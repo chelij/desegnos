@@ -551,6 +551,7 @@ fn export_website(bundle: &ExportBundle) -> WebsiteExport {
 }
 
 /// Write a bundle, serve a preview, and record a full export in the project.
+#[allow(clippy::too_many_arguments)]
 fn commit(
     workspace: &WorkspaceState<'_>,
     site: &SiteState<'_>,

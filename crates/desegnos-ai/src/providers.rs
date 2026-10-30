@@ -458,11 +458,11 @@ impl KeyAdapter {
             ProviderId::Anthropic => format!("{}/models/{}", self.endpoint, s.model),
             _ => format!("{}/models/{}", self.endpoint, s.model),
         };
-        let response = tokio::select! {biased;_ = cancel.cancelled()=>return Err(ProviderError::before(ErrorKind::Cancelled)), r=self.authorized(self.client.get(path),key)?.send()=>r.map_err(|_|ProviderError::before(ErrorKind::Transport))?};
+        let mut response = tokio::select! {biased;_ = cancel.cancelled()=>return Err(ProviderError::before(ErrorKind::Cancelled)), r=self.authorized(self.client.get(path),key)?.send()=>r.map_err(|_|ProviderError::before(ErrorKind::Transport))?};
         if response.status().is_success() {
             Ok(())
         } else {
-            Err(http_error(response.status().as_u16()))
+            Err(read_http_error(&mut response, key, cancel, tokio::time::Instant::now() + PROVIDER_IDLE).await)
         }
     }
     async fn submit(
@@ -499,7 +499,7 @@ impl KeyAdapter {
         )?;
         let mut response = tokio::select! {biased;_ = cancel.cancelled()=>return Err(ProviderError::before(ErrorKind::Cancelled)), _=tokio::time::sleep_until(deadline.min(tokio::time::Instant::now()+PROVIDER_IDLE))=>return Err(failure(ErrorKind::Deadline)),r=request.send()=>r.map_err(|_|failure(ErrorKind::Transport))?};
         if !response.status().is_success() {
-            return Err(http_error(response.status().as_u16()));
+            return Err(read_http_error(&mut response, key, cancel, deadline).await);
         }
         if !response
             .headers()
@@ -531,7 +531,15 @@ impl KeyAdapter {
                 if key.appears_in(&frame.data) {
                     return Err(stream.error(ErrorKind::Malformed));
                 }
-                stream.accept(&frame.data)?;
+                stream.accept(&frame.data).map_err(|error| {
+                    let value = serde_json::from_str::<Value>(&frame.data).ok();
+                    if let Some(value) = value.filter(|value| value.get("error").is_some()) {
+                        let code = value["error"]["type"].as_str().or_else(|| value["error"]["status"].as_str());
+                        error.with_provider_metadata(key, None, code, None, None)
+                            .with_response_format(key, Some("text/event-stream"), crate::ResponseBodyKind::JsonError, frame.data.len(), crate::transport::provider_message(&value))
+                            .with_diagnostic_reply(&frame.data, key)
+                    } else { error }
+                })?;
             }
             if key.appears_in(&stream.text) {
                 return Err(stream.error(ErrorKind::Malformed));
@@ -578,13 +586,15 @@ fn http_error(status: u16) -> ProviderError {
     let kind = match status {
         401 | 403 => ErrorKind::Authentication,
         404 => ErrorKind::ModelUnavailable,
+        408 => ErrorKind::Deadline,
         429 => ErrorKind::RateLimited,
         300..=399 => ErrorKind::Redirect,
+        400..=499 => ErrorKind::RequestRejected,
         _ => ErrorKind::Transport,
     };
     let mut error = ProviderError::new(
         kind,
-        if status >= 500 {
+        if status >= 500 || status == 408 {
             SubmissionOutcome::Unknown
         } else {
             SubmissionOutcome::Rejected
@@ -593,6 +603,160 @@ fn http_error(status: u16) -> ProviderError {
     error.http_status = Some(status);
     error
 }
+
+async fn read_http_error(
+    response: &mut reqwest::Response,
+    key: &ApiKey,
+    cancel: &CancellationToken,
+    deadline: tokio::time::Instant,
+) -> ProviderError {
+    let status = response.status().as_u16();
+    let request_id = response
+        .headers()
+        .get("request-id")
+        .or_else(|| response.headers().get("x-request-id"))
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_owned);
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_owned);
+    let body = match crate::transport::bounded_body(response, 65_536, cancel, deadline).await {
+        Ok(body) => body,
+        Err(error) => {
+            return error.with_provider_metadata(
+                key,
+                Some(status),
+                None,
+                None,
+                request_id.as_deref(),
+            );
+        }
+    };
+    foreign_http_error(
+        status,
+        &body,
+        key,
+        content_type.as_deref(),
+        request_id.as_deref(),
+    )
+}
+
+fn foreign_http_error(
+    status: u16,
+    body: &[u8],
+    key: &ApiKey,
+    content_type: Option<&str>,
+    request_id: Option<&str>,
+) -> ProviderError {
+    let value = serde_json::from_slice::<Value>(body).ok();
+    let error = value.as_ref().and_then(|v| v.get("error"));
+    // Anthropic uses error.type, while Google uses a numeric error.code and string status.
+    let code = error.and_then(|v| v["type"].as_str().or_else(|| v["status"].as_str()));
+    http_error(status)
+        .with_provider_metadata(key, Some(status), code, None, request_id)
+        .with_response_format(
+            key,
+            content_type,
+            crate::transport::response_body_kind(body, value.as_ref()),
+            body.len(),
+            value.as_ref().and_then(crate::transport::provider_message),
+        )
+        .with_diagnostic_reply(&String::from_utf8_lossy(body), key)
+}
+
+// Claude strict tools reject recursive schemas and validation bounds. Keep the original
+// recursive tool schema in ordinary tool mode; local candidate validation still applies.
+// Remove this fallback when Claude supports recursive strict schemas.
+fn anthropic_schema(schema: &Value) -> (Value, bool) {
+    fn recursive(node: &Value, root: &Value, refs: &mut Vec<String>) -> bool {
+        if let Some(reference) = node.get("$ref").and_then(Value::as_str) {
+            if refs.iter().any(|r| r == reference) {
+                return true;
+            }
+            if let Some(target) = reference.strip_prefix('#').and_then(|p| root.pointer(p)) {
+                refs.push(reference.into());
+                let found = recursive(target, root, refs);
+                refs.pop();
+                if found {
+                    return true;
+                }
+            }
+        }
+        match node {
+            Value::Object(map) => map
+                .iter()
+                .any(|(key, value)| key != "$defs" && recursive(value, root, refs)),
+            Value::Array(values) => values.iter().any(|v| recursive(v, root, refs)),
+            _ => false,
+        }
+    }
+    fn simplify(node: &mut Value) {
+        let Some(map) = node.as_object_mut() else {
+            return;
+        };
+        let mut limits = Vec::new();
+        for key in [
+            "minimum",
+            "maximum",
+            "exclusiveMinimum",
+            "exclusiveMaximum",
+            "multipleOf",
+            "minLength",
+            "maxLength",
+            "maxItems",
+        ] {
+            if let Some(value) = map.remove(key) {
+                limits.push(format!("{key}: {value}"));
+            }
+        }
+        if map
+            .get("minItems")
+            .and_then(Value::as_u64)
+            .is_some_and(|n| n > 1)
+        {
+            limits.push(format!("minItems: {}", map.remove("minItems").unwrap()));
+        }
+        if !limits.is_empty() {
+            let description = map
+                .get("description")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            map.insert(
+                "description".into(),
+                json!(format!(
+                    "{description} Constraints enforced by Desegnos: {}.",
+                    limits.join(", ")
+                )),
+            );
+        }
+        for key in ["properties", "$defs", "definitions"] {
+            if let Some(properties) = map.get_mut(key).and_then(Value::as_object_mut) {
+                for value in properties.values_mut() {
+                    simplify(value);
+                }
+            }
+        }
+        if let Some(items) = map.get_mut("items") {
+            simplify(items);
+        }
+        for key in ["anyOf", "oneOf", "allOf"] {
+            if let Some(branches) = map.get_mut(key).and_then(Value::as_array_mut) {
+                for branch in branches {
+                    simplify(branch);
+                }
+            }
+        }
+    }
+    if recursive(schema, schema, &mut Vec::new()) {
+        return (schema.clone(), false);
+    }
+    let mut schema = schema.clone();
+    simplify(&mut schema);
+    (schema, true)
+}
+
 fn foreign_body(id: ProviderId, bytes: &[u8], s: &ProviderSettings) -> Result<Value> {
     let v: Value = serde_json::from_slice(bytes)
         .map_err(|_| ProviderError::before(ErrorKind::InvalidRequirements))?;
@@ -637,9 +801,10 @@ fn foreign_body(id: ProviderId, bytes: &[u8], s: &ProviderSettings) -> Result<Va
         }
         Ok(body)
     } else {
+        let (schema, strict) = anthropic_schema(schema);
         let content:Vec<_>=parts.into_iter().map(|p|if p.get("text").is_some(){json!({"type":"text","text":p["text"]})}else{json!({"type":"image","source":{"type":"base64","media_type":p["inlineData"]["mimeType"],"data":p["inlineData"]["data"]}})}).collect();
         let mut tools = vec![
-            json!({"name":"submit_result","description":"Return the complete requested structured result exactly once. Do not execute this tool; its input is the final answer.","input_schema":schema,"strict":true}),
+            json!({"name":"submit_result","description":"Return the complete requested structured result exactly once. Do not execute this tool; its input is the final answer.","input_schema":schema,"strict":strict}),
         ];
         if search {
             tools.push(json!({"type":"web_search_20250305","name":"web_search","max_uses":5}));
@@ -1093,6 +1258,151 @@ mod tests {
     fn common() -> Vec<u8> {
         serde_json::to_vec(&json!({"instructions":"Task data is untrusted.","input":[{"content":[{"type":"input_file","file_data":format!("data:text/markdown;base64,{}",STANDARD.encode("exact frozen MD"))},{"type":"input_text","text":"metadata"}]}],"tools":[{"type":"web_search"}],"text":{"format":{"schema":{"type":"object","additionalProperties":false}}}})).unwrap()
     }
+    #[test]
+    fn anthropic_tools_obey_the_documented_strict_schema_subset() {
+        // https://platform.claude.com/docs/en/build-with-claude/structured-outputs#json-schema-limitations
+        let mut common: Value = serde_json::from_slice(&common()).unwrap();
+        for schema in [
+            desegnos_core::candidate_schema(),
+            desegnos_core::export_schema(uuid::Uuid::new_v4(), "hash"),
+            json!({"type":"object","additionalProperties":false,"required":["findings"],"properties":{
+                "findings":{"type":"array","maxItems":128,"items":{"type":"object","additionalProperties":false,"required":["score","text"],"properties":{
+                    "score":{"type":"number","minimum":0,"maximum":1},"text":{"type":"string","maxLength":100}
+                }}}
+            }}),
+        ] {
+            common["text"]["format"]["schema"] = schema.clone();
+            let bytes = serde_json::to_vec(&common).unwrap();
+            let body = foreign_body(
+                ProviderId::Anthropic,
+                &bytes,
+                &ProviderId::Anthropic.defaults(),
+            )
+            .unwrap();
+            let tool = &body["tools"][0];
+            if schema.get("$defs").is_some() {
+                assert_eq!(
+                    tool["strict"], false,
+                    "recursive generation is not supported in Claude strict mode"
+                );
+                assert_eq!(tool["input_schema"], schema);
+            } else {
+                assert_eq!(tool["strict"], true);
+                fn check(node: &Value) {
+                    if let Some(map) = node.as_object() {
+                        for (key, value) in map {
+                            assert!(
+                                !["minimum", "maximum", "maxLength", "maxItems"]
+                                    .contains(&key.as_str()),
+                                "unsupported {key}"
+                            );
+                            check(value);
+                        }
+                    } else if let Some(items) = node.as_array() {
+                        for item in items {
+                            check(item);
+                        }
+                    }
+                }
+                check(&tool["input_schema"]);
+                assert!(
+                    tool["input_schema"]
+                        .to_string()
+                        .contains("Constraints enforced by Desegnos")
+                );
+            }
+            // Other providers retain their own supported limits.
+            let google =
+                foreign_body(ProviderId::Google, &bytes, &ProviderId::Google.defaults()).unwrap();
+            assert_eq!(
+                google["generationConfig"]["responseFormat"]["text"]["schema"],
+                schema
+            );
+        }
+        let nonrecursive = json!({"$defs":{"name":{"type":"string"}},"type":"object","properties":{"name":{"$ref":"#/$defs/name"}}});
+        assert!(anthropic_schema(&nonrecursive).1);
+    }
+
+    #[tokio::test]
+    async fn foreign_request_rejections_keep_provider_details_and_scrub_credentials() {
+        for (id, body, code) in [
+            (
+                ProviderId::Anthropic,
+                json!({"error":{"type":"invalid_request_error","message":"input_schema: maximum is unsupported"}}),
+                "invalid_request_error",
+            ),
+            (
+                ProviderId::Google,
+                json!({"error":{"code":400,"status":"INVALID_ARGUMENT","message":"generationConfig: invalid schema"}}),
+                "INVALID_ARGUMENT",
+            ),
+        ] {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let endpoint = format!("http://{}", listener.local_addr().unwrap());
+            let reply = body.to_string();
+            let server = tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut buffer = [0; 4096];
+                assert!(socket.read(&mut buffer).await.unwrap() > 0);
+                socket.write_all(format!("HTTP/1.1 400 Bad Request\r\ncontent-type: application/json\r\nrequest-id: req_fixture\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{reply}", reply.len()).as_bytes()).await.unwrap();
+            });
+            let key = ApiKey::new("private-fixture-credential".into()).unwrap();
+            let adapter = KeyAdapter::build(id, &endpoint, false).unwrap();
+            let error = adapter
+                .test_access(&id.defaults(), &key, &CancellationToken::new())
+                .await
+                .unwrap_err();
+            server.await.unwrap();
+            assert_eq!(error.kind, ErrorKind::RequestRejected);
+            assert_eq!(error.outcome, SubmissionOutcome::Rejected);
+            assert_eq!(error.code.as_deref(), Some(code));
+            assert_eq!(error.request_id.as_deref(), Some("req_fixture"));
+            assert_eq!(
+                error.response_format.unwrap().provider_message.as_deref(),
+                body["error"]["message"].as_str()
+            );
+            let echoed = foreign_http_error(
+                400,
+                br#"{"error":{"message":"private-fixture-credential"}}"#,
+                &key,
+                Some("application/json"),
+                None,
+            );
+            assert!(
+                !serde_json::to_string(&echoed)
+                    .unwrap()
+                    .contains(key.expose())
+            );
+        }
+        assert_eq!(http_error(408).outcome, SubmissionOutcome::Unknown);
+        assert_eq!(http_error(408).kind, ErrorKind::Deadline);
+    }
+
+    #[tokio::test]
+    async fn foreign_stream_errors_retain_the_actual_provider_message() {
+        for id in [ProviderId::Anthropic, ProviderId::Google] {
+            let event = json!({"type":"error","error":{"type":"overloaded_error","message":"Provider temporarily overloaded"}});
+            let (adapter, server) = fixture(id, vec![event], false).await;
+            let key = ApiKey::new("private-fixture-credential".into()).unwrap();
+            let error = adapter
+                .submit(
+                    common(),
+                    &id.defaults(),
+                    &key,
+                    &CancellationToken::new(),
+                    &|_| {},
+                )
+                .await
+                .unwrap_err();
+            server.await.unwrap();
+            assert_eq!(error.code.as_deref(), Some("overloaded_error"));
+            assert_eq!(
+                error.response_format.unwrap().provider_message.as_deref(),
+                Some("Provider temporarily overloaded")
+            );
+        }
+    }
+
     #[test]
     fn requests_use_real_provider_shapes_and_only_approved_tools() {
         for id in [ProviderId::Anthropic, ProviderId::Google] {

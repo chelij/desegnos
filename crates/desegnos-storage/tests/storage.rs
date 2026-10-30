@@ -74,6 +74,57 @@ fn project_with_element() -> Project {
 }
 
 #[test]
+fn saved_linked_picture_reopens_without_pruning_its_shared_image_bytes() {
+    let directory = TempDir::new("linked-picture");
+    let path = directory.path("linked.desegnos");
+    let mut project = project();
+    let (picture, uri) = Project::prepare_picture(
+        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", 100,
+    ).unwrap();
+    let mut master = empty_element(
+        ElementKind::Image,
+        Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 100.0,
+            height: 100.0,
+        },
+    );
+    master.image = Some(picture);
+    let definition_id = Uuid::new_v4();
+    project.linked.insert(
+        definition_id,
+        desegnos_core::LinkedDefinition {
+            id: definition_id,
+            name: "Shared logo".into(),
+            master,
+        },
+    );
+    let mut copy = empty_element(
+        ElementKind::Image,
+        Rect {
+            x: 10.0,
+            y: 10.0,
+            width: 100.0,
+            height: 100.0,
+        },
+    );
+    copy.link = Some(definition_id);
+    project.pages[0].elements.push(copy);
+    project.pictures.insert(picture, uri.into());
+    project.validate().unwrap();
+    let database = ProjectDatabase::create(&path, &project, now_millis()).unwrap();
+    drop(database);
+    let loaded = desegnos_storage::load_project(&path).unwrap();
+    let session = Session::new(loaded).unwrap();
+    assert_eq!(
+        session.project().picture_bytes(picture),
+        project.picture_bytes(picture)
+    );
+    assert_eq!(session.project().linked, project.linked);
+}
+
+#[test]
 fn a_blank_untitled_canvas_saves_and_its_first_boundary_becomes_home() {
     let blank = Project::blank("Untitled project".into(), Appearance::Light).unwrap();
     assert!(blank.pages.is_empty());

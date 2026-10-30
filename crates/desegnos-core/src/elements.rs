@@ -1396,17 +1396,17 @@ impl Project {
         // needs a per-size override; later This size edits still control visibility and style.
         fn fit(elements: &mut [Element], widths: &[(Uuid, f64)], source: Uuid, source_width: f64) {
             for element in elements {
-                let original = element.rect.clone();
+                let original = element.rect;
                 let mut child_widths = Vec::new();
                 for &(id, width) in widths {
-                    let mut rect = original.clone();
+                    let mut rect = original;
                     if width < source_width {
                         rect.x = (original.x * width / source_width)
                             .clamp(0.0, (width - 1.0).max(0.0));
                         rect.width = original.width.min((width - rect.x).max(1.0));
                     }
                     if id != source && !element.overrides.contains_key(&id) && rect != original {
-                        element.overrides.entry(id).or_default().rect = Some(rect.clone());
+                        element.overrides.entry(id).or_default().rect = Some(rect);
                     }
                     let child_width = element.overrides.get(&id)
                         .and_then(|over| over.rect.as_ref())
@@ -2029,24 +2029,24 @@ impl Project {
             let page = self.pages.iter().find(|page| page.id == page_id)
                 .ok_or_else(|| Error("This page no longer exists.".into()))?;
             let resolved = resolve_elements(self, &page.elements);
-            if let Some(element) = find_element(&resolved, ids[0]) {
-                if element.kind == ElementKind::Box {
-                    if matches!(element.layout, ElementLayout::Stack { .. }) {
-                        return Ok(());
-                    }
-                    // Like switching to Stack in Properties, a box with children then hugs them.
-                    let mut style = element.style.clone();
-                    if !element.children.is_empty() {
-                        style.sizing.width = SizingMode::Fit;
-                        style.sizing.height = SizingMode::Fit;
-                    }
-                    return self.update_elements(page_id, vec![ElementPatch {
-                        id: ids[0],
-                        layout: Some(default_stack()),
-                        style: Some(style),
-                        ..Default::default()
-                    }]);
+            if let Some(element) = find_element(&resolved, ids[0])
+                && element.kind == ElementKind::Box
+            {
+                if matches!(element.layout, ElementLayout::Stack { .. }) {
+                    return Ok(());
                 }
+                // Like switching to Stack in Properties, a box with children then hugs them.
+                let mut style = element.style.clone();
+                if !element.children.is_empty() {
+                    style.sizing.width = SizingMode::Fit;
+                    style.sizing.height = SizingMode::Fit;
+                }
+                return self.update_elements(page_id, vec![ElementPatch {
+                    id: ids[0],
+                    layout: Some(default_stack()),
+                    style: Some(style),
+                    ..Default::default()
+                }]);
             }
         }
         self.wrap_elements(page_id, ids, true)

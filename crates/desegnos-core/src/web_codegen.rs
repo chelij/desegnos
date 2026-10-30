@@ -328,6 +328,11 @@ fn markup(
         return;
     }
     match &element.kind {
+        // The HTML parser discards one newline immediately after a textarea start tag.
+        Textarea if element.text.starts_with(['\n', '\r']) => {
+            out.push('\n');
+            out.push_str(&escape(&element.text));
+        }
         Select { options } => {
             for option in options {
                 out.push_str(&format!(
@@ -1091,6 +1096,24 @@ mod tests {
     fn exported_css(project: &Project) -> String {
         let bundle = direct_export_bundle(project, &[]).unwrap();
         String::from_utf8(bundle.files["index.css"].clone()).unwrap()
+    }
+
+    #[test]
+    fn exported_textarea_preserves_its_leading_newline_after_html_parsing() {
+        for text in [
+            "\nFirst line",
+            "\n\nTwo blank lines",
+            "First <line> & second",
+        ] {
+            let mut project = project();
+            let mut field = element(ElementKind::Textarea);
+            field.text = text.into();
+            project.pages[0].elements.push(field);
+            let bundle = direct_export_bundle(&project, &[]).unwrap();
+            let html = std::str::from_utf8(&bundle.files["index.html"]).unwrap();
+            let parsed = dom_query::Document::from(html);
+            assert_eq!(parsed.select("textarea").text().as_ref(), text);
+        }
     }
 
     /// The stylesheet the export wrote before per-element rules were compacted, in bytes: 1.67 MB

@@ -39,6 +39,7 @@ pub(super) fn deck(scenes: &[Scene]) -> Vec<u8> {
             pictures: &mut pictures,
             shadows: &mut shadows,
         };
+        page.paint_alpha(scene.background.a);
         set_fill(&mut page.stream, scene.background);
         let _ = writeln!(page.stream, "0 0 {:.3} {:.3} re f", scene.width * SCALE, scene.height * SCALE);
         page.items(&scene.items);
@@ -48,7 +49,7 @@ pub(super) fn deck(scenes: &[Scene]) -> Vec<u8> {
     // 1 catalog, 2 pages, 3 resources, then one page and one content object per scene.
     let first_page = 4;
     let first_picture = first_page + scenes.len() * 2;
-    let first_shadow = first_picture + pictures.len();
+    let first_shadow = first_picture + pictures.len() * 2;
     let first_state = first_shadow + shadows.len() * 2;
 
     let mut writer = Writer::default();
@@ -65,7 +66,7 @@ pub(super) fn deck(scenes: &[Scene]) -> Vec<u8> {
         ),
     );
     let mut xobjects: Vec<String> = (0..pictures.len())
-        .map(|index| format!("/Im{index} {} 0 R", first_picture + index))
+        .map(|index| format!("/Im{index} {} 0 R", first_picture + index * 2))
         .collect();
     xobjects.extend(
         (0..shadows.len()).map(|index| format!("/Sh{index} {} 0 R", first_shadow + index * 2)),
@@ -95,8 +96,12 @@ pub(super) fn deck(scenes: &[Scene]) -> Vec<u8> {
         writer.stream(page_id + 1, stream.into_bytes(), false);
     }
     for (index, (mime, bytes)) in pictures.iter().enumerate() {
-        let image = image_stream(mime, bytes);
-        writer.stream(first_picture + index, image, true);
+        let id = first_picture + index * 2;
+        let (image, mask) = image_stream(mime, bytes, id + 1);
+        writer.stream(id, image, true);
+        if let Some(mask) = mask {
+            writer.stream(id + 1, mask, true);
+        }
     }
     for (index, shadow) in shadows.iter().enumerate() {
         let id = first_shadow + index * 2;
@@ -199,12 +204,14 @@ impl Page<'_> {
     }
 
     fn picture(&mut self, picture: &Picture) {
+        // A preceding shape's fill opacity must not leak into this image.
+        self.paint_alpha(1.0);
         let index = self.pictures.len();
         self.pictures
             .push((picture.mime.clone(), picture.bytes.clone()));
         // `object-fit: cover`: scale to fill the box, centre it and let the clip crop it.
         let (intrinsic_width, intrinsic_height) =
-            picture_dimensions(&picture.bytes).unwrap_or((picture.width, picture.height));
+            picture_dimensions(&picture.mime, &picture.bytes).unwrap_or((picture.width, picture.height));
         let scale = (picture.width / intrinsic_width).max(picture.height / intrinsic_height);
         let width = intrinsic_width * scale;
         let height = intrinsic_height * scale;
@@ -538,7 +545,23 @@ fn pdf_y(scene: &Scene, y: f64) -> f64 {
 }
 
 /// A picture's pixel size, read from its header; `None` when the bytes cannot be decoded.
-fn picture_dimensions(bytes: &[u8]) -> Option<(f64, f64)> {
+fn picture_dimensions(mime: &str, bytes: &[u8]) -> Option<(f64, f64)> {
+    if mime == "image/svg+xml" {
+        let mut options = resvg::usvg::Options::default();
+        // Read the SVG's own dimensions without resolving any embedded or external images.
+        options.image_href_resolver.resolve_string = Box::new(|_, _| None);
+        options.image_href_resolver.resolve_data = Box::new(|_, _, _| None);
+        let tree = resvg::usvg::Tree::from_data(bytes, &options).ok()?;
+        return Some((
+            f64::from(tree.size().width()),
+            f64::from(tree.size().height()),
+        ));
+    }
+    if mime == "image/gif" && bytes.len() >= 10 && bytes.starts_with(b"GIF8") {
+        let width = u16::from_le_bytes([bytes[6], bytes[7]]);
+        let height = u16::from_le_bytes([bytes[8], bytes[9]]);
+        return (width > 0 && height > 0).then_some((f64::from(width), f64::from(height)));
+    }
     let reader = image::ImageReader::new(Cursor::new(bytes))
         .with_guessed_format()
         .ok()?;
@@ -546,18 +569,42 @@ fn picture_dimensions(bytes: &[u8]) -> Option<(f64, f64)> {
     (width > 0 && height > 0).then_some((f64::from(width), f64::from(height)))
 }
 
-/// A picture as a PDF image XObject: raw RGB, deflated.
-fn image_stream(mime: &str, bytes: &[u8]) -> Vec<u8> {
-    let decoded = image::load_from_memory(bytes).ok();
-    let (width, height, rgb) = match decoded {
+/// A picture as a deflated RGB XObject, with a grayscale soft mask when it has transparency.
+fn image_stream(mime: &str, bytes: &[u8], mask_id: usize) -> (Vec<u8>, Option<Vec<u8>>) {
+    let decoded = image::load_from_memory(bytes).ok().or_else(|| {
+        // The canvas renderer already supports SVG and GIF via resvg. The image crate's
+        // configured codecs do not, so use that same renderer for these PDF pictures.
+        if !matches!(mime, "image/svg+xml" | "image/gif") { return None; }
+        use base64::{Engine, engine::general_purpose::STANDARD};
+        let (width, height) = picture_dimensions(mime, bytes)?;
+        let svg = format!("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{width}\" height=\"{height}\"><image width=\"100%\" height=\"100%\" href=\"data:{mime};base64,{}\"/></svg>", STANDARD.encode(bytes));
+        let tree = resvg::usvg::Tree::from_str(&svg, &resvg::usvg::Options::default()).ok()?;
+        let scale = (4096.0 / width.max(height)).min(1.0);
+        let mut pixmap = resvg::tiny_skia::Pixmap::new((width * scale).ceil() as u32, (height * scale).ceil() as u32)?;
+        resvg::render(&tree, resvg::tiny_skia::Transform::from_scale(scale as f32, scale as f32), &mut pixmap.as_mut());
+        image::load_from_memory(&pixmap.encode_png().ok()?).ok()
+    });
+    let (width, height, rgb, alpha) = match decoded {
         Some(picture) => {
-            let picture = picture.to_rgb8();
-            (picture.width(), picture.height(), picture.into_raw())
+            let alpha: Vec<u8> = picture.to_rgba8().pixels().map(|pixel| pixel[3]).collect();
+            let alpha = alpha.iter().any(|a| *a != 255).then_some(alpha);
+            (
+                picture.width(),
+                picture.height(),
+                picture.to_rgb8().into_raw(),
+                alpha,
+            )
         }
-        None => (1, 1, vec![0_u8, 0, 0]),
+        None => (1, 1, vec![0_u8, 0, 0], None),
     };
-    let _ = mime;
-    raster_stream(width, height, "DeviceRGB", &rgb, "")
+    let extra = alpha
+        .as_ref()
+        .map_or(String::new(), |_| format!(" /SMask {mask_id} 0 R"));
+    let mask = alpha.map(|alpha| raster_stream(width, height, "DeviceGray", &alpha, ""));
+    (
+        raster_stream(width, height, "DeviceRGB", &rgb, &extra),
+        mask,
+    )
 }
 
 /// A deflated image stream; a shadow's RGB image references its grayscale soft mask.
@@ -677,6 +724,121 @@ mod tests {
             },
             paths: Vec::new(),
             items,
+        }
+    }
+
+    #[test]
+    fn pdf_pictures_preserve_alpha_and_do_not_inherit_the_previous_fill_opacity() {
+        let mut png = Cursor::new(Vec::new());
+        let pixels = image::RgbaImage::from_raw(2, 1, vec![255, 0, 0, 0, 0, 255, 0, 128]).unwrap();
+        pixels.write_to(&mut png, image::ImageFormat::Png).unwrap();
+        let picture = Picture {
+            x: 20.0,
+            y: 20.0,
+            width: 80.0,
+            height: 40.0,
+            mime: "image/png".into(),
+            bytes: png.into_inner(),
+        };
+        let mut preceding = shadow(0.0);
+        preceding.shape = ShadowShape::Rect {
+            rect: Rect {
+                x: 180.0,
+                y: 180.0,
+                width: 20.0,
+                height: 20.0,
+            },
+            radius: 0.0,
+        };
+        let mut moved = picture.clone();
+        moved.y = 100.0;
+        let page = scene(vec![
+            Item::Shadow(preceding),
+            Item::Picture(picture),
+            Item::Group(Group {
+                clip: None,
+                transform: None,
+                alpha: 0.5,
+                items: vec![Item::Picture(moved)],
+            }),
+        ]);
+        let pdf = deck(&[page]);
+        assert_eq!(String::from_utf8_lossy(&pdf).matches("/SMask ").count(), 2);
+        let directory =
+            std::env::temp_dir().join(format!("desegnos-pdf-alpha-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&directory).unwrap();
+        let path = directory.join("alpha.pdf");
+        std::fs::write(&path, pdf).unwrap();
+        let result = std::process::Command::new("pdftoppm")
+            .args(["-singlefile", "-png", "-r", "96"])
+            .arg(&path)
+            .arg(directory.join("rendered"))
+            .output();
+        let output = match result {
+            Ok(output) => output,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                std::fs::remove_dir_all(directory).unwrap();
+                eprintln!("pdftoppm unavailable; skipping PDF pixel validation");
+                return;
+            }
+            Err(error) => panic!("could not render PDF: {error}"),
+        };
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let rendered = image::open(directory.join("rendered.png"))
+            .unwrap()
+            .to_rgb8();
+        for (x, y, expected) in [
+            (30, 40, [255, 255, 255]),
+            (90, 40, [127, 255, 127]),
+            (90, 120, [191, 255, 191]),
+        ] {
+            let actual = rendered.get_pixel(x, y).0;
+            for (actual, expected) in actual.into_iter().zip(expected) {
+                assert!(
+                    actual.abs_diff(expected) <= 2,
+                    "pixel ({x}, {y}): {:?}",
+                    rendered.get_pixel(x, y)
+                );
+            }
+        }
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn svg_and_gif_pictures_are_embedded_as_pixels_instead_of_black_placeholders() {
+        use base64::{Engine, engine::general_purpose::STANDARD};
+        use std::io::Read;
+        let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" width="2" height="1"><path fill="#ff0000" d="M0 0H2V1H0Z"/></svg>"##;
+        // A 1x1 opaque white GIF89a, including its colour table and first frame.
+        let gif = STANDARD
+            .decode("R0lGODlhAQABAIAAAP///wAAACH5BAAAAAAALAAAAAABAAEAAAICRAEAOw==")
+            .unwrap();
+        for (mime, bytes, expected_size, expected_pixels) in [
+            (
+                "image/svg+xml",
+                svg.as_slice(),
+                (2.0, 1.0),
+                vec![255, 0, 0, 255, 0, 0],
+            ),
+            ("image/gif", gif.as_slice(), (1.0, 1.0), vec![255, 255, 255]),
+        ] {
+            assert_eq!(picture_dimensions(mime, bytes), Some(expected_size));
+            let (stream, mask) = image_stream(mime, bytes, 99);
+            assert!(mask.is_none());
+            let start = stream
+                .windows(7)
+                .position(|bytes| bytes == b"stream\n")
+                .unwrap()
+                + 7;
+            let mut pixels = Vec::new();
+            flate2::read::ZlibDecoder::new(&stream[start..])
+                .read_to_end(&mut pixels)
+                .unwrap();
+            assert_eq!(pixels, expected_pixels, "{mime}");
         }
     }
 

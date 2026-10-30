@@ -297,10 +297,8 @@ fn snapshot_pages(files: &[(String, Vec<u8>)]) -> Vec<WebsitePage> {
             };
             target = next.clone();
         }
-        if frames.contains_key(home) {
-            if let Some(page) = pages.get_mut(&target) {
-                page.route = "/".into();
-            }
+        if frames.contains_key(home) && let Some(page) = pages.get_mut(&target) {
+            page.route = "/".into();
         }
     }
     let mut queue = VecDeque::from_iter(home);
@@ -430,10 +428,8 @@ fn render_references(name: &str, bytes: &[u8]) -> Vec<String> {
         if node.attr("rel").is_some_and(|rel| {
             rel.split_whitespace()
                 .any(|v| v.eq_ignore_ascii_case("stylesheet"))
-        }) {
-            if let Some(href) = node.attr("href") {
-                references.push(href.to_string());
-            }
+        }) && let Some(href) = node.attr("href") {
+            references.push(href.to_string());
         }
     }
     for node in doc.select("[style]").nodes().iter() {

@@ -295,7 +295,7 @@ fn internal_href(href: &str, page_url: &str, page_paths: &BTreeMap<String, Strin
     // after the random first segment. Old sites link to their own pages with absolute URLs on
     // their original domain and with different letter case, so match those paths without case.
     let page_path = served_path(&page)?;
-    let linked = url::Url::parse(&page_url).ok()?.join(href).ok()?;
+    let linked = url::Url::parse(page_url).ok()?.join(href).ok()?;
     // Another domain counts only when the site links to several of its own pages there, so
     // a link to https://social.example/ never lands on the imported home page.
     let linked_path = served_path(linked.as_str()).or_else(|| {
@@ -786,32 +786,30 @@ impl Converter<'_> {
             return [self.base_element(&tag, path, local, node, ElementKind::Button, &Some(value), None, vec![])]
                 .into();
         }
-        if is_text_tag(&tag) {
-            if let Some(text) = text.clone() {
-                if children.is_empty() {
-                    return [self.text_element(&tag, path, local, node, &text)].into();
-                }
-                let mut merged = children;
-                let mut text_element = self.text_element(&tag, path, Rect { x: 0.0, y: 0.0, width: local.width, height: local.height }, node, &text);
-                text_element.id = stable_uuid(&format!("{}:{}:text", self.element_id(path, &tag), path.len()));
-                merged.insert(0, text_element);
-                let layout = layout_for(&node.styles);
-                if !visual(&node.styles) && matches!(layout, ElementLayout::Free) {
-                    return merged
-                        .into_iter()
-                        .map(|mut child| {
-                            child.rect.x += node.rect.x - origin.0;
-                            child.rect.y += node.rect.y - origin.1;
-                            child
-                        })
-                        .collect();
-                }
-                let boxed = self.base_element(&tag, path, local, node, ElementKind::Box, &None, None, merged);
-                return [boxed].into();
+        if is_text_tag(&tag) && let Some(text) = text.clone() {
+            if children.is_empty() {
+                return [self.text_element(&tag, path, local, node, &text)].into();
             }
-            // Without its own text, a cell or list item is a container like any other: its
-            // children move into the parent's coordinates and a painted background stays.
+            let mut merged = children;
+            let mut text_element = self.text_element(&tag, path, Rect { x: 0.0, y: 0.0, width: local.width, height: local.height }, node, &text);
+            text_element.id = stable_uuid(&format!("{}:{}:text", self.element_id(path, &tag), path.len()));
+            merged.insert(0, text_element);
+            let layout = layout_for(&node.styles);
+            if !visual(&node.styles) && matches!(layout, ElementLayout::Free) {
+                return merged
+                    .into_iter()
+                    .map(|mut child| {
+                        child.rect.x += node.rect.x - origin.0;
+                        child.rect.y += node.rect.y - origin.1;
+                        child
+                    })
+                    .collect();
+            }
+            let boxed = self.base_element(&tag, path, local, node, ElementKind::Box, &None, None, merged);
+            return [boxed].into();
         }
+        // Without its own text, a cell or list item is a container like any other: its
+        // children move into the parent's coordinates and a painted background stays.
 
         // Every other visible element is a container. Transparent wrappers are merged into
         // their parent; visual boxes and flex/grid containers stay as real layers.
