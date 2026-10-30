@@ -444,3 +444,135 @@ fn a_pointer_without_a_kind_deserialises_as_reference() {
     .unwrap();
     assert_eq!(parsed.kind, desegnos_core::PointerKind::Reference);
 }
+
+#[test]
+fn behaviours_require_change_and_are_unique_per_source() {
+    let (project, page, id) = with_element();
+    let mut own = pointer(
+        Uuid::new_v4(),
+        page,
+        id,
+        PointerTarget::Element {
+            page_id: page,
+            element_id: id,
+            size_id: None,
+        },
+        "Follow the mouse",
+    );
+    assert!(own.is_behaviour());
+    assert!(own.validate().unwrap_err().to_string().contains("Change"));
+    own.kind = desegnos_core::PointerKind::Change;
+    let project = apply(
+        &project,
+        Command::AddPointer {
+            pointer: own.clone(),
+        },
+    );
+    assert_eq!(
+        project.pointer_states()[0].state,
+        PointerState::NeedsExporting
+    );
+    assert!(!desegnos_core::pointer_needs_classifying(&own));
+    assert!(
+        project
+            .apply(
+                project.revision,
+                Command::UpdatePointer {
+                    pointer_id: own.id,
+                    from: None,
+                    to: None,
+                    comment: None,
+                    kind: Some(desegnos_core::PointerKind::Reference),
+                }
+            )
+            .is_err()
+    );
+    own.id = Uuid::new_v4();
+    assert!(
+        project
+            .apply(
+                project.revision,
+                Command::AddPointer {
+                    pointer: own.clone()
+                }
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("at most one behaviour")
+    );
+    own.to = PointerTarget::Boundary {
+        page_id: page,
+        size_id: None,
+    };
+    assert!(!own.is_behaviour());
+    own.comment = "Go to this boundary".into();
+    let project = apply(
+        &project,
+        Command::AddPointer {
+            pointer: own.clone(),
+        },
+    );
+    assert!(
+        project
+            .pointer_states()
+            .iter()
+            .all(|state| state.state != PointerState::Contradicts)
+    );
+    assert!(
+        project
+            .apply(
+                project.revision,
+                Command::UpdatePointer {
+                    pointer_id: own.id,
+                    from: None,
+                    to: Some(PointerTarget::Element {
+                        page_id: page,
+                        element_id: id,
+                        size_id: None
+                    }),
+                    comment: None,
+                    kind: None,
+                }
+            )
+            .is_err()
+    );
+    own.from = PointerSource::Boundary {
+        page_id: page,
+        size_id: None,
+    };
+    assert!(own.is_behaviour());
+    own.id = Uuid::new_v4();
+    let project = apply(
+        &project,
+        Command::AddPointer {
+            pointer: own.clone(),
+        },
+    );
+    own.id = Uuid::new_v4();
+    let mut duplicate = project.clone();
+    duplicate.pointers.push(own.clone());
+    assert!(
+        duplicate
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("at most one behaviour")
+    );
+    assert!(
+        project
+            .apply(
+                project.revision,
+                Command::AddPointer {
+                    pointer: own.clone()
+                }
+            )
+            .is_err()
+    );
+    own.kind = desegnos_core::PointerKind::Reference;
+    assert!(own.validate().is_err());
+    own.to = PointerTarget::Boundary {
+        page_id: page,
+        size_id: Some(Uuid::new_v4()),
+    };
+    assert!(!own.is_behaviour());
+}

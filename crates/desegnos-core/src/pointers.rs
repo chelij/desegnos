@@ -41,7 +41,9 @@ pub struct PointerStateView {
 
 /// A pointer's comment still needs an AI classification.
 pub fn pointer_needs_classifying(pointer: &Pointer) -> bool {
-    !pointer.comment.trim().is_empty() && pointer.play_comment != pointer.comment
+    !pointer.is_behaviour()
+        && !pointer.comment.trim().is_empty()
+        && pointer.play_comment != pointer.comment
 }
 
 /// `None` for a pointer that is already wired or classified for its current comment.
@@ -329,6 +331,7 @@ impl Project {
         for (index, first) in self.pointers.iter().enumerate() {
             for second in self.pointers.iter().skip(index + 1) {
                 if first.from != second.from
+                    || first.is_behaviour() != second.is_behaviour()
                     || first.comment.trim().is_empty()
                     || second.comment.trim().is_empty()
                     || first.comment.trim() == second.comment.trim()
@@ -354,10 +357,10 @@ impl Project {
                         .get(&pointer.id)
                         .is_some_and(|fingerprint| fingerprint != &recorded.fingerprint)
                 });
-                let needs_exporting = exported.is_some_and(|_| {
+                let needs_exporting = (pointer.is_behaviour() || exported.is_some()) && {
                     !pointer.comment.trim().is_empty()
                         && recorded.is_none_or(|recorded| recorded.comment != pointer.comment)
-                });
+                };
                 let state = if pointer.is_broken(self) {
                     PointerState::Broken
                 } else if !clash_with.is_empty() {

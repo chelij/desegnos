@@ -453,3 +453,112 @@ fn strict_schema_nulls_read_as_omitted_optional_fields() {
     assert_eq!(target_element.rotation, 0.0);
     assert_eq!(target_element.children.len(), 0);
 }
+
+#[test]
+fn set_behaviour_validates_scope_and_creates_updates_removes_in_one_undo_step() {
+    for destination in ["layer", "subtree", "boundary"] {
+        let (mut project, page, target, outsider) = setup();
+        let child = element(
+            Uuid::new_v4(),
+            ElementKind::Text,
+            rect(0.0, 0.0, 20.0, 20.0),
+        );
+        let child_id = child.id;
+        project.pages[0].elements[0].children.push(child);
+        let behaviour_target = match destination {
+            "boundary" => None,
+            "subtree" => Some(child_id),
+            _ => Some(target),
+        };
+        let mut pointer_id = None;
+        for words in ["Follow the mouse", "Rotate forever", ""] {
+            let snapshot = project.prepare_requirements().unwrap();
+            let mut reply = candidate(&snapshot, target, page, project.pointers[0].id);
+            reply.pointer_classifications.retain(|classification| {
+                project.pointers.iter().any(|pointer| {
+                    pointer.id == classification.pointer_id
+                        && desegnos_core::pointer_needs_classifying(pointer)
+                })
+            });
+            reply.requests[0].operations = vec![desegnos_core::ElementOperation::SetBehaviour {
+                element_id: behaviour_target,
+                behaviour: words.into(),
+            }];
+            reply.validate(&snapshot, &project).unwrap();
+            let mut escaped = reply.clone();
+            escaped.requests[0].operations = vec![desegnos_core::ElementOperation::SetBehaviour {
+                element_id: Some(outsider),
+                behaviour: "Move".into(),
+            }];
+            // A pre-existing Change pointer to the boundary grants its layers, just as for Update.
+            if destination != "boundary" || words == "Follow the mouse" {
+                assert!(escaped.validate(&snapshot, &project).is_err());
+            }
+            let mut session = Session::new(project.clone()).unwrap();
+            let before = session.history().2;
+            session
+                .apply_generation(&snapshot, &reply, &[0], &BTreeMap::new(), |_| Ok(()))
+                .unwrap();
+            assert_eq!(session.history().2, before + 1);
+            let applied = session.project().clone();
+            session.undo(|_| Ok(())).unwrap();
+            assert_eq!(session.project().pointers, project.pointers);
+            let own: Vec<_> = applied
+                .pointers
+                .iter()
+                .filter(|p| p.is_behaviour())
+                .collect();
+            if words.is_empty() {
+                assert!(own.is_empty());
+            } else {
+                assert_eq!(own.len(), 1);
+                assert_eq!(own[0].comment, words);
+                assert_eq!(own[0].kind, desegnos_core::PointerKind::Change);
+                assert!(own[0].wiring.is_none() && own[0].play.is_none());
+                if let Some(id) = pointer_id {
+                    assert_eq!(own[0].id, id);
+                }
+                pointer_id = Some(own[0].id);
+            }
+            project = applied;
+            // Keep the same request active for the next edit.
+            project.requests = session.project().requests.clone();
+        }
+    }
+}
+
+#[test]
+fn set_behaviour_rejects_boundary_without_a_boundary_request_and_oversized_text() {
+    let (mut project, page, target, _) = setup();
+    let snapshot = project.prepare_requirements().unwrap();
+    let mut reply = candidate(&snapshot, target, page, project.pointers[0].id);
+    reply.requests[0].operations = vec![desegnos_core::ElementOperation::SetBehaviour {
+        element_id: Some(target),
+        behaviour: "x".repeat(desegnos_core::MAX_PROMPT_CHARS + 1),
+    }];
+    assert!(
+        reply
+            .validate(&snapshot, &project)
+            .unwrap_err()
+            .to_string()
+            .contains("Pointer comment")
+    );
+    project.requests[0].targets = vec![RequestTarget::Reference {
+        id: project.reference[0].id,
+    }];
+    let snapshot = project.prepare_requirements().unwrap();
+    let mut reply = candidate(&snapshot, target, page, project.pointers[0].id);
+    reply.requests[0].request_id = Some(project.requests[0].id);
+    reply.requests[0].element_id = None;
+    reply.requests[0].operations = vec![desegnos_core::ElementOperation::SetBehaviour {
+        element_id: None,
+        behaviour: "Animate forever".into(),
+    }];
+    assert!(
+        reply
+            .validate(&snapshot, &project)
+            .unwrap_err()
+            .to_string()
+            .contains("boundary behaviour")
+    );
+}

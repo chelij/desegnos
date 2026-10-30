@@ -924,8 +924,41 @@ pub struct Pointer {
 }
 
 impl Pointer {
+    /// A layer or boundary's own export-only behaviour, shared by all linked sizes.
+    pub fn is_behaviour(&self) -> bool {
+        match (&self.from, &self.to) {
+            (
+                PointerSource::Element {
+                    page_id: a,
+                    element_id: x,
+                    size_id: None,
+                },
+                PointerTarget::Element {
+                    page_id: b,
+                    element_id: y,
+                    size_id: None,
+                },
+            ) => a == b && x == y,
+            (
+                PointerSource::Boundary {
+                    page_id: a,
+                    size_id: None,
+                },
+                PointerTarget::Boundary {
+                    page_id: b,
+                    size_id: None,
+                },
+            ) => a == b,
+            _ => false,
+        }
+    }
+
     pub fn validate(&self) -> Result<()> {
         ensure(!self.id.is_nil(), "A pointer needs a nonempty identifier.")?;
+        ensure(
+            !self.is_behaviour() || self.kind == PointerKind::Change,
+            "A behaviour pointer must be kind Change.",
+        )?;
         validate_text(&self.comment, "Pointer comment", MAX_PROMPT_CHARS, false)?;
         if let PointerTarget::Url { url } = &self.to {
             ensure(
@@ -1967,6 +2000,15 @@ impl Project {
                 .any(|existing| existing.id == pointer.id),
             "This pointer already exists.",
         )?;
+        pointer.validate()?;
+        ensure(
+            !pointer.is_behaviour()
+                || !self
+                    .pointers
+                    .iter()
+                    .any(|existing| existing.is_behaviour() && existing.from == pointer.from),
+            "A source can have at most one behaviour pointer.",
+        )?;
         self.pointers.push(pointer);
         Ok(())
     }
@@ -1979,7 +2021,7 @@ impl Project {
         comment: Option<String>,
         kind: Option<PointerKind>,
     ) -> Result<()> {
-        let pointer = self.pointer_mut(pointer_id)?;
+        let mut pointer = self.pointer_mut(pointer_id)?.clone();
         if let Some(from) = from {
             pointer.from = from;
         }
@@ -1992,6 +2034,17 @@ impl Project {
         if let Some(kind) = kind {
             pointer.kind = kind;
         }
+        pointer.validate()?;
+        ensure(
+            !pointer.is_behaviour()
+                || !self.pointers.iter().any(|existing| {
+                    existing.id != pointer_id
+                        && existing.is_behaviour()
+                        && existing.from == pointer.from
+                }),
+            "A source can have at most one behaviour pointer.",
+        )?;
+        *self.pointer_mut(pointer_id)? = pointer;
         Ok(())
     }
 
@@ -2637,7 +2690,15 @@ impl Project {
             self.pointers.len() <= MAX_POINTERS,
             "A project holds at most 1,000 pointers.",
         )?;
+        let mut behaviour_sources = Vec::new();
         for pointer in &self.pointers {
+            if pointer.is_behaviour() {
+                ensure(
+                    !behaviour_sources.contains(&pointer.from),
+                    "A source can have at most one behaviour pointer.",
+                )?;
+                behaviour_sources.push(pointer.from.clone());
+            }
             ensure(
                 ids.insert(pointer.id),
                 "Project identifiers must be unique.",

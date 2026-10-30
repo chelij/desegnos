@@ -27,7 +27,7 @@ try {
   const job = {
     jobId: 'job', status: 'blocked', provider: 'openai', settings: { model: 'model' }, generationMode: 'fuzzy',
     requirements: { markdown: '' }, areas: [{ pageId: 'page', elementId: id }], usage: { inputTokens: 10, outputTokens: 20 },
-    candidate: { summary: 'Booking form needs a service.', requests: [{ elementId: id, status: 'conflict', explanation: 'Which booking service should this use?' }], criticism: [], decisionProposals: [] },
+    candidate: { summary: 'Booking form needs a service.', requests: [{ elementId: id, status: 'conflict', operations: [], explanation: 'Which booking service should this use?' }], criticism: [], decisionProposals: [] },
   };
   const controller = { job, operation: null, elapsedSeconds: null, error: '', stopped: false, canStop: false, prepare() {}, cancel() {} };
   const render = (overrides = {}) => renderToStaticMarkup(React.createElement(GenerationLog, {
@@ -47,8 +47,13 @@ try {
     assert.match(html, /Booking form needs a service\./);
   });
 
+  await test('behaviour operations appear in the conversation in plain words', () => {
+    const behaviourJob = { ...job, candidate: { ...job.candidate, requests: [{ elementId: id, status: 'implemented', explanation: '', operations: [{ kind: 'setBehaviour', elementId: id, behaviour: 'Rotate toward the mouse' }] }] } };
+    assert.match(render({ job: behaviourJob }), /Behaviour: Rotate toward the mouse/);
+  });
+
   await test('an app rejection keeps Try again and hides the declared-question route', () => {
-    const rejected = { ...job, candidate: { ...job.candidate, requests: [{ elementId: id, status: 'conflict', explanation: `Area ${id}: The generation result omitted a requested layer.` }] } };
+    const rejected = { ...job, candidate: { ...job.candidate, requests: [{ elementId: id, status: 'conflict', operations: [], explanation: `Area ${id}: The generation result omitted a requested layer.` }] } };
     const html = render({ job: rejected });
     assert.match(html, />Try again</);
     assert.doesNotMatch(html, /Needs your input|>Change request</);

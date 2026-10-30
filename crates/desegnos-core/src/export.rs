@@ -107,11 +107,11 @@ pub fn behaviour_fingerprint(project: &Project, pointer: &Pointer) -> String {
         _ => None,
     };
     let endpoints: Vec<_> = std::iter::once(source)
-        .chain(target)
+        .chain(target.filter(|endpoint| *endpoint != source))
         .map(|(id, element_id)| {
             project.pages.iter().find(|page| page.id == id).map(|page| {
                 let elements = crate::resolve_for_size(project, page, page.base_size_id());
-                let elements = if let Some(id) = element_id {
+                let elements = if let Some(id) = element_id.filter(|_| !pointer.is_behaviour()) {
                     crate::elements::find_in(&elements, id)
                         .map(std::slice::from_ref)
                         .unwrap_or(&[])
@@ -667,6 +667,7 @@ fn mode_name(mode: GenerationMode) -> &'static str {
 
 fn export_markdown(mode: GenerationMode, design: &serde_json::Value) -> String {
     let instructions = "The HTML and CSS are generated deterministically from the element tree. \
+A pointer whose source and target are the same layer or boundary is that layer's own behaviour: implement its comment. It may read and change anything on its page and use any browser API. \
 Do not generate or rewrite markup or styles. Implement ONLY the requested pointer comments \
 in plain JavaScript, using document.querySelector('[data-desegnos-id=\"<element-or-page-id>\"]') hooks. \
 For each web/app boundary, judge from its background and content colours whether light or dark mode suits it better. Return pages entries with pageId and colorScheme (light or dark). Return empty shared.css. Put all behaviour in shared.js. \

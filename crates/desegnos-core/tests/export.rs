@@ -943,3 +943,74 @@ fn website_import_sitemap_wraps_a_long_level_into_lines() {
     let seventh = imported.pages.iter().find(|page| page.name == "/p06").unwrap();
     assert_eq!(first.sizes[0].x, seventh.sizes[0].x, "each line starts at the same left edge");
 }
+
+#[test]
+fn behaviour_is_requested_once_and_wrapped_in_export_javascript() {
+    for boundary in [false, true] {
+        let (mut project, id) = webpage_project();
+        let page = project.home_page_id;
+        let pointer = &mut project.pointers[0];
+        pointer.comment = "Follow the mouse".into();
+        pointer.to = if boundary {
+            pointer.from = PointerSource::Boundary {
+                page_id: page,
+                size_id: None,
+            };
+            PointerTarget::Boundary {
+                page_id: page,
+                size_id: None,
+            }
+        } else {
+            let PointerSource::Element { element_id, .. } = pointer.from else {
+                unreachable!()
+            };
+            PointerTarget::Element {
+                page_id: page,
+                element_id,
+                size_id: None,
+            }
+        };
+        assert!(pointer.is_behaviour());
+        project.validate().unwrap();
+        let plan = plan_export(&project, &[], Uuid::new_v4()).unwrap();
+        assert_eq!(plan.pointers.len(), 1);
+        assert_eq!(plan.pointers[0].id, id);
+        let bundle = desegnos_core::ai_export_bundle(&project, &plan, &reply(&plan, id)).unwrap();
+        let js = String::from_utf8(bundle.files["behaviours.js"].clone()).unwrap();
+        assert_eq!(
+            js.matches(&format!("/* desegnos-pointer:{id} */")).count(),
+            1
+        );
+        assert!(js.contains("if (!document.querySelector('[data-desegnos-id="));
+        assert!(js.contains("console.log('ready')"));
+        project.last_export = Some(ExportRecord {
+            id: Uuid::new_v4(),
+            project_id: project.id,
+            version: 1,
+            destination: "/tmp/behaviour-export-test".into(),
+            exported_at: "now".into(),
+            pages: bundle.pages,
+            pointers: bundle.pointers,
+            behaviours: bundle.behaviours,
+        });
+        assert!(
+            plan_export(&project, &[], Uuid::new_v4())
+                .unwrap()
+                .pointers
+                .is_empty()
+        );
+        assert_eq!(
+            project.pointer_states()[0].state,
+            desegnos_core::PointerState::Wired
+        );
+        let sibling = empty_element(ElementKind::Text, rect(0.0, 50.0, 100.0, 20.0));
+        project.pages[0].elements.push(sibling);
+        assert_eq!(
+            plan_export(&project, &[], Uuid::new_v4())
+                .unwrap()
+                .pointers
+                .len(),
+            1
+        );
+    }
+}

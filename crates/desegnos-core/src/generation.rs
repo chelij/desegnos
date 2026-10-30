@@ -141,6 +141,11 @@ impl ElementUpdate {
 pub enum ElementOperation {
     /// Replace the requested layer's children with a new element tree.
     ReplaceChildren { children: Vec<ElementDraft> },
+    /// Plain-language behaviour compiled to JavaScript at export; null targets the request boundary.
+    SetBehaviour {
+        element_id: Option<Uuid>,
+        behaviour: String,
+    },
     /// Change existing elements in the layer's subtree.
     Update { patches: Vec<ElementUpdate> },
     /// Add one new element under an existing box in the layer's subtree.
@@ -625,6 +630,16 @@ fn validate_operations(
                     validate_draft(child, image_keys, &mut new_ids)?;
                 }
             }
+            ElementOperation::SetBehaviour {
+                element_id,
+                behaviour,
+            } => {
+                ensure(
+                    element_id.is_none_or(|id| !id.is_nil()),
+                    "A behaviour needs an existing element id.",
+                )?;
+                crate::validate_text(behaviour, "Pointer comment", crate::MAX_PROMPT_CHARS, false)?;
+            }
             ElementOperation::Update { patches } => {
                 ensure(!patches.is_empty(), "An update needs at least one patch.")?;
                 for patch in patches {
@@ -856,6 +871,7 @@ fn fits(parent: &crate::Rect, child: &crate::Rect) -> bool {
 /// change pointers grant; a boundary target grants every layer inside it; a change pointer target
 /// grants what that pointer points at. Reference pointers grant reads only.
 struct RequestScope {
+    behaviour_page: Option<Uuid>,
     allowed: BTreeSet<Uuid>,
     boundary_pages: BTreeSet<Uuid>,
     area: Option<crate::RequestArea>,
@@ -918,7 +934,19 @@ fn scope_for(
     } else if let Some(page_id) = anchor_page {
         boundary_pages.insert(page_id);
     }
+    let mut request_pages = BTreeSet::new();
+    if let Some(request) = request {
+        request_pages.extend(request.targets.iter().filter_map(|target| target.page()));
+        request_pages.extend(request.area.as_ref().and_then(|area| area.page));
+    } else {
+        request_pages.extend(anchor_page);
+    }
     RequestScope {
+        behaviour_page: if request_pages.len() == 1 {
+            request_pages.first().copied()
+        } else {
+            None
+        },
         allowed,
         boundary_pages,
         area: request.and_then(|request| request.area.clone()),
@@ -1048,6 +1076,69 @@ fn apply_operations(
                     .editable_element_mut(target)
                     .expect("the target exists")
                     .children = built;
+            }
+            ElementOperation::SetBehaviour {
+                element_id,
+                behaviour,
+            } => {
+                let (from, to) = if let Some(id) = element_id {
+                    ensure(
+                        scope.allowed.contains(id),
+                        "The generation result changed a layer outside its request.",
+                    )?;
+                    let (page, _) = project
+                        .element(*id)
+                        .ok_or_else(|| Error("This layer no longer exists.".into()))?;
+                    touched.insert(*id);
+                    (
+                        crate::PointerSource::Element {
+                            page_id: page.id,
+                            element_id: *id,
+                            size_id: None,
+                        },
+                        crate::PointerTarget::Element {
+                            page_id: page.id,
+                            element_id: *id,
+                            size_id: None,
+                        },
+                    )
+                } else {
+                    let page_id = scope.behaviour_page.ok_or_else(|| {
+                        Error("A boundary behaviour needs a request in one boundary.".into())
+                    })?;
+                    (
+                        crate::PointerSource::Boundary {
+                            page_id,
+                            size_id: None,
+                        },
+                        crate::PointerTarget::Boundary {
+                            page_id,
+                            size_id: None,
+                        },
+                    )
+                };
+                let existing = project
+                    .pointers
+                    .iter()
+                    .position(|p| p.is_behaviour() && p.from == from);
+                if behaviour.is_empty() {
+                    if let Some(index) = existing {
+                        project.pointers.remove(index);
+                    }
+                } else if let Some(index) = existing {
+                    project.pointers[index].comment = behaviour.clone();
+                } else {
+                    project.pointers.push(crate::Pointer {
+                        id: Uuid::new_v4(),
+                        from,
+                        to,
+                        comment: behaviour.clone(),
+                        kind: crate::PointerKind::Change,
+                        wiring: None,
+                        play: None,
+                        play_comment: String::new(),
+                    });
+                }
             }
             ElementOperation::Update { patches } => {
                 for patch in patches {
@@ -1535,6 +1626,7 @@ pub fn candidate_schema() -> serde_json::Value {
         object(json!({"kind":{"type":"string","enum":["update"]},"patches":{"type":"array","minItems":1,"maxItems":2048,"items":update}})),
         object(json!({"kind":{"type":"string","enum":["insert"]},"parentId":uuid.clone(),"index":nullable(json!({"type":"integer","minimum":0})),"element":{"$ref":"#/$defs/element"}})),
         object(json!({"kind":{"type":"string","enum":["remove"]},"elementId":uuid.clone()})),
+        object(json!({"kind":{"type":"string","enum":["setBehaviour"]},"elementId":nullable(uuid.clone()),"behaviour":text(crate::MAX_PROMPT_CHARS)})),
         object(json!({"kind":{"type":"string","enum":["insertInBoundary"]},"pageId":uuid.clone(),"sizeId":nullable(uuid.clone()),"element":{"$ref":"#/$defs/element"}})),
         object(json!({"kind":{"type":"string","enum":["addReference"]},"item":object(json!({"rect":rect,"kind":reference_kind}))}))
     ]});

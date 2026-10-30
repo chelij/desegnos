@@ -145,6 +145,7 @@ export type ElementDraft = Omit<Element, 'id' | 'meta' | 'image'> & { image?: st
 export type ElementUpdate = { elementId: string; rect?: Rect; rotation?: number; style?: ElementStyle; text?: string; url?: string; layout?: ElementLayout; visible?: boolean; locked?: boolean; name?: string; inputType?: InputType; options?: string[]; language?: string; source?: string; sizeId?: string | null };
 export type ElementOperation =
   | { kind: 'replaceChildren'; children: ElementDraft[] }
+  | { kind: 'setBehaviour'; elementId: string | null; behaviour: string }
   | { kind: 'update'; patches: ElementUpdate[] }
   | { kind: 'insert'; parentId: string; index?: number; element: ElementDraft }
   | { kind: 'remove'; elementId: string }

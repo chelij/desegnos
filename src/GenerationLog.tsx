@@ -111,6 +111,7 @@ export function GenerationLog({ job: currentJob, operation, error, project, cont
           </div>}
           {!past && !working && !resultApplied && !stale && (review.retryable.length > 0 || review.retryAll) && <button disabled={!!operation} onClick={() => { void controller.prepare(review.retryable.length ? review.retryable : undefined).catch(() => {}); }}>Try again</button>}
           {candidate && <p className="log-text">{candidate.summary}</p>}
+          {candidate?.requests.flatMap((request, requestIndex) => request.operations.map((operation, operationIndex) => operation.kind === 'setBehaviour' ? <p className="log-text" key={`${requestIndex}-${operationIndex}`}>Behaviour: {operation.behaviour}</p> : null))}
           {candidate && candidate.criticism.length > 0 && <Disclosure className="generation-feedback" summary={`Design feedback (${candidate.criticism.length})`}><ul>{candidate.criticism.map((item, index) => <li key={index}><p className="log-text">{humanText(item.message)}</p><p className="log-meta">{humanText(item.suggestion)}</p></li>)}</ul></Disclosure>}
           {!past && review.blocked.length > 0 && <section className="log-needs-input" aria-label="Needs your input">
             <p className="log-who">Needs your input</p>
