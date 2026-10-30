@@ -284,7 +284,42 @@ impl ProviderError {
         self
     }
 
-    pub fn message(&self) -> &'static str {
+    /// The message shown for this failure. Request rejections quote the provider's own bounded
+    /// explanation so a rejected reply format is not blamed on the user's request.
+    pub fn message(&self) -> String {
+        if self.kind == ErrorKind::RequestRejected {
+            return self.rejected_message();
+        }
+        self.default_message().to_owned()
+    }
+
+    fn rejected_message(&self) -> String {
+        // OpenAI reports a reply schema it cannot accept through this code and parameter.
+        // Nothing the user asked for can avoid it; Desegnos built the schema.
+        let schema_problem = self.code.as_deref() == Some("invalid_json_schema")
+            || self
+                .param
+                .as_deref()
+                .is_some_and(|param| param.starts_with("text.format"));
+        if schema_problem {
+            return "Desegnos sent the AI service a reply format it doesn't accept. This is a Desegnos bug, not your request.".into();
+        }
+        match self
+            .response_format
+            .as_ref()
+            .and_then(|format| format.provider_message.as_deref())
+        {
+            Some(message) => {
+                format!("The AI service rejected this request: {}", bounded_message(message))
+            }
+            None => {
+                "The AI service rejected this request. Review its settings and requirements before explicitly retrying."
+                    .into()
+            }
+        }
+    }
+
+    fn default_message(&self) -> &'static str {
         if self.kind == ErrorKind::Malformed
             && let Some(reason) = self
                 .response_format
@@ -428,8 +463,19 @@ impl ProviderError {
 
 impl std::fmt::Display for ProviderError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.message())
+        f.write_str(&self.message())
     }
+}
+
+/// Keep a provider explanation to a short, readable line in the UI.
+fn bounded_message(message: &str) -> String {
+    const LIMIT: usize = 400;
+    if message.chars().count() <= LIMIT {
+        return message.to_owned();
+    }
+    let mut bounded: String = message.chars().take(LIMIT).collect();
+    bounded.push('…');
+    bounded
 }
 
 impl std::error::Error for ProviderError {}

@@ -427,7 +427,7 @@ impl ChatgptManager {
             {
                 Ok(models) => (models, None),
                 Err(_) if attempt.cancellation.is_cancelled() => return Err(Kind::Cancelled.into()),
-                Err(error) => (vec![], Some(error.message().into())),
+                Err(error) => (vec![], Some(error.message())),
             }
         } else {
             (
@@ -871,9 +871,7 @@ impl ChatgptManager {
             }
             Err(error) => {
                 state.models.remove(&account_id);
-                state
-                    .model_errors
-                    .insert(account_id, error.message().into());
+                state.model_errors.insert(account_id, error.message());
             }
         }
         drop(state);

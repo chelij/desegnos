@@ -300,7 +300,10 @@ impl GenerationCandidate {
             source.len() <= MAX_GENERATION_BYTES,
             "The generation result exceeds the 8 MiB response limit.",
         )?;
-        let candidate: Self = serde_json::from_str(source)
+        let mut value: serde_json::Value = serde_json::from_str(source)
+            .map_err(|error| Error(format!("The generation result is invalid: {error}")))?;
+        drop_null_optional_draft_fields(&mut value);
+        let candidate: Self = serde_json::from_value(value)
             .map_err(|error| Error(format!("The generation result is invalid: {error}")))?;
         candidate.validate_bounds()?;
         Ok(candidate)
@@ -1429,6 +1432,30 @@ fn nullable<T: serde::Serialize>(schema: T) -> serde_json::Value {
     serde_json::json!({"anyOf":[schema,{"type":"null"}]})
 }
 
+/// Strict structured output requires every draft property, so an omitted optional kind field
+/// arrives as null. The flattened element kind cannot tell a null member from an unknown one,
+/// so remove those nulls before deserialising; every other optional field is an `Option` or has
+/// a default, both of which already read null as absent.
+fn drop_null_optional_draft_fields(value: &mut serde_json::Value) {
+    const NULL_AS_ABSENT: [&str; 4] = ["inputType", "options", "language", "source"];
+    match value {
+        serde_json::Value::Object(object) => {
+            object.retain(|key, member| {
+                !(member.is_null() && NULL_AS_ABSENT.contains(&key.as_str()))
+            });
+            for member in object.values_mut() {
+                drop_null_optional_draft_fields(member);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                drop_null_optional_draft_fields(item);
+            }
+        }
+        _ => {}
+    }
+}
+
 pub fn candidate_schema() -> serde_json::Value {
     use serde_json::json;
     fn object(properties: serde_json::Value) -> serde_json::Value {
@@ -1438,9 +1465,6 @@ pub fn candidate_schema() -> serde_json::Value {
             .keys()
             .cloned()
             .collect();
-        json!({"type":"object","additionalProperties":false,"required":required,"properties":properties})
-    }
-    fn partial_object(properties: serde_json::Value, required: &[&str]) -> serde_json::Value {
         json!({"type":"object","additionalProperties":false,"required":required,"properties":properties})
     }
     fn text(maximum: usize) -> serde_json::Value {
@@ -1471,65 +1495,50 @@ pub fn candidate_schema() -> serde_json::Value {
     let rect = object(
         json!({"x":{"type":"number"},"y":{"type":"number"},"width":{"type":"number","minimum":0},"height":{"type":"number","minimum":0}}),
     );
-    let layout = json!({"oneOf":[
+    let layout = json!({"anyOf":[
         object(json!({"kind":{"type":"string","enum":["free"]}})),
         object(json!({"kind":{"type":"string","enum":["stack"]},"direction":{"type":"string","enum":["row","column"]},"gap":{"type":"number"},"padding":{"type":"number"},"align":{"type":"string","enum":["start","center","end","stretch"]},"justify":{"type":"string","enum":["start","center","end","spaceBetween"]},"wrap":{"type":"boolean"}})),
         object(json!({"kind":{"type":"string","enum":["grid"]},"columns":{"type":"integer","minimum":1,"maximum":64},"gap":{"type":"number"},"padding":{"type":"number"}}))
     ]});
     let kind = json!({"type":"string","enum":["box","group","text","ellipse","line","image","button","link","input","textarea","select","checkbox","radio","video","audio","embed","code"]});
-    let draft = partial_object(
-        json!({
-            "kind":kind,"rect":rect,"name":nullable(text(120)),
-            "rotation":{"type":"number"},"visible":{"type":"boolean"},"locked":{"type":"boolean"},
-            "style":style,"text":text(16_384),"image":nullable(uuid.clone()),
-            "imageRequest":nullable(text(120)),"url":nullable(text(2048)),"layout":layout,
-            "inputType":{"type":"string","enum":["text","email","password","number","search","tel","url","date","time","color","range","file"]},
-            "options":{"type":"array","minItems":1,"maxItems":100,"items":text(120)},
-            "language":text(40),"source":text(200_000),
-            "children":{"type":"array","maxItems":512,"items":{"$ref":"#/$defs/element"}}
-        }),
-        &[
-            "kind",
-            "rect",
-            "name",
-            "rotation",
-            "visible",
-            "locked",
-            "style",
-            "text",
-            "image",
-            "imageRequest",
-            "url",
-            "layout",
-            "children",
-        ],
-    );
-    let update = partial_object(
-        json!({
-            "elementId":uuid.clone(),"rect":rect,"rotation":{"type":"number"},"style":style,
-            "text":text(16_384),"url":text(2048),"layout":layout,"visible":{"type":"boolean"},
-            "locked":{"type":"boolean"},"name":text(120),
-            "inputType":{"type":"string","enum":["text","email","password","number","search","tel","url","date","time","color","range","file"]},
-            "options":{"type":"array","maxItems":100,"items":text(120)},
-            "language":text(40),"source":text(200_000),
-            "sizeId":{"anyOf":[uuid.clone(),{"type":"null"}],"description":"Change only this linked size of the boundary; omit for the base values every size inherits."}
-        }),
-        &["elementId"],
-    );
-    let reference_kind = json!({"oneOf":[
+    let input_type = json!({"type":"string","enum":["text","email","password","number","search","tel","url","date","time","color","range","file"]});
+    // Strict structured output requires every property of every object, so a field the reply may
+    // omit is required and reads null as omitted. The element kind fields stay nullable because
+    // the flattened kind decides which of them applies.
+    let draft = object(json!({
+        "kind":kind,"rect":rect,"name":nullable(text(120)),
+        "rotation":{"type":"number"},"visible":{"type":"boolean"},"locked":{"type":"boolean"},
+        "style":style,"text":text(16_384),"image":nullable(uuid.clone()),
+        "imageRequest":nullable(text(120)),"url":nullable(text(2048)),"layout":layout,
+        "inputType":nullable(input_type.clone()),
+        "options":nullable(json!({"type":"array","minItems":1,"maxItems":100,"items":text(120)})),
+        "language":nullable(text(40)),"source":nullable(text(200_000)),
+        "children":{"type":"array","maxItems":512,"items":{"$ref":"#/$defs/element"}}
+    }));
+    let update = object(json!({
+        "elementId":uuid.clone(),"rect":nullable(rect.clone()),"rotation":nullable(json!({"type":"number"})),
+        "style":nullable(style),"text":nullable(text(16_384)),"url":nullable(text(2048)),
+        "layout":nullable(layout),"visible":nullable(json!({"type":"boolean"})),
+        "locked":nullable(json!({"type":"boolean"})),"name":nullable(text(120)),
+        "inputType":nullable(input_type),
+        "options":nullable(json!({"type":"array","maxItems":100,"items":text(120)})),
+        "language":nullable(text(40)),"source":nullable(text(200_000)),
+        "sizeId":{"anyOf":[uuid.clone(),{"type":"null"}],"description":"Change only this linked size of the boundary; null keeps the base values every size inherits."}
+    }));
+    let reference_kind = json!({"anyOf":[
         object(json!({"kind":{"type":"string","enum":["note"]},"text":text(16_384)})),
         object(json!({"kind":{"type":"string","enum":["link"]},"url":text(2048),"title":text(120)})),
         object(json!({"kind":{"type":"string","enum":["swatch"]},"color":text(32)}))
     ]});
-    let operation = json!({"oneOf":[
+    let operation = json!({"anyOf":[
         object(json!({"kind":{"type":"string","enum":["replaceChildren"]},"children":{"type":"array","maxItems":512,"items":{"$ref":"#/$defs/element"}}})),
         object(json!({"kind":{"type":"string","enum":["update"]},"patches":{"type":"array","minItems":1,"maxItems":2048,"items":update}})),
-        partial_object(json!({"kind":{"type":"string","enum":["insert"]},"parentId":uuid.clone(),"index":{"type":"integer","minimum":0},"element":{"$ref":"#/$defs/element"}}), &["kind","parentId","element"]),
+        object(json!({"kind":{"type":"string","enum":["insert"]},"parentId":uuid.clone(),"index":nullable(json!({"type":"integer","minimum":0})),"element":{"$ref":"#/$defs/element"}})),
         object(json!({"kind":{"type":"string","enum":["remove"]},"elementId":uuid.clone()})),
-        partial_object(json!({"kind":{"type":"string","enum":["insertInBoundary"]},"pageId":uuid.clone(),"sizeId":nullable(uuid.clone()),"element":{"$ref":"#/$defs/element"}}), &["kind","pageId","element"]),
+        object(json!({"kind":{"type":"string","enum":["insertInBoundary"]},"pageId":uuid.clone(),"sizeId":nullable(uuid.clone()),"element":{"$ref":"#/$defs/element"}})),
         object(json!({"kind":{"type":"string","enum":["addReference"]},"item":object(json!({"rect":rect,"kind":reference_kind}))}))
     ]});
-    let action = json!({"oneOf":[
+    let action = json!({"anyOf":[
         object(json!({"kind":{"type":"string","enum":["goTo"]},"boundary":uuid.clone()})),
         object(json!({"kind":{"type":"string","enum":["show"]},"element":uuid.clone()})),
         object(json!({"kind":{"type":"string","enum":["hide"]},"element":uuid.clone()})),
@@ -1537,7 +1546,7 @@ pub fn candidate_schema() -> serde_json::Value {
         object(json!({"kind":{"type":"string","enum":["swap"]},"element":uuid.clone(),"withElement":uuid.clone()})),
         object(json!({"kind":{"type":"string","enum":["exportOnly"]}}))
     ]});
-    let scope = json!({"oneOf":[
+    let scope = json!({"anyOf":[
         object(json!({"kind":{"type":"string","enum":["project"]}})),
         object(json!({"kind":{"type":"string","enum":["page"]},"id":uuid.clone()})),
         object(json!({"kind":{"type":"string","enum":["element"]},"id":uuid.clone()}))

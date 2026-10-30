@@ -1691,6 +1691,15 @@ async fn provider_explanations_without_codes_are_useful_bounded_and_credential_s
                 ErrorKind::Authentication
             }
         );
+        let message = error.message();
+        if status == 200 {
+            assert_eq!(
+                message,
+                format!("The AI service rejected this request: {explanation}")
+            );
+        } else {
+            assert!(!message.contains(explanation));
+        }
         assert_eq!(server.count.load(Ordering::SeqCst), 1);
     }
     for explanation in [
@@ -1728,7 +1737,48 @@ async fn provider_explanations_without_codes_are_useful_bounded_and_credential_s
         );
         assert!(!diagnostic.contains(KEY));
         assert_eq!(server.count.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            error.message(),
+            "The AI service rejected this request. Review its settings and requirements before explicitly retrying."
+        );
     }
+}
+
+#[test]
+fn a_rejected_reply_schema_is_reported_as_a_desegnos_bug() {
+    let mut error = ProviderError::new(ErrorKind::RequestRejected, SubmissionOutcome::Received);
+    error.code = Some("invalid_json_schema".into());
+    error.param = Some("text.format.schema".into());
+    assert_eq!(
+        error.message(),
+        "Desegnos sent the AI service a reply format it doesn't accept. This is a Desegnos bug, not your request."
+    );
+
+    let mut param_only =
+        ProviderError::new(ErrorKind::RequestRejected, SubmissionOutcome::Received);
+    param_only.param = Some("text.format.schema".into());
+    assert!(param_only.message().contains("Desegnos bug"));
+
+    let mut schema_only =
+        ProviderError::new(ErrorKind::RequestRejected, SubmissionOutcome::Received);
+    schema_only.code = Some("invalid_json_schema".into());
+    assert!(schema_only.message().contains("Desegnos bug"));
+
+    let mut long = ProviderError::new(ErrorKind::RequestRejected, SubmissionOutcome::Received);
+    long.response_format = Some(Box::new(ResponseFormat {
+        diagnostic_reply: None,
+        content_type: None,
+        body_kind: ResponseBodyKind::JsonError,
+        body_bytes: 0,
+        provider_message: Some("x".repeat(900).into_boxed_str()),
+        body_truncated: false,
+        limit_bytes: None,
+        rejection: None,
+        correlation: None,
+    }));
+    let message = long.message();
+    assert!(message.starts_with("The AI service rejected this request: "));
+    assert!(message.chars().count() <= 439);
 }
 
 #[tokio::test]
