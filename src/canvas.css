@@ -87,7 +87,8 @@
 .project-canvas.tool-select .page-boundary { cursor: default; }
 .project-canvas .boundary-label-name { cursor: move; }
 .project-canvas.panning, .project-canvas.pan-ready { cursor: grabbing; }
-.project-canvas:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+/* Pointer handlers retain focus for shortcuts; a click must also clear a prior keyboard ring. */
+.project-canvas:focus-visible:not(.pointer-focus) { outline: 2px solid var(--focus); outline-offset: -2px; }
 .project-canvas-layer { position: absolute; top: 0; left: 0; transform-origin: 0 0; }
 /* A file dragged from the file manager outlines the boundary it will land in, or the bed. */
 .project-canvas .canvas-drop-target {
@@ -127,6 +128,7 @@
   border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface);
   box-shadow: var(--shadow-2); cursor: pointer; touch-action: none;
 }
+.project-canvas .project-minimap .minimap-bed { fill: var(--surface); }
 .project-canvas .project-minimap .minimap-boundary { fill: color-mix(in srgb, var(--text) 18%, transparent); stroke: var(--border); stroke-width: 0.75; }
 .project-canvas .project-minimap .minimap-reference { fill: color-mix(in srgb, var(--muted) 30%, transparent); }
 .project-canvas .project-minimap .minimap-viewport { fill: color-mix(in srgb, var(--accent) 14%, transparent); stroke: var(--accent); stroke-width: 1.25; }

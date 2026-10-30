@@ -444,8 +444,10 @@
 .props-hex { flex: 1 1 auto; width: auto; min-width: 0; height: var(--props-field, 26px); min-height: var(--props-field, 26px); padding: 0 var(--space-3); font-variant-numeric: tabular-nums; }
 /* Invalid input keeps its draft visible briefly, then reverts, instead of failing silently. */
 .props-hex.is-invalid { border-color: var(--danger); outline: 2px solid var(--danger); outline-offset: 1px; }
-/* Stroke keeps its colour on one row with the line weight it applies to. */
-.props-stroke { display: flex; align-items: center; gap: var(--props-row); min-width: 0; }
+/* Colour and saved style share a row; stroke width wraps when the dock is narrow. */
+.props-colour-style { display: flex; gap: var(--space-2); min-width: 0; }
+.props-stroke { display: flex; flex-wrap: wrap; align-items: center; gap: var(--props-row); min-width: 0; }
+.props-stroke .props-colour-style { flex: 1 1 180px; }
 .props-stroke .props-num { flex: 0 0 96px; }
 /* Opacity: a percentage field beside a slim slider; the stored value stays 0-1. */
 .props-opacity { display: flex; align-items: center; gap: var(--props-row); min-width: 0; }

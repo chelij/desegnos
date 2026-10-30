@@ -89,6 +89,8 @@ p { margin-bottom: var(--space-5); }
 .segmented button + button { margin-left: 0; }
 .segmented button:hover:not(:disabled) { background: color-mix(in srgb, var(--surface-raised) 60%, transparent); color: var(--text); }
 .segmented button[aria-pressed="true"] { position: relative; z-index: 1; background: var(--surface-raised); border-color: var(--border); color: var(--accent-ink); font-weight: var(--weight-semibold); box-shadow: var(--shadow-1); }
+.segmented.edit-scope { flex: none; }
+.segmented.edit-scope button { padding-inline: var(--space-3); white-space: nowrap; }
 
 .field-pair { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-5); }
 .form-actions, .inline-actions { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-4); }
