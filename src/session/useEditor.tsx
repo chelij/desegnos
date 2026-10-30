@@ -13,7 +13,7 @@ import { readRequestAttachments } from '../requestAttachments';
 import { elementTree, elementTreeIds } from '../projectCanvas/elementGeometry';
 import { needsAiSettings } from '../ProblemBanner.js';
 import { updateSummary, type UpdateCheck, type UpdateSummary } from '../updateCheck';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { isTauri } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { native, edit } from '../api';
@@ -68,14 +68,23 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
   const [checkingUpdates, setCheckingUpdates] = useState(false);
   const [updateResult, setUpdateResult] = useState<UpdateSummary | null>(null);
   const [updateError, setUpdateError] = useState('');
-  const [notices, setNotices] = useState<{ id: number; message: string; undo?: () => void }[]>([]);
+  const [notices, setNotices] = useState<{ id: number; message: string; undo?: () => void; history: string }[]>([]);
   const noticeId = useRef(0);
   // A notice may carry one reversible follow-up, which the toast offers as Undo; repeating a
   // message restarts that toast instead of stacking an identical row.
   const setNotice = useCallback((message: string, undo?: () => void) => {
     const id = ++noticeId.current;
-    setNotices(items => [...items.filter(item => item.message !== message), { id, message, undo }]);
+    const project = current.current?.project;
+    setNotices(items => [...items.filter(item => item.message !== message), { id, message, undo, history: project ? `${project.id}:${project.revision}` : '' }]);
   }, []);
+  // Undo acts on the change it announced, so it leaves as soon as the history moves on.
+  const historyKey = view?.project ? `${view.project.id}:${view.project.revision}` : '';
+  useLayoutEffect(() => {
+    setNotices(items => {
+      const kept = items.filter(item => !item.undo || item.history === historyKey);
+      return kept.length === items.length ? items : kept;
+    });
+  }, [historyKey]);
   const [showPalette, setShowPalette] = useState(false);
   const [dismissedRecovery, setDismissedRecovery] = useState<string[]>([]);
   const [theme, setTheme] = useState<Theme>(readTheme);

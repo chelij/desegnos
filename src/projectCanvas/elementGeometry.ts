@@ -65,6 +65,7 @@ export function forBackground(element: Element, background: string): Element {
   return { ...element, style: { ...style, stroke: { ...style.stroke, color: swap(style.stroke.color) }, textStyle: { ...style.textStyle, color: swap(style.textStyle.color)! } } };
 }
 const MUTED_COLOUR = '#6b6b6b';
+const SHAPE_FILL = '#d9d9d9';
 const BORDER_COLOUR = '#d2d2d2';
 const SURFACE_COLOUR = '#ffffff';
 const MUTED_SURFACE = '#efefef';
@@ -100,7 +101,8 @@ export function defaultStyle(kind: ElementKind): ElementStyle {
   };
   const control = kind === 'input' || kind === 'textarea' || kind === 'select';
   return {
-    fill: kind === 'text' || kind === 'line' || kind === 'group' || kind === 'checkbox' || kind === 'radio' || kind === 'link' ? null : kind === 'code' ? '#f5f5f5' : SURFACE_COLOUR,
+    fill: kind === 'box' || kind === 'ellipse' ? SHAPE_FILL
+      : kind === 'text' || kind === 'line' || kind === 'group' || kind === 'checkbox' || kind === 'radio' || kind === 'link' ? null : kind === 'code' ? '#f5f5f5' : SURFACE_COLOUR,
     stroke: { color: kind === 'text' || kind === 'group' ? null : kind === 'line' ? TEXT_COLOUR : BORDER_COLOUR, width: kind === 'line' ? 2 : control ? 1 : kind === 'box' ? 1 : 0 },
     radius: control ? 4 : 0,
     opacity: 1,

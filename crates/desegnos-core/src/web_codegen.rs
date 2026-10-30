@@ -1254,7 +1254,8 @@ mod tests {
     #[test]
     fn a_plain_layer_states_only_what_it_paints() {
         let mut project = project();
-        let plain = element(ElementKind::Box);
+        let mut plain = element(ElementKind::Box);
+        plain.style.fill = None;
         let mut text = element(ElementKind::Text);
         text.text = "Hi".into();
         let image = element(ElementKind::Image);

@@ -6,6 +6,7 @@ import type { Command, PointerStateView, Project, WorkspaceView, ExportCheck, Ex
 import { idlePlay, playIsActive, type PlayState } from '../projectCanvas/play';
 import type { PreviewState } from '../ProjectCanvas';
 import { errorMessage } from '../editorShared';
+import { projectHasPreviewPages } from '../visibleActions';
 
 type Context = {
   view: WorkspaceView | null;
@@ -234,14 +235,14 @@ export function useExportJobs(input: Pick<Context, 'current' | 'view' | 'showHis
   }
 
   function previewSelectedBoundary() {
-    const { canvasFocus, selectedElementPageId, current, setNotice, play, setPlay } = context();
-    const target = canvasFocus ?? selectedElementPageId ?? current.current?.project?.homePageId ?? null;
+    const { canvasFocus, selectedElementPageId, current, play, setPlay } = context();
+    const project = current.current?.project;
+    if (!project || !projectHasPreviewPages(project)) return;
+    const previewable = (pageId: string | null | undefined) => project.pages.find(page =>
+      page.id === pageId && (page.output === 'webpage' || page.output === 'appScreen'))?.id;
+    const target = previewable(canvasFocus) ?? previewable(selectedElementPageId) ?? previewable(project.homePageId)
+      ?? project.pages.find(page => page.output === 'webpage' || page.output === 'appScreen')?.id;
     if (!target) return;
-    const page = current.current?.project?.pages.find(item => item.id === target);
-    if (page && page.output !== 'webpage' && page.output !== 'appScreen') {
-      setNotice('Slides and images export directly; preview shows AI-built pages.');
-      return;
-    }
     if (playIsActive(play)) setPlay(idlePlay);
     void runExport(target);
   }

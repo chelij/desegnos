@@ -17,7 +17,7 @@ try {
   const result = spawnSync(process.execPath, [compiler, '--ignoreConfig', '--module', 'esnext', '--target', 'ES2022',
     '--moduleResolution', 'bundler', '--skipLibCheck', '--outDir', temporary, 'src/visibleActions.ts'], { cwd: root, encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr || result.stdout || String(result.error));
-  const { requestEditorOpen, showsOpener } = await import(pathToFileURL(join(temporary, 'visibleActions.js')).href);
+  const { projectHasPreviewPages, requestEditorOpen, showsOpener } = await import(pathToFileURL(join(temporary, 'visibleActions.js')).href);
 
   await test('a request editor is open only for the selected layer that holds focus', () => {
     const open = { selectedElementId: 'box-1', focusedElementId: 'box-1' };
@@ -36,9 +36,18 @@ try {
     assert.equal(showsOpener({ available: false, open: true }), false);
   });
 
+  await test('Preview is offered only while a project has web output', () => {
+    const project = outputs => ({ pages: outputs.map((output, index) => ({ id: `page-${index}`, output })) });
+    assert.equal(projectHasPreviewPages(null), false);
+    assert.equal(projectHasPreviewPages({ pages: [] }), false);
+    assert.equal(projectHasPreviewPages(project(['slide', 'image'])), false);
+    assert.equal(projectHasPreviewPages(project(['image', 'webpage'])), true);
+    assert.equal(projectHasPreviewPages(project(['appScreen'])), true);
+  });
+
   await test('the app bar leaves out what is already on screen', async () => {
     const app = await read('App.tsx');
-    assert.match(app, /import \{ showsOpener \} from '\.\/visibleActions';/);
+    assert.match(app, /import \{ projectHasPreviewPages, showsOpener \} from '\.\/visibleActions';/);
     assert.match(app, /showsOpener\(\{ available: true, open: showImport \}\)/);
     assert.match(app, /showsOpener\(\{ available: !aiConnected, open: showAiSettings \}\)/);
     assert.match(app, /showsOpener\(\{ available: !onStartPage && !!project && !!\(generation\.job \|\| generation\.operation\), open: showLog \}\)/);

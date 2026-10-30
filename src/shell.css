@@ -403,6 +403,9 @@
 .dock-panels { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow-y: auto; }
 .dock-panel { display: flex; flex: 1 1 0; flex-direction: column; min-height: 160px; border-bottom: 1px solid var(--border-soft); }
 .dock-panel.is-collapsed { flex: 0 0 auto; min-height: 0; }
+.dock-panel.is-fit-content { flex: 0 0 auto; min-height: 0; }
+.dock-panel.is-fit-content .dock-panel-body { flex: none; overflow: visible; }
+.dock-panel.is-fit-content .export-panel { flex: 0 0 auto; }
 .dock-panel:last-child { border-bottom: 0; }
 .dock-panel-header { display: flex; flex: none; align-items: center; justify-content: space-between; gap: var(--space-3); height: var(--control-lg); min-height: var(--control-lg); padding: 0 var(--space-4) 0 var(--space-5); border-bottom: 1px solid var(--border-soft); }
 .dock-panel-header h2 { margin: 0; font-size: var(--text-md); font-weight: var(--weight-semibold); letter-spacing: 0; text-transform: none; color: var(--text); }

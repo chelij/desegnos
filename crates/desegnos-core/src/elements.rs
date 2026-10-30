@@ -2601,6 +2601,7 @@ fn next_default_name(project: &Project, kind: &ElementKind) -> String {
 
 /// An element with the neutral visuals every new layer starts from.
 pub fn empty_element(kind: ElementKind, rect: Rect) -> Element {
+    let fill = matches!(&kind, ElementKind::Box | ElementKind::Ellipse).then(|| "#d9d9d9".to_owned());
     Element {
         id: Uuid::new_v4(),
         kind,
@@ -2616,7 +2617,7 @@ pub fn empty_element(kind: ElementKind, rect: Rect) -> Element {
             sizing: ElementSizing::default(),
             padding: None,
             references: StyleReferences::default(),
-            fill: None,
+            fill,
             stroke: ElementStroke {
                 color: None,
                 width: 0.0,
