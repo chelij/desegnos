@@ -12,7 +12,9 @@ export function ModalDialog({ title, close, children, className = '', showClose 
     if (!dialog) return;
     const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     dialog.showModal();
-    dialog.querySelector<HTMLElement>('.primary, button')?.focus({ preventScroll: true });
+    // A field to type in comes first, then the primary action; a selector list would take whichever is first in the DOM.
+    (dialog.querySelector<HTMLElement>('input:not([type="hidden"]):not(:disabled), textarea:not(:disabled)')
+      ?? dialog.querySelector<HTMLElement>('.primary') ?? dialog.querySelector<HTMLElement>('button'))?.focus({ preventScroll: true });
     return () => { dialog.close(); if (opener?.isConnected) opener.focus({ preventScroll: true }); };
   }, []);
   // Keys stay inside the dialog so canvas shortcuts such as Delete never act behind it.

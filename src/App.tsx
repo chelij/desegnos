@@ -93,6 +93,12 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
   const nothingToGenerate = requestedAreas === 0 && pendingImages === 0;
   return <div className={presenting ? 'application editor-shell presenting' : 'application editor-shell'}>
     {showPalette && <CommandPalette commands={paletteCommands} close={() => setShowPalette(false)} />}
+    {untitledSave && view?.untitled && project && <ModalDialog title="Save project" close={() => closeUntitledSave(null)}>
+      <UntitledSaveForm key={project.id} project={project} location={projectLocation} busy={pending > 0}
+        cancel={() => closeUntitledSave(null)}
+        chooseLocation={name => native<string | null>('pick_project_save_path', { name })}
+        save={saveUntitledProject} />
+    </ModalDialog>}
     {closeRequest && <ModalDialog title="Close Desegnos?" close={() => { closeRequest.resolve(false); setCloseRequest(null); }}><p>{closeRequest.message}</p><div className="form-actions"><button className="primary" onClick={() => { closeRequest.resolve(false); setCloseRequest(null); }}>Keep editing</button><button className="danger" onClick={() => { closeRequest.resolve(true); setCloseRequest(null); }}>Close Desegnos</button></div></ModalDialog>}
     <header className="app-bar"><div className="wordmark" aria-label="Desegnos"><img className="brand-light" src={brandLight} alt="" /><img className="brand-dark" src={brandDark} alt="" /><span className="sr-only">Desegnos</span></div>
       {!onStartPage && project && !!view?.openProjects?.length && <nav className="project-tabs" aria-label="Open projects">
@@ -179,10 +185,6 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
               apply={accept} notice={setNotice} error={setError} compact={() => run(compactHistory)} />
           : undefined}
         properties={<>
-          {untitledSave && view?.untitled && <UntitledSaveForm key={project.id} project={project} location={projectLocation} busy={pending > 0}
-            cancel={() => closeUntitledSave(null)}
-            chooseLocation={name => native<string | null>('pick_project_save_path', { name })}
-            save={saveUntitledProject} />}
           {selectedPointer
           ? <PointerProperties pointer={selectedPointer} project={project} state={selectedPointerState} busy={pending > 0} rewriting={false}
               aiConnected={aiConnected} connectAi={() => setShowAiSettings(true)}

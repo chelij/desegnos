@@ -430,8 +430,7 @@ export function UntitledSaveForm({ project, location, busy, chooseLocation, save
     } catch (reason) { fail(reason); }
     finally { setWorking(false); }
   }
-  return <form className="dock-form untitled-save" aria-label="Save untitled project" onSubmit={submit}>
-    <h3>Save project</h3>
+  return <form className="dialog-body dock-form untitled-save" aria-label="Save untitled project" onSubmit={submit}>
     <label className="dock-field">Project name
       <input autoFocus required maxLength={PROJECT_NAME_MAX_LENGTH} value={name} disabled={locked} autoComplete="off"
         onFocus={event => event.currentTarget.select()} onChange={event => setName(event.target.value)} />
