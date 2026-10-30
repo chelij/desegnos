@@ -3466,7 +3466,7 @@ async fn a_reply_that_loops_on_the_same_operations_is_stopped() {
         )
     };
     let mut events = vec![delta("{\"operations\":[".into())];
-    for _ in 0..40 {
+    for _ in 0..250 {
         events.push(delta(operation("visible")));
         events.push(delta(operation("locked")));
     }
@@ -3488,5 +3488,13 @@ async fn a_reply_that_loops_on_the_same_operations_is_stopped() {
     assert!(
         !sse::ends_in_repetition(distinct.as_bytes()),
         "similar but different operations are not a loop"
+    );
+    let marquee = format!(
+        "{{\"kind\":\"insert\",\"text\":\"{}",
+        "As an AI language model, I love toast and the colour seven. ".repeat(120)
+    );
+    assert!(
+        !sse::ends_in_repetition(marquee.as_bytes()),
+        "text written to repeat on purpose is not a loop"
     );
 }

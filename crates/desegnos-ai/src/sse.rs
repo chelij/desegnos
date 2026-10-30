@@ -14,7 +14,8 @@ pub(crate) const MAX_WHITESPACE_RUN: usize = 2_000;
 // A model stuck in a loop repeats the same operations until the stream is cut off.
 const REPETITION_CHECK_BYTES: usize = 4096;
 const REPETITION_TIMES: usize = 8;
-const REPETITION_MIN_BYTES: usize = 2048;
+// Large enough that text written to repeat on purpose (a marquee, a looping list) is not a loop.
+const REPETITION_MIN_BYTES: usize = 32 * 1024;
 const REPETITION_MAX_PERIOD: usize = 16 * 1024;
 const REPETITION_NEEDLE: usize = 64;
 
