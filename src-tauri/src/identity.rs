@@ -1152,7 +1152,7 @@ impl IdentityService {
                 } else {
                     AnalysisStatus::Failed
                 };
-                record.error = Some(failure.message().into());
+                record.error = Some(failure.message());
                 record.response_id = failure.response_id;
                 record.usage = failure.usage;
                 record.message = "Identity analysis did not finish. Review its status before explicitly analyzing again; no project was created.".into();
@@ -1642,3 +1642,76 @@ pub fn analyze_identity(
     Ok(view)
 }
 
+#[cfg(test)]
+mod strict_schema_tests {
+    use super::*;
+    use std::collections::BTreeSet;
+
+    /// OpenAI Structured Outputs strict mode rejects `oneOf` and any object that does not
+    /// require every property, so validate the real identity reply schema the same way the
+    /// generation reply schema is validated.
+    fn assert_strict_schema(schema: &Value, path: &str) {
+        let object = schema
+            .as_object()
+            .unwrap_or_else(|| panic!("{path} is not a schema object"));
+        for keyword in [
+            "oneOf",
+            "allOf",
+            "not",
+            "if",
+            "then",
+            "else",
+            "patternProperties",
+        ] {
+            assert!(
+                !object.contains_key(keyword),
+                "{path} uses the unsupported keyword {keyword}"
+            );
+        }
+        assert!(
+            object.get("anyOf").is_none() || path != "identity",
+            "the schema root must not use anyOf"
+        );
+        if object.get("type").and_then(Value::as_str) == Some("object") {
+            assert_eq!(
+                object.get("additionalProperties"),
+                Some(&Value::Bool(false)),
+                "{path} must set additionalProperties: false"
+            );
+            let properties = object
+                .get("properties")
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("{path} has no properties object"));
+            let required: BTreeSet<&str> = object
+                .get("required")
+                .and_then(Value::as_array)
+                .unwrap_or_else(|| panic!("{path} has no required list"))
+                .iter()
+                .map(|key| key.as_str().expect("required keys are strings"))
+                .collect();
+            let keys: BTreeSet<&str> = properties.keys().map(String::as_str).collect();
+            assert_eq!(required, keys, "{path} must require every property");
+            for (name, child) in properties {
+                assert_strict_schema(child, &format!("{path}.properties.{name}"));
+            }
+        }
+        if let Some(items) = object.get("items") {
+            assert_strict_schema(items, &format!("{path}.items"));
+        }
+        if let Some(branches) = object.get("anyOf").and_then(Value::as_array) {
+            for (index, branch) in branches.iter().enumerate() {
+                assert_strict_schema(branch, &format!("{path}.anyOf[{index}]"));
+            }
+        }
+        if let Some(definitions) = object.get("$defs").and_then(Value::as_object) {
+            for (name, child) in definitions {
+                assert_strict_schema(child, &format!("{path}.$defs.{name}"));
+            }
+        }
+    }
+
+    #[test]
+    fn identity_candidate_schema_conforms_to_strict_structured_output() {
+        assert_strict_schema(&candidate_schema(), "identity");
+    }
+}

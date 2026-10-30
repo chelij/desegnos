@@ -185,7 +185,7 @@ impl CredentialManager {
         }
         match self.vault.get() {
             Ok(key) => info(key.as_ref(), CredentialLocation::System, None),
-            Err(error) => info(None, CredentialLocation::None, Some(error.message().into())),
+            Err(error) => info(None, CredentialLocation::None, Some(error.message())),
         }
     }
 
