@@ -210,6 +210,16 @@ export function fitCamera(bounds: Rect, viewport: Viewport, padding = FIT_PADDIN
   return { zoom, x: (viewport.width - bounds.width * zoom) / 2 - bounds.x * zoom, y: (viewport.height - bounds.height * zoom) / 2 - bounds.y * zoom };
 }
 
+// Inline editing needs readable type, not a fit of every linked page size. Tiny
+// type (<12px at 100%) may magnify past 100%, within the usual camera limits.
+export function textEditingCamera(camera: CanvasCamera, bounds: Rect, fontSize: number, viewport: Viewport): CanvasCamera {
+  if (!Number.isFinite(fontSize) || fontSize <= 0 || fontSize * camera.zoom >= 12
+    || viewport.width < 1 || viewport.height < 1) return camera;
+  const targetZoom = Math.min(16 / fontSize, fontSize < 12 ? MAX_ZOOM : 1);
+  // Prefer the whole text box when a very large element cannot fit at 16px.
+  return fitCamera(bounds, viewport, 24, targetZoom);
+}
+
 // Screen = world * zoom + camera offset, so the world point under `point` stays put.
 export function zoomCameraAt(camera: CanvasCamera, point: Point, zoom: number): CanvasCamera {
   const next = clamp(Number.isFinite(zoom) ? zoom : camera.zoom, MIN_ZOOM, MAX_ZOOM);

@@ -8,7 +8,7 @@ try {
   const {
     boundaryHeight, layoutBoundaries, drawnBoundaryRect, snapToBoundaryGrid, canvasRectFromPage, pageRectFromCanvas,
     pushApartBoundaries, boundaryMoves, boundariesByPosition, boundaryKey, dotGrid, unionBounds, sameBoundaries,
-    fitCamera, zoomCameraAt, panCamera, drawnFrameRect, referenceNoteRect, movedReferenceRect, resizedReferenceRect,
+    fitCamera, textEditingCamera, zoomCameraAt, panCamera, drawnFrameRect, referenceNoteRect, movedReferenceRect, resizedReferenceRect,
     convertedReferenceRects, referenceFrameRect, pushApartReference, referenceMoves, insideRect, boundaryAt, boundaryNear,
     insideAnyBoundary, referenceItemAt, canvasTargetKey, selectedPointers, selectedReference, selectedElementIds,
     selectedElementTargets, hasCanvasTarget, toggleCanvasTarget, sizeTarget, nearestEdgeAnchors, pointerEndpointKey,
@@ -165,6 +165,39 @@ try {
     assert.equal(FIT_PADDING, 48);
     const tinyViewport = fitCamera({ x: 0, y: 0, width: 100_000, height: 100_000 }, { width: 100, height: 100 });
     assert.equal(tinyViewport.zoom, MIN_ZOOM);
+  });
+
+  await test('inline editing brings small text to 16 screen pixels and keeps it inside the canvas', () => {
+    const viewport = { width: 900, height: 600 }; // Canvas width already excludes the dock.
+    const before = { x: 20, y: -40, zoom: 0.32 };
+    for (const bounds of [box(2500, 1700, 240, 60), box(-2000, -800, 0, 24)]) {
+      const camera = textEditingCamera(before, bounds, 20, viewport);
+      assert.equal(camera.zoom, 0.8);
+      const topLeft = screenPoint(bounds, camera);
+      assert.ok(topLeft.x >= 24 && topLeft.y >= 24);
+      assert.ok(topLeft.x + bounds.width * camera.zoom <= viewport.width - 24);
+      assert.ok(topLeft.y + bounds.height * camera.zoom <= viewport.height - 24);
+    }
+    assert.equal(textEditingCamera(before, box(0, 0, 200, 30), 14, viewport).zoom, 1);
+    assert.equal(textEditingCamera(before, box(0, 0, 200, 30), 8, viewport).zoom, 2);
+    assert.equal(textEditingCamera(before, box(0, 0, 20, 3), 1, viewport).zoom, ZOOM_LEVELS.at(-1));
+    const large = box(0, 0, 2000, 1000);
+    const fitted = textEditingCamera(before, large, 20, viewport);
+    assert.ok(large.width * fitted.zoom <= viewport.width - 48);
+    assert.ok(large.height * fitted.zoom <= viewport.height - 48);
+  });
+
+  await test('inline editing leaves readable text and invalid font sizes alone', () => {
+    const bounds = box(1000, 2000, 200, 30), viewport = { width: 900, height: 600 };
+    for (const zoom of [0.6, 0.8, 1, 2]) {
+      const camera = { x: 5, y: 10, zoom };
+      assert.equal(textEditingCamera(camera, bounds, 20, viewport), camera);
+    }
+    const camera = { x: 5, y: 10, zoom: 0.32 };
+    for (const size of [0, -1, Number.NaN, Infinity]) {
+      assert.equal(textEditingCamera(camera, bounds, size, viewport), camera);
+    }
+    assert.equal(textEditingCamera(camera, bounds, 20, { width: 0, height: 0 }), camera);
   });
 
   await test('zoom stays anchored under the cursor and clamps to the edit range', () => {

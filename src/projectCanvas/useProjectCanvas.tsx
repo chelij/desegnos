@@ -11,13 +11,13 @@ import {
   DuplicateRepeat, ProjectCanvasProps, isElementTarget, elementAt, targetKey,
 } from './interactionTypes';
 import { canvasView } from './canvasView';
-import { useEffect, useImperativeHandle, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { isTauri } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { isTextField } from '../WorkspaceSurface';
 import {
   automaticLinks, boundaryAt, boundaryNear, canvasTargetKey, dotGrid, fitCamera, nearestEdgeAnchors, selectedPointers,
-  viewportWorldRect, type Boundary, type CanvasTarget, type Point, type ReferenceBox, type RequestBox,
+  textEditingCamera, viewportWorldRect, type Boundary, type CanvasTarget, type Point, type ReferenceBox, type RequestBox,
 } from '../projectCanvasGeometry';
 import type { Element, ElementPatch, NamedView, Page, Project, Rect, ReferenceItem, RequestArea, RequestShape, RequestTarget } from '../types';
 import { onEditScope, type EditScope } from './selectionBar';
@@ -210,6 +210,7 @@ export function useProjectCanvas({
   const pasteHandler = useRef<(data: DataTransfer | null, target: EventTarget | null) => boolean>(() => false);
   const pendingText = useRef<PendingText | null>(null);
   const [editing, setEditing] = useState<{ pageId: string; sizeId: string; elementId: string; autoWidth: boolean; created: boolean } | null>(null);
+  const [editingBounds, setEditingBounds] = useState<{ session: typeof editing; rect: Rect } | null>(null);
   const [pendingImage, setPendingImage] = useState<{ uri: string; width: number; height: number; name: string } | null>(null);
   const [viewSize, setViewSize] = useState({ width: 0, height: 0 });
   // The minimap draws boundaries and reference; it stays hidden while all of it fits on screen.
@@ -720,8 +721,37 @@ export function useProjectCanvas({
   const editingElement = editing ? pendingText.current?.element ?? findElementIn(pageFor(editing.pageId, editing.sizeId)?.elements ?? [], editing.elementId) : null;
   const editingBoundary = editing ? boundaries.find(item => item.sizeId === editing.sizeId) ?? null : null;
   const editingScreen = editing && editingElement
-    ? (pendingText.current ? screenRect(pendingText.current.worldRect, camera) : elementScreenRect(editing.elementId, editing.sizeId)) ?? (editingBoundary ? textEditorScreen(project, editing.pageId, editingElement, editingBoundary, camera, editing.sizeId) : null)
+    ? (editingBounds?.session === editing ? screenRect(editingBounds.rect, camera)
+      : pendingText.current ? screenRect(pendingText.current.worldRect, camera) : elementScreenRect(editing.elementId, editing.sizeId))
+      ?? (editingBoundary ? textEditorScreen(project, editing.pageId, editingElement, editingBoundary, camera, editing.sizeId) : null)
     : null;
+
+  // Both pending Text-tool drafts and double-click edits arrive here. Adjust
+  // once on entry, before painting, so typing and later manual zoom stay put.
+  useLayoutEffect(() => {
+    if (!editing || !editingElement || !surface.current) { setEditingBounds(null); return; }
+    const current = currentCamera();
+    const screen = (pendingText.current ? screenRect(pendingText.current.worldRect, current) : elementScreenRect(editing.elementId, editing.sizeId))
+      ?? (editingBoundary ? textEditorScreen(project, editing.pageId, editingElement, editingBoundary, current, editing.sizeId) : null);
+    if (!screen) return;
+    const font = editingElement.style.textStyle;
+    const bounds = {
+      x: (screen.left - current.x) / current.zoom,
+      y: (screen.top - current.y) / current.zoom,
+      width: screen.width / current.zoom,
+      height: screen.height / current.zoom,
+    };
+    // Project the measured world bounds on later camera changes: reading the DOM
+    // during render would still see the previous camera's transform.
+    setEditingBounds({ session: editing, rect: bounds });
+    // The dock is beside this surface; the floating selection bar hides while editing.
+    const next = textEditingCamera(current, { ...bounds, width: Math.max(bounds.width, font.size),
+      height: Math.max(bounds.height, font.size * font.lineHeight) }, font.size, surface.current.getBoundingClientRect());
+    if (next === current) return;
+    stopTransition();
+    touched.current = true;
+    setCamera(next);
+  }, [editing]);
 
   function elementScreenRect(elementId: string, sizeId?: string | null): ScreenRect | null {
     const scope = sizeId ? `[data-size="${CSS.escape(sizeId)}"] ` : '';
