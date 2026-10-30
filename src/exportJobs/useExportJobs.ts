@@ -234,13 +234,13 @@ export function useExportJobs(input: Pick<Context, 'current' | 'view' | 'showHis
     void mutate({ type: 'forget_export_pointer', pointer_id: pointerId }).catch(() => {});
   }
 
-  function previewSelectedBoundary() {
+  function previewSelectedBoundary(preferredPageId?: string | null) {
     const { canvasFocus, selectedElementPageId, current, play, setPlay } = context();
     const project = current.current?.project;
     if (!project || !projectHasPreviewPages(project)) return;
     const previewable = (pageId: string | null | undefined) => project.pages.find(page =>
       page.id === pageId && (page.output === 'webpage' || page.output === 'appScreen'))?.id;
-    const target = previewable(canvasFocus) ?? previewable(selectedElementPageId) ?? previewable(project.homePageId)
+    const target = previewable(preferredPageId) ?? previewable(canvasFocus) ?? previewable(selectedElementPageId) ?? previewable(project.homePageId)
       ?? project.pages.find(page => page.output === 'webpage' || page.output === 'appScreen')?.id;
     if (!target) return;
     if (playIsActive(play)) setPlay(idlePlay);

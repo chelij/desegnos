@@ -7,7 +7,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { CodeEditor } from '../CodeEditor';
 import { CompactNumberField, CompactTextField } from '../CompactField';
 import { normalizeAngle } from '../numberExpression';
-import { ChoiceRow, PropsSection } from '../EditorDock';
+import { ChoiceRow, PropsSection, BehaviourField, type BehaviourProperty } from '../EditorDock';
 import { Icon } from '../icons';
 import { projectCodeSource } from '../editorHtml';
 import type { Element, ElementPadding, ElementPatch, ElementStyle, InputType, Page, PendingRequest, Project, Rect, RequestAttachment } from '../types';
@@ -195,8 +195,9 @@ function PaddingFields({ uniform, sides, disabled, change }: {
   </>;
 }
 
-export function ElementProperties({ project, page, pageId, sizeId, elements, busy, update, rename, link, unlink, canLink, canUnlink, request, setRequest, updateContext, generate, error, styleCommand }: {
+export function ElementProperties({ project, page, pageId, sizeId, elements, busy, update, rename, link, unlink, canLink, canUnlink, request, setRequest, updateContext, generate, error, styleCommand, behaviour }: {
   styleCommand?: (command: import('../types').Command) => Promise<unknown>;
+  behaviour?: BehaviourProperty;
   project: Project; page: Page; pageId: string; sizeId: string | null; elements: Element[]; busy: boolean;
   update: (patches: ElementPatch[]) => void;
   rename: (name: string | null) => Promise<void>;
@@ -404,6 +405,7 @@ export function ElementProperties({ project, page, pageId, sizeId, elements, bus
         disabled={busy} valid={validLink} commit={commitUrl} />
       {single.url && <button type="button" className="dock-action" disabled={busy} onClick={() => commitUrl('')}>Remove link</button>}
     </PropsSection>}
+    {single && behaviour && <PropsSection id="props-behaviour" title="Behaviour"><BehaviourField {...behaviour} /></PropsSection>}
     {visual && <PropsSection id="props-appearance" title="Appearance">
       {kind !== 'line' && <div className="props-colour-style"><ColourField label="Fill" value={fill ?? ''} mixed={mixed(fill)} disabled={busy} commit={value => { rememberColour('fill', value.trim() || null); commitStyle(style => { style.fill = value.trim() || null; style.references = { ...style.references, fill: null }; }); }} />{picker('fill')}</div>}
       <div className="props-stroke">

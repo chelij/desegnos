@@ -13,6 +13,7 @@ import { shownReference } from './reference';
 import { type ScreenRect } from './surface';
 import { elementLocalRect, isTextKind } from './elementGeometry';
 import { playIsActive, type PlayState } from './play';
+import { behaviourFor, behaviourPointer } from './behaviours';
 import {
   elementTree, findElementIn, axisLockedDelta, drawRectWithKeys, rectFromPoints, resizedRectWithKeys,
   snappedLineEnd, snapPoint,
@@ -96,6 +97,7 @@ type Context = {
   selectTargets: (targets: { pageId: string; elementId: string; sizeId?: string | null; }[]) => void;
   endpointAt: (point: Point) => { endpoint: PointerSource | PointerTarget; rect: Rect; } | null;
   addPointer: (pointer: Pointer) => Promise<void>;
+  focusBehaviour: (source: PointerSource) => void;
   createdPointer: import("react").RefObject<string | null>;
   setArmedPointer: import("react").Dispatch<import("react").SetStateAction<{ pointerId: string; end: 'from' | 'to'; } | null>>;
   selectPointer: (pointerId: string, additive?: boolean) => void;
@@ -558,7 +560,17 @@ export function createCanvasInteraction(context: () => Context) {
     if (active.kind === 'draw-pointer') {
       if (!active.moved) return;
       const hit = endpointAt(lastPointer.current ?? active.current);
-      if (!hit || samePointerEndpoint(active.source, hit.endpoint)) return;
+      if (!hit) return;
+      if (samePointerEndpoint(active.source, hit.endpoint)) {
+        // Dropping a pointer back on its own layer or boundary describes that layer's behaviour.
+        const { project, addPointer, focusBehaviour, busy } = context();
+        const source = active.source;
+        const focus = () => focusBehaviour(source);
+        if (behaviourFor(project, source)) { focus(); return; }
+        busy.current = true;
+        void addPointer(behaviourPointer(source, '')).then(focus).catch(() => {}).finally(() => { busy.current = false; });
+        return;
+      }
       const pointer: Pointer = { id: crypto.randomUUID(), from: active.source, to: hit.endpoint as PointerTarget, comment: '', kind: 'reference', wiring: null };
       busy.current = true;
       void addPointer(pointer).then(() => { createdPointer.current = pointer.id; setArmedPointer(null); selectPointer(pointer.id); }).catch(() => {}).finally(() => { busy.current = false; });

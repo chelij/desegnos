@@ -10,7 +10,7 @@ import { SelectionBar } from './projectCanvas/selectionBar';
 import { BoundaryLayer } from './projectCanvas/boundaries';
 import { RequestBoxEditor, RequestLayer } from './projectCanvas/requests';
 import { ReferenceLayer, ReferenceNoteEditor } from './projectCanvas/reference';
-import { PointerComments, PointerHandles, PointerLines } from './projectCanvas/pointers';
+import { PointerComments, PointerHandles, PointerLines, BehaviourBadges } from './projectCanvas/pointers';
 import { screenRect } from './projectCanvas/surface';
 import { Minimap } from './projectCanvas/Minimap';
 import { ElementSelectionOverlay, ElementTextEditor } from './projectCanvas/elements';
@@ -25,7 +25,7 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
   removeSelection, removeElements, deleteBoundary, addReference, updateReference, elementToReference, referenceToElement, attachToRequest,
   addRequest, updateRequest, selectRequest,
   insertElements, updateElements, moveElements, groupElements, ungroupElements, linkElements, unlinkElements, pasteLinked,
-  addPointer, updatePointer, pointerStates, tool, insertKind, onTool, boundaryKind, requestShape, onRequestShape, focusedSize, widthPreview, onZoom, onLayout,
+  addPointer, updatePointer, focusBehaviour, pointerStates, tool, insertKind, onTool, boundaryKind, requestShape, onRequestShape, focusedSize, widthPreview, onZoom, onLayout,
   play, onPlayBoundary, onPlayElement, onPlayExit, preview, previewClose, previewRefresh,
 }, ref) {
   const [pointerFocus, setPointerFocus] = useState(false);
@@ -33,7 +33,7 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
     runCanvasAction, surface, panning, spaceHeld, zoomHeld, painterArmed, dropHover, dotStyle, pointerDown, keyDown,
     doubleClick, paste, dropText, imagePicker, chooseImage, camera, scrubbed, moving, editing, movingElements,
     openPlaceholder, viewport, inverse, boundaries, requestDraft, draftArea, movingItems, draftNote, draft,
-    draftElement, marquee, zoomRect, entries, autoLinks, pointerDraft, selectedPointerIds, choosePointer,
+    draftElement, marquee, zoomRect, entries, autoLinks, behaviours, pointerDraft, selectedPointerIds, choosePointer,
     createdPointer, selectionScreen, viewSize, selectionFill, selectionLinked,
     selectionLinkable, selectionHyperlink, focusElementLink, selectionScope, setSelectionFill, alignSelection, distributeSelection, setSelectionScope,
     startRequestOnSelection, linkSelection, unlinkSelection, duplicateElements, deleteSelectedLayers,
@@ -43,7 +43,7 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
     cancelRequestDraft, selectedItem, selectedItemScreen, createdItem, startReferenceResize, pasteChoice,
     setPasteChoice, confirmPaste, linkChoice, linkCopies, setLinkChoice, previewScreen, dropNotice,
     setDropNotice,
-  } = useProjectCanvas({ editProject, project, openPage, createBoundary, savePlacements, saveView, selection, focused, selectBoundary, selectReference, selectPointer, selectElement, clearSelection, removeSelection, removeElements, deleteBoundary, addReference, updateReference, elementToReference, referenceToElement, attachToRequest, addRequest, updateRequest, selectRequest, insertElements, updateElements, moveElements, groupElements, ungroupElements, linkElements, unlinkElements, pasteLinked, addPointer, updatePointer, pointerStates, tool, insertKind, onTool, boundaryKind, requestShape, onRequestShape, focusedSize, widthPreview, onZoom, onLayout, play, onPlayBoundary, onPlayElement, onPlayExit, preview, previewClose, previewRefresh }, ref);
+  } = useProjectCanvas({ editProject, project, openPage, createBoundary, savePlacements, saveView, selection, focused, selectBoundary, selectReference, selectPointer, selectElement, clearSelection, removeSelection, removeElements, deleteBoundary, addReference, updateReference, elementToReference, referenceToElement, attachToRequest, addRequest, updateRequest, selectRequest, insertElements, updateElements, moveElements, groupElements, ungroupElements, linkElements, unlinkElements, pasteLinked, addPointer, updatePointer, focusBehaviour, pointerStates, tool, insertKind, onTool, boundaryKind, requestShape, onRequestShape, focusedSize, widthPreview, onZoom, onLayout, play, onPlayBoundary, onPlayElement, onPlayExit, preview, previewClose, previewRefresh }, ref);
   const presenting = playIsActive(play) && project.pages.length > 0 && project.pages.every(page => page.output === 'slide');
   const slides = project.pages;
   const slideIndex = Math.max(0, slides.findIndex(page => page.id === play.boundary));
@@ -103,6 +103,8 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
       change={(pointerId, comment) => updatePointer(pointerId, { comment })}
       changeKind={(pointerId, kind) => updatePointer(pointerId, { kind })}
       autoFocusId={createdPointer.current} close={() => { createdPointer.current = null; surface.current?.focus({ preventScroll: true }); }} />
+    <BehaviourBadges entries={behaviours} camera={camera} viewport={viewport} pointerStates={pointerStates} enabled={tool === 'select'}
+      onSelect={pointer => focusBehaviour(pointer.from)} />
     <BoundaryLabels project={project} boundaries={boundaries} moving={moving} draft={draft} draftKind={boundaryKind} focused={focused} selection={selection} camera={camera} openPage={openPage} />
     {selectionScreen && <SelectionBar screen={selectionScreen} viewWidth={viewSize.width} fill={selectionFill} linked={selectionLinked} linkable={selectionLinkable} hyperlink={selectionHyperlink} scope={selectionScope}
       onFill={setSelectionFill} onAlign={alignSelection} onDistribute={distributeSelection} count={selectedElementTargets.length} onScope={setSelectionScope} onRequest={() => { startRequestOnSelection(); }}

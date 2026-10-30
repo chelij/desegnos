@@ -38,7 +38,8 @@ import { type PaletteCommand } from '../CommandPalette';
 import { activeGeneration, useGeneration } from '../useGeneration';
 import type { AiSettingsView, AppSettingsView, BoundaryKind, Brief, Element, ElementKind, ElementMove, ElementPatch, GenerationJobView, GenerationMode, GridSettings, LinkedPasteInstance, NamedView, PageSize, PendingRequest, Pointer, PointerSource, PointerStateView, PointerTarget, Project, Rect, ReferenceItem, RequestAttachment, SizePreset, WorkspaceView, RecentProjectsView, RecentProject } from '../types';
 import { baseSizeId, resolveForSize } from '../projectCanvas/sizes';
-import { idlePlay, playClick, type PlayState } from '../projectCanvas/play';
+import { idlePlay, playClick, playIsActive, type PlayState } from '../projectCanvas/play';
+import { behaviourSourceKey, playShouldPreview } from '../projectCanvas/behaviours';
 
 export function useEditor({ initialView }: { initialView?: WorkspaceView } = {}) {
 
@@ -101,6 +102,8 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
   const [canvasFocus, setCanvasFocus] = useState<string | null>(null);
   const [widthPreview, setWidthPreview] = useState<{ sizeId: string; width: number } | null>(null);
   const [canvasFocusSize, setCanvasFocusSize] = useState<string | null>(null);
+  const [behaviourFocus, setBehaviourFocus] = useState<{ source: string; token: number } | null>(null);
+  const behaviourToken = useRef(0);
 
   const [canvasZoom, setCanvasZoom] = useState(1);
   const canvasRef = useRef<ProjectCanvasHandle>(null);
@@ -266,6 +269,12 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
     setCanvasFocus(pageId);
     setCanvasSelection(current => toggleCanvasTarget(current, { kind: 'element', pageId, elementId, sizeId }, additive));
   }, []);
+  // A behaviour badge or a pointer dropped on its own layer lands here: select it and open its field.
+  const focusCanvasBehaviour = useCallback((source: PointerSource) => {
+    if (source.kind === 'element') selectCanvasElement(source.pageId, source.elementId, source.sizeId ?? null);
+    else selectCanvasBoundary(source.pageId, source.sizeId ?? null);
+    setBehaviourFocus({ source: behaviourSourceKey(source), token: ++behaviourToken.current });
+  }, [selectCanvasBoundary, selectCanvasElement]);
   const selectCanvasPointer = useCallback((pointerId: string, additive = false) => {
     setCanvasSelection(current => toggleCanvasTarget(current, { kind: 'pointer', pointerId }, additive));
   }, []);
@@ -542,8 +551,11 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
 
   // Play and Preview export.
   function togglePlay(pageId?: string | null) {
-    const target = pageId ?? canvasFocus ?? selectedElementPageId ?? current.current?.project?.pages[0]?.id ?? null;
+    const projectNow = current.current?.project;
+    const target = pageId ?? canvasFocus ?? selectedElementPageId ?? projectNow?.pages[0]?.id ?? null;
     if (!target) { setNotice('Select a boundary to play.'); return; }
+    // Behaviours only run as exported code, so starting Play hands this boundary to Preview.
+    if (!playIsActive(play) && projectNow && playShouldPreview(projectNow, target)) { setCanvasFocus(target); previewSelectedBoundary(target); return; }
     if (preview) closePreview();
     setPlay(current => current.boundary === target ? idlePlay : { ...idlePlay, boundary: target });
     setCanvasFocus(target);
@@ -937,7 +949,7 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
     selectedBounds, clashPointers, selectNextPointerClash, zoomPercent, showGridSettings, setShowGridSettings,
     showShortcuts, setShowShortcuts, recovery, showProjectLocation, setShowProjectLocation,
     changeProjectLocation, showRecovery, setShowRecovery, importSource, importContext,
-    setCanvasSelection, setCanvasFocus, showStyleGuide,
+    setCanvasSelection, setCanvasFocus, focusCanvasBehaviour, behaviourFocus, showStyleGuide,
     setShowStyleGuide, showNotes, changeBrief, showRename, setShowRename,
     saveConflict, chooseSaveConflict, replacement, setReplacement, confirmation, setConfirmation,
     refreshAiSettings, updateAiSettings, aiPollingError,
