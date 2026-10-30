@@ -17,12 +17,13 @@ function editedAgo(createdAt: number) {
 
 // Versions of the current branch, newest first, with the alternatives they belong to.
 // Restoring never edits history: it becomes the current state as one undo step.
-export function HistoryPanel({ projectId, refreshKey, apply, notice, error }: {
+export function HistoryPanel({ projectId, refreshKey, apply, notice, error, compact }: {
   projectId: string;
   refreshKey: string;
   apply: (workspace: WorkspaceView) => void;
   notice: (message: string) => void;
   error: (message: string) => void;
+  compact: () => void;
 }) {
   const [data, setData] = useState<ProjectHistoryView | null>(null);
   const [busy, setBusy] = useState(false);
@@ -114,6 +115,7 @@ export function HistoryPanel({ projectId, refreshKey, apply, notice, error }: {
           <button type="button" onClick={() => { setCreating(false); setName(''); }}>Cancel</button>
         </form>
       : <button type="button" className="history-action" disabled={busy || !data} onClick={() => { setCreating(true); setRenaming(null); setDeleting(null); }}>New alternative</button>}
+    <button type="button" className="history-action" disabled={busy || !data} onClick={() => compact()}>Compact history</button>
     {alternatives.length > 0 && <ul className="history-alternatives">{alternatives.map(alternativeRow)}</ul>}
     {data && data.versions.length > 0
       ? <ol className="history-list">

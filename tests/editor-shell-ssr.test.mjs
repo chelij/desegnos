@@ -92,6 +92,13 @@ try {
     });
   }
 
+  await test('the app bar names its primary actions and keeps the editor theme in Preferences', () => {
+    const { project } = templates.find(item => item.template === 'website');
+    const html = renderToStaticMarkup(React.createElement(App, { initialView: view(project) }));
+    for (const label of ['Import', 'Play', 'Preview', 'Export']) assert.match(html, new RegExp(`<span class="button-label">${label}</span>`));
+    assert.doesNotMatch(html, /class="theme-toggle icon-button"/);
+  });
+
   await test('the editor shell renders a project with a pointer that has no wiring yet', () => {
     const { project } = templates.find(item => item.template === 'website');
     project.pointers.push({

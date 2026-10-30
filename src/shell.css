@@ -6,11 +6,18 @@
 .shell-primary-actions { display: flex; flex: none; flex-wrap: nowrap; align-items: center; gap: var(--space-1); margin-left: auto; }
 .shell-primary-actions > button { flex: none; }
 .shell-primary-actions > button.icon-button { width: var(--control-md); padding: 0; }
+.shell-primary-actions > button.icon-button.labeled { width: auto; padding-inline: var(--space-3); }
+.shell-primary-actions > button.icon-button.labeled .button-label { font-weight: var(--weight-medium); }
 .shell-primary-actions > .ai-shortcut { padding-inline: var(--space-4); }
 .editor-shell .generation-controls { margin-left: 0; gap: var(--space-2); }
 .editor-shell .generation-mode button { min-width: 52px; }
 .editor-shell .app-bar button { white-space: nowrap; }
 .editor-shell .ai-shortcut { border-color: transparent; }
+/* Below this width the labelled actions would push the bar past its room, so they fall back to icons. */
+@media (max-width: 1100px) {
+  .shell-primary-actions > button.icon-button.labeled { width: var(--control-md); padding: 0; }
+  .shell-primary-actions > button.icon-button.labeled .button-label { display: none; }
+}
 
 /* Menus: separators, right-aligned muted shortcuts and one checked style. */
 .menu-anchor { position: relative; display: inline-flex; flex-shrink: 0; }
@@ -65,7 +72,8 @@
 .dossier-generated .note-record .field-help { margin-top: 0; }
 .project-details dl { display: grid; grid-template-columns: minmax(110px, 1fr) minmax(0, 3fr); gap: var(--space-5) var(--space-6); margin: 0; font-size: var(--text-md); }
 .project-details dt { color: var(--muted); }
-.project-details dd { margin: 0; overflow-wrap: anywhere; }@media (max-width: 820px) {
+.project-details dd { margin: 0; overflow-wrap: anywhere; }
+@media (max-width: 820px) {
   .editor-shell .app-bar { gap: var(--space-2); }
   .shell-primary-actions > button { padding-inline: var(--space-3); }
   .shell-primary-actions > button.icon-button { padding: 0; }
@@ -330,6 +338,22 @@
 .editor-shell { --panel-chrome: var(--surface); }
 .editor-shell .editor-body { display: flex; flex: 1; min-width: 0; min-height: 0; }
 .show-panels { position: absolute; z-index: 15; top: 10px; left: 10px; height: var(--control-md); min-height: var(--control-md); padding: 0 var(--space-4); box-shadow: var(--shadow-2); }
+/* Play says which boundary it runs, in the same pill the canvas uses for its own readouts. */
+.play-pill {
+  position: absolute; z-index: 14; top: 10px; left: 50%; transform: translateX(-50%);
+  display: flex; align-items: center; gap: var(--space-3); max-width: calc(100% - 24px);
+  height: var(--control-md); min-height: var(--control-md); padding: 0 var(--space-2) 0 var(--space-5);
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent); border-radius: var(--radius-pill);
+  background: var(--accent-tint); color: var(--text); box-shadow: var(--shadow-1);
+  font-size: var(--text-xs); font-weight: var(--weight-medium); white-space: nowrap;
+}
+.play-pill-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.play-pill > button {
+  height: 20px; min-height: 20px; padding: 0 var(--space-3);
+  border: 1px solid var(--accent); border-radius: var(--radius-pill);
+  background: var(--surface-raised); color: var(--accent-ink); font-size: var(--text-xs);
+}
+.play-pill > button:hover:not(:disabled) { background: var(--selected); }
 .editor-shell .editor-work { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; }
 
 /* The tool strip floats clear of the window edge as one rounded pill. */

@@ -12,7 +12,7 @@ export type IconName =
   | 'rectangle' | 'ellipse' | 'line' | 'image' | 'video' | 'audio' | 'code' | 'note' | 'group' | 'linked-copies'
   | 'line-weight' | 'corner-radius'
   | 'eye' | 'eye-off' | 'lock' | 'unlock' | 'insert' | 'history' | 'pin' | 'home' | 'folder'
-  | 'redo' | 'play' | 'download';
+  | 'redo' | 'play' | 'stop' | 'download';
 
 const paths: Record<IconName, ReactNode> = {
   close: <path d="M4 4l8 8M12 4l-8 8" />,
@@ -27,6 +27,7 @@ const paths: Record<IconName, ReactNode> = {
   undo: <><path d="M3 6h6.2a4 4 0 0 1 0 8H7.5" /><path d="M6 3 3 6l3 3" /></>,
   redo: <><path d="M13 6H6.8a4 4 0 0 0 0 8H8.5" /><path d="M10 3l3 3-3 3" /></>,
   play: <path d="M5.6 3.4 12.2 8l-6.6 4.6Z" />,
+  stop: <rect x="4.2" y="4.2" width="7.6" height="7.6" rx="1" />,
   download: <><path d="M8 2.8v7.4" /><path d="M4.8 7.2 8 10.4l3.2-3.2" /><path d="M2.9 13.2h10.2" /></>,
   trash: <><path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.6 8.5h5.8l.6-8.5" /><path d="M6.8 7v3.5M9.2 7v3.5" /></>,
   'arrow-left': <><path d="M12.5 8H3.5" /><path d="M7 4 3 8l4 4" /></>,

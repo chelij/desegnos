@@ -121,6 +121,38 @@ try {
     assert.match(app, /id: 'preferences', label: 'Preferences'/);
   });
 
+  await test('the editor menu hides what does not apply and keeps panel actions out of it', async () => {
+    const app = await read('App.tsx');
+    assert.match(app, /\.\.\.\(!onStartPage \? \[\{ id: 'home', label: 'Home'/);
+    assert.match(app, /\.\.\.\(onStartPage && project \? \[\{ id: 'back-to-canvas'/);
+    assert.match(app, /\.\.\.\(recentProjects\.length \? \[\{ id: 'open-recent'/);
+    assert.match(app, /\.\.\.\(canEditProject && project\.lastExport \? \[\{ id: 'open-browser'/);
+    assert.doesNotMatch(app, /Publish online/);
+    assert.doesNotMatch(app, /id: 'compact-history'/);
+    assert.match(await read('HistoryPanel.tsx'), /disabled=\{busy \|\| !data\} onClick=\{\(\) => compact\(\)\}>Compact history<\/button>/);
+  });
+
+  await test('Play names the boundary it runs and the bar reads Stop while it plays', async () => {
+    const app = await read('App.tsx');
+    assert.match(app, /className="play-pill" role="status"/);
+    assert.match(app, /Playing \{playingLabel\}/);
+    assert.match(app, /<button type="button" onClick=\{\(\) => setPlay\(idlePlay\)\}>Stop<\/button>/);
+    assert.match(app, /playIsActive\(play\) \? 'stop' : 'play'/);
+    assert.match(app, /playIsActive\(play\) \? 'Stop' : 'Play'/);
+    assert.doesNotMatch(app, /Playing · Esc to stop/);
+  });
+
+  await test('the app bar labels its primary actions beside their icons', async () => {
+    const app = await read('App.tsx');
+    assert.match(app, /className="icon-button labeled" aria-label="Import" title="Import"/);
+    assert.match(app, /className="icon-button labeled" aria-label="Preview export"/);
+    assert.match(app, /<span className="button-label">Preview<\/span>/);
+    assert.match(app, /<span className="button-label">Export<\/span>/);
+    // The editor theme lives in Preferences; the start page keeps its own toggle.
+    assert.match(app, /\(onStartPage \|\| !project\) && <button type="button" className="theme-toggle icon-button"/);
+    assert.match(await read('shell.css'), /@media \(max-width: 1100px\) \{\n  \.shell-primary-actions > button\.icon-button\.labeled \{ width: var\(--control-md\); padding: 0; \}/);
+  });
+
   await test('hidden controls keep their menu entries and keyboard shortcuts', async () => {
     const app = await read('App.tsx');
     assert.match(app, /\{ id: 'settings', label: 'AI settings'/);

@@ -699,9 +699,6 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
     await mutate({ type: 'update_request', request: { ...request, attachments } });
     if (problems.length) setError(problems.join(' ')); else setNotice('Attached to the request.');
   }, [mutate]);
-  async function switchAppearance(next: 'light' | 'dark') {
-    setTheme(next);
-  }
   // One undoable step covers a whole canvas selection, so removing never interrupts the work.
   function removeCanvasSelection(referenceIds: string[], pointerIds: string[] = [], requestIds: string[] = [], elementIds: { pageId: string; elementId: string }[] = []) {
     const count = referenceIds.length + pointerIds.length + requestIds.length + elementIds.length;
@@ -770,27 +767,25 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
   }
 
   const menuItems: MenuItem[] = [
-    { id: 'home', label: 'Home', disabled: showStartPage || !project, action: () => setShowStartPage(true) },
-    { id: 'back-to-canvas', label: 'Back to canvas', disabled: !project || !showStartPage, action: () => setShowStartPage(false) },
+    ...(!onStartPage ? [{ id: 'home', label: 'Home', action: () => setShowStartPage(true) }] : []),
+    ...(onStartPage && project ? [{ id: 'back-to-canvas', label: 'Back to canvas', action: () => setShowStartPage(false) }] : []),
     { id: 'new', label: 'New project', shortcut: shortcutLabel('new'), action: () => run(newUntitled) },
     { id: 'open', label: 'Open project…', shortcut: shortcutLabel('open'), action: () => run(open) },
-    { id: 'open-recent', label: 'Open recent', disabled: recentProjects.length === 0, children: recentProjects.length ? [
+    ...(recentProjects.length ? [{ id: 'open-recent', label: 'Open recent', children: [
       ...recentProjects.map((entry, index) => ({ id: `open-recent-${index}`, label: entry.name, action: () => run(() => openRecent(entry.path)) })),
       { id: 'open-recent-separator', label: '', separator: true },
       { id: 'forget-recent', label: 'Forget recent project', children: recentProjects.map((entry, index) => ({ id: `forget-recent-${index}`, label: entry.name, action: () => run(() => forgetRecent(entry.path)) })) },
-    ] : [] },
+    ] }] : []),
     { id: 'open-folder', label: 'Open project folder…', action: () => run(() => open(true)) },
     { id: 'save', label: 'Save', shortcut: shortcutLabel('save'), disabled: !canEditProject, action: () => run(() => save()) },
     { id: 'close-project', label: 'Close project', shortcut: shortcutLabel('closeProject'), disabled: !canEditProject, action: () => run(closeProject) },
     { id: 'save-as', label: 'Save as', shortcut: shortcutLabel('saveAs'), disabled: !canEditProject, action: () => run(() => save(true)) },
     { id: 'save-copy', label: 'Save a copy without history…', disabled: !canEditProject || pending > 0, action: () => run(saveCopy) },
     { id: 'rename-project', label: 'Rename project…', disabled: !canEditProject, action: () => setShowRename(true) },
-    { id: 'compact-history', label: 'Compact history', disabled: !canEditProject || pending > 0, action: () => run(compactHistory) },
     ...(view?.recoveries.length ? [{ id: 'recover', label: 'Recover unsaved projects', action: () => setShowRecovery(true) }] : []),
     { id: 'file-divider', label: '', separator: true },
     { id: 'export', label: 'Export…', shortcut: shortcutLabel('export'), disabled: !canEditProject, action: openExportPanel },
-    { id: 'open-browser', label: 'Open in browser', disabled: !canEditProject || !project?.lastExport, action: () => run(openInBrowser) },
-    { id: 'publish', label: 'Publish online (coming soon)', disabled: true },
+    ...(canEditProject && project.lastExport ? [{ id: 'open-browser', label: 'Open in browser', action: () => run(openInBrowser) }] : []),
     { id: 'ai-divider', label: '', separator: true },
     { id: 'settings', label: 'AI settings', action: () => setShowAiSettings(true) },
     { id: 'mode', label: 'AI style', disabled: !canEditProject || working, children: (['fuzzy', 'strict'] as GenerationMode[]).map(mode => ({ id: mode, label: mode === 'fuzzy' ? 'Flexible' : 'Precise', checked: project?.generationMode === mode, action: () => run(() => mutate(current => current.generationMode === mode ? null : { type: 'set_generation_mode', mode })) })) },
@@ -900,7 +895,7 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
 
   return {
     showPalette, paletteCommands, setShowPalette, closeRequest, setCloseRequest, onStartPage, project, view,
-    run, switchProjectTab, closeProjectTab, menuItems, resolvedTheme, setTheme, switchAppearance, showImport,
+    run, switchProjectTab, closeProjectTab, menuItems, resolvedTheme, setTheme, compactHistory, showImport,
     setImportSource, setShowImport, travel, showHistory, setShowHistory, panels, panelActions, play,
     togglePlay, previewSelectedBoundary, showExport, openExportPanel, aiConnected, showAiSettings,
     setShowAiSettings, generation, showLog, setShowLog, requestedAreas, pendingImages, working, generate,
