@@ -349,7 +349,7 @@ impl ProviderError {
                     return "OpenAI stopped before completing the candidate. Review the requirements and plan usage before explicitly trying again.";
                 }
                 ErrorKind::Truncated => {
-                    return "The ChatGPT stream ended without a completed candidate. Its plan usage outcome may be unknown; it was not retried.";
+                    return "ChatGPT closed the connection before the reply finished. Try again; if it keeps happening, make the request smaller or more specific.";
                 }
                 ErrorKind::Cancelled => {
                     return "Generation was cancelled. A submitted request may still count toward ChatGPT plan or credit usage; late output will not be applied.";
@@ -389,7 +389,7 @@ impl ProviderError {
                 "The complete request exceeds Desegnos's input limit. No content was truncated or sent."
             }
             ErrorKind::OutputLimit => {
-                "The provider response exceeded Desegnos's bounded output limit and was rejected."
+                "The AI kept writing past Desegnos's output limit, so it was stopped. Try again, or make the request smaller or more specific."
             }
             ErrorKind::Authentication => {
                 "The AI service rejected this key or its permissions. Replace the key or review its API access."

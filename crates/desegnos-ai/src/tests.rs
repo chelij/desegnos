@@ -3407,3 +3407,49 @@ fn image_cache_expiry_and_capabilities_apply_equally_to_both_authentication_meth
     }
 }
 
+#[tokio::test]
+async fn runaway_replies_stop_before_the_provider_closes_the_stream() {
+    let frozen = snapshot(GenerationMode::Strict);
+    let delta = |text: String| json!({"type":"response.output_text.delta","delta":text});
+    for authentication in [AuthenticationMethod::ApiKey, AuthenticationMethod::Chatgpt] {
+        let blank = vec![
+            delta("{\"a\":".into()),
+            delta("\n".repeat(1_000)),
+            delta(" ".repeat(1_001)),
+        ];
+        let error = generate_events(&frozen, blank, authentication)
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind, ErrorKind::OutputLimit);
+        let spaced = vec![
+            delta(" ".repeat(1_500)),
+            delta("1,".into()),
+            delta(" ".repeat(1_500)),
+        ];
+        let error = generate_events(&frozen, spaced, authentication)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.kind,
+            ErrorKind::Truncated,
+            "separate whitespace runs are not runaway"
+        );
+    }
+    let long = || vec![delta("x".repeat(MAX_OUTPUT_TOKENS as usize * 6 + 1))];
+    let error = generate_events(&frozen, long(), AuthenticationMethod::Chatgpt)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error.kind,
+        ErrorKind::OutputLimit,
+        "ChatGPT ignores max_output_tokens, so the text is capped locally"
+    );
+    let error = generate_events(&frozen, long(), AuthenticationMethod::ApiKey)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error.kind,
+        ErrorKind::Truncated,
+        "the API enforces its own token limit"
+    );
+}

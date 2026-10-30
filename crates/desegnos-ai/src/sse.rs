@@ -1,13 +1,18 @@
 use crate::{
-    ApiKey, AuthenticationMethod, CorrelationCause, ErrorKind, MAX_OUTPUT_BYTES, ProviderError,
-    ProviderResponse, ResponseBodyKind, ResponseCorrelation, ResponseRejection, Result,
-    SubmissionOutcome, TerminalOutput, TokenUsage,
+    ApiKey, AuthenticationMethod, CorrelationCause, ErrorKind, MAX_OUTPUT_BYTES, MAX_OUTPUT_TOKENS,
+    ProviderError, ProviderResponse, ResponseBodyKind, ResponseCorrelation, ResponseRejection,
+    Result, SubmissionOutcome, TerminalOutput, TokenUsage,
 };
 use serde_json::Value;
 use std::collections::BTreeMap;
 
 pub(crate) const MAX_STREAM_BYTES: usize = 32 * 1024 * 1024;
 pub(crate) const MAX_EVENT_BYTES: usize = MAX_OUTPUT_BYTES * 2 + 65_536;
+// A JSON reply never needs this much whitespace in a row; strict structured output can get
+// stuck emitting it until the provider closes the stream.
+pub(crate) const MAX_WHITESPACE_RUN: usize = 2_000;
+// About six bytes per token of the default output limit: far beyond any real candidate.
+const CHATGPT_MAX_TEXT_BYTES: usize = MAX_OUTPUT_TOKENS as usize * 6;
 
 #[derive(Default)]
 pub(crate) struct SseDecoder {
@@ -173,6 +178,8 @@ pub(crate) struct ResponseStream<'a> {
     job_id: String,
     digest: &'a str,
     max_output_tokens: u32,
+    max_text_bytes: usize,
+    whitespace_run: usize,
     request_id: Option<Box<str>>,
     content_type: Option<Box<str>>,
     pub(crate) received_bytes: usize,
@@ -209,6 +216,12 @@ impl<'a> ResponseStream<'a> {
             job_id,
             digest,
             max_output_tokens,
+            // ChatGPT ignores max_output_tokens, so its reply text is capped here instead.
+            max_text_bytes: match authentication {
+                AuthenticationMethod::ApiKey => MAX_OUTPUT_BYTES,
+                AuthenticationMethod::Chatgpt => CHATGPT_MAX_TEXT_BYTES,
+            },
+            whitespace_run: 0,
             request_id,
             content_type: content_type.map(Box::from),
             received_bytes: 0,
@@ -577,8 +590,19 @@ impl<'a> ResponseStream<'a> {
             .text_bytes
             .saturating_sub(previous_bytes)
             .saturating_add(next_bytes);
-        if total > MAX_OUTPUT_BYTES {
-            return Err(self.byte_limit_error(MAX_OUTPUT_BYTES, SubmissionOutcome::Unknown));
+        if total > self.max_text_bytes {
+            return Err(self.byte_limit_error(self.max_text_bytes, SubmissionOutcome::Unknown));
+        }
+        if !done {
+            let trailing = text.len() - text.trim_end_matches([' ', '\n', '\r', '\t']).len();
+            self.whitespace_run = if trailing == text.len() {
+                self.whitespace_run + trailing
+            } else {
+                trailing
+            };
+            if self.whitespace_run > MAX_WHITESPACE_RUN {
+                return Err(self.error(ErrorKind::OutputLimit, SubmissionOutcome::Unknown));
+            }
         }
         self.text_bytes = total;
         let part = self.texts.entry(location).or_default();
