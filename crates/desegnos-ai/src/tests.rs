@@ -3420,7 +3420,7 @@ async fn runaway_replies_stop_before_the_provider_closes_the_stream() {
         let error = generate_events(&frozen, blank, authentication)
             .await
             .unwrap_err();
-        assert_eq!(error.kind, ErrorKind::OutputLimit);
+        assert_eq!(error.kind, ErrorKind::Repetition);
         let spaced = vec![
             delta(" ".repeat(1_500)),
             delta("1,".into()),
@@ -3435,7 +3435,9 @@ async fn runaway_replies_stop_before_the_provider_closes_the_stream() {
             "separate whitespace runs are not runaway"
         );
     }
-    let long = || vec![delta("x".repeat(MAX_OUTPUT_TOKENS as usize * 6 + 1))];
+    // Varied text, so only the size limit applies and not the loop check.
+    let varied = (0..100_000).map(|i| format!("{i},")).collect::<String>();
+    let long = || vec![delta(varied[..MAX_OUTPUT_TOKENS as usize * 6 + 1].into())];
     let error = generate_events(&frozen, long(), AuthenticationMethod::Chatgpt)
         .await
         .unwrap_err();
@@ -3451,5 +3453,40 @@ async fn runaway_replies_stop_before_the_provider_closes_the_stream() {
         error.kind,
         ErrorKind::Truncated,
         "the API enforces its own token limit"
+    );
+}
+
+#[tokio::test]
+async fn a_reply_that_loops_on_the_same_operations_is_stopped() {
+    let frozen = snapshot(GenerationMode::Strict);
+    let delta = |text: String| json!({"type":"response.output_text.delta","delta":text});
+    let operation = |field: &str| {
+        format!(
+            "{{\"kind\":\"update\",\"patches\":[{{\"elementId\":\"fce93171\",\"{field}\":true,\"rect\":null,\"style\":null}}]}},"
+        )
+    };
+    let mut events = vec![delta("{\"operations\":[".into())];
+    for _ in 0..40 {
+        events.push(delta(operation("visible")));
+        events.push(delta(operation("locked")));
+    }
+    for authentication in [AuthenticationMethod::ApiKey, AuthenticationMethod::Chatgpt] {
+        let error = generate_events(&frozen, events.clone(), authentication)
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind, ErrorKind::Repetition);
+    }
+    let distinct = (0..400)
+        .map(|index| {
+            format!(
+                "{{\"kind\":\"insert\",\"name\":\"Card {index}\",\"rect\":{{\"x\":{},\"y\":{}}}}},",
+                index % 7 * 40,
+                index * 24
+            )
+        })
+        .collect::<String>();
+    assert!(
+        !sse::ends_in_repetition(distinct.as_bytes()),
+        "similar but different operations are not a loop"
     );
 }

@@ -11,6 +11,34 @@ pub(crate) const MAX_EVENT_BYTES: usize = MAX_OUTPUT_BYTES * 2 + 65_536;
 // A JSON reply never needs this much whitespace in a row; strict structured output can get
 // stuck emitting it until the provider closes the stream.
 pub(crate) const MAX_WHITESPACE_RUN: usize = 2_000;
+// A model stuck in a loop repeats the same operations until the stream is cut off.
+const REPETITION_CHECK_BYTES: usize = 4096;
+const REPETITION_TIMES: usize = 8;
+const REPETITION_MIN_BYTES: usize = 2048;
+const REPETITION_MAX_PERIOD: usize = 16 * 1024;
+const REPETITION_NEEDLE: usize = 64;
+
+// True when the end of the text is one block repeated back to back.
+pub(crate) fn ends_in_repetition(text: &[u8]) -> bool {
+    let Some(start) = text.len().checked_sub(REPETITION_NEEDLE) else {
+        return false;
+    };
+    let needle = &text[start..];
+    let earliest = start.saturating_sub(REPETITION_MAX_PERIOD);
+    // Try the nearest few earlier copies of the tail as the loop's period.
+    (earliest..start)
+        .rev()
+        .filter(|&at| &text[at..at + REPETITION_NEEDLE] == needle)
+        .take(4)
+        .any(|at| {
+            let period = start - at;
+            let span = period * REPETITION_TIMES.max(REPETITION_MIN_BYTES.div_ceil(period));
+            span <= text.len()
+                && text[text.len() - span + period..]
+                    == text[text.len() - span..text.len() - period]
+        })
+}
+
 // About six bytes per token of the default output limit: far beyond any real candidate.
 const CHATGPT_MAX_TEXT_BYTES: usize = MAX_OUTPUT_TOKENS as usize * 6;
 
@@ -180,6 +208,7 @@ pub(crate) struct ResponseStream<'a> {
     max_output_tokens: u32,
     max_text_bytes: usize,
     whitespace_run: usize,
+    next_repetition_check: usize,
     request_id: Option<Box<str>>,
     content_type: Option<Box<str>>,
     pub(crate) received_bytes: usize,
@@ -222,6 +251,7 @@ impl<'a> ResponseStream<'a> {
                 AuthenticationMethod::Chatgpt => CHATGPT_MAX_TEXT_BYTES,
             },
             whitespace_run: 0,
+            next_repetition_check: REPETITION_CHECK_BYTES,
             request_id,
             content_type: content_type.map(Box::from),
             received_bytes: 0,
@@ -601,7 +631,7 @@ impl<'a> ResponseStream<'a> {
                 trailing
             };
             if self.whitespace_run > MAX_WHITESPACE_RUN {
-                return Err(self.error(ErrorKind::OutputLimit, SubmissionOutcome::Unknown));
+                return Err(self.error(ErrorKind::Repetition, SubmissionOutcome::Unknown));
             }
         }
         self.text_bytes = total;
@@ -614,6 +644,12 @@ impl<'a> ResponseStream<'a> {
         } else {
             part.delta.push_str(text);
             part.delta_seen = true;
+            if part.delta.len() >= self.next_repetition_check {
+                self.next_repetition_check = part.delta.len() + REPETITION_CHECK_BYTES;
+                if ends_in_repetition(part.delta.as_bytes()) {
+                    return Err(self.error(ErrorKind::Repetition, SubmissionOutcome::Unknown));
+                }
+            }
         }
         Ok(())
     }

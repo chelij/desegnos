@@ -13,6 +13,7 @@ pub enum ErrorKind {
     SpendingLimit,
     InputLimit,
     OutputLimit,
+    Repetition,
     Authentication,
     Quota,
     RateLimited,
@@ -387,6 +388,9 @@ impl ProviderError {
             }
             ErrorKind::InputLimit => {
                 "The complete request exceeds Desegnos's input limit. No content was truncated or sent."
+            }
+            ErrorKind::Repetition => {
+                "The AI got stuck repeating the same changes, so Desegnos stopped it. Try again, or reword the request."
             }
             ErrorKind::OutputLimit => {
                 "The AI kept writing past Desegnos's output limit, so it was stopped. Try again, or make the request smaller or more specific."
