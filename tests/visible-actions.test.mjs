@@ -48,7 +48,8 @@ try {
   await test('the app bar leaves out what is already on screen', async () => {
     const app = await read('App.tsx');
     assert.match(app, /import \{ projectHasPreviewPages, showsOpener \} from '\.\/visibleActions';/);
-    assert.match(app, /showsOpener\(\{ available: true, open: showImport \}\)/);
+    // Import stays in place and shows as pressed, so the bar never shifts under the pointer.
+    assert.match(app, /aria-pressed=\{showImport\} aria-label="Import"/);
     assert.match(app, /showsOpener\(\{ available: !aiConnected, open: showAiSettings \}\)/);
     assert.match(app, /showsOpener\(\{ available: !onStartPage && !!project && !!\(generation\.job \|\| generation\.operation\), open: showLog \}\)/);
     assert.match(app, /showsOpener\(\{ available: true, open: showGridSettings \}\)/);
@@ -56,11 +57,10 @@ try {
     assert.doesNotMatch(app, /aria-pressed=\{showLog\}/);
   });
 
-  await test('Undo and Redo appear only when they would change the canvas', async () => {
+  await test('Undo and Redo keep their place and disable when they would change nothing', async () => {
     const app = await read('App.tsx');
-    assert.match(app, /\{view\?\.canUndo && <button aria-label="Undo last change"/);
-    assert.match(app, /\{view\?\.canRedo && <button aria-label="Redo last change"/);
-    assert.doesNotMatch(app, /disabled=\{!view\?\.can/);
+    assert.match(app, /aria-label="Undo last change" type="button" className="icon-button" disabled=\{!view\?\.canUndo\}/);
+    assert.match(app, /aria-label="Redo last change" type="button" className="icon-button" disabled=\{!view\?\.canRedo\}/);
     assert.match(app, /command === 'undo_project' \? workspace\?\.canUndo : workspace\?\.canRedo/);
   });
 
@@ -153,7 +153,7 @@ try {
 
   await test('the app bar labels its primary actions beside their icons', async () => {
     const app = await read('App.tsx');
-    assert.match(app, /className="icon-button labeled" aria-label="Import" title="Import"/);
+    assert.match(app, /aria-label="Import" title="Import".*<span className="button-label">Import<\/span>/);
     assert.match(app, /className="icon-button labeled" aria-label="Preview export"/);
     assert.match(app, /<span className="button-label">Preview<\/span>/);
     assert.match(app, /<span className="button-label">Export<\/span>/);
