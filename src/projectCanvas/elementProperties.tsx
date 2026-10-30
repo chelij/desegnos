@@ -163,7 +163,7 @@ function StylePicker({ project, category, label, value, choose, create, disabled
   project: Project; category: 'colour' | 'text'; label: string; value?: string | null; choose: (id: string | null) => void; create: () => void; disabled: boolean;
 }) {
   const styles = category === 'colour' ? project.styles?.colours : project.styles?.text;
-  return <select aria-label={`${label} style`} title="Style" value={value ?? ''} disabled={disabled} style={{ width: 100, minWidth: 0, flex: 'none' }}
+  return <select aria-label={`${label} style`} title="Style" value={value ?? ''} disabled={disabled} style={{ width: 100, minWidth: 0, flex: '0 1 100px' }}
     onChange={event => event.target.value === '__create' ? create() : choose(event.target.value || null)}>
     <option value="">Custom</option>{styles?.map(style => <option key={style.id} value={style.id}>{style.name}</option>)}
     <option value="__create">Create style from this</option>
@@ -405,9 +405,9 @@ export function ElementProperties({ project, page, pageId, sizeId, elements, bus
       {single.url && <button type="button" className="dock-action" disabled={busy} onClick={() => commitUrl('')}>Remove link</button>}
     </PropsSection>}
     {visual && <PropsSection id="props-appearance" title="Appearance">
-      {kind !== 'line' && <div style={{ display: 'flex', gap: 4 }}><ColourField label="Fill" value={fill ?? ''} mixed={mixed(fill)} disabled={busy} commit={value => { rememberColour('fill', value.trim() || null); commitStyle(style => { style.fill = value.trim() || null; style.references = { ...style.references, fill: null }; }); }} />{picker('fill')}</div>}
+      {kind !== 'line' && <div className="props-colour-style"><ColourField label="Fill" value={fill ?? ''} mixed={mixed(fill)} disabled={busy} commit={value => { rememberColour('fill', value.trim() || null); commitStyle(style => { style.fill = value.trim() || null; style.references = { ...style.references, fill: null }; }); }} />{picker('fill')}</div>}
       <div className="props-stroke">
-        <div style={{ display: 'flex', gap: 4 }}><ColourField label="Stroke" value={strokeColour ?? ''} mixed={mixed(strokeColour)} fallback="#000000" disabled={busy} commit={value => { rememberColour('stroke', value.trim() || null); commitStyle(style => { style.stroke.color = value.trim() || null; style.references = { ...style.references, stroke: null }; }); }} />{picker('stroke')}</div>
+        <div className="props-colour-style"><ColourField label="Stroke" value={strokeColour ?? ''} mixed={mixed(strokeColour)} fallback="#000000" disabled={busy} commit={value => { rememberColour('stroke', value.trim() || null); commitStyle(style => { style.stroke.color = value.trim() || null; style.references = { ...style.references, stroke: null }; }); }} />{picker('stroke')}</div>
         {showsStrokeWidth && <CompactNumberField prefix={<Icon name="line-weight" size={12} />} label="Stroke width" min={0} unit="px" value={strokeWidth ?? ''} placeholder={mixed(strokeWidth) ? 'Mixed' : undefined} disabled={busy} valid={value => Number(value) >= 0}
           commit={value => commitStyle(style => { style.stroke.width = Number(value); })} />}
       </div>
@@ -438,7 +438,7 @@ export function ElementProperties({ project, page, pageId, sizeId, elements, bus
         <CompactNumberField prefix="LS" label="Letter spacing" unit="px" value={textStyle?.letterSpacing ?? ''} placeholder={mixed(textStyle) ? 'Mixed' : undefined} disabled={busy} valid={validNumber}
           commit={value => commitStyle(style => { style.textStyle.letterSpacing = Number(value); })} />
       </div>
-      <div style={{ display: 'flex', gap: 4 }}><ColourField label="Text colour" value={textColour ?? ''} mixed={mixed(textColour)} disabled={busy} commit={value => { rememberColour('text', value.trim() || null); commitStyle(style => { style.textStyle.color = value.trim() || '#1a1a1a'; style.references = { ...style.references, textColour: null }; }); }} />{picker('textColour')}</div>
+      <div className="props-colour-style"><ColourField label="Text colour" value={textColour ?? ''} mixed={mixed(textColour)} disabled={busy} commit={value => { rememberColour('text', value.trim() || null); commitStyle(style => { style.textStyle.color = value.trim() || '#1a1a1a'; style.references = { ...style.references, textColour: null }; }); }} />{picker('textColour')}</div>
       <label className="check-label"><input type="checkbox" disabled={busy} checked={!!textStyle?.italic} onChange={event => commitStyle(style => { style.textStyle.italic = event.target.checked; })} />Italic</label>
       <div className="props-choice"><ChoiceRow label="Align" value={textStyle?.align ?? 'left'} choices={[['left', 'Left'], ['center', 'Center'], ['right', 'Right']]} disabled={busy}
         choose={align => commitStyle(style => { style.textStyle.align = align; })} /></div>

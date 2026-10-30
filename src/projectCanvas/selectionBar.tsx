@@ -24,7 +24,7 @@ export function onEditScope(handle: (scope: EditScope) => void): () => void {
 
 /** The two editing scopes of a boundary with more than one linked size. */
 export function EditScopeChoice({ scope, choose }: { scope: EditScope; choose: (scope: EditScope) => void }) {
-  return <div className="segmented" role="group" aria-label="Edit scope">
+  return <div className="segmented edit-scope" role="group" aria-label="Edit scope">
     <button type="button" aria-pressed={scope === 'this'} onClick={() => choose('this')}>This size</button>
     <button type="button" aria-pressed={scope === 'all'} onClick={() => choose('all')}>All sizes</button>
   </div>;

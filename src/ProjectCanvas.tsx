@@ -3,7 +3,7 @@ import { fitCamera } from './projectCanvasGeometry';
 import { useProjectCanvas } from './projectCanvas/useProjectCanvas';
 export type { ProjectCanvasHandle, ProjectCanvasProps, PreviewState } from './projectCanvas/interactionTypes';
 import { CORNERS, ProjectCanvasHandle, ProjectCanvasProps } from './projectCanvas/interactionTypes';
-import { forwardRef, useEffect, type CSSProperties } from 'react';
+import { forwardRef, useEffect, useState, type CSSProperties } from 'react';
 import { isTextField } from './WorkspaceSurface';
 import { BoundaryLabels } from './projectCanvas/boundaryLabels';
 import { SelectionBar } from './projectCanvas/selectionBar';
@@ -28,6 +28,7 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
   addPointer, updatePointer, pointerStates, tool, insertKind, onTool, boundaryKind, requestShape, onRequestShape, focusedSize, widthPreview, onZoom, onLayout,
   play, onPlayBoundary, onPlayElement, onPlayExit, preview, previewClose, previewRefresh,
 }, ref) {
+  const [pointerFocus, setPointerFocus] = useState(false);
   const {
     runCanvasAction, surface, panning, spaceHeld, zoomHeld, painterArmed, dropHover, dotStyle, pointerDown, keyDown,
     doubleClick, paste, dropText, imagePicker, chooseImage, camera, scrubbed, moving, editing, movingElements,
@@ -77,7 +78,9 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
       </div>
     </div>;
   }
-  return <div ref={surface} id="project-canvas" className={`project-canvas tool-${tool}${tool === 'request' ? ` request-shape-${requestShape}` : ''}${panning ? ' panning' : ''}${spaceHeld ? ' pan-ready' : ''}${zoomHeld ? ' zoom-ready' : ''}${painterArmed ? ' paint-format' : ''}${playIsActive(play) ? ' playing' : ''}${dropHover && !dropHover.rect ? ' drop-bed' : ''}`} style={dotStyle} tabIndex={0}
+  return <div ref={surface} id="project-canvas" className={`project-canvas tool-${tool}${tool === 'request' ? ` request-shape-${requestShape}` : ''}${panning ? ' panning' : ''}${spaceHeld ? ' pan-ready' : ''}${zoomHeld ? ' zoom-ready' : ''}${painterArmed ? ' paint-format' : ''}${playIsActive(play) ? ' playing' : ''}${dropHover && !dropHover.rect ? ' drop-bed' : ''}${pointerFocus ? ' pointer-focus' : ''}`} style={dotStyle} tabIndex={0}
+    onPointerDownCapture={() => setPointerFocus(true)} onKeyDownCapture={() => setPointerFocus(false)}
+    onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) setPointerFocus(false); }}
     onPointerDown={pointerDown} onKeyDown={keyDown} onDoubleClickCapture={doubleClick} onPaste={paste}
     onDragOver={event => { if (!isTextField(event.target)) event.preventDefault(); }} onDrop={dropText}>
     <input ref={imagePicker} type="file" hidden accept="image/png,image/jpeg,image/webp,image/gif" onChange={event => { chooseImage(event.target.files?.[0]); event.target.value = ''; }} />
