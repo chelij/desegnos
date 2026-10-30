@@ -550,7 +550,9 @@
 .element-row-line .dock-row-toggle { opacity: 0; pointer-events: none; }
 .element-row-line:hover .dock-row-toggle, .element-row-line:focus-within .dock-row-toggle,
 .element-row-line .dock-row-toggle[aria-pressed="true"] { opacity: 1; pointer-events: auto; }
-.element-row-line[draggable="true"] { cursor: grab; }
+.element-row-line[data-draggable="true"] { cursor: grab; }
+.dock-tree-elements[data-dragging="true"] { user-select: none; }
+.dock-tree-elements[data-dragging="true"] .element-row-line { cursor: grabbing; }
 .dock-drop-line { position: relative; height: 0; margin: 0; padding: 0; list-style: none; }
 .dock-drop-line::after { content: ''; position: absolute; left: 0; right: 0; top: -1px; height: 2px; border-radius: 1px; background: var(--accent); }
 .dock-layer-title { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-3); font-size: var(--text-sm); }
