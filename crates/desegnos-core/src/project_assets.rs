@@ -22,7 +22,10 @@ impl Project {
     /// every edit can call it.
     pub fn store_inline_images(&mut self) -> Result<()> {
         let mut pictures = self.pictures.clone();
-        let used = referenced_ids(&self.pages, &self.reference);
+        let mut used = referenced_ids(&self.pages, &self.reference);
+        for definition in self.linked.values() {
+            collect_element_pictures(std::slice::from_ref(&definition.master), &mut used);
+        }
         pictures.retain(|id, _| used.contains(id));
         validate_pictures(&pictures)?;
         self.pictures = pictures;

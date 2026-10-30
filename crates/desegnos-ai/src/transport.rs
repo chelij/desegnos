@@ -735,14 +735,14 @@ async fn non_stream_error(
     error
 }
 
-fn provider_message(value: &Value) -> Option<&str> {
+pub(crate) fn provider_message(value: &Value) -> Option<&str> {
     value
         .pointer("/error/message")
         .or_else(|| value.get("detail"))
         .and_then(Value::as_str)
 }
 
-fn response_body_kind(body: &[u8], json: Option<&Value>) -> ResponseBodyKind {
+pub(crate) fn response_body_kind(body: &[u8], json: Option<&Value>) -> ResponseBodyKind {
     if body.is_empty() {
         ResponseBodyKind::Empty
     } else if let Some(value) = json {
@@ -864,7 +864,7 @@ async fn check_status(
         .with_diagnostic_reply(&String::from_utf8_lossy(&body), key))
 }
 
-async fn bounded_body(
+pub(crate) async fn bounded_body(
     response: &mut Response,
     limit: usize,
     cancellation: &CancellationToken,
