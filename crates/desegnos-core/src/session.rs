@@ -48,6 +48,7 @@ const STEP_PAUSE: std::time::Duration = std::time::Duration::from_secs(5);
 impl Session {
     pub fn new(mut project: Project) -> Result<Self> {
         project.store_inline_images()?;
+        project.keep_one_request_per_layer();
         project.validate()?;
         let user_revision_floor = project.revision;
         Ok(Self {
@@ -440,6 +441,7 @@ impl Session {
         durable: impl FnOnce(&Project) -> Result<()>,
     ) -> Result<()> {
         let mut candidate = project;
+        candidate.keep_one_request_per_layer();
         candidate.revision = self
             .project
             .revision

@@ -299,6 +299,14 @@ pub struct PendingRequest {
 }
 
 impl PendingRequest {
+    /// The layer this request is asked of when it targets that layer alone.
+    fn sole_layer(&self) -> Option<Uuid> {
+        match self.targets.as_slice() {
+            [RequestTarget::Element { id, .. }] if self.area.is_none() => Some(*id),
+            _ => None,
+        }
+    }
+
     pub fn validate(&self) -> Result<()> {
         ensure(!self.id.is_nil(), "A request needs a nonempty identifier.")?;
         validate_text(&self.text, "Request", MAX_PROMPT_CHARS, false)?;
@@ -2338,8 +2346,13 @@ impl Project {
         Ok(())
     }
 
+    /// A layer holds one pending request: one asked of that layer alone replaces the earlier one.
     fn add_request(&mut self, request: PendingRequest) -> Result<()> {
         request.validate()?;
+        if let Some(layer) = request.sole_layer() {
+            self.requests
+                .retain(|existing| existing.sole_layer() != Some(layer));
+        }
         ensure(
             self.requests.len() < MAX_REQUESTS,
             "A project holds at most 256 pending requests.",
@@ -2353,6 +2366,19 @@ impl Project {
         )?;
         self.requests.push(request);
         Ok(())
+    }
+
+    /// Keeps the newest pending request of each layer, for projects saved with several.
+    pub fn keep_one_request_per_layer(&mut self) {
+        let mut seen = BTreeSet::new();
+        let mut kept: Vec<_> = self
+            .requests
+            .drain(..)
+            .rev()
+            .filter(|request| request.sole_layer().is_none_or(|layer| seen.insert(layer)))
+            .collect();
+        kept.reverse();
+        self.requests = kept;
     }
 
     fn update_request(&mut self, request: PendingRequest) -> Result<()> {

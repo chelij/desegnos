@@ -619,3 +619,34 @@ fn set_behaviour_rejects_boundary_without_a_boundary_request_and_oversized_text(
             .contains("boundary behaviour")
     );
 }
+
+#[test]
+fn a_layer_keeps_one_pending_request() {
+    let (project, page, target, _) = setup();
+    let ask = |text: &str| PendingRequest {
+        id: Uuid::new_v4(),
+        text: text.into(),
+        attachments: vec![],
+        targets: vec![RequestTarget::Element {
+            page,
+            size: None,
+            id: target,
+        }],
+        area: None,
+        requested_at: "2026-10-31T00:00:00Z".into(),
+    };
+    let project = apply(
+        &project,
+        Command::AddRequest {
+            request: ask("Make it red"),
+        },
+    );
+    assert_eq!(project.requests.len(), 1);
+    assert_eq!(project.requests[0].text, "Make it red");
+
+    let mut saved = project.clone();
+    saved.requests.insert(0, ask("An older request"));
+    let session = Session::new(saved).unwrap();
+    assert_eq!(session.project().requests.len(), 1);
+    assert_eq!(session.project().requests[0].text, "Make it red");
+}
