@@ -123,7 +123,7 @@ function DockSection({ name, open, toggle, children, grow, register, fitContent 
   name: string; open: boolean; toggle: () => void; children: ReactNode;
   grow: number; register: (node: HTMLElement | null) => void; fitContent?: boolean;
 }) {
-  return <section ref={register} className={`dock-panel${open ? '' : ' is-collapsed'}${fitContent ? ' is-fit-content' : ''}`} aria-label={name} style={open ? { flexGrow: grow } : undefined}>
+  return <section ref={register} className={`dock-panel${open ? '' : ' is-collapsed'}${fitContent ? ' is-fit-content' : ''}`} aria-label={name} style={open && !fitContent ? { flexGrow: grow } : undefined}>
     <header className="dock-panel-header">
       <h2>{name}</h2>
       <button type="button" className="icon-button sm" aria-expanded={open} aria-label={`${open ? 'Collapse' : 'Expand'} ${name.toLowerCase()}`} title={open ? `Collapse ${name}` : `Expand ${name}`} onClick={toggle}><Icon name="chevron-right" className={open ? 'expanded' : undefined} /></button>
@@ -156,7 +156,7 @@ export function EditorDock({ state, actions, properties, layers, history, export
 }) {
   const panels = [
     ...(history ? [{ key: 'history', name: 'History', content: history }] : []),
-    ...(exportPanel ? [{ key: 'export', name: 'Export', content: exportPanel }] : []),
+    ...(exportPanel ? [{ key: 'export', name: 'Export', content: exportPanel, fitContent: true }] : []),
     { key: 'properties', name: 'Properties', content: properties },
     { key: 'layers', name: 'Layers', content: layers },
   ];
@@ -177,9 +177,14 @@ export function EditorDock({ state, actions, properties, layers, history, export
     window.addEventListener('pointerup', stop);
   }
 
-  // A splitter trades height between its two neighbouring panels and stops at the readable minimum.
-  function startPanelResize(event: ReactPointerEvent<HTMLDivElement>, aboveKey: string, belowKey: string) {
+  // A splitter trades height between the nearest resizable panels on each side and stops at the
+  // readable minimum. Fit-content panels keep their height, so they sit out of the trade.
+  function startPanelResize(event: ReactPointerEvent<HTMLDivElement>, index: number) {
     event.preventDefault();
+    const resizable = (panel: typeof panels[number]) => !panel.fitContent && !collapsed.has(panel.key);
+    const aboveKey = panels.slice(0, index).reverse().find(resizable)?.key;
+    const belowKey = panels.slice(index).find(resizable)?.key;
+    if (!aboveKey || !belowKey) return;
     const aboveNode = nodes.current.get(aboveKey);
     const belowNode = nodes.current.get(belowKey);
     if (!aboveNode || !belowNode) return;
@@ -192,7 +197,7 @@ export function EditorDock({ state, actions, properties, layers, history, export
       const heights: Record<string, number> = {};
       for (const panel of panels) {
         const node = nodes.current.get(panel.key);
-        if (node && !collapsed.has(panel.key)) heights[panel.key] = node.getBoundingClientRect().height;
+        if (node && resizable(panel)) heights[panel.key] = node.getBoundingClientRect().height;
       }
       heights[aboveKey] = startAbove + dy;
       heights[belowKey] = startBelow - dy;
@@ -228,8 +233,8 @@ export function EditorDock({ state, actions, properties, layers, history, export
         const previous = panels[index - 1];
         return <Fragment key={panel.key}>
           {previous && open && !collapsed.has(previous.key) && <div className="dock-splitter" role="separator" aria-orientation="horizontal"
-            aria-label={`Resize ${previous.name} and ${panel.name}`} onPointerDown={event => startPanelResize(event, previous.key, panel.key)} />}
-          <DockSection name={panel.name} open={open} toggle={() => togglePanel(panel.key)} grow={weights[panel.key] ?? DEFAULT_PANEL_WEIGHTS[panel.key] ?? 1} fitContent={panel.key === 'export'}
+            aria-label={`Resize ${previous.name} and ${panel.name}`} onPointerDown={event => startPanelResize(event, index)} />}
+          <DockSection name={panel.name} open={open} toggle={() => togglePanel(panel.key)} grow={weights[panel.key] ?? DEFAULT_PANEL_WEIGHTS[panel.key] ?? 1} fitContent={panel.fitContent}
             register={node => { if (node) nodes.current.set(panel.key, node); else nodes.current.delete(panel.key); }}>{panel.content}</DockSection>
         </Fragment>;
       })}
