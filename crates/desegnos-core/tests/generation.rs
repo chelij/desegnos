@@ -234,6 +234,12 @@ fn candidate_validation_rejects_scope_escape_duplicates_and_wrong_identity() {
     let mut mismatched_comment = candidate(&snapshot, target, page, pointer);
     mismatched_comment.pointer_classifications[0].comment = "Something else".into();
     assert!(mismatched_comment.validate(&snapshot, &project).is_err());
+
+    let mut classified = project.clone();
+    classified.pointers[0].play_comment = classified.pointers[0].comment.clone();
+    let classified_snapshot = classified.prepare_requirements().unwrap();
+    let restated = candidate(&classified_snapshot, target, page, pointer);
+    assert!(restated.validate(&classified_snapshot, &classified).is_ok());
 }
 
 #[test]

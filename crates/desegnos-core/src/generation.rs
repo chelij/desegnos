@@ -514,6 +514,15 @@ impl GenerationCandidate {
             .collect();
         let mut classified = BTreeSet::new();
         for classification in &self.pointer_classifications {
+            // Restating a pointer already classified for its comment changes nothing; apply skips it.
+            if !classifying.contains(&classification.pointer_id)
+                && project.pointers.iter().any(|pointer| {
+                    pointer.id == classification.pointer_id
+                        && pointer.comment == classification.comment
+                })
+            {
+                continue;
+            }
             ensure(
                 classifying.contains(&classification.pointer_id)
                     && classified.insert(classification.pointer_id),
@@ -1425,6 +1434,9 @@ pub fn apply_generation_output(
             .iter_mut()
             .find(|pointer| pointer.id == classification.pointer_id)
             .ok_or_else(|| Error("This pointer no longer exists.".into()))?;
+        if !crate::pointer_needs_classifying(pointer) {
+            continue;
+        }
         ensure(
             pointer.comment == classification.comment,
             "A pointer comment changed before this result was applied.",
@@ -1710,7 +1722,7 @@ pub fn result_schema(_snapshot: &RequirementsSnapshot) -> serde_json::Value {
         "Deliver every requested layer exactly once. A conflict must not withhold other ready layers."
     );
     schema["properties"]["pointerClassifications"]["description"] = serde_json::json!(
-        "Classify every pointer listed under pointer comments. Copy its current comment exactly."
+        "Classify every pointer listed under pointer comments to classify, and no other. Copy its current comment exactly. Leave empty when none are listed."
     );
     schema
 }
