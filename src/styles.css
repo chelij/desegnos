@@ -97,6 +97,17 @@ p { margin-bottom: var(--space-5); }
 .form-actions { margin-top: var(--space-2); }
 .recovery-list { display: grid; gap: var(--space-6); padding: var(--space-5) 0; }
 .recovery-list p { overflow-wrap: anywhere; }
+.workspace-surface .recovery-list { gap: var(--space-5); }
+.recovery-row { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-4) var(--space-6); min-width: 0; }
+.recovery-details { flex: 1 1 220px; min-width: 0; overflow-wrap: anywhere; }
+.recovery-details p { margin: 3px 0 0; font-size: var(--text-sm); }
+.recovery-list .form-actions { justify-content: flex-end; margin: 0; }
+.recovery-row > .form-actions { margin-left: auto; }
+.recovery-confirmation { flex: 1 1 100%; min-width: 0; }
+.recovery-confirmation p { margin: 0 0 var(--space-4); }
+.workspace-surface:not(.workspace-start) .recovery-list { padding: var(--space-5); }
+.link-button { display: inline-flex; min-height: auto; height: auto; padding: 0; border: 0; background: transparent; color: var(--accent); text-decoration: underline; text-underline-offset: 2px; font: inherit; font-weight: var(--weight-medium); cursor: pointer; }
+.link-button:hover:not(:disabled) { background: transparent; color: var(--accent-strong-hover); }
 .recovery-choice { position: relative; display: flex; align-items: center; gap: var(--space-4); min-width: 0; padding: var(--space-2) 34px var(--space-2) var(--space-4); border: 1px solid var(--notice-warning-border); border-radius: var(--radius-lg); background: var(--notice-warning-bg); color: var(--notice-warning-fg); }
 .recovery-message { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--text-xs); font-weight: var(--weight-semibold); line-height: 18px; }
 .recovery-actions { display: flex; flex: none; align-items: center; gap: var(--space-2); }
