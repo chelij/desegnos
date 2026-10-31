@@ -1207,7 +1207,8 @@ impl GenerationService {
             || record.view.requirements.sha256
                 != digest(record.view.requirements.markdown.as_bytes())
             || record.view.areas.len() > desegnos_core::MAX_GENERATION_REQUESTS
-            || record.view.areas.len() != record.view.requirements.request_count
+            // Areas are the distinct layers requested; several requests may share one layer.
+            || record.view.requirements.target_ids().map_or(true, |targets| targets.len() != record.view.areas.len())
             || record.view.areas.iter().any(|area| {
                 !record
                     .view
