@@ -537,7 +537,7 @@ try {
       'Minimap': [['minimap', 'Shift+M']],
       'Play / Preview export': [['play', 'Shift+Space'], ['preview', 'Ctrl/Cmd+Enter']],
       'Hide panels': [['hidePanels', 'Ctrl/Cmd+\\']],
-      'Ask AI on selection': [['askAI', 'Ctrl/Cmd+K']],
+      'Request on selection': [['askAI', 'Ctrl/Cmd+K']],
       'Export': [['export', 'Ctrl/Cmd+E']],
       'Undo / Redo': [['undo', 'Ctrl/Cmd+Z'], ['redo', 'Shift+Ctrl/Cmd+Z']],
     };
@@ -584,7 +584,7 @@ try {
     assert.equal(shortcuts.viewSlot({ key: 'a', code: 'KeyA' }), null);
     assert.equal(shortcuts.shortcutFor(event({ key: 'q', code: 'KeyQ' }), false), null);
     assert.equal(shortcuts.shortcutLabel('not-an-action'), '');
-    assert.equal(shortcuts.withShortcut('Ask AI', 'askAI'), 'Ask AI · Ctrl/Cmd+K');
+    assert.equal(shortcuts.withShortcut('Request', 'askAI'), 'Request · Ctrl/Cmd+K');
     assert.ok(shortcuts.SHORTCUT_GROUPS.find(group => group.group === 'Tools').items.length > 0);
     assert.ok(shortcuts.TOOL_SHORTCUTS.selectTool);
     assert.ok(shortcuts.TOOL_SHORTCUTS.rectangleTool === 'R');

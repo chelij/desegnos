@@ -9,7 +9,7 @@ import { isTextField } from './WorkspaceSurface';
 import { BoundaryLabels } from './projectCanvas/boundaryLabels';
 import { SelectionBar } from './projectCanvas/selectionBar';
 import { BoundaryLayer } from './projectCanvas/boundaries';
-import { RequestBoxEditor, RequestLayer } from './projectCanvas/requests';
+import { RequestBoxEditor, RequestLayer, singleTargetRequest } from './projectCanvas/requests';
 import { ReferenceLayer, ReferenceNoteEditor } from './projectCanvas/reference';
 import { PointerComments, PointerHandles, PointerLines, BehaviourBadges } from './projectCanvas/pointers';
 import { Minimap } from './projectCanvas/Minimap';
@@ -26,7 +26,7 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
   addRequest, selectRequest,
   insertElements, updateElements, moveElements, groupElements, ungroupElements, linkElements, unlinkElements, pasteLinked,
   addPointer, updatePointer, focusBehaviour, pointerStates, tool, insertKind, onTool, boundaryKind, requestShape, focusedSize, widthPreview, onZoom, onLayout,
-  play, onPlayBoundary, onPlayElement, onPlayExit, preview, previewClose, previewRefresh,
+  play, onPlayBoundary, onPlayElement, onPlayExit, preview, previewClose, previewRefresh, generate,
 }, ref) {
   const [pointerFocus, setPointerFocus] = useState(false);
   const {
@@ -39,12 +39,13 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
     startRequestOnSelection, linkSelection, unlinkSelection, duplicateElements, deleteSelectedLayers,
     minimapVisible, stopTransition, touched, setCamera, selectedPointerId, armedPointer, startReattach,
     selectedElementTargets, startElementResize, editingElement, editingScreen, commitEditingText,
-    placeholderChoice, resolvePlaceholder, setPlaceholderChoice, submitRequestDraft,
+    placeholderChoice, resolvePlaceholder, setPlaceholderChoice, submitRequestDraft, askRequestDraft,
     cancelRequestDraft, selectedItem, selectedItemScreen, createdItem, startReferenceResize, pasteChoice,
     setPasteChoice, confirmPaste, linkChoice, linkCopies, setLinkChoice, previewScreen, dropNotice,
     setDropNotice,
-  } = useProjectCanvas({ editProject, project, openPage, createBoundary, savePlacements, saveView, selection, focused, selectBoundary, selectReference, selectPointer, selectElement, clearSelection, removeSelection, removeElements, deleteBoundary, addReference, updateReference, elementToReference, referenceToElement, attachToRequest, addRequest, selectRequest, insertElements, updateElements, moveElements, groupElements, ungroupElements, linkElements, unlinkElements, pasteLinked, addPointer, updatePointer, focusBehaviour, pointerStates, tool, insertKind, onTool, boundaryKind, requestShape, focusedSize, widthPreview, onZoom, onLayout, play, onPlayBoundary, onPlayElement, onPlayExit, preview, previewClose, previewRefresh }, ref);
+  } = useProjectCanvas({ editProject, project, openPage, createBoundary, savePlacements, saveView, selection, focused, selectBoundary, selectReference, selectPointer, selectElement, clearSelection, removeSelection, removeElements, deleteBoundary, addReference, updateReference, elementToReference, referenceToElement, attachToRequest, addRequest, selectRequest, insertElements, updateElements, moveElements, groupElements, ungroupElements, linkElements, unlinkElements, pasteLinked, addPointer, updatePointer, focusBehaviour, pointerStates, tool, insertKind, onTool, boundaryKind, requestShape, focusedSize, widthPreview, onZoom, onLayout, play, onPlayBoundary, onPlayElement, onPlayExit, preview, previewClose, previewRefresh, generate }, ref);
   const presenting = playIsActive(play) && project.pages.length > 0 && project.pages.every(page => page.output === 'slide');
+  const draftRequest = requestDraft ? singleTargetRequest(project, requestDraft.targets) : null;
   const slides = project.pages;
   const slideIndex = Math.max(0, slides.findIndex(page => page.id === play.boundary));
   const advance = (delta: number) => onPlayBoundary(slides[Math.max(0, Math.min(slides.length - 1, slideIndex + delta))].id);
@@ -120,7 +121,8 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
     {placeholderChoice && <PlaceholderChoiceRow screen={placeholderChoice.screen}
       include={() => resolvePlaceholder(placeholderChoice, true)} dismiss={() => resolvePlaceholder(placeholderChoice, false)}
       close={() => { setPlaceholderChoice(null); surface.current?.focus({ preventScroll: true }); }} />}
-    {requestDraft && <RequestBoxEditor screen={requestDraft.screen} text="" submit={submitRequestDraft} close={cancelRequestDraft} />}
+    {requestDraft && <RequestBoxEditor screen={requestDraft.screen} text={draftRequest?.text ?? ''} submit={text => submitRequestDraft(text, draftRequest)}
+      ask={requestDraft.targets.some(target => target.kind === 'element') ? text => askRequestDraft(text, draftRequest) : undefined} close={cancelRequestDraft} />}
     {selectedItem && selectedItemScreen && selectedItem.kind.kind === 'note' && <ReferenceNoteEditor key={selectedItem.id} item={selectedItem}
       kind={selectedItem.kind} screen={selectedItemScreen} autoFocus={createdItem.current === selectedItem.id}
       change={text => updateReference(selectedItem.id, { text })} close={() => { createdItem.current = null; surface.current?.focus({ preventScroll: true }); }} />}

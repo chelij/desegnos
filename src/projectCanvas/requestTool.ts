@@ -2,7 +2,7 @@ import {
   pointerAt, POINTER_HIT_PX, referenceItemAt, viewportWorldRect, type Boundary, type CanvasCamera,
   type CanvasTarget, type Point, type RequestBox,
 } from '../projectCanvasGeometry';
-import type { PendingRequest, Project, Rect, RequestArea, RequestShape, RequestTarget } from '../types';
+import type { Command, PendingRequest, Project, Rect, RequestArea, RequestShape, RequestTarget } from '../types';
 import { coveredTargets, dedupeTargets, requestShapeBounds } from './requests';
 import { shownReference } from './reference';
 import { pointerEntries } from './pointers';
@@ -29,6 +29,8 @@ type Context = {
   elementEntries: (targets: CanvasTarget[]) => ElementEntry[];
   requestDraft: { targets: RequestTarget[]; area: RequestArea | null; screen: ScreenRect; } | null;
   addRequest: (request: PendingRequest) => Promise<void>;
+  editProject: (command: Command) => Promise<unknown>;
+  generate: (elementIds: string[]) => void;
   selectRequest: (requestId: string) => void;
 };
 
@@ -133,18 +135,26 @@ export function createRequestTool(context: () => Context) {
     return true;
   }
 
-  function submitRequestDraft(text: string) {
-    const { requestDraft, setRequestDraft, surface, addRequest, selectRequest } = context();
+  function submitRequestDraft(text: string, existing: PendingRequest | null = null) {
+    const { requestDraft, setRequestDraft, surface, addRequest, editProject, selectRequest } = context();
     const draft = requestDraft;
     setRequestDraft(null);
     const trimmed = text.trim();
-    if (!draft || !trimmed) { surface.current?.focus({ preventScroll: true }); return; }
-    const request: PendingRequest = {
+    if (!draft || !trimmed) { surface.current?.focus({ preventScroll: true }); return Promise.resolve(false); }
+    const request: PendingRequest = existing ? { ...existing, text: trimmed } : {
       id: crypto.randomUUID(), text: trimmed, attachments: [], targets: draft.targets, area: draft.area,
       requestedAt: new Date().toISOString(),
     };
-    void addRequest(request).then(() => selectRequest(request.id)).catch(() => {})
+    const saved = existing ? editProject({ type: 'update_request', request }) : addRequest(request);
+    return saved.then(() => { selectRequest(request.id); return true; }, () => false)
       .finally(() => surface.current?.focus({ preventScroll: true }));
+  }
+
+  /** Saves the draft, then generates for the layers it targets once the request is stored. */
+  function askRequestDraft(text: string, existing: PendingRequest | null = null) {
+    const { requestDraft, generate } = context();
+    const elementIds = (requestDraft?.targets ?? []).flatMap(target => target.kind === 'element' ? [target.id] : []);
+    void submitRequestDraft(text, existing).then(saved => { if (saved && elementIds.length) generate(elementIds); });
   }
 
   function cancelRequestDraft() {
@@ -156,6 +166,6 @@ export function createRequestTool(context: () => Context) {
 
   return {
     requestTargetAt, requestEditorScreen, closeRequestArea, startRequestOnSelection,
-    startRequestFromShape, submitRequestDraft, cancelRequestDraft,
+    startRequestFromShape, submitRequestDraft, askRequestDraft, cancelRequestDraft,
   };
 }

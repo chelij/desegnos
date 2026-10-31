@@ -67,7 +67,7 @@ export function createEditorShortcuts(context: () => Context) {
       case 'requestTool': case 'requestFromShape':
         // The canvas starts a request on the selection; with nothing selected F picks the tool.
         return;
-      case 'askAI': event.preventDefault(); document.querySelector<HTMLElement>('[data-element-request]')?.focus(); return;
+      case 'askAI': event.preventDefault(); canvasRef.current?.startRequestOnSelection(); return;
       case 'hidePanels':
         if (!project) return;
         if (event.target instanceof Element && event.target.closest('.workspace-surface, .editor-menu, .layers-popover')) return;

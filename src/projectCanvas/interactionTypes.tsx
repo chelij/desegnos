@@ -76,6 +76,8 @@ export type CanvasActionOptions = { key?: string; slot?: number; repeat?: boolea
 
 export type ProjectCanvasHandle = { focusCanvas: () => void; fit: () => void; fitSelection: () => void; zoomStep: (direction: number) => void; zoomTo: (zoom: number) => void; focusBoundary: (pageId: string) => void; armPointer: (pointerId: string) => void; linkSelection: () => void; unlinkSelection: () => void;
   copyStyle: () => void; pasteStyle: () => void; paintFormat: () => void;
+  /** Opens the request box on the current selection; false when nothing is selected. */
+  startRequestOnSelection: () => boolean;
   currentCamera: () => CanvasCamera; goToView: (view: NamedView) => void;
   /** Runs one keymap action through the same path its key uses; true when the canvas took it. */
   runCanvasAction: (action: ShortcutAction, options?: CanvasActionOptions) => boolean;
@@ -124,6 +126,8 @@ export type ProjectCanvasProps = {
   onPlayBoundary: (id: string) => void;
   play: PlayState; onPlayElement: (pageId: string, elementId: string) => void; onPlayExit: () => void;
   preview: PreviewState | null; previewClose: () => void; previewRefresh: () => void;
+  /** Generates for the given layers, as a canvas request does. */
+  generate: (elementIds: string[]) => void;
 };
 
 export const isElementTarget = (target: CanvasTarget): target is ElementTarget => target.kind === 'element';

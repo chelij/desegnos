@@ -50,16 +50,16 @@ export function useProjectCanvas({
   addRequest, selectRequest,
   insertElements, updateElements, moveElements, groupElements, ungroupElements, linkElements, unlinkElements, pasteLinked,
   addPointer, updatePointer, pointerStates, tool, insertKind, onTool, boundaryKind, requestShape, focusedSize, widthPreview = null, onZoom, onLayout,
-  play, onPlayElement, onPlayExit, preview, previewClose, previewRefresh, focusBehaviour,
+  play, onPlayElement, onPlayExit, preview, previewClose, previewRefresh, focusBehaviour, generate,
 }: ProjectCanvasProps, ref: ForwardedRef<ProjectCanvasHandle>) {
 
   const {
     requestTargetAt, requestEditorScreen, closeRequestArea, startRequestOnSelection,
-    startRequestFromShape, submitRequestDraft, cancelRequestDraft,
+    startRequestFromShape, submitRequestDraft, askRequestDraft, cancelRequestDraft,
   } = createRequestTool(() => ({
     requestBoxes, project, movingItems, pointerWorldNow, camera, viewSize, boundaryUnder, elementScreenRect,
     boundaries, setPolygonDraft, setRequestDraft, surface, selection, focused, focusedSize, elementEntries,
-    requestDraft, addRequest, selectRequest,
+    requestDraft, addRequest, editProject, generate, selectRequest,
   }));
   const {
     armPointer, endpointAt, pointerSourceAt, startReattach,
@@ -493,7 +493,7 @@ export function useProjectCanvas({
     setCamera(fitCamera({ x: left, y: top, width: right - left, height: bottom - top }, { width: box.width, height: box.height }));
   }
 
-  useImperativeHandle(ref, () => ({ focusCanvas: () => surface.current?.focus({ preventScroll: true }), fit, fitSelection, zoomStep, zoomTo, focusBoundary, armPointer, linkSelection, unlinkSelection, copyStyle, pasteStyle, paintFormat, currentCamera, goToView, runCanvasAction, canRunCanvasAction }));
+  useImperativeHandle(ref, () => ({ focusCanvas: () => surface.current?.focus({ preventScroll: true }), fit, fitSelection, zoomStep, zoomTo, focusBoundary, armPointer, linkSelection, unlinkSelection, copyStyle, pasteStyle, paintFormat, currentCamera, goToView, runCanvasAction, canRunCanvasAction, startRequestOnSelection }));
 
   /** Double-click editing is the all-sizes mode: a layer drawn then belongs to every size. */
   const editingAllSizes = (pageId: string): boolean =>
@@ -810,7 +810,7 @@ export function useProjectCanvas({
     deleteSelectedLayers, minimapVisible, stopTransition, touched, setCamera, selectedPointerId, armedPointer,
     startReattach, selectedElementTargets, startElementResize, editingElement, editingScreen,
     commitEditingText, finishEditingText, placeholderChoice, resolvePlaceholder, setPlaceholderChoice,
-    submitRequestDraft, cancelRequestDraft, selectedItem, selectedItemScreen, createdItem, updateReference,
+    submitRequestDraft, askRequestDraft, cancelRequestDraft, selectedItem, selectedItemScreen, createdItem, updateReference,
     startReferenceResize, pasteChoice, setPasteChoice, confirmPaste, linkChoice, linkCopies, setLinkChoice,
     preview, previewScreen, previewRefresh, previewClose, dropNotice, setDropNotice,
   };

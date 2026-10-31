@@ -197,7 +197,7 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
         groupElements={groupCanvasElements} ungroupElements={ungroupCanvasElements}
         linkElements={linkCanvasElements} unlinkElements={unlinkCanvasElements} pasteLinked={pasteLinkedInstances}
         play={play} onPlayBoundary={id => setPlay(current => ({ ...current, boundary: id }))} onPlayElement={playElement} onPlayExit={() => setPlay(idlePlay)}
-        preview={preview} previewClose={closePreview} previewRefresh={refreshPreview} />
+        preview={preview} previewClose={closePreview} previewRefresh={refreshPreview} generate={ids => generate(ids)} />
       {showGenerationStatus ? <GenerationFeedback controller={generation} project={project} openSettings={() => setShowAiSettings(true)} openImport={openImportDialog} openBrief={() => setShowNotes('decisions')} changeRequest={editGenerationRequest} details={showsOpener({ available: true, open: showLog }) ? openGeneration : undefined} /> : null}
       </div>
       {showLog && project && <GenerationLog key={`${project.id}:${logFocus}`} controller={generation} job={generation.job} operation={generation.operation} error={generation.error} project={project} settings={aiSettings} openSettings={() => setShowAiSettings(true)} openImport={openImportDialog} openBrief={() => setShowNotes('decisions')} editRequest={editGenerationRequest} reply={replyToGeneration} close={() => setShowLog(false)} />}
@@ -236,7 +236,7 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
                 canLink={selectedElementTargets.length >= 2}
                 canUnlink={selectedElementTargets.length === 1 && (!!selectedElements[0]?.link || isNestedLayer(project, selectedElements[0]?.id ?? ''))}
                 request={selectedElementRequest} setRequest={data => setCanvasElementRequest(selectedElements[0].id, data)}
-                generate={() => generate(selectedElements.map(element => element.id))} error={setError}
+                error={setError}
                 behaviour={elementBehaviourSource ? behaviourProps(elementBehaviourSource) : undefined} />
           : selectedBoundary
             ? <BoundaryProperties page={selectedBoundary} selectedSizeId={canvasFocusSize} widthPreview={widthPreview} previewWidth={setWidthPreview} busy={pending > 0} commit={patch => updateCanvasPage(selectedBoundary.id, patch)}

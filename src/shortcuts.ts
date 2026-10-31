@@ -145,7 +145,7 @@ export const KEYMAP: Binding[] = [
   // Run
   { action: 'play', label: 'Play', group: 'Run', keys: [{ key: ' ', code: 'Space', shift: true }], display: 'Shift+Space' },
   { action: 'preview', label: 'Preview export', group: 'Run', keys: [{ key: 'Enter', mod: true }], display: 'Ctrl/Cmd+Enter', inText: true },
-  { action: 'askAI', label: 'Ask AI on selection', group: 'Run', keys: [mod('k')], display: 'Ctrl/Cmd+K' },
+  { action: 'askAI', label: 'Request on selection', group: 'Run', keys: [mod('k')], display: 'Ctrl/Cmd+K' },
   { action: 'export', label: 'Export', group: 'Run', keys: [mod('e')], display: 'Ctrl/Cmd+E' },
 
   // Help
@@ -160,7 +160,7 @@ export function shortcutLabel(action: ShortcutAction): string {
   return BINDING.get(action)?.display ?? '';
 }
 
-/** A tooltip with its shortcut, e.g. "Ask AI · Ctrl/Cmd+K". */
+/** A tooltip with its shortcut, e.g. "Request · Ctrl/Cmd+K". */
 export function withShortcut(label: string, action: ShortcutAction) {
   return `${label} · ${shortcutLabel(action)}`;
 }

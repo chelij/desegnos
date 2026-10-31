@@ -99,7 +99,7 @@ export function SelectionBar({ screen, viewWidth, fill, linked, linkable, hyperl
     {scope && <><span className="floating-bar-divider" aria-hidden="true" />
       <EditScopeChoice scope={scope} choose={onScope} /></>}
     <span className="floating-bar-divider" aria-hidden="true" />
-    <button type="button" className="selection-action" aria-label="Request" title={withShortcut('Request', 'requestTool')} onClick={onRequest}><Icon name="note" /></button>
+    <button type="button" className="selection-action labeled" title={withShortcut('Request', 'askAI')} onClick={onRequest}>Request</button>
     <button type="button" className="selection-action" aria-label="Link to…" title="Link to…" disabled={!hyperlink} onClick={onLinkTo}><Icon name="link" /></button>
     <button type="button" className="selection-action" aria-label={linked ? 'Unlink layer' : 'Make linked'} title={withShortcut(linked ? 'Unlink' : 'Make linked', linked ? 'unlink' : 'link')}
       disabled={!linked && !linkable} onClick={linked ? onUnlink : onLink}><Icon name="linked-copies" /></button>

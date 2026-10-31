@@ -161,6 +161,13 @@ export function requestTargetKey(target: RequestTarget): string {
   }
 }
 
+/** The one pending request that targets this layer, when a draft targets that layer alone. */
+export function singleTargetRequest(project: Project, targets: RequestTarget[]): PendingRequest | null {
+  const target = targets.length === 1 && targets[0].kind === 'element' ? targets[0] : null;
+  if (!target) return null;
+  return (project.requests ?? []).find(request => request.targets.length === 1 && request.targets[0].kind === 'element' && request.targets[0].id === target.id) ?? null;
+}
+
 export function requestTargetLabel(project: Project, target: RequestTarget): string {
   if (target.kind === 'element') {
     const page = project.pages.find(item => item.id === target.page);
@@ -230,23 +237,24 @@ function RequestOutline({ shape, inverse, draft }: { shape: RequestShape; invers
 }
 
 /** The request box: native screen pixels beside the targets, never inside the transformed layer. */
-export function RequestBoxEditor({ screen, text, submit, close }: {
+export function RequestBoxEditor({ screen, text, ask, submit, close }: {
   screen: { left: number; top: number; width: number; height: number }; text: string;
+  ask?: (text: string) => void;
   submit: (text: string) => void; close: () => void;
 }) {
   const [draft, setDraft] = useState(text);
   const area = useRef<HTMLTextAreaElement>(null);
   useEffect(() => { area.current?.focus({ preventScroll: true }); area.current?.select(); }, []);
+  const send = ask ?? submit;
   return <div className="request-box-editor" style={{ left: screen.left, top: screen.top, width: screen.width, minHeight: screen.height }} onPointerDown={event => event.stopPropagation()}>
     <textarea ref={area} aria-label="Describe the request" maxLength={16384} value={draft} placeholder="What should happen here?" spellCheck
       onChange={event => setDraft(event.target.value)}
       onKeyDown={event => {
         if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); close(); return; }
-        if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); event.stopPropagation(); submit(draft); }
+        if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); event.stopPropagation(); send(draft); }
       }} />
     <div className="request-box-actions">
-      <span className="request-box-hint">Enter to queue · Esc to cancel</span>
-      <button type="button" className="dock-action" disabled={!draft.trim()} onClick={() => submit(draft)}>Queue request</button>
+      <button type="button" className="dock-action primary" disabled={!draft.trim()} onClick={() => send(draft)}>Request</button>
     </div>
   </div>;
 }

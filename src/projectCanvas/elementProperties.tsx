@@ -85,30 +85,20 @@ function CodeField({ language, source, commit }: { language: string; source: str
   </div>;
 }
 
-function RequestArea({ element, project, request, setRequest, generate, error }: {
+function RequestArea({ element, project, request, setRequest, error }: {
   element: Element; project: Project; request: PendingRequest | null;
   setRequest: (data: { text: string; attachments: RequestAttachment[] } | null) => void;
-  generate: () => void; error: (message: string) => void;
+  error: (message: string) => void;
 }) {
   const files = useRef<HTMLInputElement>(null);
-  const [prompt, setPrompt] = useState(request?.text ?? '');
-  useEffect(() => { setPrompt(request?.text ?? ''); }, [request?.text, element.id]);
-  const save = (patch: { text?: string; attachments?: RequestAttachment[] }) => {
-    const text = patch.text ?? prompt;
-    const attachments = patch.attachments ?? request?.attachments ?? [];
+  const save = (attachments: RequestAttachment[]) => {
+    const text = request?.text ?? '';
     if (!text.trim() && !attachments.length) { setRequest(null); return; }
     setRequest({ text, attachments });
   };
-  function commit() { save({ text: prompt }); }
-  async function askAi() {
-    const text = prompt.trim();
-    if (!text) return;
-    try { save({ text }); } catch (reason) { error(String(reason)); return; }
-    generate();
-  }
   async function attach(files: File[], links: string[] = []) {
     const result = await readRequestAttachments(request?.attachments ?? [], files, links);
-    save({ attachments: result.attachments });
+    save(result.attachments);
     if (result.errors.length) error(result.errors.join(' '));
   }
   function drop(event: React.DragEvent<HTMLDivElement>) {
@@ -119,13 +109,6 @@ function RequestArea({ element, project, request, setRequest, generate, error }:
     void attach([], [text]);
   }
   return <div className="dock-form dock-layer-meta">
-    <label className="dock-field">Ask AI on this layer
-      <textarea data-element-request value={prompt} rows={3} maxLength={16384} placeholder="Describe a change"
-        onChange={event => setPrompt(event.target.value)}
-        onBlur={commit}
-        onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); askAi(); } }} />
-    </label>
-    <button type="button" className="dock-action" disabled={!prompt.trim()} onClick={() => void askAi()}>Ask AI</button>
     {element.meta.requests.length > 0 && <div className="dock-history">
       <span className="dock-field-label">Past requests</span>
       {[...element.meta.requests].reverse().map(item => <details key={item.id} className="dock-history-entry">
@@ -143,7 +126,7 @@ function RequestArea({ element, project, request, setRequest, generate, error }:
       {(request?.attachments.length ?? 0) > 0 ? <ul className="request-attachments">{request!.attachments.map(attachment => <li key={attachment.id} title={attachment.kind === 'link' ? attachment.url : attachment.name}>
         {attachment.kind === 'image' && attachment.dataUri ? <img src={attachment.dataUri} alt="" /> : <span className="attachment-icon" aria-hidden="true"><Icon name={attachment.kind === 'link' ? 'link' : 'text'} size={12} /></span>}
         <span className="attachment-name">{attachment.name}</span>
-        <button type="button" className="icon-button sm" aria-label={`Remove ${attachment.name}`} title={`Remove ${attachment.name}`} onClick={() => save({ attachments: request!.attachments.filter(item => item.id !== attachment.id) })}><Icon name="close" /></button>
+        <button type="button" className="icon-button sm" aria-label={`Remove ${attachment.name}`} title={`Remove ${attachment.name}`} onClick={() => save(request!.attachments.filter(item => item.id !== attachment.id))}><Icon name="close" /></button>
       </li>)}</ul> : <p className="dock-hint">Drop files or links here</p>}
     </div>
     <p className="dock-hint">{pictureName(project, element.image) || elementKindLabel(element)}</p>
@@ -186,7 +169,7 @@ function PaddingFields({ uniform, sides, disabled, change }: {
   </>;
 }
 
-export function ElementProperties({ project, page, sizeId, elements, busy, update, rename, link, unlink, canLink, canUnlink, request, setRequest, generate, error, styleCommand, behaviour }: {
+export function ElementProperties({ project, page, sizeId, elements, busy, update, rename, link, unlink, canLink, canUnlink, request, setRequest, error, styleCommand, behaviour }: {
   styleCommand?: (command: import('../types').Command) => Promise<unknown>;
   behaviour?: BehaviourProperty;
   project: Project; page: Page; sizeId: string | null; elements: Element[]; busy: boolean;
@@ -195,7 +178,6 @@ export function ElementProperties({ project, page, sizeId, elements, busy, updat
   link: () => void; unlink: () => void; canLink: boolean; canUnlink: boolean;
   request: PendingRequest | null;
   setRequest: (data: { text: string; attachments: RequestAttachment[] } | null) => void;
-  generate: () => void;
   error: (message: string) => void;
 }) {
   const single = elements.length === 1 ? elements[0] : null;
@@ -451,7 +433,7 @@ export function ElementProperties({ project, page, sizeId, elements, busy, updat
             commit={value => commitStyle(style => { style.shadow.blur = Number(value); })} />
         </div>
     </PropsSection>}
-    {single && <RequestArea element={single} project={project} request={request} setRequest={setRequest} generate={generate} error={error} />}
+    {single && <RequestArea element={single} project={project} request={request} setRequest={setRequest} error={error} />}
     {!single && <p className="dock-hint">{elements.map(element => elementKindLabel(element)).filter((label, index, all) => all.indexOf(label) === index).join(', ')}</p>}
   </div>;
 }

@@ -160,13 +160,12 @@
   background: var(--surface-raised); box-shadow: var(--shadow-2); pointer-events: auto;
 }
 .project-canvas .request-box-editor textarea {
-  flex: 1; min-width: 0; min-height: 44px; padding: var(--space-1) var(--space-2); resize: none;
+  flex: 1; min-width: 0; min-height: 44px; padding: var(--space-1) var(--space-2); resize: none; overflow: hidden auto;
   border: 0; background: transparent; color: var(--text); font-family: inherit; font-size: var(--text-sm); line-height: 1.4;
 }
 .project-canvas .request-box-editor textarea:focus-visible { outline: none; }
 .project-canvas .request-box-editor:focus-within { box-shadow: var(--shadow-2), 0 0 0 2px var(--focus); }
-.project-canvas .request-box-actions { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
-.project-canvas .request-box-hint { color: var(--muted); font-size: var(--text-xs); }
+.project-canvas .request-box-actions { display: flex; align-items: center; justify-content: flex-end; gap: var(--space-2); }
 .project-canvas .canvas-grip {
   position: absolute; z-index: 7; width: 10px; height: 10px; min-height: 10px; padding: 0;
   border: 1px solid var(--annotation); border-radius: 2px; background: var(--white);
@@ -331,6 +330,7 @@
 .project-canvas .selection-bar .selection-action:hover:not(:disabled) { background: var(--surface-muted); }
 .project-canvas .selection-bar .selection-action:active:not(:disabled) { background: var(--surface-sunken); }
 .project-canvas .selection-bar .selection-action svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: var(--icon-stroke); stroke-linejoin: round; stroke-linecap: round; }
+.project-canvas .selection-bar .selection-action.labeled { width: auto; min-width: 0; padding-inline: var(--space-2); font-size: var(--text-xs); }
 .project-canvas .selection-bar .selection-action .icon { width: 15px; height: 15px; }
 .project-canvas .selection-bar .floating-bar-divider { height: 17px; margin-inline: var(--space-1); }
 .project-canvas .selection-bar .selection-align { display: flex; align-items: center; gap: 1px; padding: 1px; border-radius: var(--radius-sm); background: var(--control-track); }

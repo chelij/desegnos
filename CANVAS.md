@@ -138,7 +138,7 @@ Every tool and action has a shortcut, using the keys other design tools use.
 | Minimap | Shift+M |
 | Play / Preview export | Shift+Space / Ctrl/Cmd+Enter |
 | Hide panels | Ctrl/Cmd+\ |
-| Ask AI on selection | Ctrl/Cmd+K |
+| Request on selection | Ctrl/Cmd+K |
 | Export | Ctrl/Cmd+E |
 | Undo / Redo | Ctrl/Cmd+Z / Shift+Ctrl/Cmd+Z |
 
