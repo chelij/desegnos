@@ -713,12 +713,13 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
       setNotice(`${count} ${count === 1 ? 'item' : 'items'} deleted.`, () => { void travel('undo_project').catch(() => {}); });
     });
   }
-  // A boundary is deleted as a whole page, or as the selected linked size.
+  // A boundary is deleted as a whole page, or as the selected linked size. The base size
+  // carries the values the other sizes inherit, so deleting it deletes the page.
   function deleteBoundary(pageId: string, sizeId: string | null) {
     const page = project?.pages.find(item => item.id === pageId);
     if (!page) return;
     const size = sizeId ? page.sizes.find(item => item.id === sizeId) : null;
-    const removeSize = !!size && page.sizes.length > 1;
+    const removeSize = !!size && size.id !== page.sizes[0].id;
     const name = removeSize ? `${page.name} · ${size.label}` : page.name;
     run(async () => {
       await mutate(removeSize ? { type: 'delete_items', size_ids: [[pageId, size!.id]] } : { type: 'delete_items', page_ids: [pageId] });
