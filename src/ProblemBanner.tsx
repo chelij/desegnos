@@ -118,24 +118,29 @@ const TOAST_FADE = 200;
 
 /** A toast disappears on its own; pointing at it, or tabbing to its Undo, holds it open. */
 export function ToastRow({ variant = 'info', title, message, undo, dismiss, className = '' }: NoticeProps) {
-  const [held, setHeld] = useState(false);
-  const [leaving, setLeaving] = useState(false);
+  // showing counts down to the deadline, held pauses it, leaving fades out for good.
+  const [phase, setPhase] = useState<'showing' | 'held' | 'leaving'>('showing');
   const close = useRef(dismiss); close.current = dismiss;
   const deadline = useRef(Date.now() + TOAST_LIFETIME);
+  // One place for every phase change: only a toast that is still showing can be held, and only an unheld one leaves.
+  const hold = (held: boolean) => setPhase(current => {
+    if (current === 'leaving') return current;
+    return held ? 'held' : 'showing';
+  });
   useEffect(() => {
-    if (held || leaving) return;
-    const timer = setTimeout(() => setLeaving(true), Math.max(0, deadline.current - Date.now()));
+    if (phase !== 'showing') return;
+    const timer = setTimeout(() => setPhase('leaving'), Math.max(0, deadline.current - Date.now()));
     return () => clearTimeout(timer);
-  }, [held, leaving]);
+  }, [phase]);
   useEffect(() => {
-    if (!leaving) return;
+    if (phase !== 'leaving') return;
     const timer = setTimeout(() => close.current?.(), TOAST_FADE);
     return () => clearTimeout(timer);
-  }, [leaving]);
-  return <div className={`notice floating-bar notice-${variant} toast${leaving ? ' leaving' : ''}${className ? ` ${className}` : ''}`}
+  }, [phase]);
+  return <div className={`notice floating-bar notice-${variant} toast${phase === 'leaving' ? ' leaving' : ''}${className ? ` ${className}` : ''}`}
     role={variant === 'error' || variant === 'warning' ? 'alert' : 'status'}
-    onPointerEnter={() => setHeld(true)} onPointerLeave={() => setHeld(false)}
-    onFocus={() => setHeld(true)} onBlur={() => setHeld(false)}>
+    onPointerEnter={() => hold(true)} onPointerLeave={() => hold(false)}
+    onFocus={() => hold(true)} onBlur={() => hold(false)}>
     <div className="notice-copy" title={[title, message].filter(Boolean).join(' · ')}>{title && <strong>{title}</strong>}{message && <span>{message}</span>}</div>
     {undo && <div className="notice-actions"><button type="button" className="primary" onClick={() => { close.current?.(); undo.onClick(); }}>{undo.label}</button></div>}
   </div>;

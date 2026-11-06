@@ -15,6 +15,13 @@ function editedAgo(createdAt: number) {
   return new Date(createdAt).toLocaleDateString([], { month: 'short', day: 'numeric' });
 }
 
+// One inline alternative task at a time; the variant carries the draft it edits.
+type Mode =
+  | { kind: 'idle' }
+  | { kind: 'creating'; name: string }
+  | { kind: 'renaming'; branch: string; name: string }
+  | { kind: 'deleting'; branch: string };
+
 // Versions of the current branch, newest first, with the alternatives they belong to.
 // Restoring never edits history: it becomes the current state as one undo step.
 export function HistoryPanel({ projectId, refreshKey, apply, notice, error, compact }: {
@@ -26,12 +33,9 @@ export function HistoryPanel({ projectId, refreshKey, apply, notice, error, comp
   compact: () => void;
 }) {
   const [data, setData] = useState<ProjectHistoryView | null>(null);
+  // busy spans the whole request, including the mode that started it.
   const [busy, setBusy] = useState(false);
-  const [creating, setCreating] = useState(false);
-  const [name, setName] = useState('');
-  const [renaming, setRenaming] = useState<string | null>(null);
-  const [renameTo, setRenameTo] = useState('');
-  const [deleting, setDeleting] = useState<string | null>(null);
+  const [mode, setMode] = useState<Mode>({ kind: 'idle' });
   const request = useRef(0);
 
   const load = useCallback(async () => {
@@ -55,10 +59,7 @@ export function HistoryPanel({ projectId, refreshKey, apply, notice, error, comp
       .then(workspace => {
         apply(workspace);
         notice(typeof message === 'string' ? message : message(workspace));
-        setCreating(false);
-        setName('');
-        setRenaming(null);
-        setDeleting(null);
+        setMode({ kind: 'idle' });
       })
       .catch(fail)
       .finally(() => { setBusy(false); void load(); });
@@ -73,27 +74,27 @@ export function HistoryPanel({ projectId, refreshKey, apply, notice, error, comp
     act(() => native<WorkspaceView>('switch_alternative', { branch }), `Switched to “${branch}”.`);
   };
   const alternativeRow = (branch: BranchSummary) => <li key={branch.name}>
-    {renaming === branch.name
+    {mode.kind === 'renaming' && mode.branch === branch.name
       ? <form className="history-inline" onSubmit={event => {
           event.preventDefault();
-          const value = renameTo.trim();
+          const value = mode.name.trim();
           if (!value) return;
           act(() => native<WorkspaceView>('rename_alternative', { from: branch.name, to: value }), `Renamed the alternative to “${value}”.`);
         }}>
-          <input autoFocus aria-label="Alternative name" maxLength={60} value={renameTo} onChange={event => setRenameTo(event.target.value)} />
-          <button className="primary" disabled={busy || !renameTo.trim()}>Rename</button>
-          <button type="button" onClick={() => setRenaming(null)}>Cancel</button>
+          <input autoFocus aria-label="Alternative name" maxLength={60} value={mode.name} onChange={event => setMode({ kind: 'renaming', branch: mode.branch, name: event.target.value })} />
+          <button className="primary" disabled={busy || !mode.name.trim()}>Rename</button>
+          <button type="button" onClick={() => setMode({ kind: 'idle' })}>Cancel</button>
         </form>
-      : deleting === branch.name
+      : mode.kind === 'deleting' && mode.branch === branch.name
         ? <div className="history-inline">
             <span className="muted">Delete “{branch.name}” and its versions?</span>
             <button type="button" className="danger" disabled={busy} onClick={() => act(() => native<WorkspaceView>('delete_alternative', { name: branch.name }), `Deleted “${branch.name}”.`)}>Delete</button>
-            <button type="button" onClick={() => setDeleting(null)}>Cancel</button>
+            <button type="button" onClick={() => setMode({ kind: 'idle' })}>Cancel</button>
           </div>
         : <div className="history-inline">
             <span className="history-alternative-name">{branch.name}</span>
-            <button type="button" className="history-action" disabled={busy} onClick={() => { setRenaming(branch.name); setRenameTo(branch.name); setDeleting(null); }}>Rename</button>
-            <button type="button" className="history-action" disabled={busy} onClick={() => { setDeleting(branch.name); setRenaming(null); }}>Delete</button>
+            <button type="button" className="history-action" disabled={busy} onClick={() => setMode({ kind: 'renaming', branch: branch.name, name: branch.name })}>Rename</button>
+            <button type="button" className="history-action" disabled={busy} onClick={() => setMode({ kind: 'deleting', branch: branch.name })}>Delete</button>
           </div>}
   </li>;
 
@@ -103,18 +104,18 @@ export function HistoryPanel({ projectId, refreshKey, apply, notice, error, comp
         {(data?.branches ?? []).map(branch => <option key={branch.name} value={branch.name}>{branch.primary ? `${branch.name} (main)` : branch.name}</option>)}
       </select>
     </label>
-    {creating
+    {mode.kind === 'creating'
       ? <form className="history-inline" onSubmit={event => {
           event.preventDefault();
-          const value = name.trim();
+          const value = mode.name.trim();
           if (!value) return;
           act(() => native<WorkspaceView>('create_alternative', { name: value }), `Created “${value}”.`);
         }}>
-          <input autoFocus aria-label="Alternative name" maxLength={60} placeholder="Alternative name" value={name} onChange={event => setName(event.target.value)} />
-          <button className="primary" disabled={busy || !name.trim()}>Create</button>
-          <button type="button" onClick={() => { setCreating(false); setName(''); }}>Cancel</button>
+          <input autoFocus aria-label="Alternative name" maxLength={60} placeholder="Alternative name" value={mode.name} onChange={event => setMode({ kind: 'creating', name: event.target.value })} />
+          <button className="primary" disabled={busy || !mode.name.trim()}>Create</button>
+          <button type="button" onClick={() => setMode({ kind: 'idle' })}>Cancel</button>
         </form>
-      : <button type="button" className="history-action" disabled={busy || !data} onClick={() => { setCreating(true); setRenaming(null); setDeleting(null); }}>New alternative</button>}
+      : <button type="button" className="history-action" disabled={busy || !data} onClick={() => setMode({ kind: 'creating', name: '' })}>New alternative</button>}
     <button type="button" className="history-action" disabled={busy || !data} onClick={() => compact()}>Compact history</button>
     {alternatives.length > 0 && <ul className="history-alternatives">{alternatives.map(alternativeRow)}</ul>}
     {data && data.versions.length > 0
