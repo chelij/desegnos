@@ -1,8 +1,9 @@
 //! Generation reply validation and application.
 use desegnos_core::{
-    Appearance, Command, Element, ElementKind, GenerationCandidate, PendingRequest, PlayAction,
-    Pointer, PointerSource, PointerTarget, Project, Rect, ReferenceItem, ReferenceKind,
-    RequestTarget, Session, Viewport, apply_generation_output, empty_element,
+    Appearance, BoundaryKind, Command, Element, ElementKind, ElementOperation, GenerationCandidate,
+    GenerationCapabilities, PageSize, PendingRequest, PlayAction, Pointer, PointerSource,
+    PointerTarget, Project, Rect, ReferenceItem, ReferenceKind, RequestTarget, Session, Viewport,
+    apply_generation_output, empty_element,
 };
 use serde_json::json;
 use std::collections::BTreeMap;
@@ -649,4 +650,625 @@ fn a_layer_keeps_one_pending_request() {
     let session = Session::new(saved).unwrap();
     assert_eq!(session.project().requests.len(), 1);
     assert_eq!(session.project().requests[0].text, "Make it red");
+}
+
+fn add_request(project: &Project, text: &str, targets: Vec<RequestTarget>) -> Project {
+    apply(
+        project,
+        Command::AddRequest {
+            request: PendingRequest {
+                id: Uuid::new_v4(),
+                text: text.into(),
+                attachments: vec![],
+                targets,
+                area: None,
+                requested_at: "2026-11-01T00:00:00Z".into(),
+            },
+        },
+    )
+}
+
+// A drawn request area over an empty page has only a boundary target: no layer exists to scope
+// it to, so the whole pending request must still reach generation.
+#[test]
+fn a_boundary_only_request_on_an_empty_page_prepares_one_request_and_page() {
+    let start = Project::new(
+        "Blank".into(),
+        Viewport {
+            width: 800,
+            height: 600,
+        },
+        Appearance::Light,
+    )
+    .unwrap();
+    let page = start.home_page_id;
+    let project = add_request(
+        &start,
+        "Build this page from the project brief.",
+        vec![RequestTarget::Boundary { page, size: None }],
+    );
+
+    let snapshot = project.prepare_requirements().unwrap();
+    assert_eq!(snapshot.request_count, 1);
+    assert_eq!(snapshot.page_count, 1);
+    assert_eq!(
+        snapshot.request_ids().unwrap(),
+        vec![project.requests[0].id]
+    );
+    snapshot.validate_current(&project).unwrap();
+}
+
+#[test]
+fn a_layer_request_and_a_boundary_request_on_a_blank_page_both_travel() {
+    let (project, _, target, _) = setup();
+    let about = Uuid::new_v4();
+    let project = apply(
+        &project,
+        Command::AddCanvasPage {
+            name: "About".into(),
+            path: "/about".into(),
+            size: PageSize {
+                id: about,
+                label: "Desktop".into(),
+                width: 800,
+                height: 600,
+                kind: BoundaryKind::Page,
+                x: 0.0,
+                y: 1000.0,
+            },
+            moves: vec![],
+            reference: vec![],
+        },
+    );
+    let blank_page = project.pages.last().unwrap().id;
+    assert_eq!(blank_page, project.pages[1].id);
+    assert!(project.page(blank_page).unwrap().elements.is_empty());
+    let project = add_request(
+        &project,
+        "Build this page from the project brief.",
+        vec![RequestTarget::Boundary {
+            page: blank_page,
+            size: None,
+        }],
+    );
+
+    let snapshot = project.prepare_requirements().unwrap();
+    assert_eq!(snapshot.request_count, 2);
+    assert_eq!(snapshot.page_count, 2);
+    snapshot.validate_current(&project).unwrap();
+
+    // The targeted path stays scoped to the layers it was asked about.
+    let targeted = project
+        .prepare_targeted_requirements(GenerationCapabilities::default(), &[target], &[])
+        .unwrap();
+    assert_eq!(targeted.request_count, 1);
+    assert_eq!(targeted.page_count, 1);
+}
+
+/// A reply to a boundary-only request: the page an area or a blank boundary asked for.
+fn boundary_candidate(
+    snapshot: &desegnos_core::RequirementsSnapshot,
+    request_id: Uuid,
+    operations: serde_json::Value,
+) -> GenerationCandidate {
+    serde_json::from_value(json!({
+        "jobId": snapshot.job_id,
+        "requirementsSha256": snapshot.sha256,
+        "summary": "Built the page",
+        "requests": [{
+            "requestId": request_id,
+            "elementId": null,
+            "status": "implemented",
+            "explanation": "Built the page",
+            "operations": operations
+        }],
+        "images": [],
+        "pointerClassifications": [],
+        "decisionProposals": [],
+        "criticism": []
+    }))
+    .unwrap()
+}
+
+/// One layer inserted straight into a boundary, below its current height.
+fn below_the_fold(page: Uuid, y: f64, height: f64, text: &str) -> serde_json::Value {
+    json!({
+        "kind": "insertInBoundary",
+        "pageId": page,
+        "sizeId": null,
+        "element": {
+            "kind": "text", "rect": rect(0.0, y, 800.0, height), "text": text
+        }
+    })
+}
+
+fn blank_page_request(output: Option<desegnos_core::OutputType>) -> (Project, Uuid, Uuid) {
+    let start = Project::new(
+        "Blank".into(),
+        Viewport {
+            width: 800,
+            height: 600,
+        },
+        Appearance::Light,
+    )
+    .unwrap();
+    let page = start.home_page_id;
+    let start = match output {
+        Some(output) => apply(
+            &start,
+            Command::SetPageOutput {
+                page_id: page,
+                output,
+            },
+        ),
+        None => start,
+    };
+    let project = add_request(
+        &start,
+        "Build this page from the project brief.",
+        vec![RequestTarget::Boundary { page, size: None }],
+    );
+    let request = project.requests[0].id;
+    (project, page, request)
+}
+
+#[test]
+fn a_website_page_grows_downward_to_fit_inserted_layers() {
+    let (project, page, request) = blank_page_request(None);
+    let snapshot = project.prepare_requirements().unwrap();
+    // The second layer sits below the first, so the boundary keeps the lowest edge.
+    let reply = boundary_candidate(
+        &snapshot,
+        request,
+        json!([
+            below_the_fold(page, 620.0, 100.0, "Features"),
+            below_the_fold(page, 1250.5, 40.0, "Footer"),
+        ]),
+    );
+    reply.validate(&snapshot, &project).unwrap();
+    let applied =
+        apply_generation_output(&project, &snapshot, &reply, &[], &BTreeMap::new()).unwrap();
+    let size = applied.page(page).unwrap().base_size();
+    assert_eq!(size.height, 1291);
+    assert_eq!(size.width, 800);
+    assert_eq!(applied.page(page).unwrap().elements.len(), 2);
+    assert_eq!(applied.revision, project.revision + 1);
+
+    // Growing the boundary is part of the same undo step as the new layers.
+    let mut session = Session::new(project.clone()).unwrap();
+    session
+        .apply_generation(&snapshot, &reply, &[], &BTreeMap::new(), |_| Ok(()))
+        .unwrap();
+    assert_eq!(
+        session.project().page(page).unwrap().base_size().height,
+        1291
+    );
+    session.undo(|_| Ok(())).unwrap();
+    assert_eq!(
+        session.project().page(page).unwrap().base_size().height,
+        600
+    );
+    assert!(session.project().page(page).unwrap().elements.is_empty());
+    session.redo(|_| Ok(())).unwrap();
+    assert_eq!(
+        session.project().page(page).unwrap().base_size().height,
+        1291
+    );
+}
+
+// A model can echo the boundary's page id as the layer a request anchors on. A page is not a
+// layer, so a boundary-only request drops that anchor instead of rejecting a complete reply.
+#[test]
+fn a_boundary_request_answered_with_its_page_id_as_the_layer_is_normalized_and_applied() {
+    let (project, page, request) = blank_page_request(None);
+    let snapshot = project.prepare_requirements().unwrap();
+    let mut reply = boundary_candidate(
+        &snapshot,
+        request,
+        json!([below_the_fold(page, 620.0, 100.0, "Features")]),
+    );
+    reply.requests[0].element_id = Some(page);
+    reply.normalize_boundary_anchors(&project);
+    assert_eq!(reply.requests[0].element_id, None);
+
+    reply.validate(&snapshot, &project).unwrap();
+    let applied =
+        apply_generation_output(&project, &snapshot, &reply, &[], &BTreeMap::new()).unwrap();
+    assert_eq!(applied.page(page).unwrap().base_size().height, 720);
+    assert_eq!(applied.page(page).unwrap().elements.len(), 1);
+}
+
+#[test]
+fn a_boundary_request_answered_with_an_unrelated_layer_is_still_rejected() {
+    let (project, page, request) = blank_page_request(None);
+    let unrelated = Uuid::new_v4();
+    let project = apply(
+        &project,
+        Command::InsertElements {
+            page_id: page,
+            parent_id: None,
+            index: 0,
+            elements: vec![element(
+                unrelated,
+                ElementKind::Box,
+                rect(0.0, 0.0, 100.0, 60.0),
+            )],
+            picture_data_uri: None,
+            size_id: None,
+        },
+    );
+    let snapshot = project.prepare_requirements().unwrap();
+    let mut reply = boundary_candidate(
+        &snapshot,
+        request,
+        json!([below_the_fold(page, 620.0, 100.0, "Features")]),
+    );
+    reply.requests[0].element_id = Some(unrelated);
+    reply.normalize_boundary_anchors(&project);
+    assert_eq!(reply.requests[0].element_id, Some(unrelated));
+
+    let error = reply.validate(&snapshot, &project).unwrap_err().to_string();
+    assert!(error.contains("a layer it does not target"), "{error}");
+}
+
+// A model can also reach for `insert` and name the page it may fill as the parent. A page is
+// not a layer, so that insert becomes a boundary insert instead of rejecting a complete reply.
+#[test]
+fn a_boundary_request_answered_with_insert_on_its_page_id_becomes_a_boundary_insert() {
+    let (project, page, request) = blank_page_request(None);
+    let snapshot = project.prepare_requirements().unwrap();
+    let mut reply = boundary_candidate(
+        &snapshot,
+        request,
+        json!([
+            {
+                "kind": "insert", "index": null, "parentId": page,
+                "element": {"kind": "text", "rect": rect(0.0, 620.0, 800.0, 100.0), "text": "Features"}
+            },
+            {
+                "kind": "insert", "index": 0, "parentId": page,
+                "element": {"kind": "text", "rect": rect(0.0, 720.0, 800.0, 40.0), "text": "Footer"}
+            },
+        ]),
+    );
+    assert!(
+        reply.requests[0]
+            .operations
+            .iter()
+            .all(|operation| matches!(operation, ElementOperation::Insert { .. }))
+    );
+    let error = reply.validate(&snapshot, &project).unwrap_err().to_string();
+    assert!(error.contains("inserted outside its request"), "{error}");
+
+    reply.normalize_boundary_anchors(&project);
+    assert_eq!(reply.requests[0].operations.len(), 2);
+    for operation in &reply.requests[0].operations {
+        match operation {
+            ElementOperation::InsertInBoundary {
+                page_id, size_id, ..
+            } => {
+                assert_eq!(*page_id, page);
+                assert!(size_id.is_none());
+            }
+            other => panic!("expected a boundary insert, got {other:?}"),
+        }
+    }
+
+    reply.validate(&snapshot, &project).unwrap();
+    let applied =
+        apply_generation_output(&project, &snapshot, &reply, &[], &BTreeMap::new()).unwrap();
+    assert_eq!(applied.page(page).unwrap().base_size().height, 760);
+    assert_eq!(applied.page(page).unwrap().elements.len(), 2);
+}
+
+#[test]
+fn a_boundary_request_answered_with_insert_on_an_unrelated_layer_is_still_rejected() {
+    let (project, page, request) = blank_page_request(None);
+    // A layer that is not in this boundary's scope is not what the request may fill.
+    let unrelated = Uuid::new_v4();
+    let snapshot = project.prepare_requirements().unwrap();
+    let mut reply = boundary_candidate(
+        &snapshot,
+        request,
+        json!([{
+            "kind": "insert", "index": null, "parentId": unrelated,
+            "element": {"kind": "text", "rect": rect(0.0, 20.0, 100.0, 20.0), "text": "Inside"}
+        }]),
+    );
+    reply.normalize_boundary_anchors(&project);
+    assert!(matches!(
+        reply.requests[0].operations.as_slice(),
+        [ElementOperation::Insert { .. }]
+    ));
+
+    let error = reply.validate(&snapshot, &project).unwrap_err().to_string();
+    assert!(error.contains("inserted outside its request"), "{error}");
+    assert!(project.page(page).unwrap().elements.is_empty());
+}
+
+// A real reply built the Nightfall home page as four boundary inserts and described the whole
+// page's interaction in one boundary behaviour. Applying it must turn that behaviour into a
+// pointer the export plan asks for, or Preview reports 0 pointers and no script ships.
+#[test]
+fn a_boundary_behaviour_from_a_generation_reply_is_planned_for_export() {
+    let mut project: Project = serde_json::from_str(include_str!(
+        "fixtures/nightfall/project.json"
+    ))
+    .unwrap();
+    let page = project.pages[0].clone();
+    let request = Uuid::new_v4();
+    project.requests.push(PendingRequest {
+        id: request,
+        text: "Build the full home page and make every interactive part work.".into(),
+        attachments: vec![],
+        targets: vec![RequestTarget::Boundary {
+            page: page.id,
+            size: Some(page.base_size().id),
+        }],
+        area: None,
+        requested_at: "2026-11-06T14:09:34.534Z".into(),
+    });
+    let snapshot = project.prepare_requirements().unwrap();
+    let mut reply: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/nightfall/reply.json")).unwrap();
+    reply["jobId"] = json!(snapshot.job_id);
+    reply["requirementsSha256"] = json!(snapshot.sha256);
+    reply["requests"][0]["requestId"] = json!(request);
+    let behaviour = "Sticky navigation, theme toggle, new-moon countdown, finder filters, billing \
+        toggle, booking total, keyboard carousel, single-open accordion and inline email check.";
+    reply["requests"][0]["operations"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"kind": "setBehaviour", "elementId": null, "behaviour": behaviour}));
+    let mut candidate = GenerationCandidate::from_json(&reply.to_string()).unwrap();
+    candidate.normalize_boundary_anchors(&project);
+    candidate.validate(&snapshot, &project).unwrap();
+
+    let applied =
+        apply_generation_output(&project, &snapshot, &candidate, &[], &BTreeMap::new()).unwrap();
+    let pointer = applied
+        .pointers
+        .iter()
+        .find(|pointer| pointer.is_behaviour())
+        .expect("the boundary behaviour became a pointer");
+    assert_eq!(pointer.comment, behaviour);
+    assert!(matches!(
+        pointer.from,
+        PointerSource::Boundary { page_id, .. } if page_id == page.id
+    ));
+
+    let plan = desegnos_core::plan_export(&applied, &[], Uuid::new_v4()).unwrap();
+    assert_eq!(plan.request_count, 1);
+    assert_eq!(plan.pointers.len(), 1);
+    assert_eq!(plan.pointers[0].id, pointer.id);
+    assert_eq!(plan.pointers[0].comment, behaviour);
+}
+
+// The model can echo the boundary's page id where null means the request boundary. A page is
+// not a layer, so it means the same page-wide behaviour instead of rejecting the reply.
+#[test]
+fn a_boundary_behaviour_that_names_its_page_id_is_normalized_to_the_boundary() {
+    let (project, page, request) = blank_page_request(None);
+    let snapshot = project.prepare_requirements().unwrap();
+    let mut reply = boundary_candidate(
+        &snapshot,
+        request,
+        json!([{"kind": "setBehaviour", "elementId": page, "behaviour": "Tick every second"}]),
+    );
+    assert!(reply.validate(&snapshot, &project).is_err());
+
+    reply.normalize_boundary_anchors(&project);
+    assert!(matches!(
+        reply.requests[0].operations.as_slice(),
+        [ElementOperation::SetBehaviour {
+            element_id: None,
+            ..
+        }]
+    ));
+    reply.validate(&snapshot, &project).unwrap();
+    let applied =
+        apply_generation_output(&project, &snapshot, &reply, &[], &BTreeMap::new()).unwrap();
+    let pointer = applied
+        .pointers
+        .iter()
+        .find(|pointer| pointer.is_behaviour())
+        .expect("the boundary behaviour became a pointer");
+    assert_eq!(pointer.comment, "Tick every second");
+    assert!(matches!(pointer.from, PointerSource::Boundary { .. }));
+    assert_eq!(
+        desegnos_core::plan_export(&applied, &[], Uuid::new_v4())
+            .unwrap()
+            .pointers
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn a_slide_or_image_boundary_still_rejects_a_layer_below_its_height() {
+    for output in [
+        desegnos_core::OutputType::Slide,
+        desegnos_core::OutputType::Image,
+        desegnos_core::OutputType::AppScreen,
+    ] {
+        let (project, page, request) = blank_page_request(Some(output));
+        let snapshot = project.prepare_requirements().unwrap();
+        let reply = boundary_candidate(
+            &snapshot,
+            request,
+            json!([below_the_fold(page, 620.0, 100.0, "Overflow")]),
+        );
+        let error = reply.validate(&snapshot, &project).unwrap_err().to_string();
+        assert!(
+            error.contains("must stay inside its boundary"),
+            "{output:?}: {error}"
+        );
+        // The message names the layer, its rect and the boundary it left.
+        assert!(
+            error.contains("Text at 0,620 sized 800x100"),
+            "{output:?}: {error}"
+        );
+        assert!(error.contains("800x600"), "{output:?}: {error}");
+        assert_eq!(project.page(page).unwrap().base_size().height, 600);
+        assert!(project.page(page).unwrap().elements.is_empty());
+    }
+}
+
+#[test]
+fn a_website_page_still_rejects_horizontal_and_upward_overflow() {
+    let (project, page, request) = blank_page_request(None);
+    let snapshot = project.prepare_requirements().unwrap();
+    let wide = boundary_candidate(
+        &snapshot,
+        request,
+        json!([{
+            "kind": "insertInBoundary",
+            "pageId": page,
+            "sizeId": null,
+            "element": {"kind": "text", "rect": rect(700.0, 10.0, 200.0, 20.0), "text": "Wide"}
+        }]),
+    );
+    let error = wide.validate(&snapshot, &project).unwrap_err().to_string();
+    assert!(error.contains("must stay inside its boundary"), "{error}");
+    assert!(error.contains("Text at 700,10 sized 200x20"), "{error}");
+
+    let above = boundary_candidate(
+        &snapshot,
+        request,
+        json!([{
+            "kind": "insertInBoundary",
+            "pageId": page,
+            "sizeId": null,
+            "element": {"kind": "text", "rect": rect(0.0, -40.0, 200.0, 20.0), "text": "Above"}
+        }]),
+    );
+    assert!(above.validate(&snapshot, &project).is_err());
+}
+
+#[test]
+fn a_layer_that_leaves_its_parent_names_the_parent_in_the_rejection() {
+    let (project, page, target, _) = setup();
+    let pointer = project.pointers[0].id;
+    let snapshot = project.prepare_requirements().unwrap();
+    let mut reply = candidate(&snapshot, target, page, pointer);
+    reply.requests[0].operations = vec![
+        serde_json::from_value(json!({
+            "kind": "insert",
+            "parentId": target,
+            "index": null,
+            "element": {
+                "kind": "box", "rect": rect(0.0, 180.0, 300.0, 100.0), "name": "Panel"
+            }
+        }))
+        .unwrap(),
+    ];
+    let error = reply.validate(&snapshot, &project).unwrap_err().to_string();
+    assert!(
+        error.contains("Panel (Box) at 0,180 sized 300x100"),
+        "{error}"
+    );
+    assert_eq!(reply.rejected_element(&snapshot, &project), Some(target));
+}
+
+#[test]
+fn the_requirements_tell_the_model_a_webpage_boundary_grows_downward() {
+    let (project, ..) = blank_page_request(None);
+    let snapshot = project.prepare_requirements().unwrap();
+    assert!(
+        snapshot
+            .markdown
+            .contains("A webpage boundary grows downward"),
+        "the requirements must say a webpage boundary grows"
+    );
+}
+
+#[test]
+fn raw_control_characters_inside_reply_strings_are_repaired() {
+    let job_id = Uuid::new_v4();
+    let digest = "a".repeat(64);
+    // Models emit literal newlines and tabs inside generated HTML text; strict JSON forbids them.
+    let reply = format!(
+        "{{\"jobId\":\"{job_id}\",\"requirementsSha256\":\"{digest}\",\
+         \"summary\":\"Filled the box\",\
+         \"requests\":[{{\"status\":\"implemented\",\
+         \"explanation\":\"Wrote\n\t<div>hi</div>\",\"operations\":[]}}],\
+         \"images\":[],\"pointerClassifications\":[],\"decisionProposals\":[],\
+         \"criticism\":[]}}"
+    );
+    let candidate = GenerationCandidate::from_json(&reply).unwrap();
+    assert_eq!(candidate.requests[0].explanation, "Wrote\n\t<div>hi</div>");
+
+    // A reply that is still invalid reports the original strict error.
+    let broken = reply.replacen("\"operations\":[]", "\"operations\":[,]", 1);
+    let error = GenerationCandidate::from_json(&broken)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.starts_with("The generation result is invalid: control character"),
+        "{error}"
+    );
+}
+
+// Without an enforced schema a model can copy `insert`'s index onto a boundary insert.
+#[test]
+fn a_boundary_insert_with_a_stray_index_still_parses() {
+    let (project, page, request) = blank_page_request(None);
+    let snapshot = project.prepare_requirements().unwrap();
+    let mut operation = below_the_fold(page, 0.0, 40.0, "Hero");
+    operation["index"] = json!(0);
+    let reply = json!({
+        "jobId": snapshot.job_id,
+        "requirementsSha256": snapshot.sha256,
+        "summary": "Built the page",
+        "requests": [{
+            "requestId": request, "elementId": null, "status": "implemented",
+            "explanation": "Built the page", "operations": [operation]
+        }],
+        "images": [], "pointerClassifications": [], "decisionProposals": [], "criticism": []
+    });
+    let candidate = GenerationCandidate::from_json(&reply.to_string()).unwrap();
+    candidate.validate(&snapshot, &project).unwrap();
+}
+
+// A reply describes each interaction as its own boundary behaviour; all of them must reach export.
+#[test]
+fn several_boundary_behaviours_in_one_reply_all_survive() {
+    let (project, _page, request) = blank_page_request(None);
+    let snapshot = project.prepare_requirements().unwrap();
+    let reply = boundary_candidate(
+        &snapshot,
+        request,
+        json!([
+            {"kind": "setBehaviour", "elementId": null, "behaviour": "Count down to the new moon."},
+            {"kind": "setBehaviour", "elementId": null, "behaviour": "Open one FAQ answer at a time."}
+        ]),
+    );
+    reply.validate(&snapshot, &project).unwrap();
+    let applied =
+        apply_generation_output(&project, &snapshot, &reply, &[], &BTreeMap::new()).unwrap();
+    let behaviours: Vec<_> = applied.pointers.iter().filter(|p| p.is_behaviour()).collect();
+    assert_eq!(behaviours.len(), 1);
+    assert!(behaviours[0].comment.contains("Count down to the new moon."));
+    assert!(behaviours[0].comment.contains("Open one FAQ answer at a time."));
+
+    // A later generation still replaces the page's behaviour rather than piling onto it.
+    let mut next = applied.clone();
+    next.requests.push(PendingRequest {
+        id: Uuid::new_v4(),
+        text: "Rework the interactions.".into(),
+        attachments: vec![],
+        targets: project.requests[0].targets.clone(),
+        area: None,
+        requested_at: "2026-11-06T15:00:00.000Z".into(),
+    });
+    let second = next.prepare_requirements().unwrap();
+    let reply = boundary_candidate(
+        &second,
+        next.requests.last().unwrap().id,
+        json!([{"kind": "setBehaviour", "elementId": null, "behaviour": "Only the countdown."}]),
+    );
+    reply.validate(&second, &next).unwrap();
+    let applied = apply_generation_output(&next, &second, &reply, &[], &BTreeMap::new()).unwrap();
+    let behaviour = applied.pointers.iter().find(|p| p.is_behaviour()).unwrap();
+    assert_eq!(behaviour.comment, "Only the countdown.");
 }

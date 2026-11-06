@@ -10,6 +10,17 @@ import './dialogs.css';
 import type { AiSettingsView, ProviderSettings } from './types';
 
 function message(error: unknown) { return error instanceof Error ? error.message : String(error); }
+// A model that offers only some levels keeps the request as strong as the user asked for,
+// rather than dropping to its weakest one.
+const reasoningOrder = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+function nearestReasoningEffort(offered: string[], current: string): string {
+  if (!offered.length || offered.includes(current)) return current;
+  // Custom levels from another provider have no place in this order; advertise their first.
+  if (!reasoningOrder.includes(current) || offered.some(level => !reasoningOrder.includes(level))) return offered[0];
+  const distance = (level: string) => Math.abs(reasoningOrder.indexOf(level) - reasoningOrder.indexOf(current));
+  // On a tie the stronger effort wins, so raising a model's ceiling never weakens the request.
+  return offered.reduce((best, level) => distance(level) < distance(best) || (distance(level) === distance(best) && reasoningOrder.indexOf(level) > reasoningOrder.indexOf(best)) ? level : best);
+}
 export type AiSettingsUpdate = (command: string, args?: Record<string, unknown>) => Promise<AiSettingsView>;
 
 export function AiSettings({ current, refresh, update, manageUsage, pollingError }: {
@@ -52,7 +63,7 @@ export function AiSettings({ current, refresh, update, manageUsage, pollingError
           imageUsd: Math.max(prior?.imageUsd ?? 0, quoted.imageUsd ?? 0) } };
       }
       const reasoning = model && !model.reasoningEfforts.includes(next.reasoningEffort) && model.reasoningEfforts.length
-        ? { ...next, reasoningEffort: model.reasoningEfforts[0] }
+        ? { ...next, reasoningEffort: nearestReasoningEffort(model.reasoningEfforts, next.reasoningEffort) }
         : next;
       return value.authentication === 'apiKey' && model?.maxOutputTokens && reasoning.maxOutputTokens > model.maxOutputTokens
         ? { ...reasoning, maxOutputTokens: model.maxOutputTokens } : reasoning;
@@ -169,12 +180,14 @@ export function AiSettings({ current, refresh, update, manageUsage, pollingError
   const canTest = !!view && !dirty && !endpointDirty && !view.configurationError && !pending && (usesChatgpt ? !!account?.connected && account.planEnabled && !account.storageRepairRequired : !!model && view.credential.configured && !key.trim());
   const testHelp = pending ? 'Finish signing in through your browser first.' : key.trim() ? 'Connect the key above before testing access.' : dirty || view?.configurationError ? 'Save your settings below before testing access.' : usesChatgpt ? !account?.connected ? 'Sign in above to test your connection.' : !account.planEnabled ? 'Allow ChatGPT plan usage when signing in.' : account.storageRepairRequired ? 'Repair secure storage above before testing access.' : 'Checks your connection without generating.' : !view?.credential.configured ? `Add and connect a ${providerName} API key above first.` : 'Checks your connection without generating.';
   const connected = usesChatgpt ? !!account?.connected : view?.credential.configured;
+  // A local server that rejected its anonymous key is not a working connection.
+  const connectedHealthy = connected && !(usesLocal && view?.modelsAuthRequired);
   const canRefreshModels = !busy && !pending && !endpointDirty && !!connected && !key.trim() && (usesChatgpt ? !!account?.planEnabled && !account.storageRepairRequired : true);
   const modelsError = usesChatgpt ? view?.chatgpt.modelsError : view?.modelsError;
   const identity = usesChatgpt ? account?.email ?? account?.label ?? 'ChatGPT' : view?.credential.maskedIdentifier ?? `${providerName} API key`;
   // An unusable switch reads as off; the saved preference returns once images are available.
-  const imagesUsable = view?.imageAccess?.available === 'yes' && !!connected && !(usesChatgpt && !account?.planEnabled) && !!provider?.capabilities.imageGeneration;
-  const imageStatus = view?.imageAccessChecking || checkingImages || pending ? 'Checking…' : !provider?.capabilities.imageGeneration || view?.imageAccess?.available === 'no' ? 'Not available' : !connected ? 'Not connected' : view?.imageAccess?.available === 'yes' ? 'Available' : "Couldn't check";
+  const imagesUsable = view?.imageAccess?.available === 'yes' && connectedHealthy && !(usesChatgpt && !account?.planEnabled) && !!provider?.capabilities.imageGeneration;
+  const imageStatus = view?.imageAccessChecking || checkingImages || pending ? 'Checking…' : !provider?.capabilities.imageGeneration || view?.imageAccess?.available === 'no' ? 'Not available' : !connectedHealthy ? 'Not connected' : view?.imageAccess?.available === 'yes' ? 'Available' : "Couldn't check";
   return <div className="ai-settings dialog-body">
     {error && <ProblemBanner message={userError(error)} dismiss={() => setError('')} />}
     {pollingError && <ProblemBanner message={userError(pollingError)} action={{ label: 'Try again', disabled: busy, onClick: () => { void load(); } }} />}
@@ -194,7 +207,7 @@ export function AiSettings({ current, refresh, update, manageUsage, pollingError
         <div className="ai-account-card">
           <span className="ai-avatar" aria-hidden="true">{identity.charAt(0).toUpperCase()}</span>
           <div className="ai-account-copy"><span className="ai-account-identity">{identity}</span>
-            <StatusChip tone={connected ? 'success' : 'neutral'} dot role="status" className="connection-status">{connected ? 'Connected' : 'Not connected'}</StatusChip>
+            <StatusChip tone={connectedHealthy ? 'success' : 'neutral'} dot role="status" className="connection-status">{connectedHealthy ? 'Connected' : 'Not connected'}</StatusChip>
           </div>
           {usesChatgpt && view.chatgpt.accounts.length > 1 && <select aria-label="ChatGPT account" className="ai-account-switcher" value={view.chatgpt.activeAccountId ?? ''} disabled={busy || pending} onChange={event => { if (event.target.value) void action('select_chatgpt_account', { accountId: event.target.value }); }}>
             {!account && <option value="" disabled>Choose account</option>}{view.chatgpt.accounts.map((item, index) => <option key={item.id} value={item.id}>{item.email ?? item.label}{view.chatgpt.accounts.filter(other => (other.email ?? other.label) === (item.email ?? item.label)).length > 1 ? ` (${index + 1})` : ''}{!item.connected ? ' · Not connected' : !item.planEnabled ? ' · Plan permission needed' : ''}</option>)}
@@ -235,7 +248,7 @@ export function AiSettings({ current, refresh, update, manageUsage, pollingError
       <form className="settings-form generation-settings-form" onSubmit={saveSettings}>
         <div className="ai-model-row"><label className="ai-inline-field">Model<select disabled={busy || pending || endpointDirty || view.catalogue.length === 0} value={settings.model} onChange={event => {
           const chosen = view.catalogue.find(model => model.id === event.target.value);
-          setSettings({ ...settings, model: event.target.value, pricing: chosen?.defaultPricing, maxOutputTokens: usesChatgpt ? settings.maxOutputTokens : Math.min(settings.maxOutputTokens, chosen?.maxOutputTokens ?? 32768), reasoningEffort: chosen?.reasoningEfforts.includes(settings.reasoningEffort) ? settings.reasoningEffort : chosen?.reasoningEfforts[0] ?? '' });
+          setSettings({ ...settings, model: event.target.value, pricing: chosen?.defaultPricing, maxOutputTokens: usesChatgpt ? settings.maxOutputTokens : Math.min(settings.maxOutputTokens, chosen?.maxOutputTokens ?? 32768), reasoningEffort: nearestReasoningEffort(chosen?.reasoningEfforts ?? [], settings.reasoningEffort) });
         }}>{!model && <option value={settings.model} disabled>{settings.model} · unavailable</option>}{view.catalogue.map(model => <option key={model.id} value={model.id}>{model.name}</option>)}</select></label>
           <div className="ai-model-actions">
             <button type="button" className="icon-button sm" aria-label="Refresh models" title="Refresh models" disabled={!canRefreshModels} onClick={() => { void action('get_ai_settings', { refreshModels: true }); }}><Icon name="refresh" /></button>
@@ -243,7 +256,7 @@ export function AiSettings({ current, refresh, update, manageUsage, pollingError
           </div>
         </div>
         {modelsError && <ProblemBanner message={userError(modelsError)} action={{ label: 'Refresh models', disabled: !canRefreshModels, onClick: () => { void action('get_ai_settings', { refreshModels: true }); } }} />}
-        {!model && <ProblemBanner message="No available AI model is selected." />}
+        {!model && connectedHealthy && <ProblemBanner message="No available AI model is selected." />}
         {(!usesChatgpt || view.imageKey.configured) && <label className="ai-inline-field ai-budget">Budget per generation (USD)<input disabled={busy || pending} type="number" required min={0.01} step={0.01} aria-label="API budget per generation (USD)" value={budget ?? String(settings.spendingLimitUsd)} onChange={event => { setBudget(event.target.value); if (event.target.value.trim() && Number.isFinite(event.target.valueAsNumber)) setSettings({ ...settings, spendingLimitUsd: event.target.valueAsNumber }); }} onBlur={() => setBudget(null)} /></label>}
         {!usesChatgpt && model?.pricingRequired && <div className="field-pair ai-price-ceilings">
           <label>Input ceiling (USD / million)<input type="number" aria-label="Input price ceiling" required min={0} max={1000000} step="any" disabled={busy || pending} value={settings.pricing?.inputUsdPerMillion ?? ''} onChange={event => setPrice('inputUsdPerMillion', event.target.value)} /></label>

@@ -14,6 +14,8 @@ use serde_json::{Value, json};
 use std::{collections::BTreeMap, future::Future, pin::Pin, time::Duration};
 
 pub const DEFAULT_LOCAL_ENDPOINT: &str = "http://127.0.0.1:11434/v1";
+const DEEPSEEK_ENDPOINT: &str = "https://api.deepseek.com";
+const DEEPSEEK_CONTEXT_TOKENS: u64 = 1_000_000;
 
 pub fn local_endpoint(settings: &ProviderSettings) -> Result<String> {
     let mut url = reqwest::Url::parse(
@@ -55,6 +57,7 @@ pub enum ProviderId {
     Anthropic,
     Google,
     Openrouter,
+    Deepseek,
     Local,
 }
 impl ProviderId {
@@ -64,6 +67,7 @@ impl ProviderId {
             Self::Anthropic => "io.desegnos.anthropic",
             Self::Google => "io.desegnos.google",
             Self::Openrouter => "io.desegnos.openrouter",
+            Self::Deepseek => "io.desegnos.deepseek",
             Self::Local => "io.desegnos.local",
         }
     }
@@ -100,10 +104,23 @@ impl ProviderId {
                 Self::Anthropic => "claude-sonnet-5-5",
                 Self::Google => "gemini-3.8-flash",
                 Self::Openrouter => "openai/gpt-6.1-sol",
+                Self::Deepseek => "deepseek-flash",
                 Self::Local => "local-model",
                 _ => crate::MODEL_ID,
             }
             .into(),
+            // DeepSeek thinking is always on and its API names only the higher efforts.
+            reasoning_effort: if self == Self::Deepseek {
+                ReasoningEffort::High
+            } else {
+                ReasoningEffort::Medium
+            },
+            // DeepSeek counts thinking inside max_tokens; its ceiling still fits the budget.
+            max_output_tokens: if self == Self::Deepseek {
+                crate::MAX_OUTPUT_TOKENS
+            } else {
+                crate::DEFAULT_MAX_OUTPUT_TOKENS
+            },
             endpoint: (self == Self::Local).then(|| DEFAULT_LOCAL_ENDPOINT.into()),
             ..Default::default()
         }
@@ -121,6 +138,9 @@ impl ProviderId {
         if self == Self::Local {
             local_endpoint(settings)?;
         }
+        if self == Self::Deepseek && settings.endpoint.is_some() {
+            return Err(ProviderError::before(ErrorKind::InvalidSettings));
+        }
         settings.validate_limits(auth)
     }
     pub fn catalogue(self) -> Vec<ModelInfo> {
@@ -132,6 +152,35 @@ impl ProviderId {
         }
         if !self.available() {
             return vec![];
+        }
+        if self == Self::Deepseek {
+            // Peak rates are used as the ceilings; discovery publishes neither price nor limit.
+            // Desegnos never requests more than its own API-key output ceiling.
+            return [
+                ("deepseek-flash", "DeepSeek V4.1 Flash", 0.30, 1.20),
+                ("deepseek-v4-pro", "DeepSeek V4 Pro", 1.32, 3.96),
+            ]
+            .into_iter()
+            .map(|(id, name, input, output)| ModelInfo {
+                id: id.into(),
+                name: name.into(),
+                input_usd_per_million: input,
+                output_usd_per_million: output,
+                verified_at: "2026-11-06".into(),
+                source_url: "https://api-docs.deepseek.com/quick_start/pricing".into(),
+                reasoning_efforts: vec![
+                    ReasoningEffort::Low,
+                    ReasoningEffort::High,
+                    ReasoningEffort::Other("max".into()),
+                ],
+                context_window_tokens: DEEPSEEK_CONTEXT_TOKENS,
+                max_output_tokens: MAX_OUTPUT_TOKENS,
+                long_context_input_usd_per_million: input,
+                long_context_output_usd_per_million: output,
+                pricing_required: false,
+                default_pricing: None,
+            })
+            .collect();
         }
         let (name, input, output, source, context) = match self {
             Self::Anthropic => (
@@ -186,6 +235,7 @@ pub fn provider_catalogue() -> Vec<ProviderDescriptor> {
         (ProviderId::Anthropic, "Anthropic"),
         (ProviderId::Google, "Google"),
         (ProviderId::Openrouter, "OpenRouter"),
+        (ProviderId::Deepseek, "DeepSeek"),
         (ProviderId::Local, "Local"),
     ]
     .into_iter()
@@ -197,6 +247,30 @@ pub fn provider_catalogue() -> Vec<ProviderDescriptor> {
         capabilities: id.capabilities(),
     })
     .collect()
+}
+
+/// A local server that rejected the anonymous key needs one entered, not a generic auth error.
+pub fn models_need_key(
+    provider: ProviderId,
+    local_authentication: bool,
+    error: &ProviderError,
+) -> bool {
+    provider == ProviderId::Local
+        && !local_authentication
+        && error.kind == ErrorKind::Authentication
+}
+
+/// Discovery failures reach the settings view as text; a server demanding a key says so.
+pub fn models_error(
+    provider: ProviderId,
+    local_authentication: bool,
+    error: &ProviderError,
+) -> String {
+    if models_need_key(provider, local_authentication, error) {
+        "This server needs an API key. Add one from the account menu.".into()
+    } else {
+        error.to_string()
+    }
 }
 
 pub struct GenerationRequest<'a> {
@@ -412,18 +486,22 @@ fn foreign_estimate(
     settings: &ProviderSettings,
     reserve: u64,
 ) -> Result<CostEstimate> {
-    // Byte-per-token bound includes schema, attachments and per-image vision reserve.
+    // Byte-per-token bound includes schema (in the prompt text for DeepSeek, in response_format
+    // elsewhere), attachments and per-image vision reserve.
     let wire = serde_json::to_vec(&foreign_body(id, body, settings)?)
         .map_err(|_| ProviderError::before(ErrorKind::InvalidRequirements))?;
     if wire.len() > MAX_REQUEST_BYTES {
         return Err(ProviderError::before(ErrorKind::InputLimit));
     }
+    // Cost keeps the byte-per-token bound, so spending is never underestimated; the context
+    // window uses the two-bytes-per-token bound, so a request that fits is not refused.
     let input = wire.len() as u64 + reserve + 65_536;
+    let window_input = wire.len() as u64 / crate::WINDOW_BYTES_PER_TOKEN + reserve + 65_536;
     let info = id
         .catalogue()
         .into_iter()
         .find(|model| model.id == settings.model);
-    if input + u64::from(settings.max_output_tokens)
+    if window_input + u64::from(settings.max_output_tokens)
         > info.as_ref().map_or(crate::CONTEXT_WINDOW_TOKENS, |model| {
             model.context_window_tokens
         })
@@ -490,6 +568,7 @@ impl KeyAdapter {
             ProviderId::Anthropic => "https://api.anthropic.com/v1",
             ProviderId::Google => "https://generativelanguage.googleapis.com/v1beta",
             ProviderId::Openrouter => "https://openrouter.ai/api/v1",
+            ProviderId::Deepseek => DEEPSEEK_ENDPOINT,
             ProviderId::Local => DEFAULT_LOCAL_ENDPOINT,
             _ => return Err(ProviderError::before(ErrorKind::InvalidSettings)),
         };
@@ -535,7 +614,10 @@ impl KeyAdapter {
         key: &ApiKey,
         cancel: &CancellationToken,
     ) -> Result<()> {
-        if matches!(self.id, ProviderId::Openrouter | ProviderId::Local) {
+        if matches!(
+            self.id,
+            ProviderId::Openrouter | ProviderId::Deepseek | ProviderId::Local
+        ) {
             let models = crate::model_discovery::list_models(
                 self.id,
                 &self.client,
@@ -585,7 +667,7 @@ impl KeyAdapter {
         }
         let path = match self.id {
             ProviderId::Anthropic => format!("{}/messages", self.endpoint),
-            ProviderId::Openrouter | ProviderId::Local => {
+            ProviderId::Openrouter | ProviderId::Deepseek | ProviderId::Local => {
                 format!("{}/chat/completions", self.endpoint)
             }
             _ => format!(
@@ -874,12 +956,15 @@ fn anthropic_schema(schema: &Value) -> (Value, bool) {
     (schema, true)
 }
 
-fn foreign_body(
+pub(crate) fn foreign_body(
     id: ProviderId,
     request: &RequestContent<'_>,
     s: &ProviderSettings,
 ) -> Result<Value> {
-    if matches!(id, ProviderId::Openrouter | ProviderId::Local) {
+    if matches!(
+        id,
+        ProviderId::Openrouter | ProviderId::Deepseek | ProviderId::Local
+    ) {
         if request.web_search {
             return Err(ProviderError::before(ErrorKind::InvalidRequirements));
         }
@@ -902,14 +987,37 @@ fn foreign_body(
                 })
             })
             .collect::<Result<_>>()?;
+        // DeepSeek's chat API accepts only "text" and "json_object" response formats, so its
+        // schema travels in the system message instead of response_format and the caller's local
+        // validation is what enforces it.
+        let deepseek = id == ProviderId::Deepseek;
+        let system = if deepseek {
+            format!(
+                "{}\n\nReply with one JSON object only that conforms to the JSON Schema below. Do not wrap it in prose or a code fence.\n{}",
+                request.instructions,
+                serde_json::to_string(&request.schema)
+                    .map_err(|_| ProviderError::before(ErrorKind::InvalidRequirements))?
+            )
+        } else {
+            request.instructions.to_owned()
+        };
+        let response_format = if deepseek {
+            json!({"type":"json_object"})
+        } else {
+            json!({"type":"json_schema","json_schema":{"name":request.schema_name,"schema":request.schema,"strict":true}})
+        };
         let mut body = json!({
             "model":s.model,"stream":true,"stream_options":{"include_usage":true},
             "max_tokens":s.max_output_tokens,
-            "messages":[{"role":"system","content":request.instructions},{"role":"user","content":content}],
-            "response_format":{"type":"json_schema","json_schema":{"name":request.schema_name,"schema":request.schema,"strict":true}}
+            "messages":[{"role":"system","content":system},{"role":"user","content":content}],
+            "response_format":response_format
         });
         if s.reasoning_effort.as_str() != "none" {
-            body["reasoning_effort"] = json!(s.reasoning_effort);
+            body["reasoning_effort"] = json!(if id == ProviderId::Deepseek {
+                deepseek_reasoning_effort(&s.reasoning_effort)
+            } else {
+                s.reasoning_effort.as_str()
+            });
         }
         if id == ProviderId::Openrouter {
             body["provider"] = json!({"require_parameters":true,"allow_fallbacks":false});
@@ -974,6 +1082,15 @@ fn foreign_body(
     }
 }
 
+/// DeepSeek names three effort levels; Desegnos's finer levels map onto the nearest.
+pub fn deepseek_reasoning_effort(effort: &ReasoningEffort) -> &'static str {
+    match effort.as_str() {
+        "max" => "max",
+        "medium" | "high" | "xhigh" => "high",
+        _ => "low",
+    }
+}
+
 struct Block {
     kind: String,
     closed: bool,
@@ -1021,8 +1138,10 @@ impl ForeignStream {
         Ok(())
     }
     fn accept(&mut self, data: &str) -> Result<()> {
-        if matches!(self.provider, ProviderId::Openrouter | ProviderId::Local)
-            && data.trim() == "[DONE]"
+        if matches!(
+            self.provider,
+            ProviderId::Openrouter | ProviderId::Deepseek | ProviderId::Local
+        ) && data.trim() == "[DONE]"
         {
             if self.terminal || !self.stopped {
                 return Err(self.error(ErrorKind::Truncated));
@@ -1040,7 +1159,10 @@ impl ForeignStream {
         if self.provider == ProviderId::Google {
             return self.google(v);
         }
-        if matches!(self.provider, ProviderId::Openrouter | ProviderId::Local) {
+        if matches!(
+            self.provider,
+            ProviderId::Openrouter | ProviderId::Deepseek | ProviderId::Local
+        ) {
             return self.chat(v);
         }
         match v["type"].as_str() {
@@ -1322,9 +1444,11 @@ impl ForeignStream {
         if !self.stopped || (self.provider != ProviderId::Google && !self.terminal) {
             return Err(self.error(ErrorKind::Truncated));
         }
-        if self.response_id.is_none() || self.text.is_empty() {
+        if self.response_id.is_none() {
             return Err(self.error(ErrorKind::Malformed));
         }
+        // A blank reply is unparseable output, never a usable answer: DeepSeek may answer with
+        // empty content even at finish_reason "stop".
         let rejection = match serde_json::from_str::<Value>(&self.text) {
             Err(_) => Some(crate::ResponseRejection::CandidateJson),
             Ok(value) if !value.is_object() => Some(crate::ResponseRejection::CandidateShape),
@@ -1439,7 +1563,11 @@ mod tests {
 
     #[test]
     fn chat_stream_requires_one_complete_json_answer_and_a_terminal_marker() {
-        for provider in [ProviderId::Openrouter, ProviderId::Local] {
+        for provider in [
+            ProviderId::Openrouter,
+            ProviderId::Deepseek,
+            ProviderId::Local,
+        ] {
             let mut stream = ForeignStream::new(provider);
             let mut first = chat_chunk("{\"html\":", Value::Null);
             first["choices"][0]["delta"]["reasoning"] = json!("private thoughts");
@@ -1479,12 +1607,34 @@ mod tests {
         }
     }
 
+    #[test]
+    fn deepseek_blank_reply_is_rejected_as_invalid_output() {
+        for text in ["", "   ", "\r\n\t"] {
+            let mut stream = ForeignStream::new(ProviderId::Deepseek);
+            stream
+                .accept(&chat_chunk(text, json!("stop")).to_string())
+                .unwrap();
+            stream.accept("[DONE]").unwrap();
+            let error = stream.finish().unwrap_err();
+            assert_eq!(error.kind, ErrorKind::Malformed);
+            assert_eq!(error.outcome, SubmissionOutcome::Received);
+            assert_eq!(
+                error.response_format.unwrap().rejection,
+                Some(crate::ResponseRejection::CandidateJson)
+            );
+        }
+    }
+
     #[tokio::test]
     async fn chat_transports_preserve_requests_and_optional_local_authentication() {
         for (provider, key) in [
             (
                 ProviderId::Openrouter,
                 ApiKey::new("synthetic-chat-key".into()).unwrap(),
+            ),
+            (
+                ProviderId::Deepseek,
+                ApiKey::new("synthetic-deepseek-key".into()).unwrap(),
             ),
             (ProviderId::Local, ApiKey::local_anonymous()),
             (
@@ -1576,10 +1726,17 @@ mod tests {
                 body["messages"][1]["content"][2]["image_url"]["url"],
                 "data:image/png;base64,AQ=="
             );
-            assert_eq!(
-                body["response_format"]["json_schema"]["schema"],
-                packet.schema
-            );
+            if provider == ProviderId::Deepseek {
+                assert_eq!(body["response_format"], json!({"type":"json_object"}));
+                let system = body["messages"][0]["content"].as_str().unwrap();
+                assert!(system.starts_with(packet.instructions));
+                assert!(system.contains(&serde_json::to_string(&packet.schema).unwrap()));
+            } else {
+                assert_eq!(
+                    body["response_format"]["json_schema"]["schema"],
+                    packet.schema
+                );
+            }
             assert!(
                 body.get("pricing").is_none()
                     && body.get("endpoint").is_none()

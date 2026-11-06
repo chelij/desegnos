@@ -8,7 +8,9 @@ use desegnos_ai::{
     AuthenticationMethod, CancellationToken, ErrorKind, IdentityImage, ProviderId,
     ProviderProgress, ProviderResponse, ProviderSettings, SubmissionOutcome, TokenUsage,
 };
-use desegnos_core::{IdentityAsset, RequirementsSnapshot, digest, fenced_json};
+use desegnos_core::{
+    IdentityAsset, RequirementsSnapshot, digest, fenced_json, parse_provider_json,
+};
 use desegnos_storage::{
     IdentitySource, IdentitySourceAsset, collect_identity_source, write_markdown,
 };
@@ -1127,7 +1129,7 @@ impl IdentityService {
                 record.response_id = Some(response.response_id);
                 record.usage = response.usage;
                 let candidate = if response.text.len() <= MAX_CANDIDATE_BYTES {
-                    serde_json::from_str::<IdentityCandidate>(&response.text).map_err(|reason| {
+                    parse_provider_json::<IdentityCandidate>(&response.text).map_err(|reason| {
                         // Name the failing field so a rejected reply can be diagnosed.
                         let detail: String = reason.to_string().chars().take(160).collect();
                         format!("The identity reply did not match the required result format ({detail}).")

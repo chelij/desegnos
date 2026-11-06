@@ -41,7 +41,7 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
     selectedElementTargets, startElementResize, editingElement, editingScreen, commitEditingText,
     placeholderChoice, resolvePlaceholder, setPlaceholderChoice, submitRequestDraft, askRequestDraft,
     cancelRequestDraft, selectedItem, selectedItemScreen, createdItem, startReferenceResize, pasteChoice,
-    setPasteChoice, confirmPaste, linkChoice, linkCopies, setLinkChoice, previewScreen, dropNotice,
+    setPasteChoice, confirmPaste, linkChoice, linkCopies, setLinkChoice, dropNotice,
     setDropNotice,
   } = useProjectCanvas({ editProject, project, openPage, createBoundary, savePlacements, saveView, selection, focused, selectBoundary, selectReference, selectPointer, selectElement, clearSelection, removeSelection, removeElements, deleteBoundary, addReference, updateReference, elementToReference, referenceToElement, attachToRequest, addRequest, selectRequest, insertElements, updateElements, moveElements, groupElements, ungroupElements, linkElements, unlinkElements, pasteLinked, addPointer, updatePointer, focusBehaviour, pointerStates, tool, insertKind, onTool, boundaryKind, requestShape, focusedSize, widthPreview, onZoom, onLayout, play, onPlayBoundary, onPlayElement, onPlayExit, preview, previewClose, previewRefresh, generate }, ref);
   const presenting = playIsActive(play) && project.pages.length > 0 && project.pages.every(page => page.output === 'slide');
@@ -138,7 +138,7 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
     {linkChoice && <LinkChoiceRow screen={linkChoice.screen} copies={linkChoice.copies} error={linkChoice.error}
       pick={id => linkCopies(linkChoice.copies.map(copy => copy.id), id)}
       cancel={() => { setLinkChoice(null); surface.current?.focus({ preventScroll: true }); }} />}
-    {preview && previewScreen && <div className="preview-overlay" style={{ left: previewScreen.left, top: previewScreen.top, width: previewScreen.width, height: previewScreen.height }} onPointerDown={event => event.stopPropagation()}>
+    {preview && <div className="preview-overlay" onPointerDown={event => event.stopPropagation()}>
       <div className="preview-overlay-bar">
         <span className="preview-overlay-title">Preview</span>
         {preview.stale ? <><span className="preview-outdated">Preview is out of date</span><button type="button" className="dock-action" onClick={previewRefresh}>Refresh</button></> : null}

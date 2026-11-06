@@ -45,6 +45,8 @@ export function Notes({ project, initialSection = 'overview', apply, changeBrief
   const tabId = useId();
   const sections = [{ id: 'overview', label: 'Overview' }, { id: 'brief', label: 'Brief' }, { id: 'decisions', label: 'Rules' }, { id: 'exceptions', label: 'Exceptions' }] as const;
   const latest = project.latestGeneration;
+  const brief = ([['Purpose', project.brief.purpose], ['Audience', project.brief.audience], ['Brand name', project.brief.brandName], ['Voice and tone', project.brief.tone]] as const)
+    .filter(([, value]) => value.trim());
   const [editing, setEditing] = useState<Decision | null>(null);
   const [topic, setTopic] = useState('');
   const [value, setValue] = useState('');
@@ -82,9 +84,12 @@ export function Notes({ project, initialSection = 'overview', apply, changeBrief
     </div></div>
     <div id={`${tabId}-panel`} role="tabpanel" aria-labelledby={`${tabId}-${tab}`}>
     {tab === 'overview' && <div className="notes-section dossier-overview">
+      {brief.length > 0 && <section aria-label="Project brief"><h3>Project brief</h3>
+        <dl className="brief-summary">{brief.map(([label, value]) => <div key={label}><dt>{label}</dt><dd className="preserve-text">{value}</dd></div>)}</dl>
+      </section>}
       {project.importedIdentity && <section aria-label="Imported brand"><h3>Imported brand</h3><p className="preserve-text">{project.importedIdentity.summary}</p><p className="field-help">From {project.importedIdentity.sourceName}</p>{project.importedIdentity.assets.length > 0 && <div className="dossier-identity-logos">{project.importedIdentity.assets.map(asset => <figure key={asset.id}><img src={asset.dataUri} alt={asset.name} /><figcaption>{asset.name}</figcaption></figure>)}</div>}</section>}
       {latest && reviewGeneration && <button className="conversation-link" onClick={reviewGeneration}>Latest generation · AI conversation <Icon name="chevron-right" size={14} /></button>}
-      {!latest && !project.importedIdentity && <p className="empty-message">No brief yet.</p>}
+      {!latest && !project.importedIdentity && brief.length === 0 && <p className="empty-message">No brief yet.</p>}
     </div>}
     {tab === 'brief' && <div className="notes-section brief-form">
       <DraftText label="Purpose" value={project.brief.purpose} commit={value => changeBrief({ purpose: value }).then(brief => brief.purpose)} multiline />

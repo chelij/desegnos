@@ -795,9 +795,6 @@ export function useProjectCanvas({
     surface.current?.querySelector<HTMLTextAreaElement>('.element-text-editor')?.blur();
   }
 
-  const previewBoundary = preview ? boundaries.find(item => item.pageId === preview.pageId) ?? null : null;
-  const previewScreen = previewBoundary ? screenRect(previewBoundary.rect, camera) : null;
-
   return {
     runCanvasAction, surface, tool, requestShape, panning, spaceHeld, zoomHeld, painterArmed, play, dropHover, dotStyle,
     pointerDown, keyDown, doubleClick, paste, dropText, imagePicker, chooseImage, camera, scrubbed, focused,
@@ -812,6 +809,6 @@ export function useProjectCanvas({
     commitEditingText, finishEditingText, placeholderChoice, resolvePlaceholder, setPlaceholderChoice,
     submitRequestDraft, askRequestDraft, cancelRequestDraft, selectedItem, selectedItemScreen, createdItem, updateReference,
     startReferenceResize, pasteChoice, setPasteChoice, confirmPaste, linkChoice, linkCopies, setLinkChoice,
-    preview, previewScreen, previewRefresh, previewClose, dropNotice, setDropNotice,
+    preview, previewRefresh, previewClose, dropNotice, setDropNotice,
   };
 }

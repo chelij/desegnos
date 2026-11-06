@@ -34,4 +34,19 @@ try {
     const failed = render({ jobId: 'job', status: 'failed', requirements: { markdown: '' }, areas: [], candidate: null });
     assert.match(failed, />Try again</);
   });
+  await test('a reply cut off at the output limit names the cause instead of guessing', () => {
+    const settings = { model: 'deepseek-flash', maxOutputTokens: 128000, reasoningEffort: 'low', spendingLimitUsd: 2, imageGeneration: false };
+    const cutOff = render({ ...base, status: 'unknown', candidate: null, failureKind: 'incomplete', usage: null, settings });
+    assert.match(cutOff, /Reply cut off/);
+    assert.match(cutOff, /The AI reached its output limit before finishing\. Raise Maximum output tokens in AI settings or split the request\./);
+    assert.match(cutOff, />AI settings</);
+    assert.doesNotMatch(cutOff, /Not sure the layers were built/);
+    // A stopped provider that reports less than the request's limit keeps the cautious heading.
+    const stopped = render({ ...base, status: 'unknown', candidate: null, failureKind: 'incomplete', usage: { inputTokens: 10, outputTokens: 900, totalTokens: 910 }, settings });
+    assert.match(stopped, /Not sure the layers were built/);
+    assert.doesNotMatch(stopped, /Reply cut off/);
+    const other = render({ ...base, status: 'unknown', candidate: null, failureKind: 'transport', usage: null, settings });
+    assert.match(other, /Not sure the layers were built/);
+    assert.doesNotMatch(other, /Reply cut off/);
+  });
 } finally { await modules.cleanup(); }

@@ -33,7 +33,7 @@ try {
   const emptyKey = {configured: false, storage: 'none', maskedIdentifier: null, vaultError: null};
   let current = {
     authentication: 'chatgpt', provider: 'openai',
-    providers: ['openai','anthropic','google','openrouter','local'].map(id => ({id, name:id, available:true, signInSupported:id === 'openai', capabilities:{webSearch:true}})),
+    providers: ['openai','anthropic','google','openrouter','deepseek','local'].map(id => ({id, name:id, available:true, signInSupported:id === 'openai', capabilities:{webSearch:true}})),
     settings: {model:'gpt-6.1-sol', reasoningEffort:'medium', maxOutputTokens:32768, spendingLimitUsd:2, imageGeneration:false},
     catalogue: [model('gpt-6.1-sol'), model('future-account-model', ['adaptive', 'max'])],
     credential: emptyKey, imageKey: emptyKey, imageAccess: null, imageAccessChecking: false, configurationError:null,
@@ -63,6 +63,7 @@ try {
     render();
     await wait(() => picker(), 'Model picker did not load');
     check(reads[0] === true, 'Opening settings must refresh account models');
+    check([...document.querySelector('.ai-provider select').options].some(option => option.value === 'deepseek'), 'DeepSeek is missing from the provider list');
     check(ids().includes('future-account-model'), 'New account model was filtered out');
     const sameLine = (first, second) => {
       const a = first.getBoundingClientRect(), b = second.getBoundingClientRect();
@@ -128,8 +129,53 @@ try {
       document.querySelector('[aria-label="Refresh models"]').click();
       await wait(() => ids().includes('just-added-account-model'), provider + ': refresh did not update model list');
     }
-    document.getElementById('result').textContent = 'PASS: account/provider discovery, selection, prices, save, refresh, isolation, and single-line controls';
-  } catch (error) { document.getElementById('result').textContent = 'FAIL: ' + error.stack; }
+    // DeepSeek has a fixed endpoint, catalogue prices, and asks for a key before any banner.
+    const deepseek = {...model('deepseek-flash', ['low', 'high', 'max']), pricingRequired:false, maxOutputTokens:128000};
+    current = {...current, provider:'deepseek', authentication:'apiKey', credential:{...emptyKey}, modelsError:null, modelsAuthRequired:false,
+      settings:{...current.settings, model:'deepseek-flash', reasoningEffort:'low', maxOutputTokens:32768, pricing:undefined, endpoint:undefined},
+      catalogue:[]};
+    render();
+    await wait(() => !!document.querySelector('.ai-key-form input[type="password"]'), 'The key form is the call to action on a fresh install');
+    check(!document.querySelector('[aria-label="Local server URL"]'), 'DeepSeek must not accept a server address');
+    check(!document.body.textContent.includes('No available AI model is selected.'), 'The missing-model banner must wait for a connected provider');
+    check(document.querySelector('.connection-status').textContent === 'Not connected', 'An unconfigured DeepSeek key must not read Connected');
+    current = {...current, credential:{...emptyKey, configured:true, storage:'session'}};
+    render();
+    await wait(() => document.body.textContent.includes('No available AI model is selected.'), 'A connected provider without models must explain itself');
+    current = {...current, catalogue:[deepseek], settings:{...current.settings, model:'unavailable'}};
+    render();
+    await wait(() => ids().includes('deepseek-flash'), 'DeepSeek model did not return to the picker');
+    picker().value = 'deepseek-flash';
+    picker().dispatchEvent(new Event('change', {bubbles:true}));
+    await wait(() => document.querySelector('.ai-save-actions button.primary'), 'DeepSeek draft did not appear');
+    check(!document.querySelector('[aria-label="Input price ceiling"]'), 'Catalogue prices must not ask for ceilings');
+    document.querySelector('.generation-settings-form').requestSubmit();
+    await wait(() => saved?.model === 'deepseek-flash', 'DeepSeek model did not save');
+    check(saved.pricing === undefined, 'DeepSeek catalogue prices need no entered ceilings');
+    // The API-key ceiling is offerable: the field's own max is 128,000 and validation accepts it.
+    const outputTokens = [...document.querySelectorAll('.advanced-settings label')].find(label => label.textContent.includes('Maximum output tokens'))?.querySelector('input');
+    check(outputTokens?.max === '128000', 'The maximum output-token field must allow the API-key ceiling');
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(outputTokens, '128000');
+    outputTokens.dispatchEvent(new Event('input', {bubbles:true}));
+    await wait(() => outputTokens.value === '128000', 'The output-token draft did not update');
+    document.querySelector('.generation-settings-form').requestSubmit();
+    await wait(() => saved?.maxOutputTokens === 128000, 'The API-key ceiling was rejected');
+    // DeepSeek offers low, high and max: medium must rise to high, not fall to its weakest level.
+    await wait(() => !document.querySelector('.ai-save-actions button.primary'), 'Saved DeepSeek settings stayed dirty');
+    current = {...current, settings:{...current.settings, model:'deepseek-flash', reasoningEffort:'medium'}};
+    render();
+    await wait(() => document.querySelector('.ai-save-actions button.primary'), 'Medium reasoning draft did not appear');
+    document.querySelector('.generation-settings-form').requestSubmit();
+    await wait(() => saved?.reasoningEffort === 'high', 'The nearest stronger reasoning effort was not chosen');
+    // A local server that rejects the anonymous key needs a key, not a green connection.
+    current = {...current, provider:'local', settings:{...current.settings, model:'local-model', endpoint:'http://127.0.0.1:11434/v1', localAuthentication:false},
+      credential:{configured:true, storage:'none', maskedIdentifier:'Local server', vaultError:null}, catalogue:[],
+      modelsError:'This server needs an API key. Add one from the account menu.', modelsAuthRequired:true};
+    render();
+    await wait(() => document.querySelector('.connection-status').textContent === 'Not connected', 'A local server demanding a key must not read Connected');
+    check(document.body.textContent.includes('This server needs an API key. Add one from the account menu.'), 'The local key requirement was not shown');
+    check(!document.body.textContent.includes('No available AI model is selected.'), 'No models after an auth failure is not a missing-model banner');
+    document.getElementById('result').textContent = 'PASS: account/provider discovery, selection, prices, save, refresh, isolation, single-line controls, DeepSeek catalogue pricing, key-first banner, and local auth failure';  } catch (error) { document.getElementById('result').textContent = 'FAIL: ' + error.stack; }
   </script></body></html>`);
   server = await createServer({ root, cacheDir: join(folder, 'cache'),
     server: { host: '127.0.0.1', port: 0, strictPort: false }, optimizeDeps: { entries: [fixture] } });

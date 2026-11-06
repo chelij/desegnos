@@ -80,6 +80,9 @@ impl GridSettings {
     }
 }
 
+/// The widest or highest a viewport or a boundary size may be; `PageSize::validate` shares it.
+pub const MAX_VIEWPORT_SIDE: u32 = 100_000;
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Viewport {
@@ -90,7 +93,8 @@ pub struct Viewport {
 impl Viewport {
     pub fn validate(&self) -> Result<()> {
         ensure(
-            (1..=100_000).contains(&self.width) && (1..=100_000).contains(&self.height),
+            (1..=MAX_VIEWPORT_SIDE).contains(&self.width)
+                && (1..=MAX_VIEWPORT_SIDE).contains(&self.height),
             "Viewport dimensions must be between 1 and 100,000 pixels wide and high.",
         )
     }

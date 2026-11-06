@@ -3,8 +3,8 @@ use desegnos_core::{
     Appearance, BoundaryKind, Command, Element, ElementKind, ExportRecord, ExportReply,
     ExportedPage, ExportedPointer, InputType, OutputType, PageSize, Pointer, PointerSource,
     PointerTarget, Project, Rect, ReferenceKind, Session, Viewport, WebCapture, WebNode, WebScript,
-    WebStyles, direct_export_bundle, empty_element, import_website, parse_export_reply,
-    plan_export, preview_page_ids, validate_export_reply,
+    WebStyles, direct_export_bundle, empty_element, import_website, parse_comment_reply,
+    parse_export_reply, plan_export, preview_page_ids, validate_export_reply,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
@@ -121,6 +121,29 @@ fn excluded_boundaries_can_be_previewed_without_joining_the_full_export() {
     let preview = plan_export(&project, &[excluded], Uuid::new_v4()).unwrap();
     assert_eq!(preview.pages[0].page_id, excluded);
     assert!(!project.pages[0].included);
+}
+
+#[test]
+fn the_frozen_packet_keeps_its_design_compact_so_a_large_page_stays_sendable() {
+    // Indenting the design nearly triples a packet whose text is mostly element trees, and a
+    // several-hundred-layer page pressed against the provider's context window because of it.
+    let (project, _) = webpage_project();
+    let plan = plan_export(&project, &[], Uuid::new_v4()).unwrap();
+    let design = plan
+        .markdown
+        .split("## Design\n```json\n")
+        .nth(1)
+        .and_then(|section| section.split("\n```\n").next())
+        .expect("the packet carries its design as one JSON block");
+    assert!(!design.trim().contains('\n'), "the design is compact JSON");
+    let parsed: serde_json::Value = serde_json::from_str(design).unwrap();
+    assert_eq!(parsed["pages"].as_array().unwrap().len(), 1);
+    assert!(
+        !parsed["pages"][0]["sizes"][0]["elements"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[test]
@@ -251,6 +274,31 @@ fn export_reply_is_checked_against_the_frozen_plan() {
             implemented: true,
         });
     assert!(parse_export_reply(&plan, &serde_json::to_string(&extra_pointer).unwrap()).is_err());
+}
+
+#[test]
+fn a_raw_newline_inside_an_export_reply_string_is_repaired() {
+    let (project, pointer_id) = webpage_project();
+    let plan = plan_export(&project, &[], Uuid::new_v4()).unwrap();
+    let valid = reply(&plan, pointer_id);
+    // A model wrote the summary across two lines, which strict JSON forbids in a string.
+    let text = serde_json::to_string(&valid)
+        .unwrap()
+        .replace("Built the page", "Built\nthe page");
+    let parsed = parse_export_reply(&plan, &text).unwrap();
+    assert_eq!(parsed.summary, "Built\nthe page");
+}
+
+#[test]
+fn a_raw_newline_inside_a_comment_reply_string_is_repaired() {
+    let (project, _) = webpage_project();
+    let plan = plan_export(&project, &[], Uuid::new_v4()).unwrap();
+    let text = format!(
+        "{{\"jobId\":\"{}\",\"requirementsSha256\":\"{}\",\"comment\":\"Opens\nthe boundary\"}}",
+        plan.job_id, plan.sha256
+    );
+    let comment = parse_comment_reply(&plan, &text).unwrap();
+    assert_eq!(comment, "Opens\nthe boundary");
 }
 
 // ---------------------------------------------------------------------------

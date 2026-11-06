@@ -886,6 +886,31 @@ fn rules(
     }
 }
 
+/// The width one size's layers were drawn at. Per-size overrides are authored in that size's
+/// space, but a layer that keeps the base size's geometry still carries the base size's pixels.
+/// Scaling by the widest right edge keeps such a tree inside the viewport instead of letting a
+/// narrower breakpoint stretch it past the edge.
+fn layout_width(size: &crate::PageSize, elements: &[Element]) -> u32 {
+    fn right(element: &Element) -> f64 {
+        let own = element.rect.x + element.rect.width;
+        if !element.layout.is_free() {
+            return own;
+        }
+        element
+            .children
+            .iter()
+            .filter(|child| child.visible)
+            .map(|child| element.rect.x + right(child))
+            .fold(own, f64::max)
+    }
+    let widest = elements
+        .iter()
+        .filter(|element| element.visible)
+        .map(right)
+        .fold(0.0, f64::max);
+    size.width.max(widest.ceil().max(0.0) as u32)
+}
+
 /// The page shell's declarations for one size.
 fn page_declarations(
     size: &crate::PageSize,
@@ -903,7 +928,10 @@ fn page_declarations(
         size.height as f64
     };
     let mut css = Declarations::new();
-    css.set("--desegnos-unit", format!("calc(100cqw / {})", size.width));
+    css.set(
+        "--desegnos-unit",
+        format!("calc(100cqw / {})", layout_width(size, elements)),
+    );
     css.set("height", length(height));
     if matches!(size.kind, crate::BoundaryKind::Screen) {
         css.set("overflow", "auto");
@@ -1009,7 +1037,7 @@ pub(super) fn render(
             markup(&element, plan, &page.path, &markers, &mut html);
         }
         let mut css = format!(
-            "html,body{{margin:0;padding:0;}}\n.desegnos-viewport{{container-type:inline-size;width:100%;max-width:{}px;margin:0 auto;}}\n.desegnos-page{{position:relative;width:100%;isolation:isolate;}}\n",
+            "html,body{{margin:0;padding:0;overflow-x:clip;}}\n.desegnos-viewport{{container-type:inline-size;width:100%;max-width:{}px;margin:0 auto;overflow-x:clip;}}\n.desegnos-page{{position:relative;width:100%;isolation:isolate;}}\n",
             sizes.last().map_or(1, |size| size.width)
         );
         let default_text = crate::ElementTextStyle::default();
@@ -1765,6 +1793,46 @@ mod tests {
         let css = declarations(&element, &ElementLayout::Free, &mut fonts).block();
         assert!(css.contains(&format!("width:{};", length(800.0))));
         assert!(css.contains(&format!("max-width:{};", length(200.0))));
+    }
+
+    // A size whose layers keep the base size's geometry is still drawn in base-size pixels. The
+    // unit must follow that geometry, or a narrower breakpoint multiplies every layer by
+    // base/breakpoint (a 1440px nav at the 820px tablet query becomes ~1772px at 1024).
+    #[test]
+    fn a_size_that_keeps_the_base_geometry_scales_instead_of_overflowing() {
+        let mut project = project();
+        let base = project.pages[0].base_size().width;
+        project.pages[0].elements = vec![empty_element(
+            ElementKind::Group,
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: base as f64,
+                height: 80.0,
+            },
+        )];
+        project.pages[0].sizes.push(PageSize {
+            id: Uuid::new_v4(),
+            label: "Phone".into(),
+            width: 390,
+            height: 844,
+            kind: BoundaryKind::Page,
+            x: 1000.0,
+            y: 0.0,
+        });
+        let css = exported_css(&project);
+        assert!(
+            css.contains(&format!("100cqw / {base}")),
+            "the base geometry sets the scale: {css}"
+        );
+        assert!(
+            !css.contains("100cqw / 390"),
+            "the phone breakpoint must not stretch a base-size layout: {css}"
+        );
+        assert!(
+            css.contains("html,body{margin:0;padding:0;overflow-x:clip;}"),
+            "horizontal overflow is clipped at the page edge: {css}"
+        );
     }
 
     #[test]

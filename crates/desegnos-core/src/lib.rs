@@ -6,6 +6,7 @@ mod generation;
 mod identity;
 mod identity_pages;
 mod image_generation;
+mod json_parse;
 mod model;
 mod picture_scaling;
 mod pointers;
@@ -26,6 +27,7 @@ pub use generation::*;
 pub use identity::*;
 pub use identity_pages::*;
 pub use image_generation::*;
+pub use json_parse::*;
 pub use model::*;
 pub use picture_scaling::{
     AI_PREVIEW_BYTES, AI_PREVIEW_EDGE, AI_PREVIEW_TOKEN_RESERVE, ai_preview, scaled_for_display,

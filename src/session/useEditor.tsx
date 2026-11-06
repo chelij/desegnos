@@ -22,7 +22,7 @@ import { isTextField } from '../WorkspaceSurface';
 import { type ProjectCanvasHandle } from '../ProjectCanvas';
 import { type PendingRecovery, type RecoveryChoices } from '../RecoveryBanner';
 import { type SaveConflict, type SaveChoice } from '../SaveConflict';
-import type { ProjectLocationView } from '../types';
+import type { ProjectLocationView, RequestArea } from '../types';
 import { type DossierSection } from '../Notes';
 import { type MenuItem } from '../Menus';
 import { KEYMAP, shortcutFor, shortcutLabel, viewNameForSlot } from '../shortcuts';
@@ -38,6 +38,7 @@ import { type PaletteCommand } from '../CommandPalette';
 import { activeGeneration, useGeneration } from '../useGeneration';
 import type { AiSettingsView, AppSettingsView, BoundaryKind, Brief, Element, ElementKind, ElementMove, ElementPatch, GenerationJobView, GenerationMode, GridSettings, LinkedPasteInstance, NamedView, PageSize, PendingRequest, Pointer, PointerSource, PointerStateView, PointerTarget, Project, Rect, ReferenceItem, RequestAttachment, SizePreset, WorkspaceView, RecentProjectsView, RecentProject } from '../types';
 import { baseSizeId, resolveForSize } from '../projectCanvas/sizes';
+import { coveredTargets } from '../projectCanvas/requests';
 import { idlePlay, playClick, playIsActive, type PlayState } from '../projectCanvas/play';
 import { behaviourSourceKey, playShouldPreview } from '../projectCanvas/behaviours';
 
@@ -143,6 +144,7 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
   const untitledSaveResolve = useRef<((workspace: WorkspaceView | null) => void) | null>(null);
   const generationRef = useRef<GenerationJobView | null>(null);
   const generationOwns = useRef(false);
+  const briefGenerateFlight = useRef(false);
   const { openExportPanel, chooseExportDestination, runExport, sendExport, cancelExport, openExportFolder, openInBrowser, keepPointerCode, forgetExportPointer, previewSelectedBoundary, closePreview, refreshPreview, showExport, setShowExport, exportDestination, exportJob, exportError, exportSending, checkedStates, checkedProject, preview } = useExportJobs({ current, view, showHistory, play, setPlay }, () => ({ current, panels, panelActions, accept, setNotice, settle, setError, setOpenFailure, setShowHistory, mutate, canvasFocus, selectedElementPageId, play, setPlay, view, showHistory, aiConnected }));
 
   const storeAiSettings = useCallback((value: AiSettingsView) => { aiCurrent.current = value; setAiSettings(value); setAiPollingError(''); }, []);
@@ -667,11 +669,29 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
     await generation.prepare(elementIds);
   }
   function openImportDialog() { setImportSource(null); setShowImport(true); }
-  function generate(elementIds?: string[]) {
+  async function generate(elementIds?: string[]) {
     const contextItems = selectedReference(canvasSelection);
     setError('');
     setShowLog(true);
-    void generation.prepare(elementIds, contextItems).catch(() => {});
+    // With nothing described, a filled brief captures the first empty page as one request area.
+    const page = project?.pages[0];
+    const boundary = page && canvasBoundaries.find(item => item.pageId === page.id && item.sizeId === baseSizeId(page));
+    const fromBrief = !!project && !!page && !!boundary && !page.elements.length && !!project.brief.purpose.trim()
+      && !(project.requests ?? []).some(request => request.text.trim());
+    if (!fromBrief) { await generation.prepare(elementIds, contextItems).catch(() => {}); return; }
+    // The request is added before the job is prepared, so a second click must not add another.
+    if (briefGenerateFlight.current) return;
+    briefGenerateFlight.current = true;
+    try {
+      const area: RequestArea = { page: page.id, size: page.sizes.length > 1 ? baseSizeId(page) : null, shape: { kind: 'rect', rect: boundary.rect } };
+      const request: PendingRequest = {
+        id: crypto.randomUUID(), text: 'Build this page from the project brief.', attachments: [],
+        targets: coveredTargets(project, canvasBoundaries, area), area, requestedAt: new Date().toISOString(),
+      };
+      await mutate({ type: 'add_request', request });
+      await generation.prepare(elementIds, contextItems).catch(() => {});
+    } catch { /* mutate already reported the failure */ }
+    finally { briefGenerateFlight.current = false; }
   }
   function requestTargetingElement(project: Project, elementId: string): PendingRequest | null {
     return (project.requests ?? []).find(request => request.targets.some(target => target.kind === 'element' && target.id === elementId)) ?? null;

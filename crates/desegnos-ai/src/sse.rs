@@ -1,7 +1,7 @@
 use crate::{
-    ApiKey, AuthenticationMethod, CorrelationCause, ErrorKind, MAX_OUTPUT_BYTES, MAX_OUTPUT_TOKENS,
-    ProviderError, ProviderResponse, ResponseBodyKind, ResponseCorrelation, ResponseRejection,
-    Result, SubmissionOutcome, TerminalOutput, TokenUsage,
+    ApiKey, AuthenticationMethod, CHATGPT_MAX_OUTPUT_TOKENS, CorrelationCause, ErrorKind,
+    MAX_OUTPUT_BYTES, ProviderError, ProviderResponse, ResponseBodyKind, ResponseCorrelation,
+    ResponseRejection, Result, SubmissionOutcome, TerminalOutput, TokenUsage,
 };
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -40,8 +40,8 @@ pub(crate) fn ends_in_repetition(text: &[u8]) -> bool {
         })
 }
 
-// About six bytes per token of the default output limit: far beyond any real candidate.
-const CHATGPT_MAX_TEXT_BYTES: usize = MAX_OUTPUT_TOKENS as usize * 6;
+// About six bytes per token of the ChatGPT plan's output allowance: far beyond any real candidate.
+const CHATGPT_MAX_TEXT_BYTES: usize = CHATGPT_MAX_OUTPUT_TOKENS as usize * 6;
 
 #[derive(Default)]
 pub(crate) struct SseDecoder {

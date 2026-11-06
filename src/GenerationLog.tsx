@@ -9,7 +9,7 @@ import type { GenerationController } from './useGeneration';
 import { native } from './api';
 import { scopeLabel } from './Notes';
 
-const SERVICE = { openai: 'OpenAI', anthropic: 'Anthropic', google: 'Google', openrouter: 'OpenRouter', local: 'Local model' } as const;
+const SERVICE = { openai: 'OpenAI', anthropic: 'Anthropic', google: 'Google', openrouter: 'OpenRouter', deepseek: 'DeepSeek', local: 'Local model' } as const;
 const kb = (bytes: number) => bytes < 1024 ? `${bytes} bytes` : `${(bytes / 1024).toFixed(1)} KB`;
 
 function allElements(elements: Element[]): Element[] {
@@ -81,6 +81,8 @@ export function GenerationLog({ job: currentJob, operation, error, project, cont
     finally { setReplySending(false); }
   }
   const candidate = job?.candidate;
+  // A boundary-only request has no layer to list, so the frozen requirements own the count.
+  const sentCount = job?.requirements.requestCount ?? requests.length;
   const label = (id: string) => {
     const item = requests.find(request => request.key === id);
     return item ? `${item.page} · ${item.label}` : 'Layer';
@@ -93,7 +95,7 @@ export function GenerationLog({ job: currentJob, operation, error, project, cont
       {job && <>
         <section className="log-message from-you" aria-label="Sent to the AI">
           <p className="log-who">You → {SERVICE[job.provider ?? 'openai']}</p>
-          <p>{requests.length} {requests.length === 1 ? 'request' : 'requests'}</p>
+          <p>{sentCount} {sentCount === 1 ? 'request' : 'requests'}</p>
           <ol className="log-requests">{requests.map(item => <li key={item.key}>
             <span className="log-meta">{label(item.key)} · {stale ? 'Not applied' : item.done ? 'Done' : working ? 'Working' : item.outcome?.retryable === false ? 'Needs your input' : 'Needs attention'}</span>
             {item.prompt && <p className="log-text">{item.prompt}</p>}

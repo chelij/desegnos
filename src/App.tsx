@@ -123,7 +123,8 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
   const playingPage = playIsActive(play) && project ? project.pages.find(page => page.id === play.boundary) ?? null : null;
   const playingSize = playingPage ? playingPage.sizes.find(size => size.id === canvasFocusSize) ?? playingPage.sizes[0] ?? null : null;
   const playingLabel = playingPage && playingSize ? `${playingPage.name} · ${sizeLabel(playingSize.width)}` : null;
-  const nothingToGenerate = requestedAreas === 0;
+  const briefOnly = requestedAreas === 0 && !!project && !!project.brief.purpose.trim() && project.pages[0]?.elements.length === 0;
+  const nothingToGenerate = requestedAreas === 0 && !briefOnly;
   const previewAvailable = !onStartPage && !!project && projectHasPreviewPages(project);
   return <div className={presenting ? 'application editor-shell presenting' : 'application editor-shell'}>
     {showPalette && <CommandPalette commands={paletteCommands} close={() => setShowPalette(false)} />}

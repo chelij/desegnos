@@ -126,7 +126,7 @@ export type ProviderSettings = { model: string; maxOutputTokens: number; reasoni
   pricing?: { model: string; inputUsdPerMillion: number | null; outputUsdPerMillion: number | null; requestUsd?: number | null; imageUsd?: number | null }; endpoint?: string; localAuthentication?: boolean };
 export type CredentialInfo = { configured: boolean; storage: 'system' | 'session' | 'none'; maskedIdentifier: string | null; vaultError: string | null };
 export type AuthenticationMethod = 'apiKey' | 'chatgpt';
-export type ProviderId = 'openai' | 'anthropic' | 'google' | 'openrouter' | 'local';
+export type ProviderId = 'openai' | 'anthropic' | 'google' | 'openrouter' | 'deepseek' | 'local';
 export type ProviderDescriptor = { id: ProviderId; name: string; available: boolean; signInSupported: boolean; capabilities: { webSearch: boolean; imageDownloads: number; imageGeneration?: { maxImages: number; sizes: string[] } } };
 export type ChatgptAccount = { id: string; label: string; email: string | null; connected: boolean; planEnabled: boolean; storage: 'system' | 'session' | 'none'; storageRepairRequired: boolean };
 export type ChatgptView = { accounts: ChatgptAccount[]; activeAccountId: string | null;
@@ -135,7 +135,7 @@ export type ChatgptView = { accounts: ChatgptAccount[]; activeAccountId: string 
 export type ModelInfo = { id: string; name: string; inputUsdPerMillion: number; outputUsdPerMillion: number; verifiedAt: string; sourceUrl: string; reasoningEfforts: string[]; pricingRequired?: boolean; maxOutputTokens?: number; defaultPricing?: ProviderSettings['pricing'] };
 export type ImageAccess = { available: 'yes' | 'no' | 'unknown'; checkedAt: number; reason: string };
 export type AiSettingsView = { imageCredential: 'chatgpt' | 'connection' | 'imageKey' | null; imageKey: CredentialInfo; mainImageAccess: ImageAccess | null; imageKeyAccess: ImageAccess | null; imageAccess: ImageAccess | null; imageAccessChecking: boolean; provider: ProviderId; providers: ProviderDescriptor[]; settings: ProviderSettings; credential: CredentialInfo; catalogue: ModelInfo[]; configurationError: string | null;
-  authentication: AuthenticationMethod; chatgpt: ChatgptView; modelsError?: string | null };
+  authentication: AuthenticationMethod; chatgpt: ChatgptView; modelsError?: string | null; modelsAuthRequired?: boolean };
 export type TokenUsage = { inputTokens: number; outputTokens: number; totalTokens: number };
 export type GenerationStatus = 'prepared' | 'generating' | 'ready' | 'blocked' | 'failed' | 'unknown' | 'cancelled' | 'discarded' | 'applying' | 'applied';
 export type GenerationAttempt = { ordinal: number; status: string; startedAt: string; finishedAt: string | null; responseId: string | null; usage: TokenUsage | null };

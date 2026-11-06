@@ -59,6 +59,17 @@ try {
     assert.doesNotMatch(html, /Needs your input|>Change request</);
   });
 
+  await test('a boundary-only request counts as the one request that was sent', () => {
+    const boundaryJob = {
+      ...job, areas: [], requirements: { markdown: '', requestCount: 1 },
+      candidate: { summary: 'Built the page', requests: [{ requestId: 'request', elementId: null, status: 'implemented', explanation: '', operations: [] }], criticism: [], decisionProposals: [] },
+    };
+    const html = render({ job: boundaryJob });
+    assert.match(html, /1 request</);
+    assert.doesNotMatch(html, /0 requests/);
+    assert.match(html, /Built the page/);
+  });
+
   await test('request actions and past generations remain reachable', () => {
     const html = render();
     assert.match(html, />Change request</);

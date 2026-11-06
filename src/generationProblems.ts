@@ -31,6 +31,15 @@ export function staleResult(job: GenerationJobView | null): boolean {
   return job?.status === 'blocked' && /\bis stale\b/i.test(job.message ?? '');
 }
 
+/// The provider stopped because the reply reached the request's output-token limit: a
+/// finish_reason of "length" and a provider's own incomplete marker both arrive as `incomplete`.
+export const replyCutOffMessage = 'The AI reached its output limit before finishing. Raise Maximum output tokens in AI settings or split the request.';
+export function replyCutOff(job: GenerationJobView | null): boolean {
+  if (!job || !['failed', 'unknown'].includes(job.status) || job.failureKind !== 'incomplete') return false;
+  // Chat providers can report the stop before publishing usage, so a missing total still counts.
+  return !job.usage || job.usage.outputTokens >= job.settings.maxOutputTokens;
+}
+
 /// Read the fenced JSON blocks a generation snapshot carries.
 export function jsonBlocks(markdown: string): any[] {
   const blocks: any[] = [];

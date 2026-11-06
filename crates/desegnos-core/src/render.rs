@@ -619,7 +619,21 @@ fn paint_element(
     }
     let mut own: Vec<Item> = Vec::new();
     match element.kind {
-        ElementKind::Group => {}
+        // A group paints its fill like the exporter does, but never its border or shadow.
+        ElementKind::Group => {
+            if let Some(fill) = style
+                .fill
+                .as_deref()
+                .and_then(Rgba::parse)
+                .filter(|colour| colour.a > 0.0)
+            {
+                own.push(Item::Shape(Shape {
+                    path_ref: scene.push_path(Path::rect(at, radius)),
+                    fill: Some(fill),
+                    stroke: None,
+                }));
+            }
+        }
         ElementKind::Line => paint_line(scene, style, at, &mut own),
         ElementKind::Ellipse => paint_ellipse(scene, style, at, &mut own),
         ElementKind::Image => paint_picture(project, element, at, &mut own),

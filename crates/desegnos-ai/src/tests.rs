@@ -1238,7 +1238,7 @@ async fn responses_adapter_contract_through_a_real_loopback_http_server() {
         assert_eq!(body["store"], false);
         assert_eq!(body["stream"], true);
         assert_eq!(body["service_tier"], "default");
-        assert_eq!(body["max_output_tokens"], MAX_OUTPUT_TOKENS);
+        assert_eq!(body["max_output_tokens"], DEFAULT_MAX_OUTPUT_TOKENS);
         assert_eq!(body["reasoning"]["effort"], "medium");
         assert_eq!(body["tools"], json!([]));
         assert_eq!(body["tool_choice"], "none");
@@ -2144,6 +2144,13 @@ fn settings_catalogue_cost_and_loopback_gate_are_explicit_and_bounded() {
     assert!(OpenAiClient::for_loopback("http://[::1]:8080/v1").is_ok());
     let settings = ProviderSettings::default();
     settings.validate().unwrap();
+    assert_eq!(settings.max_output_tokens, DEFAULT_MAX_OUTPUT_TOKENS);
+    // The API-key ceiling reaches the model maximum and accepts exactly that.
+    let mut raised = settings.clone();
+    raised.max_output_tokens = MAX_OUTPUT_TOKENS;
+    raised.spending_limit_usd = 10_000.0;
+    raised.validate().unwrap();
+    assert_eq!(model_catalogue()[0].max_output_tokens, MAX_OUTPUT_TOKENS);
     let info = &model_catalogue()[0];
     assert_eq!(info.id, MODEL_ID);
     assert_eq!(info.input_usd_per_million, 2.0);
@@ -2157,7 +2164,7 @@ fn settings_catalogue_cost_and_loopback_gate_are_explicit_and_bounded() {
             ..settings.clone()
         },
         ProviderSettings {
-            max_output_tokens: 32769,
+            max_output_tokens: MAX_OUTPUT_TOKENS + 1,
             ..settings.clone()
         },
         ProviderSettings {
@@ -2180,7 +2187,7 @@ fn settings_catalogue_cost_and_loopback_gate_are_explicit_and_bounded() {
     }
     let frozen = snapshot(GenerationMode::Strict);
     let estimate = estimate_cost(&frozen, GenerationMode::Strict, &schema(), &settings).unwrap();
-    assert!(estimate.estimate_usd >= f64::from(MAX_OUTPUT_TOKENS) * 15.0 / 1_000_000.0);
+    assert!(estimate.estimate_usd >= f64::from(DEFAULT_MAX_OUTPUT_TOKENS) * 15.0 / 1_000_000.0);
     assert!(estimate.input_token_upper_bound > frozen.markdown.len() as u64);
     for endpoint in [
         "https://api.openai.com/v1",
@@ -2473,7 +2480,7 @@ async fn chatgpt_accepts_verified_model_output_capacity_without_using_the_api_ca
         spending_limit_usd: 0.0,
         ..ProviderSettings::default()
     };
-    for output in [MAX_OUTPUT_TOKENS + 1, MODEL_MAX_OUTPUT_TOKENS] {
+    for output in [DEFAULT_MAX_OUTPUT_TOKENS + 1, MODEL_MAX_OUTPUT_TOKENS] {
         let mut completion = completed(&candidate(&frozen));
         completion["response"]["usage"] = json!({
             "input_tokens":211,"output_tokens":output,"total_tokens":211+u64::from(output)
@@ -2488,8 +2495,8 @@ async fn chatgpt_accepts_verified_model_output_capacity_without_using_the_api_ca
     }
     let mut api_completion = completed(&candidate(&frozen));
     api_completion["response"]["usage"] = json!({
-        "input_tokens":211,"output_tokens":MAX_OUTPUT_TOKENS+1,
-        "total_tokens":212+u64::from(MAX_OUTPUT_TOKENS)
+        "input_tokens":211,"output_tokens":DEFAULT_MAX_OUTPUT_TOKENS+1,
+        "total_tokens":212+u64::from(DEFAULT_MAX_OUTPUT_TOKENS)
     });
     let api_server = Server::start(Reply::sse(frame(api_completion))).await;
     assert_eq!(
@@ -2502,7 +2509,7 @@ async fn chatgpt_accepts_verified_model_output_capacity_without_using_the_api_ca
 async fn chatgpt_context_reserves_full_verified_model_output_capacity() {
     let frozen = snapshot(GenerationMode::Strict);
     let settings = ProviderSettings {
-        max_output_tokens: MAX_OUTPUT_TOKENS,
+        max_output_tokens: DEFAULT_MAX_OUTPUT_TOKENS,
         spending_limit_usd: 10_000.0,
         ..ProviderSettings::default()
     };
@@ -2519,7 +2526,9 @@ async fn chatgpt_context_reserves_full_verified_model_output_capacity() {
     capacity.markdown.push_str(&"a".repeat(added));
     capacity.sha256 = digest(capacity.markdown.as_bytes());
     let api = estimate_cost(&capacity, GenerationMode::Strict, &schema(), &settings).unwrap();
-    assert!(api.input_token_upper_bound + u64::from(MAX_OUTPUT_TOKENS) <= CONTEXT_WINDOW_TOKENS);
+    assert!(
+        api.input_token_upper_bound + u64::from(DEFAULT_MAX_OUTPUT_TOKENS) <= CONTEXT_WINDOW_TOKENS
+    );
     assert!(
         api.input_token_upper_bound + u64::from(MODEL_MAX_OUTPUT_TOKENS) > CONTEXT_WINDOW_TOKENS
     );
@@ -3727,7 +3736,11 @@ async fn runaway_replies_stop_before_the_provider_closes_the_stream() {
     }
     // Varied text, so only the size limit applies and not the loop check.
     let varied = (0..100_000).map(|i| format!("{i},")).collect::<String>();
-    let long = || vec![delta(varied[..MAX_OUTPUT_TOKENS as usize * 6 + 1].into())];
+    let long = || {
+        vec![delta(
+            varied[..CHATGPT_MAX_OUTPUT_TOKENS as usize * 6 + 1].into(),
+        )]
+    };
     let error = generate_events(&frozen, long(), AuthenticationMethod::Chatgpt)
         .await
         .unwrap_err();
@@ -3786,5 +3799,424 @@ async fn a_reply_that_loops_on_the_same_operations_is_stopped() {
     assert!(
         !sse::ends_in_repetition(marquee.as_bytes()),
         "text written to repeat on purpose is not a loop"
+    );
+}
+
+#[tokio::test]
+async fn deepseek_discovery_merges_catalogue_prices_and_limits() {
+    let server = Server::start(Reply::json(
+        200,
+        json!({"object":"list","data":[
+            {"id":"deepseek-flash","object":"model","owned_by":"deepseek"},
+            {"id":"deepseek-preview","object":"model","owned_by":"deepseek"},
+        ]}),
+    ))
+    .await;
+    let client = OpenAiClient::for_loopback(&server.endpoint).unwrap();
+    let models = crate::model_discovery::list_models(
+        ProviderId::Deepseek,
+        &client.client,
+        &server.endpoint,
+        &ApiKey::new("synthetic-deepseek-key".into()).unwrap(),
+        &CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    let request = server.request();
+    assert_eq!(
+        (request.method.as_str(), request.path.as_str()),
+        ("GET", "/v1/models")
+    );
+    assert!(
+        request
+            .headers
+            .to_ascii_lowercase()
+            .contains("authorization: bearer ")
+    );
+    assert_eq!(models.len(), 2);
+    let quoted = &models[0];
+    assert_eq!(quoted.id, "deepseek-flash");
+    assert_eq!(quoted.name, "DeepSeek V4.1 Flash");
+    assert_eq!(quoted.input_usd_per_million, 0.30);
+    assert_eq!(quoted.output_usd_per_million, 1.20);
+    assert_eq!(quoted.context_window_tokens, 1_000_000);
+    assert_eq!(quoted.max_output_tokens, MAX_OUTPUT_TOKENS);
+    assert_eq!(quoted.verified_at, "2026-11-06");
+    assert_eq!(
+        quoted.source_url,
+        "https://api-docs.deepseek.com/quick_start/pricing"
+    );
+    assert!(!quoted.pricing_required);
+    assert!(quoted.default_pricing.is_none());
+    assert_eq!(
+        quoted
+            .reasoning_efforts
+            .iter()
+            .map(ReasoningEffort::as_str)
+            .collect::<Vec<_>>(),
+        ["low", "high", "max"]
+    );
+    // Unpublished ids keep the generic bounds and must have their prices entered.
+    assert_eq!(models[1].name, "deepseek-preview");
+    assert!(models[1].pricing_required);
+    assert_eq!(
+        ProviderId::Deepseek
+            .catalogue()
+            .iter()
+            .map(|model| {
+                (
+                    model.id.as_str(),
+                    model.input_usd_per_million,
+                    model.output_usd_per_million,
+                )
+            })
+            .collect::<Vec<_>>(),
+        [
+            ("deepseek-flash", 0.30, 1.20),
+            ("deepseek-v4-pro", 1.32, 3.96)
+        ]
+    );
+}
+
+#[test]
+fn deepseek_requests_use_system_role_and_effort_names() {
+    for (effort, expected) in [
+        ("minimal", "low"),
+        ("low", "low"),
+        ("medium", "high"),
+        ("high", "high"),
+        ("xhigh", "high"),
+        ("max", "max"),
+    ] {
+        let effort = ReasoningEffort::try_from(effort.to_string()).unwrap();
+        assert_eq!(deepseek_reasoning_effort(&effort), expected, "{effort:?}");
+    }
+    let snapshot = snapshot(GenerationMode::Strict);
+    let mut packet =
+        crate::settings::request_content(&snapshot, GenerationMode::Strict, &schema()).unwrap();
+    packet.web_search = false;
+    let settings = ProviderSettings {
+        reasoning_effort: ReasoningEffort::Medium,
+        ..ProviderId::Deepseek.defaults()
+    };
+    let body = crate::providers::foreign_body(ProviderId::Deepseek, &packet, &settings).unwrap();
+    // DeepSeek's chat API has no json_schema response format, so the schema is prompt text and
+    // local validation enforces it.
+    assert_eq!(body["response_format"], json!({"type":"json_object"}));
+    let system = body["messages"][0]["content"].as_str().unwrap();
+    assert!(system.starts_with(packet.instructions));
+    assert!(system.contains(&serde_json::to_string(&packet.schema).unwrap()));
+    assert!(system.contains(&snapshot.job_id.to_string()));
+    assert!(system.contains(&snapshot.sha256));
+    assert!(system.to_ascii_lowercase().contains("json object"));
+    let identity = crate::identity::identity_content(
+        &snapshot,
+        &desegnos_core::candidate_schema(),
+        &[],
+    )
+    .unwrap();
+    let identity_body =
+        crate::providers::foreign_body(ProviderId::Deepseek, &identity, &settings).unwrap();
+    assert_eq!(
+        identity_body["response_format"],
+        json!({"type":"json_object"})
+    );
+    let identity_system = identity_body["messages"][0]["content"].as_str().unwrap();
+    assert!(identity_system.contains(&serde_json::to_string(&identity.schema).unwrap()));
+    assert_eq!(body["messages"][0]["role"], "system");
+    assert_eq!(body["messages"][1]["role"], "user");
+    assert!(body.get("developer").is_none());
+    assert_eq!(body["reasoning_effort"], "high");
+    assert_eq!(body["max_tokens"], settings.max_output_tokens);
+    assert!(body.get("max_completion_tokens").is_none());
+    assert!(body.get("tools").is_none() && body.get("provider").is_none());
+    assert_eq!(ProviderId::Deepseek.service(), "io.desegnos.deepseek");
+    assert_eq!(ProviderId::Deepseek.defaults().model, "deepseek-flash");
+    assert_eq!(ProviderId::Deepseek.defaults().endpoint, None);
+    // Thinking counts toward max_tokens, and the ceiling still fits the default budget.
+    assert_eq!(
+        ProviderId::Deepseek.defaults().max_output_tokens,
+        MAX_OUTPUT_TOKENS
+    );
+    ProviderId::Deepseek.catalogue()[0]
+        .validate_api_settings(&ProviderId::Deepseek.defaults())
+        .unwrap();
+    assert_eq!(
+        provider_catalogue()
+            .iter()
+            .map(|provider| (provider.id, provider.name))
+            .collect::<Vec<_>>(),
+        [
+            (ProviderId::Openai, "OpenAI"),
+            (ProviderId::Anthropic, "Anthropic"),
+            (ProviderId::Google, "Google"),
+            (ProviderId::Openrouter, "OpenRouter"),
+            (ProviderId::Deepseek, "DeepSeek"),
+            (ProviderId::Local, "Local"),
+        ]
+    );
+    let capabilities = ProviderId::Deepseek.capabilities();
+    assert!(!capabilities.web_search);
+    assert!(capabilities.image_generation.is_none());
+    assert_eq!(capabilities.image_downloads, 8);
+    ProviderId::Deepseek
+        .validate(
+            &ProviderId::Deepseek.defaults(),
+            AuthenticationMethod::ApiKey,
+        )
+        .unwrap();
+    // A DeepSeek key is required and its endpoint is fixed.
+    assert_eq!(
+        ProviderId::Deepseek
+            .validate(
+                &ProviderId::Deepseek.defaults(),
+                AuthenticationMethod::Chatgpt,
+            )
+            .unwrap_err()
+            .kind,
+        ErrorKind::InvalidSettings
+    );
+    assert_eq!(
+        ProviderId::Deepseek
+            .validate(
+                &ProviderSettings {
+                    endpoint: Some("https://example.test/v1".into()),
+                    ..ProviderId::Deepseek.defaults()
+                },
+                AuthenticationMethod::ApiKey
+            )
+            .unwrap_err()
+            .kind,
+        ErrorKind::InvalidSettings
+    );
+}
+
+#[tokio::test]
+async fn local_discovery_authentication_failure_asks_for_a_key() {
+    let server = Server::start(Reply::json(
+        401,
+        json!({"error":{"message":"Authentication required"}}),
+    ))
+    .await;
+    let client = OpenAiClient::for_loopback(&server.endpoint).unwrap();
+    let error = crate::model_discovery::list_models(
+        ProviderId::Local,
+        &client.client,
+        &server.endpoint,
+        &ApiKey::local_anonymous(),
+        &CancellationToken::new(),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.kind, ErrorKind::Authentication);
+    assert!(models_need_key(ProviderId::Local, false, &error));
+    assert_eq!(
+        models_error(ProviderId::Local, false, &error),
+        "This server needs an API key. Add one from the account menu."
+    );
+    // A configured key that the server rejects keeps the ordinary key error.
+    assert!(!models_need_key(ProviderId::Local, true, &error));
+    assert_eq!(
+        models_error(ProviderId::Local, true, &error),
+        error.to_string()
+    );
+    assert!(!models_need_key(ProviderId::Openrouter, false, &error));
+    assert_eq!(
+        models_error(ProviderId::Openrouter, false, &error),
+        error.to_string()
+    );
+}
+
+// A generated website page with `layers` layers over three connected sizes, plus one behaviour
+// pointer per section: the shape of a real, large export page.
+fn large_export_page(layers: usize) -> (desegnos_core::Project, Vec<Uuid>) {
+    use desegnos_core::{
+        Appearance, BoundaryKind, Command, Element, ElementKind, PageSize, Pointer, PointerKind,
+        PointerSource, PointerTarget, Project, Rect, Viewport, empty_element,
+    };
+    let project = Project::new(
+        "Nightfall".into(),
+        Viewport {
+            width: 1440,
+            height: 900,
+        },
+        Appearance::Dark,
+    )
+    .unwrap();
+    let page = project.home_page_id;
+    let mut project = project;
+    for (label, width, height, x) in [("Tablet", 820, 1180, 1600.0), ("Phone", 390, 844, 2600.0)] {
+        project = project
+            .apply(
+                project.revision,
+                Command::AddPageSize {
+                    page_id: page,
+                    size: PageSize {
+                        id: Uuid::new_v4(),
+                        label: label.into(),
+                        width,
+                        height,
+                        kind: BoundaryKind::Page,
+                        x,
+                        y: 0.0,
+                    },
+                    moves: vec![],
+                    reference: vec![],
+                },
+            )
+            .unwrap();
+    }
+    let sections = 9;
+    let mut top: Vec<Element> = Vec::new();
+    let layer = |index: usize| {
+        let mut element = empty_element(
+            if index.is_multiple_of(3) {
+                ElementKind::Box
+            } else {
+                ElementKind::Text
+            },
+            Rect {
+                x: (index % 3) as f64 * 420.0,
+                y: (index / 3) as f64 * 96.0,
+                width: 400.0,
+                height: 88.0,
+            },
+        );
+        element.text = format!("Layer {index} of the Nightfall landing page, with its copy.");
+        element
+    };
+    let mut index = 0;
+    let mut section_ids = Vec::new();
+    for section in 0..sections {
+        let mut group = empty_element(
+            ElementKind::Box,
+            Rect {
+                x: 0.0,
+                y: section as f64 * 560.0,
+                width: 1440.0,
+                height: 540.0,
+            },
+        );
+        group.name = Some(format!("Section {section}"));
+        section_ids.push(group.id);
+        let per_section = (layers - sections) / sections;
+        group.children = (0..per_section)
+            .map(|_| {
+                index += 1;
+                layer(index)
+            })
+            .collect();
+        top.push(group);
+    }
+    let mut project = project
+        .apply(
+            project.revision,
+            Command::InsertElements {
+                page_id: page,
+                parent_id: None,
+                index: 0,
+                elements: top,
+                picture_data_uri: None,
+                size_id: None,
+            },
+        )
+        .unwrap();
+    for (pointer, section) in section_ids.iter().copied().enumerate() {
+        // One behaviour per source: the boundary's own, then each section's own.
+        let (from, to) = if pointer == 0 {
+            (
+                PointerSource::Boundary {
+                    page_id: page,
+                    size_id: None,
+                },
+                PointerTarget::Boundary {
+                    page_id: page,
+                    size_id: None,
+                },
+            )
+        } else {
+            (
+                PointerSource::Element {
+                    page_id: page,
+                    element_id: section,
+                    size_id: None,
+                },
+                PointerTarget::Element {
+                    page_id: page,
+                    element_id: section,
+                    size_id: None,
+                },
+            )
+        };
+        project = project
+            .apply(
+                project.revision,
+                Command::AddPointer {
+                    pointer: Pointer {
+                        id: Uuid::new_v4(),
+                        kind: PointerKind::Change,
+                        from,
+                        to,
+                        comment: format!(
+                            "Section {pointer} parallax-slides its cards on scroll and fades them in."
+                        ),
+                        wiring: None,
+                        play: None,
+                        play_comment: String::new(),
+                    },
+                },
+            )
+            .unwrap();
+    }
+    (project, vec![page])
+}
+
+/// A page of hundreds of layers keeps its export behaviour request inside a 1M-token model.
+#[test]
+fn large_export_behaviour_request_fits_a_million_token_context_window() {
+    let (project, page_ids) = large_export_page(450);
+    let plan = desegnos_core::plan_export(&project, &page_ids, Uuid::new_v4()).unwrap();
+    assert_eq!(plan.pointers.len(), 9, "every section keeps its behaviour");
+    let snapshot = desegnos_core::plan_snapshot(&project, &plan);
+    // DeepSeek Flash: a 1,000,000-token window and the 128,000-token output ceiling.
+    let settings = ProviderId::Deepseek.defaults();
+    let client = ProviderClient::with_settings(
+        ProviderId::Deepseek,
+        OpenAiClient::for_loopback("http://127.0.0.1:1/v1").unwrap(),
+        &settings,
+    )
+    .unwrap();
+    let estimate = client
+        .estimate(
+            AuthenticationMethod::ApiKey,
+            &snapshot,
+            project.generation_mode,
+            &plan.schema,
+            &settings,
+        )
+        .expect("a page of hundreds of layers fits a 1M-token model");
+    // The byte-per-token cost bound is larger than the window, so a pre-flight that counted every
+    // wire byte as a token refused this request. It fits once bytes are bounded as tokens.
+    assert!(
+        estimate.input_token_upper_bound + u64::from(settings.max_output_tokens) > 1_000_000,
+        "the request still exercises the window bound: {}",
+        estimate.input_token_upper_bound
+    );
+    // A request that is really too long still stops before it is sent.
+    let mut oversize = snapshot.clone();
+    oversize.markdown.push_str(&"a".repeat(2_000_000));
+    oversize.sha256 = digest(oversize.markdown.as_bytes());
+    assert_eq!(
+        client
+            .estimate(
+                AuthenticationMethod::ApiKey,
+                &oversize,
+                project.generation_mode,
+                &plan.schema,
+                &settings,
+            )
+            .unwrap_err()
+            .kind,
+        ErrorKind::InputLimit
     );
 }

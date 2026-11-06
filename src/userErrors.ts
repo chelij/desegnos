@@ -13,17 +13,21 @@ export function runtimeError(error: string): string {
   return 'A script on this page stopped working.';
 }
 
-export function generationError(reason: string, request = 'this request', affected?: string): string {
+export function generationError(reason: string, request = '', affected?: string): string {
   reason = reason.split(/\bExcerpt:/i)[0];
-  const subject = request.trim().replace(/[\n\r]+/g, ' ').slice(0, 100).replace(/[.!?]+$/, '') || 'this request';
-  if (/cannot be located|original source is unavailable|same styles or behavior|cannot be reconstructed|could not be decoded/i.test(reason)) return `The saved result for “${subject}” cannot be merged into this boundary.`;
+  // A missing request reads as plain words; only real request text belongs in quotes.
+  const text = request.trim().replace(/[\n\r]+/g, ' ').slice(0, 100).replace(/[.!?]+$/, '');
+  const subject = text ? `“${text}”` : 'this request';
+  // Desegnos prepares the frozen request locally, so a preparation failure is not the AI's.
+  if (/prepare (?:a |the |this )?(?:new )?(?:generation )?request|preparing (?:a |the |this )?(?:new )?(?:generation )?request/i.test(reason)) return "Desegnos couldn't prepare this request. Try again.";
+  if (/cannot be located|original source is unavailable|same styles or behavior|cannot be reconstructed|could not be decoded/i.test(reason)) return `The saved result for ${subject} cannot be merged into this boundary.`;
   if (/\b(?:page|project|file|source) (?:was |has |had )?(?:been )?(?:changed|edited) (?:after|while|since|before)|\brevision\b|\bstale\b|edited after/i.test(reason)) return 'The boundary was edited after the AI made this draft.';
   if (/\barea ids?\b/i.test(reason)) return "The AI's reply was incomplete. Try again.";
   if (/duplicate|(?:ids?|names?).*unique|unique.*(?:ids?|names?)|same.*(?:id|name)/i.test(reason)) return 'Two items ended up with the same name, so editing one could change the other.';
-  if (/JSON|schema|parse|reply|response|format|writing mistake/i.test(reason)) return `The AI did not produce a usable boundary for “${subject}”.`;
-  if (/dynamic|executable|script|JavaScript|shared behavior|CSS outside|CSS selector|stylesheet|sharedCss|outside|scope|another layer|overlap/i.test(reason)) return `“${subject}” would also change ${affected ?? 'content outside this area'}.`;
-  if (/target|selector|missing.*(?:element|layer)|not found/i.test(reason)) return `The item needed for “${subject}” could not be found.`;
-  return `The AI could not complete “${subject}” as requested.`;
+  if (/JSON|schema|parse|reply|response|format|writing mistake/i.test(reason)) return `The AI did not produce a usable boundary for ${subject}.`;
+  if (/dynamic|executable|script|JavaScript|shared behavior|CSS outside|CSS selector|stylesheet|sharedCss|outside|scope|another layer|overlap/i.test(reason)) return `${subject} would also change ${affected ?? 'content outside this area'}.`;
+  if (/target|selector|missing.*(?:element|layer)|not found/i.test(reason)) return `The item needed for ${subject} could not be found.`;
+  return `The AI could not complete ${subject} as requested.`;
 }
 
 // Diagnostics name implementation details; a model's own explanation is already prose.

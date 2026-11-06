@@ -67,7 +67,7 @@ export function wrapperStyle(element: Element, flow: boolean, rect: Rect, parent
     minWidth: fitText ? sizing?.minWidth == null ? 0 : `min(${sizing.minWidth}px, ${availableWidth})` : sizing?.minWidth ?? (sizing?.width === 'fill' ? 0 : undefined),
     maxWidth: fitText ? sizing?.maxWidth == null ? availableWidth : `min(${sizing.maxWidth}px, ${availableWidth})` : sizing?.maxWidth ?? undefined,
     minHeight: sizing?.minHeight ?? (sizing?.height === 'fill' ? 0 : undefined), maxHeight: sizing?.maxHeight ?? undefined,
-    background: line || plain ? undefined : style.fill ?? undefined,
+    background: line ? undefined : style.fill ?? undefined,
     borderColor: line || plain ? undefined : style.stroke.color ?? undefined,
     borderStyle: line || plain ? undefined : style.stroke.color && style.stroke.width > 0 ? 'solid' : undefined,
     borderWidth: line || plain ? undefined : style.stroke.color ? style.stroke.width : undefined,

@@ -160,7 +160,7 @@ pub(crate) fn authorize(
     }
     let value = if matches!(
         provider,
-        ProviderId::Openai | ProviderId::Openrouter | ProviderId::Local
+        ProviderId::Openai | ProviderId::Openrouter | ProviderId::Deepseek | ProviderId::Local
     ) {
         zeroize::Zeroizing::new(format!("Bearer {}", key.expose()))
     } else {
@@ -170,7 +170,7 @@ pub(crate) fn authorize(
         HeaderValue::from_str(&value).map_err(|_| failure(ErrorKind::InvalidCredential))?;
     header.set_sensitive(true);
     Ok(match provider {
-        ProviderId::Openai | ProviderId::Openrouter | ProviderId::Local => {
+        ProviderId::Openai | ProviderId::Openrouter | ProviderId::Deepseek | ProviderId::Local => {
             request.header("authorization", header)
         }
         ProviderId::Anthropic => request
@@ -199,15 +199,16 @@ fn parse_model(provider: ProviderId, entry: &Value) -> Result<ModelInfo> {
         ProviderId::Openrouter => "name",
         _ => "display_name",
     }) {
-        Some(Value::String(name)) => name.as_str(),
-        None | Some(Value::Null) => id,
+        Some(Value::String(name)) => Some(name.as_str()),
+        None | Some(Value::Null) => None,
         _ => return Err(failure(ErrorKind::Malformed)),
     };
-    if !crate::settings::valid_model_id(id)
-        || name.trim().is_empty()
-        || name.len() > 256
-        || name.chars().any(char::is_control)
+    if let Some(name) = name
+        && (name.trim().is_empty() || name.len() > 256 || name.chars().any(char::is_control))
     {
+        return Err(failure(ErrorKind::Malformed));
+    }
+    if !crate::settings::valid_model_id(id) {
         return Err(failure(ErrorKind::Malformed));
     }
     let mut model = provider
@@ -216,7 +217,7 @@ fn parse_model(provider: ProviderId, entry: &Value) -> Result<ModelInfo> {
         .find(|model| model.id == id)
         .unwrap_or_else(|| ModelInfo {
             id: id.into(),
-            name: name.into(),
+            name: id.into(),
             reasoning_efforts: vec![ReasoningEffort::Other("none".into())],
             context_window_tokens: crate::CONTEXT_WINDOW_TOKENS,
             max_output_tokens: MAX_OUTPUT_TOKENS,
@@ -229,7 +230,10 @@ fn parse_model(provider: ProviderId, entry: &Value) -> Result<ModelInfo> {
             pricing_required: true,
             default_pricing: None,
         });
-    model.name = name.into();
+    // Discovery names replace the catalogue name only when the provider publishes one.
+    if let Some(name) = name {
+        model.name = name.into();
+    }
     let (context_field, output_field) = match provider {
         ProviderId::Anthropic => ("max_input_tokens", "max_tokens"),
         ProviderId::Google => ("inputTokenLimit", "outputTokenLimit"),
@@ -677,6 +681,48 @@ mod tests {
             ErrorKind::Malformed
         );
         task.await.unwrap();
+    }
+
+    #[test]
+    fn advertised_output_limits_climb_to_the_api_ceiling_and_stop_there() {
+        fn entry(provider: ProviderId, limit: u64) -> Value {
+            match provider {
+                ProviderId::Google => json!({"name":"models/future","outputTokenLimit":limit}),
+                ProviderId::Anthropic => json!({"id":"future","max_tokens":limit}),
+                _ => json!({"id":"future","max_output_tokens":limit}),
+            }
+        }
+        for provider in [
+            ProviderId::Openai,
+            ProviderId::Anthropic,
+            ProviderId::Google,
+            ProviderId::Openrouter,
+        ] {
+            let model = parse_model(provider, &entry(provider, 100_000)).unwrap();
+            assert_eq!(model.max_output_tokens, 100_000, "{provider:?}");
+            ProviderSettings {
+                model: model.id.clone(),
+                max_output_tokens: model.max_output_tokens,
+                reasoning_effort: model.reasoning_efforts[0].clone(),
+                spending_limit_usd: 10_000.0,
+                ..ProviderSettings::default()
+            }
+            .validate()
+            .unwrap();
+            // A limit beyond the API-key ceiling is advertised as the ceiling itself, so the
+            // highest setting the UI offers is still one validation accepts.
+            let model = parse_model(provider, &entry(provider, 200_000)).unwrap();
+            assert_eq!(model.max_output_tokens, MAX_OUTPUT_TOKENS, "{provider:?}");
+            ProviderSettings {
+                model: model.id.clone(),
+                max_output_tokens: model.max_output_tokens,
+                reasoning_effort: model.reasoning_efforts[0].clone(),
+                spending_limit_usd: 10_000.0,
+                ..ProviderSettings::default()
+            }
+            .validate()
+            .unwrap();
+        }
     }
 
     #[test]

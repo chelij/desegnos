@@ -295,6 +295,7 @@ pub struct AiSettingsView {
     credential: CredentialInfo,
     catalogue: Vec<ModelInfo>,
     models_error: Option<String>,
+    models_auth_required: bool,
     configuration_error: Option<String>,
     authentication: AuthenticationMethod,
     chatgpt: ChatgptView,
@@ -1866,12 +1867,14 @@ impl GenerationService {
                     &response.text,
                     std::env::var("DESEGNOS_GENERATION_BENCHMARK").as_deref() == Ok("1"),
                 )?;
-                match GenerationCandidate::from_json(&response.text).and_then(|candidate| {
-                    record.view.requirements.format_version()?;
-                    candidate.validate(&record.view.requirements, original)?;
-                    Ok(candidate)
-                }) {
-                    Ok(candidate) => {
+                let checked =
+                    GenerationCandidate::from_json(&response.text).map(|mut candidate| {
+                        candidate.normalize_boundary_anchors(original);
+                        let valid = candidate.validate(&record.view.requirements, original);
+                        (candidate, valid)
+                    });
+                match checked {
+                    Ok((candidate, Ok(()))) => {
                         let ready = candidate.can_apply(&record.view.requirements);
                         record.view.status = if ready {
                             JobStatus::Ready
@@ -1884,6 +1887,21 @@ impl GenerationService {
                             "Some requests need a choice.".into()
                         };
                         record.view.candidate = Some(candidate);
+                    }
+                    Ok((candidate, Err(error))) => {
+                        let element_id =
+                            candidate.rejected_element(&record.view.requirements, original);
+                        record.view.validation_events.push(desegnos_core::ValidationEvent {
+                            kind: desegnos_core::validation_failure_kind(&error.to_string()).into(),
+                            disposition: "conflicted".into(),
+                            element_id,
+                            message: error.to_string(),
+                        });
+                        record.view.raw_reply = Some(desegnos_ai::scrub_diagnostic_reply(&response.text, None));
+                        record.view.status = JobStatus::Blocked;
+                        record.view.message = format!(
+                            "Desegnos rejected the candidate: {error} Nothing was applied."
+                        );
                     }
                     Err(error) => {
                         record.view.validation_events.push(desegnos_core::ValidationEvent {
@@ -2291,6 +2309,7 @@ pub(super) async fn settings_view(
         )
     };
     let connection_settings = settings.clone();
+    let local_authentication = settings.local_authentication;
     let (credential, credential_id) = tauri::async_runtime::spawn_blocking(move || {
         let credential =
             if provider == ProviderId::Local && !connection_settings.local_authentication {
@@ -2314,17 +2333,25 @@ pub(super) async fn settings_view(
     })
     .await
     .map_err(message)?;
-    let (api_catalogue, models_error) = {
+    let (api_catalogue, models_error, models_auth_required) = {
         let service = state.lock().map_err(message)?;
         match credential_id
             .as_ref()
             .and_then(|id| service.api_models.get(&(provider, id.clone())))
         {
             Some(cache) => match cache {
-                Ok(models) => (models.clone(), None),
-                Err(error) => (vec![], Some(error.to_string())),
+                Ok(models) => (models.clone(), None, false),
+                Err(error) => (
+                    vec![],
+                    Some(desegnos_ai::models_error(
+                        provider,
+                        local_authentication,
+                        error,
+                    )),
+                    desegnos_ai::models_need_key(provider, local_authentication, error),
+                ),
             },
-            None => (vec![], None),
+            None => (vec![], None, false),
         }
     };
     let chatgpt = chatgpt_state.view().await;
@@ -2406,6 +2433,7 @@ pub(super) async fn settings_view(
         credential,
         catalogue,
         models_error,
+        models_auth_required,
         configuration_error,
         authentication,
         chatgpt,

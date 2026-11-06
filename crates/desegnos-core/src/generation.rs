@@ -305,13 +305,73 @@ impl GenerationCandidate {
             source.len() <= MAX_GENERATION_BYTES,
             "The generation result exceeds the 8 MiB response limit.",
         )?;
-        let mut value: serde_json::Value = serde_json::from_str(source)
+        let mut value: serde_json::Value = crate::parse_provider_json(source)
             .map_err(|error| Error(format!("The generation result is invalid: {error}")))?;
         drop_null_optional_draft_fields(&mut value);
+        conform_to_candidate_schema(&mut value);
         let candidate: Self = serde_json::from_value(value)
             .map_err(|error| Error(format!("The generation result is invalid: {error}")))?;
         candidate.validate_bounds()?;
         Ok(candidate)
+    }
+
+    /// Drop what a reply echoed from a boundary target. A boundary is named by its page, but a
+    /// page is not a layer: a model that answers a boundary-only request with that page id still
+    /// answered the request, so an anchor on the page becomes absent and an insert whose parent
+    /// is the page becomes a boundary insert before validation and apply read them.
+    pub fn normalize_boundary_anchors(&mut self, project: &Project) {
+        for outcome in &mut self.requests {
+            let boundary_pages: BTreeSet<Uuid> = outcome
+                .request_id
+                .and_then(|request_id| {
+                    project
+                        .requests
+                        .iter()
+                        .find(|request| request.id == request_id)
+                })
+                .map(|request| {
+                    request
+                        .targets
+                        .iter()
+                        .filter_map(|target| match target {
+                            crate::RequestTarget::Boundary { page, .. } => Some(*page),
+                            _ => None,
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            if outcome.element_id.is_some_and(|id| boundary_pages.contains(&id)) {
+                outcome.element_id = None;
+            }
+            // `insert` names a parent layer, and a page is not one, so an insert into the
+            // request's own boundary is what the model meant.
+            outcome.operations = std::mem::take(&mut outcome.operations)
+                .into_iter()
+                .map(|operation| match operation {
+                    ElementOperation::Insert {
+                        parent_id,
+                        element,
+                        ..
+                    } if boundary_pages.contains(&parent_id) => ElementOperation::InsertInBoundary {
+                        page_id: parent_id,
+                        size_id: None,
+                        element,
+                    },
+                    // The same echo in a behaviour: null is how it targets the request boundary,
+                    // and a page id is not a layer, so it means the same boundary behaviour.
+                    ElementOperation::SetBehaviour {
+                        element_id,
+                        behaviour,
+                    } if element_id.is_some_and(|id| boundary_pages.contains(&id)) => {
+                        ElementOperation::SetBehaviour {
+                            element_id: None,
+                            behaviour,
+                        }
+                    }
+                    other => other,
+                })
+                .collect();
+        }
     }
 
     pub(crate) fn validate_bounds(&self) -> Result<()> {
@@ -414,6 +474,26 @@ impl GenerationCandidate {
     /// Check the reply against the frozen request: identity, coverage, operation scope,
     /// pointer coverage and bounded text.
     pub fn validate(&self, snapshot: &RequirementsSnapshot, project: &Project) -> Result<()> {
+        self.check(snapshot, project, &mut None)
+    }
+
+    /// Which existing layer a rejected reply is about, when its failure names one.
+    pub fn rejected_element(
+        &self,
+        snapshot: &RequirementsSnapshot,
+        project: &Project,
+    ) -> Option<Uuid> {
+        let mut rejected = None;
+        let _ = self.check(snapshot, project, &mut rejected);
+        rejected
+    }
+
+    fn check(
+        &self,
+        snapshot: &RequirementsSnapshot,
+        project: &Project,
+        rejected: &mut Option<Uuid>,
+    ) -> Result<()> {
         self.validate_bounds()?;
         snapshot.validate_current(project)?;
         self.validate_identity(snapshot)?;
@@ -562,7 +642,7 @@ impl GenerationCandidate {
                                 .map(|(page, _)| *page)
                         })
                     });
-                apply_request(&mut copy, page_id, outcome, self, &generated)?;
+                apply_request(&mut copy, page_id, outcome, self, &generated, rejected)?;
             }
         }
         copy.validate()?;
@@ -869,12 +949,38 @@ fn find_parent_rect(
     None
 }
 
+/// How far outside a box a rectangle may sit before it counts as leaving the box.
+const FIT_TOLERANCE: f64 = 0.5;
+
 fn fits(parent: &crate::Rect, child: &crate::Rect) -> bool {
-    const TOLERANCE: f64 = 0.5;
-    child.x >= -TOLERANCE
-        && child.y >= -TOLERANCE
-        && child.x + child.width <= parent.width + TOLERANCE
-        && child.y + child.height <= parent.height + TOLERANCE
+    child.x >= -FIT_TOLERANCE
+        && child.y >= -FIT_TOLERANCE
+        && child.x + child.width <= parent.width + FIT_TOLERANCE
+        && child.y + child.height <= parent.height + FIT_TOLERANCE
+}
+
+/// How a rejected layer is named in a message: its name when it has one, its kind, and its box.
+fn describe(name: Option<&str>, kind: &ElementKind, rect: &crate::Rect) -> String {
+    let label = match name.map(str::trim).filter(|name| !name.is_empty()) {
+        Some(name) => format!("{name} ({})", kind.label()),
+        None => kind.label().to_string(),
+    };
+    format!(
+        "{label} at {},{} sized {}x{}",
+        rect.x, rect.y, rect.width, rect.height
+    )
+}
+
+fn describe_element(element: &Element) -> String {
+    describe(element.name.as_deref(), &element.kind, &element.rect)
+}
+
+/// Record the layer a rejection is about, so it reaches the validation event.
+fn reject(rejected: &mut Option<Uuid>, element: Option<Uuid>, message: String) -> Error {
+    if element.is_some() {
+        *rejected = element;
+    }
+    Error(message)
 }
 
 /// What one reply outcome may change. Element targets grant their subtree plus what their
@@ -1048,6 +1154,7 @@ fn apply_operations(
     operations: &[ElementOperation],
     candidate: &GenerationCandidate,
     generated: &BTreeMap<String, Uuid>,
+    rejected: &mut Option<Uuid>,
 ) -> Result<BTreeSet<Uuid>> {
     let images: BTreeMap<String, String> = candidate
         .images
@@ -1055,6 +1162,8 @@ fn apply_operations(
         .map(|image| (image.key.to_lowercase(), image.prompt.clone()))
         .collect();
     let mut touched = BTreeSet::new();
+    // Behaviours this reply already wrote; later ones on the same source add to them.
+    let mut behaviour_sources: Vec<crate::PointerSource> = Vec::new();
     for operation in operations {
         match operation {
             ElementOperation::ReplaceChildren { children } => {
@@ -1073,10 +1182,18 @@ fn apply_operations(
                     .map(|(_, element)| element.rect)
                     .expect("the anchor exists");
                 for element in &built {
-                    ensure(
-                        fits(&parent_rect, &element.rect),
-                        "A generated element must stay inside its frame.",
-                    )?;
+                    if !fits(&parent_rect, &element.rect) {
+                        return Err(reject(
+                            rejected,
+                            Some(target),
+                            format!(
+                                "A generated element must stay inside its frame: {} does not fit its {}x{} frame.",
+                                describe_element(element),
+                                parent_rect.width,
+                                parent_rect.height
+                            ),
+                        ));
+                    }
                 }
                 for element in &built {
                     collect_history_ids(element, &mut touched);
@@ -1131,12 +1248,22 @@ fn apply_operations(
                     .pointers
                     .iter()
                     .position(|p| p.is_behaviour() && p.from == from);
+                let seen = behaviour_sources.contains(&from);
+                if !behaviour.is_empty() && !seen {
+                    behaviour_sources.push(from.clone());
+                }
                 if behaviour.is_empty() {
                     if let Some(index) = existing {
                         project.pointers.remove(index);
                     }
                 } else if let Some(index) = existing {
-                    project.pointers[index].comment = behaviour.clone();
+                    let comment = &mut project.pointers[index].comment;
+                    if seen {
+                        comment.push_str("\n\n");
+                        comment.push_str(behaviour);
+                    } else {
+                        *comment = behaviour.clone();
+                    }
                 } else {
                     project.pointers.push(crate::Pointer {
                         id: Uuid::new_v4(),
@@ -1156,7 +1283,7 @@ fn apply_operations(
                         scope.allowed.contains(&patch.element_id),
                         "The generation result changed a layer outside its request.",
                     )?;
-                    let (owner, _) = project
+                    let (owner, current) = project
                         .element(patch.element_id)
                         .ok_or_else(|| Error("This layer no longer exists.".into()))?;
                     let owner_page = owner.id;
@@ -1172,11 +1299,19 @@ fn apply_operations(
                     )?;
                     let (_, _, parent_rect) = element_page_and_parent(project, patch.element_id)
                         .ok_or_else(|| Error("This layer no longer exists.".into()))?;
-                    if let Some(rect) = &patch.rect {
-                        ensure(
-                            fits(&parent_rect, rect),
-                            "A generated element must stay inside its parent.",
-                        )?;
+                    if let Some(rect) = &patch.rect
+                        && !fits(&parent_rect, rect)
+                    {
+                        return Err(reject(
+                            rejected,
+                            Some(patch.element_id),
+                            format!(
+                                "A generated element must stay inside its parent: {} does not fit its {}x{} parent.",
+                                describe(current.name.as_deref(), &current.kind, rect),
+                                parent_rect.width,
+                                parent_rect.height
+                            ),
+                        ));
                     }
                     let target = crate::elements::size_target_for_patch(
                         project,
@@ -1204,10 +1339,18 @@ fn apply_operations(
                     .map(|(_, parent)| parent.rect)
                     .ok_or_else(|| Error("This box no longer exists.".into()))?;
                 let built = build_element(element, generated, &images)?;
-                ensure(
-                    fits(&parent_rect, &built.rect),
-                    "A generated element must stay inside its parent.",
-                )?;
+                if !fits(&parent_rect, &built.rect) {
+                    return Err(reject(
+                        rejected,
+                        Some(*parent_id),
+                        format!(
+                            "A generated element must stay inside its parent: {} does not fit its {}x{} parent.",
+                            describe_element(&built),
+                            parent_rect.width,
+                            parent_rect.height
+                        ),
+                    ));
+                }
                 let parent = project
                     .editable_element_mut(*parent_id)
                     .ok_or_else(|| Error("This box no longer exists.".into()))?;
@@ -1251,24 +1394,68 @@ fn apply_operations(
                     size_id.is_none_or(|size| page.sizes.iter().any(|item| item.id == size)),
                     "The generation result inserted into a size this boundary does not have.",
                 )?;
+                let output = page.output;
                 let size = match size_id {
                     Some(size) => page.sizes.iter().find(|item| item.id == *size),
                     None => page.sizes.first(),
                 }
-                .ok_or_else(|| Error("This boundary has no size.".into()))?;
+                .ok_or_else(|| Error("This boundary has no size.".into()))?
+                .clone();
                 let built = build_element(element, generated, &images)?;
-                ensure(
-                    built.rect.x >= 0.0
-                        && built.rect.y >= 0.0
-                        && built.rect.x + built.rect.width <= size.width as f64 + 0.5
-                        && built.rect.y + built.rect.height <= size.height as f64 + 0.5,
-                    "A generated element must stay inside its boundary.",
-                )?;
-                if let Some(area) = &scope.area {
+                let right = built.rect.x + built.rect.width;
+                let bottom = built.rect.y + built.rect.height;
+                let outside_width =
+                    built.rect.x < 0.0 || right > f64::from(size.width) + FIT_TOLERANCE;
+                let outside_height = bottom > f64::from(size.height) + FIT_TOLERANCE;
+                // A website page scrolls: a layer below the boundary grows it instead of being
+                // rejected. Every other output keeps its fixed height.
+                let grows = outside_height
+                    && !outside_width
+                    && built.rect.y >= 0.0
+                    && output == crate::OutputType::Webpage;
+                if outside_width || built.rect.y < 0.0 || (outside_height && !grows) {
+                    return Err(reject(
+                        rejected,
+                        None,
+                        format!(
+                            "A generated element must stay inside its boundary: {} does not fit its {}x{} boundary.",
+                            describe_element(&built),
+                            size.width,
+                            size.height
+                        ),
+                    ));
+                }
+                if grows {
+                    // Grow to the lowest edge of the new layer, rounded up, within a size's limit.
+                    let height = bottom.ceil();
                     ensure(
-                        area_allows(area, &built.rect),
-                        "A generated element must stay inside the request area.",
+                        height <= f64::from(crate::MAX_VIEWPORT_SIDE),
+                        format!(
+                            "A generated element must stay inside its boundary: {} needs a boundary {} pixels high, and a boundary may be at most {} pixels high.",
+                            describe_element(&built),
+                            height,
+                            crate::MAX_VIEWPORT_SIDE
+                        ),
                     )?;
+                    project
+                        .page_mut(*page_id)?
+                        .sizes
+                        .iter_mut()
+                        .find(|item| item.id == size.id)
+                        .expect("the size exists")
+                        .height = height as u32;
+                }
+                if let Some(area) = &scope.area
+                    && !area_allows(area, &built.rect)
+                {
+                    return Err(reject(
+                        rejected,
+                        None,
+                        format!(
+                            "A generated element must stay inside the request area: {} is outside it.",
+                            describe_element(&built)
+                        ),
+                    ));
                 }
                 collect_history_ids(&built, &mut touched);
                 project.page_mut(*page_id)?.elements.push(built);
@@ -1281,10 +1468,16 @@ fn apply_operations(
                     .ok_or_else(|| {
                         Error("Reference items may only be added through an area outside every boundary.".into())
                     })?;
-                ensure(
-                    area_allows(area, &item.rect),
-                    "A generated reference item must stay inside the request area.",
-                )?;
+                if !area_allows(area, &item.rect) {
+                    return Err(reject(
+                        rejected,
+                        None,
+                        format!(
+                            "A generated reference item must stay inside the request area: the item at {},{} sized {}x{} is outside it.",
+                            item.rect.x, item.rect.y, item.rect.width, item.rect.height
+                        ),
+                    ));
+                }
                 ensure(
                     !matches!(item.kind, crate::ReferenceKind::Image { .. }),
                     "A generated reference item cannot use picture bytes.",
@@ -1334,6 +1527,7 @@ fn apply_request(
     request: &RequestOutcome,
     candidate: &GenerationCandidate,
     generated: &BTreeMap<String, Uuid>,
+    rejected: &mut Option<Uuid>,
 ) -> Result<()> {
     if !matches!(request.status, RequestStatus::Implemented) {
         return Ok(());
@@ -1367,6 +1561,7 @@ fn apply_request(
         &request.operations,
         candidate,
         generated,
+        rejected,
     )?;
     if let Some(pending) = &pending {
         let outcome = if request.explanation.trim().is_empty() {
@@ -1425,7 +1620,9 @@ pub fn apply_generation_output(
                     .element_id
                     .and_then(|id| next.element(id).map(|(page, _)| page.id))
             });
-        apply_request(&mut next, page_id, request, candidate, &generated)?;
+        apply_request(
+            &mut next, page_id, request, candidate, &generated, &mut None,
+        )?;
     }
     let _ = targets;
     for classification in &candidate.pointer_classifications {
@@ -1558,6 +1755,232 @@ fn drop_null_optional_draft_fields(value: &mut serde_json::Value) {
             }
         }
         _ => {}
+    }
+}
+
+/// Repair the small, different drift a provider without an enforced schema introduces, guided by
+/// the same schema the request carried. The pass only removes what the schema forbids and reads a
+/// null as empty where the schema requires a string and allows one; it never invents a field,
+/// never coerces another type, and leaves a value that already conforms untouched. Whatever it
+/// cannot repair stays as it is, for deserialisation and validation to report.
+fn conform_to_candidate_schema(value: &mut serde_json::Value) {
+    let schema = candidate_schema();
+    conform_value(value, &schema, &schema);
+}
+
+fn conform_value(
+    value: &mut serde_json::Value,
+    schema: &serde_json::Value,
+    root: &serde_json::Value,
+) {
+    let schema = dereference(schema, root);
+    if let Some(branches) = union_branches(schema) {
+        if let Some(branch) = matching_branch(value, branches, root) {
+            conform_value(value, branch, root);
+        }
+        return;
+    }
+    if value.is_null() {
+        if schema_accepts_null(schema) {
+            return;
+        }
+        if matches!(schema.get("type"), Some(serde_json::Value::String(kind)) if kind == "string")
+            && empty_string_is_allowed(schema)
+        {
+            *value = serde_json::Value::String(String::new());
+        }
+        return;
+    }
+    if !value_fits_type(value, schema) {
+        return;
+    }
+    match value {
+        serde_json::Value::Object(object) => {
+            let properties = schema
+                .get("properties")
+                .and_then(serde_json::Value::as_object);
+            if schema
+                .get("additionalProperties")
+                .and_then(serde_json::Value::as_bool)
+                == Some(false)
+                && let Some(properties) = properties
+            {
+                object.retain(|key, _| properties.contains_key(key));
+            }
+            for (key, member) in object.iter_mut() {
+                if let Some(property) = properties.and_then(|properties| properties.get(key)) {
+                    conform_value(member, property, root);
+                }
+            }
+        }
+        serde_json::Value::Array(items) => {
+            if let Some(item_schema) = schema.get("items") {
+                for item in items {
+                    conform_value(item, item_schema, root);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn dereference<'a>(
+    mut schema: &'a serde_json::Value,
+    root: &'a serde_json::Value,
+) -> &'a serde_json::Value {
+    // The candidate schema only uses flat root-relative definitions, and element drafts refer to
+    // themselves through them, so one lookup per level is enough.
+    while let Some(name) = schema
+        .get("$ref")
+        .and_then(serde_json::Value::as_str)
+        .and_then(|reference| reference.strip_prefix("#/$defs/"))
+    {
+        let Some(target) = root.get("$defs").and_then(|defs| defs.get(name)) else {
+            break;
+        };
+        schema = target;
+    }
+    schema
+}
+
+fn union_branches(schema: &serde_json::Value) -> Option<&[serde_json::Value]> {
+    ["anyOf", "oneOf"].iter().find_map(|keyword| {
+        schema
+            .get(*keyword)
+            .and_then(serde_json::Value::as_array)
+            .map(Vec::as_slice)
+    })
+}
+
+/// Choose the union branch a value belongs to, or none when the choice is ambiguous so the value
+/// is left untouched. A null belongs to a null branch, a value that fits exactly one branch type
+/// belongs to that branch, and object branches are told apart by their single-valued enum or const
+/// discriminator, such as `kind`.
+fn matching_branch<'a>(
+    value: &serde_json::Value,
+    branches: &'a [serde_json::Value],
+    root: &serde_json::Value,
+) -> Option<&'a serde_json::Value> {
+    if value.is_null() {
+        if branches
+            .iter()
+            .any(|branch| schema_accepts_null(dereference(branch, root)))
+        {
+            return None;
+        }
+        return single(branches);
+    }
+    let typed: Vec<&serde_json::Value> = branches
+        .iter()
+        .filter(|branch| value_fits_type(value, dereference(branch, root)))
+        .collect();
+    if let [only] = typed.as_slice() {
+        return Some(only);
+    }
+    if value.is_object() {
+        let discriminated: Vec<&serde_json::Value> = typed
+            .iter()
+            .copied()
+            .filter(|branch| discriminator_matches(value, dereference(branch, root)))
+            .collect();
+        if let [only] = discriminated.as_slice() {
+            return Some(only);
+        }
+    }
+    None
+}
+
+fn single(branches: &[serde_json::Value]) -> Option<&serde_json::Value> {
+    match branches {
+        [only] => Some(only),
+        _ => None,
+    }
+}
+
+fn schema_accepts_null(schema: &serde_json::Value) -> bool {
+    match schema.get("type") {
+        None => true,
+        Some(serde_json::Value::String(kind)) => kind == "null",
+        Some(serde_json::Value::Array(kinds)) => {
+            kinds.iter().any(|kind| kind.as_str() == Some("null"))
+        }
+        _ => false,
+    }
+}
+
+fn value_fits_type(value: &serde_json::Value, schema: &serde_json::Value) -> bool {
+    fn fits(value: &serde_json::Value, kind: &str) -> bool {
+        match kind {
+            "object" => value.is_object(),
+            "array" => value.is_array(),
+            "string" => value.is_string(),
+            "number" => value.is_number(),
+            "integer" => value.as_i64().is_some() || value.as_u64().is_some(),
+            "boolean" => value.is_boolean(),
+            "null" => value.is_null(),
+            _ => true,
+        }
+    }
+    match schema.get("type") {
+        None => true,
+        Some(serde_json::Value::String(kind)) => fits(value, kind),
+        Some(serde_json::Value::Array(kinds)) => kinds
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .any(|kind| fits(value, kind)),
+        _ => true,
+    }
+}
+
+/// An empty string is only substituted where the schema does not rule it out: a const, an enum
+/// without `""`, a positive minimum length or any pattern can all forbid it.
+fn empty_string_is_allowed(schema: &serde_json::Value) -> bool {
+    if let Some(constant) = schema.get("const") {
+        return constant.as_str() == Some("");
+    }
+    if let Some(values) = schema.get("enum").and_then(serde_json::Value::as_array) {
+        return values.iter().any(|value| value.as_str() == Some(""));
+    }
+    if schema.get("minLength").and_then(serde_json::Value::as_u64) > Some(0) {
+        return false;
+    }
+    schema.get("pattern").is_none()
+}
+
+fn discriminator_matches(value: &serde_json::Value, branch: &serde_json::Value) -> bool {
+    let (Some(object), Some(properties)) = (
+        value.as_object(),
+        branch
+            .get("properties")
+            .and_then(serde_json::Value::as_object),
+    ) else {
+        return false;
+    };
+    let mut declared = 0;
+    let mut matched = 0;
+    for (key, property) in properties {
+        let Some(expected) = discriminator_value(property) else {
+            continue;
+        };
+        declared += 1;
+        if object.get(key) == Some(expected) {
+            matched += 1;
+        }
+    }
+    declared > 0 && declared == matched
+}
+
+fn discriminator_value(schema: &serde_json::Value) -> Option<&serde_json::Value> {
+    if let Some(constant) = schema.get("const") {
+        return Some(constant);
+    }
+    match schema
+        .get("enum")
+        .and_then(serde_json::Value::as_array)?
+        .as_slice()
+    {
+        [only] => Some(only),
+        _ => None,
     }
 }
 
@@ -1725,4 +2148,130 @@ pub fn result_schema(_snapshot: &RequirementsSnapshot) -> serde_json::Value {
         "Classify every pointer listed under pointer comments to classify, and no other. Copy its current comment exactly. Leave empty when none are listed."
     );
     schema
+}
+
+#[cfg(test)]
+mod conformance_tests {
+    use super::*;
+    use serde_json::{Value, json};
+
+    const JOB: &str = "3d1f9c56-0000-4000-8000-000000000000";
+    const SHA: &str = "0000000000000000000000000000000000000000000000000000000000000000";
+    const PAGE: &str = "3d1f9c56-0000-4000-8000-000000000001";
+
+    fn candidate(operations: Value) -> Value {
+        json!({
+            "jobId": JOB,
+            "requirementsSha256": SHA,
+            "summary": "Built the page",
+            "requests": [{
+                "requestId": null,
+                "elementId": null,
+                "status": "implemented",
+                "explanation": "Built the page",
+                "operations": operations
+            }],
+            "images": [],
+            "pointerClassifications": [],
+            "decisionProposals": [],
+            "criticism": []
+        })
+    }
+
+    fn conformed(mut value: Value) -> Value {
+        conform_to_candidate_schema(&mut value);
+        value
+    }
+
+    fn element() -> Value {
+        json!({
+            "kind": "text",
+            "rect": {"x": 0.0, "y": 0.0, "width": 400.0, "height": 40.0},
+            "text": "Hero"
+        })
+    }
+
+    #[test]
+    fn unknown_keys_are_dropped_at_depth() {
+        let mut operation = json!({
+            "kind": "insert",
+            "parentId": PAGE,
+            "index": null,
+            "element": element()
+        });
+        operation["element"]["style"] = json!({"opacity": 1.0, "borderWidth": 2});
+        operation["position"] = json!(3);
+        let value = conformed(candidate(json!([operation])));
+        let operation = &value["requests"][0]["operations"][0];
+        assert_eq!(operation["kind"], json!("insert"), "{operation}");
+        assert!(operation.get("position").is_none(), "{operation}");
+        assert!(
+            operation["element"]["style"].get("borderWidth").is_none(),
+            "{operation}"
+        );
+        assert_eq!(operation["element"]["style"]["opacity"], json!(1.0));
+        assert_eq!(operation["element"]["text"], json!("Hero"));
+    }
+
+    #[test]
+    fn a_boundary_insert_with_a_stray_index_loses_it() {
+        let value = conformed(candidate(json!([{
+            "kind": "insertInBoundary",
+            "pageId": PAGE,
+            "sizeId": null,
+            "index": 0,
+            "element": element()
+        }])));
+        let operation = &value["requests"][0]["operations"][0];
+        assert!(operation.get("index").is_none(), "{operation}");
+        assert_eq!(operation["element"]["text"], json!("Hero"));
+    }
+
+    #[test]
+    fn a_null_string_becomes_empty_where_the_schema_allows_it() {
+        let mut value = candidate(json!([]));
+        value["summary"] = Value::Null;
+        value["requests"][0]["explanation"] = Value::Null;
+        let value = conformed(value);
+        assert_eq!(value["summary"], json!(""));
+        assert_eq!(value["requests"][0]["explanation"], json!(""));
+    }
+
+    #[test]
+    fn a_null_enum_member_is_left_for_validation() {
+        let mut value = candidate(json!([]));
+        value["requests"][0]["status"] = Value::Null;
+        let value = conformed(value);
+        assert_eq!(value["requests"][0]["status"], Value::Null);
+        let error = serde_json::from_value::<GenerationCandidate>(value)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("invalid type: null"), "{error}");
+    }
+
+    #[test]
+    fn a_conforming_candidate_is_byte_for_byte_unchanged() {
+        let mut drafted = element();
+        drafted["style"] = json!({"opacity": 1.0, "textStyle": {"size": 32.0, "align": "center"}});
+        drafted["children"] = json!([]);
+        let value = candidate(json!([
+            {"kind": "insertInBoundary", "pageId": PAGE, "sizeId": null, "element": drafted},
+            {"kind": "remove", "elementId": PAGE}
+        ]));
+        let before = serde_json::to_string(&value).unwrap();
+        let after = conformed(value);
+        assert_eq!(serde_json::to_string(&after).unwrap(), before);
+    }
+
+    #[test]
+    fn a_type_mismatch_other_than_null_still_fails() {
+        let mut value = candidate(json!([]));
+        value["summary"] = json!(42);
+        let value = conformed(value);
+        assert_eq!(value["summary"], json!(42));
+        let error = serde_json::from_value::<GenerationCandidate>(value)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("invalid type: integer"), "{error}");
+    }
 }

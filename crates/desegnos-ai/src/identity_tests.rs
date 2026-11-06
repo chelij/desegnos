@@ -136,7 +136,7 @@ async fn identity_analysis_has_a_distinct_request_and_correlated_answer_for_both
             json!({"type":"input_image","image_url":logo().data_uri,"detail":"high"})
         );
         if authentication == AuthenticationMethod::ApiKey {
-            assert_eq!(body["max_output_tokens"], MAX_OUTPUT_TOKENS);
+            assert_eq!(body["max_output_tokens"], DEFAULT_MAX_OUTPUT_TOKENS);
             assert_eq!(body["service_tier"], "default");
         } else {
             assert!(body.get("max_output_tokens").is_none());

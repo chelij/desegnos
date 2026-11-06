@@ -4,7 +4,7 @@ import { compileModules } from './typescript.mjs';
 
 const modules = await compileModules(['src/generationProblems.ts']);
 try {
-  const { areaProblems, placeCallouts, areaOutcome, jobOutcome, resolutionAction, staleResult, staleResultMessage } = await modules.load('generationProblems.js');
+  const { areaProblems, placeCallouts, areaOutcome, jobOutcome, resolutionAction, replyCutOff, replyCutOffMessage, staleResult, staleResultMessage } = await modules.load('generationProblems.js');
   const rect = { x: 100, y: 200, width: 200, height: 80 };
   const other = { x: 110, y: 50, width: 200, height: 80 };
   const intersects = (a, b) => a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y;
@@ -94,5 +94,15 @@ try {
     assert.deepEqual(jobOutcome(stale).retryable, ['a']);
     assert.equal(jobOutcome({ jobId: 'failed', status: 'failed', areas: [], candidate: null }).retryAll, true);
     assert.deepEqual(jobOutcome({ jobId: 'working', status: 'generating', areas: [], candidate: null }), { retryable: [], blocked: [], retryAll: false, retryBatches: false });
+  });
+  await test('a reply cut off at the output limit is named, not left unknown', () => {
+    const settings = { model: 'deepseek-flash', maxOutputTokens: 128000, reasoningEffort: 'low', spendingLimitUsd: 2, imageGeneration: false };
+    assert.equal(replyCutOff({ jobId: 'job', status: 'unknown', areas: [], candidate: null, failureKind: 'incomplete', usage: null, settings }), true);
+    assert.equal(replyCutOff({ jobId: 'job', status: 'failed', areas: [], candidate: null, failureKind: 'incomplete', usage: { inputTokens: 1, outputTokens: 128000, totalTokens: 128001 }, settings }), true);
+    assert.equal(replyCutOff({ jobId: 'job', status: 'unknown', areas: [], candidate: null, failureKind: 'incomplete', usage: { inputTokens: 1, outputTokens: 12, totalTokens: 13 }, settings }), false);
+    assert.equal(replyCutOff({ jobId: 'job', status: 'unknown', areas: [], candidate: null, failureKind: 'transport', usage: null, settings }), false);
+    assert.equal(replyCutOff({ jobId: 'job', status: 'generating', areas: [], candidate: null, failureKind: 'incomplete', usage: null, settings }), false);
+    assert.equal(replyCutOff(null), false);
+    assert.match(replyCutOffMessage, /^The AI reached its output limit/);
   });
 } finally { await modules.cleanup(); }
