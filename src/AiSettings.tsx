@@ -22,6 +22,10 @@ function nearestReasoningEffort(offered: string[], current: string): string {
   return offered.reduce((best, level) => distance(level) < distance(best) || (distance(level) === distance(best) && reasoningOrder.indexOf(level) > reasoningOrder.indexOf(best)) ? level : best);
 }
 export type AiSettingsUpdate = (command: string, args?: Record<string, unknown>) => Promise<AiSettingsView>;
+// What the AI settings form is doing right now; it never does two things at once.
+type Activity = 'loading' | 'idle' | 'saving' | 'checking' | 'checkingImages' | 'managingUsage';
+// A single message slot, so a stale notice never outlives the operation that follows it.
+type Feedback = { kind: 'none' } | { kind: 'status'; message: string } | { kind: 'error'; message: string };
 
 export function AiSettings({ current, refresh, update, manageUsage, pollingError }: {
   current: AiSettingsView | null; refresh: (refreshModels?: boolean) => Promise<AiSettingsView>; update: AiSettingsUpdate; manageUsage: () => Promise<void>; pollingError: string;
@@ -35,11 +39,8 @@ export function AiSettings({ current, refresh, update, manageUsage, pollingError
   const [imageStorage, setImageStorage] = useState<'system' | 'session'>('system');
   const [storage, setStorage] = useState<'system' | 'session'>('system');
   const [chatgptStorage, setChatgptStorage] = useState<'system' | 'session'>('system');
-  const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState(false);
-  const [checkingImages, setCheckingImages] = useState(false);
-  const [error, setError] = useState('');
-  const [status, setStatus] = useState('');
+  const [activity, setActivity] = useState<Activity>('loading');
+  const [feedback, setFeedback] = useState<Feedback>({ kind: 'none' });
   const [advanced, setAdvanced] = useState(false);
   const [replacingKey, setReplacingKey] = useState(false);
   // Keep the typed text so a number input never shows stray leading zeros such as "010".
@@ -71,25 +72,25 @@ export function AiSettings({ current, refresh, update, manageUsage, pollingError
   }, []);
   useEffect(() => { if (current && current !== accepted.current) receive(current); }, [current, receive]);
   useEffect(() => { setEndpoint(null); }, [view?.provider]);
-  const load = useCallback(async () => {
-    setLoading(true); setError('');
-    try { receive(await refresh(true)); }
-    catch (error) { setError(message(error)); }
-    finally { setLoading(false); }
-  }, [receive, refresh]);
+  // Every operation announces what it is doing, and reports its own failure.
+  const perform = useCallback(async <T,>(next: Activity, task: () => Promise<T>): Promise<T | undefined> => {
+    setActivity(next); setFeedback({ kind: 'none' });
+    try { return await task(); }
+    catch (error) { setFeedback({ kind: 'error', message: message(error) }); return undefined; }
+    finally { setActivity('idle'); }
+  }, []);
+  const load = useCallback(() => perform('loading', async () => { receive(await refresh(true)); }), [perform, receive, refresh]);
   useEffect(() => { void load(); }, [load]);
   async function action(command: string, args?: Record<string, unknown>) {
-    setBusy(true); setError(''); setStatus('');
+    // These commands re-probe image access, so the image status reads "Checking…" while they run.
     const probesImages = ['set_ai_key', 'select_chatgpt_account', 'set_ai_authentication', 'set_ai_provider'].includes(command);
-    if (probesImages) setCheckingImages(true);
-    try {
-      const value = await update(command, args); receive(value);
-      return value;
-    } catch (error) {
-      try { receive(await refresh()); } catch { /* Preserve the original operation error. */ }
-      setError(message(error)); return null;
-    }
-    finally { setBusy(false); if (probesImages) setCheckingImages(false); }
+    return perform(probesImages ? 'checkingImages' : 'saving', async () => {
+      try { const value = await update(command, args); receive(value); return value; }
+      catch (error) {
+        try { receive(await refresh()); } catch { /* Preserve the original operation error. */ }
+        throw error;
+      }
+    });
   }
   async function saveSettings(event: FormEvent) {
     event.preventDefault(); if (!settings) return;
@@ -97,11 +98,11 @@ export function AiSettings({ current, refresh, update, manageUsage, pollingError
     if (view.authentication === 'apiKey' && key.trim()) {
       const entered = key; setKey('');
       const credential = await action('set_ai_key', { key: entered, storage });
-      if (!credential?.credential.configured) { if (credential) setError(credential.credential.vaultError ?? 'The key could not be connected.'); return; }
+      if (!credential?.credential.configured) { if (credential) setFeedback({ kind: 'error', message: credential.credential.vaultError ?? 'The key could not be connected.' }); return; }
       setReplacingKey(false);
     }
     const value = await action('save_ai_settings', { settings });
-    if (value) { receive(value, true); if (!value.configurationError) setStatus('AI settings saved.'); }
+    if (value) { receive(value, true); if (!value.configurationError) setFeedback({ kind: 'status', message: 'AI settings saved.' }); }
   }
   async function connectServer(event: FormEvent) {
     event.preventDefault(); if (!view) return;
@@ -119,8 +120,8 @@ export function AiSettings({ current, refresh, update, manageUsage, pollingError
     const entered = key; setKey('');
     const value = await action('set_ai_key', { key: entered, storage });
     if (value) {
-      if (!value.credential.configured) setError(value.credential.vaultError ?? 'The key was not configured.');
-      else { setReplacingKey(false); setStatus('Key connected.'); }
+      if (!value.credential.configured) setFeedback({ kind: 'error', message: value.credential.vaultError ?? 'The key was not configured.' });
+      else { setReplacingKey(false); setFeedback({ kind: 'status', message: 'Key connected.' }); }
     }
   }
   async function connectImageKey() {
@@ -132,28 +133,22 @@ export function AiSettings({ current, refresh, update, manageUsage, pollingError
     setKey('');
     const value = await action('remove_ai_key');
     if (value) {
-      if (value.credential.configured && (value.provider !== 'local' || value.settings.localAuthentication)) setError(value.credential.vaultError ?? 'The key could not be removed.');
-      else { setReplacingKey(false); setStatus('Key removed.'); }
+      if (value.credential.configured && (value.provider !== 'local' || value.settings.localAuthentication)) setFeedback({ kind: 'error', message: value.credential.vaultError ?? 'The key could not be removed.' });
+      else { setReplacingKey(false); setFeedback({ kind: 'status', message: 'Key removed.' }); }
     }
   }
   async function testAccess() {
-    setCheckingImages(true);
-    setBusy(true); setError(''); setStatus('');
-    try {
-      const result = await native<{ message: string }>('test_ai_access');
-      receive(await refresh()); setStatus(result.message ? 'Connection checked.' : 'Access checked.');
-    } catch (error) {
-      const original = message(error);
-      try { receive(await refresh()); } catch {}
-      setError(original);
-    }
-    finally { setBusy(false); setCheckingImages(false); }
+    await perform('checking', async () => {
+      try {
+        const result = await native<{ message: string }>('test_ai_access');
+        receive(await refresh()); setFeedback({ kind: 'status', message: result.message ? 'Connection checked.' : 'Access checked.' });
+      } catch (error) {
+        try { receive(await refresh()); } catch {}
+        throw error;
+      }
+    });
   }
-  async function usage() {
-    setBusy(true); setError('');
-    try { await manageUsage(); } catch (error) { setError(message(error)); }
-    finally { setBusy(false); }
-  }
+  function usage() { return perform('managingUsage', manageUsage); }
   // OpenAI offers a key or a ChatGPT plan sign-in; other providers use a key.
   async function chooseProvider(value: string) {
     const next = value === 'openai-chatgpt' ? 'openai' : value;
@@ -163,7 +158,7 @@ export function AiSettings({ current, refresh, update, manageUsage, pollingError
       const changed = accepted.current?.authentication !== wanted;
       if (changed && !await action('set_ai_authentication', { authentication: wanted })) return;
       if (changed || wanted === 'chatgpt') {
-        try { receive(await refresh(true)); } catch (error) { setError(message(error)); }
+        try { receive(await refresh(true)); } catch (error) { setFeedback({ kind: 'error', message: message(error) }); }
       }
     }
   }
@@ -182,6 +177,11 @@ export function AiSettings({ current, refresh, update, manageUsage, pollingError
   const connected = usesChatgpt ? !!account?.connected : view?.credential.configured;
   // A local server that rejected its anonymous key is not a working connection.
   const connectedHealthy = connected && !(usesLocal && view?.modelsAuthRequired);
+  // Only one activity runs at a time; loading has its own placeholder instead of blocking controls.
+  const busy = activity !== 'idle' && activity !== 'loading';
+  const loading = activity === 'loading';
+  // Testing access re-probes images too, so both activities show "Checking…".
+  const checkingImages = activity === 'checking' || activity === 'checkingImages';
   const canRefreshModels = !busy && !pending && !endpointDirty && !!connected && !key.trim() && (usesChatgpt ? !!account?.planEnabled && !account.storageRepairRequired : true);
   const modelsError = usesChatgpt ? view?.chatgpt.modelsError : view?.modelsError;
   const identity = usesChatgpt ? account?.email ?? account?.label ?? 'ChatGPT' : view?.credential.maskedIdentifier ?? `${providerName} API key`;
@@ -189,10 +189,10 @@ export function AiSettings({ current, refresh, update, manageUsage, pollingError
   const imagesUsable = view?.imageAccess?.available === 'yes' && connectedHealthy && !(usesChatgpt && !account?.planEnabled) && !!provider?.capabilities.imageGeneration;
   const imageStatus = view?.imageAccessChecking || checkingImages || pending ? 'Checking…' : !provider?.capabilities.imageGeneration || view?.imageAccess?.available === 'no' ? 'Not available' : !connectedHealthy ? 'Not connected' : view?.imageAccess?.available === 'yes' ? 'Available' : "Couldn't check";
   return <div className="ai-settings dialog-body">
-    {error && <ProblemBanner message={userError(error)} dismiss={() => setError('')} />}
+    {feedback.kind === 'error' && <ProblemBanner message={userError(feedback.message)} dismiss={() => setFeedback({ kind: 'none' })} />}
     {pollingError && <ProblemBanner message={userError(pollingError)} action={{ label: 'Try again', disabled: busy, onClick: () => { void load(); } }} />}
     {loading ? <p role="status">Reading AI settings…</p> : !view || !settings ? <button onClick={() => { void load(); }}>Retry AI settings</button> : <>
-      <label className="ai-provider ai-inline-field">Provider<select disabled={busy || pending || dirty} value={usesChatgpt ? 'openai-chatgpt' : view.provider} onChange={event => { setKey(''); setReplacingKey(false); setStatus(''); void chooseProvider(event.target.value); }}>
+      <label className="ai-provider ai-inline-field">Provider<select disabled={busy || pending || dirty} value={usesChatgpt ? 'openai-chatgpt' : view.provider} onChange={event => { setKey(''); setReplacingKey(false); setFeedback({ kind: 'none' }); void chooseProvider(event.target.value); }}>
         {(view.providers ?? []).flatMap(item => item.id === 'openai' ? [
           ...(item.signInSupported ? [<option key="openai-chatgpt" value="openai-chatgpt">ChatGPT plan</option>] : []),
           <option key="openai" value="openai">API key</option>,
@@ -268,7 +268,7 @@ export function AiSettings({ current, refresh, update, manageUsage, pollingError
         </div>}
         <section className="ai-features" aria-label="Features">
           <div className="ai-feature-row image-generation-access"><div className="ai-feature-copy"><label htmlFor="ai-image-generation">Image generation</label><div className="ai-feature-meta"><StatusChip tone={imageStatus === 'Checking…' ? 'info' : imageStatus === 'Available' || imageStatus === 'Not connected' ? 'neutral' : 'warning'} id="ai-image-status" role="status">{imageStatus}</StatusChip><button type="button" className="ai-refresh icon-button sm" aria-label="Check again" title="Check again" disabled={busy || !canTest || view.imageAccessChecking} onClick={() => { void testAccess(); }}><Icon name="refresh" /></button></div></div>
-            <input id="ai-image-generation" className="ai-switch" type="checkbox" role="switch" aria-describedby="ai-image-status" disabled={busy || pending || checkingImages || view.imageAccessChecking || !imagesUsable} checked={settings.imageGeneration && imagesUsable} onChange={event => setSettings({ ...settings, imageGeneration: event.target.checked })} />
+            <input id="ai-image-generation" className="ai-switch" type="checkbox" role="switch" aria-describedby="ai-image-status" disabled={busy || pending || view.imageAccessChecking || !imagesUsable} checked={settings.imageGeneration && imagesUsable} onChange={event => setSettings({ ...settings, imageGeneration: event.target.checked })} />
           </div>
           {view.provider === 'openai' && <div className="ai-feature-meta">
             
@@ -289,25 +289,30 @@ export function AiSettings({ current, refresh, update, manageUsage, pollingError
         <div className={usesChatgpt ? undefined : 'field-pair'}>{!usesChatgpt && <label>Maximum output tokens<input disabled={busy} type="number" required min={1} max={model?.maxOutputTokens ?? 32768} step={1} value={settings.maxOutputTokens} onChange={event => setSettings({ ...settings, maxOutputTokens: Number(event.target.value) })} /></label>}
           <label>Reasoning effort<select disabled={busy || pending || !model} value={settings.reasoningEffort} onChange={event => setSettings({ ...settings, reasoningEffort: event.target.value })}>{model?.reasoningEfforts.map(level => <option key={level} value={level}>{level === 'none' ? 'Default' : level.charAt(0).toUpperCase() + level.slice(1)}</option>)}</select></label></div>
         </fieldset></Disclosure>
-        <div className="form-actions ai-save-actions">{status && <Notice variant="success" message={status} />}{dirty && <button type="button" disabled={busy || pending} onClick={() => setSettings(view.settings)}>Reset changes</button>}{dirty && <button className="primary" disabled={busy || pending || endpointDirty || (!model && !view.configurationError)}>Save AI settings</button>}</div>
+        <div className="form-actions ai-save-actions">{feedback.kind === 'status' && <Notice variant="success" message={feedback.message} />}{dirty && <button type="button" disabled={busy || pending} onClick={() => setSettings(view.settings)}>Reset changes</button>}{dirty && <button className="primary" disabled={busy || pending || endpointDirty || (!model && !view.configurationError)}>Save AI settings</button>}</div>
       </form>
     </>}
   </div>;
 }
 
 export function ChatgptWelcome({ update, manageUsage, dismissed }: { update: AiSettingsUpdate; manageUsage: () => Promise<void>; dismissed: () => void }) {
-  const [busy, setBusy] = useState(false);
+  const [activity, setActivity] = useState<'idle' | 'acknowledging' | 'managingUsage'>('idle');
   const [error, setError] = useState('');
-  async function acknowledge() {
-    if (busy) return;
-    setBusy(true); setError('');
-    try { await update('acknowledge_chatgpt_welcome'); dismissed(); }
-    catch (error) { setError(message(error)); }
-    finally { setBusy(false); }
+  // One operation at a time; a failure reports here instead of escaping.
+  async function perform<T>(next: 'acknowledging' | 'managingUsage', task: () => Promise<T>): Promise<T | undefined> {
+    setActivity(next); setError('');
+    try { return await task(); }
+    catch (error) { setError(message(error)); return undefined; }
+    finally { setActivity('idle'); }
   }
+  async function acknowledge() {
+    if (activity !== 'idle') return;
+    if (await perform('acknowledging', () => update('acknowledge_chatgpt_welcome'))) dismissed();
+  }
+  const busy = activity !== 'idle';
   return <section aria-label="You're using your ChatGPT plan" className="dialog-body"><strong>You're using your ChatGPT plan</strong>
     <p>Eligible AI requests in Desegnos use your ChatGPT plan or credits balance. Manage usage in your ChatGPT settings.</p>
     {error && <ProblemBanner message={userError(error)} dismiss={() => setError('')} />}
-    <div className="form-actions"><button disabled={busy} onClick={() => { void manageUsage().catch(error => setError(message(error))); }}>Manage usage</button><button className="primary" disabled={busy} onClick={() => { void acknowledge(); }}>Got it</button>
+    <div className="form-actions"><button disabled={busy} onClick={() => { void perform('managingUsage', manageUsage); }}>Manage usage</button><button className="primary" disabled={busy} onClick={() => { void acknowledge(); }}>Got it</button>
     </div></section>;
 }
