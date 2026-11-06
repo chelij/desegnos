@@ -166,12 +166,42 @@ pub(crate) fn event_stream_prefix(bytes: &[u8]) -> Option<bool> {
     Some(false)
 }
 
+/// One streamed output text part.
 #[derive(Default)]
 struct StreamedText {
     item_id: Option<String>,
-    delta: String,
-    delta_seen: bool,
-    done: Option<String>,
+    phase: TextPhase,
+}
+
+/// A text part is either still growing by deltas or already complete with its final text.
+enum TextPhase {
+    /// Still growing; `delta` is the text received so far.
+    Streaming { delta: String },
+    /// The provider sent the part's final text.
+    Done { text: String },
+}
+
+impl Default for TextPhase {
+    fn default() -> Self {
+        Self::Streaming {
+            delta: String::new(),
+        }
+    }
+}
+
+impl StreamedText {
+    /// Whether the provider already sent this part's final text.
+    fn is_done(&self) -> bool {
+        matches!(self.phase, TextPhase::Done { .. })
+    }
+
+    /// The deltas received so far, while the part is still streaming.
+    fn streaming_delta(&self) -> Option<&str> {
+        match &self.phase {
+            TextPhase::Streaming { delta } => Some(delta),
+            TextPhase::Done { .. } => None,
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -184,8 +214,30 @@ enum ItemKind {
 struct StreamedItem {
     id: String,
     kind: ItemKind,
-    done: bool,
-    message: Option<Value>,
+    phase: ItemPhase,
+}
+
+/// An output item is announced first and completed later; only completing carries data.
+enum ItemPhase {
+    /// Announced by `response.output_item.added`.
+    Added,
+    /// Completed by `response.output_item.done`; a message keeps the body that is later
+    /// checked against the terminal output.
+    Done { message: Option<Value> },
+}
+
+impl ItemPhase {
+    fn is_done(&self) -> bool {
+        matches!(self, Self::Done { .. })
+    }
+
+    /// The body a completed message item carried.
+    fn message(&self) -> Option<&Value> {
+        match self {
+            Self::Added => None,
+            Self::Done { message } => message.as_ref(),
+        }
+    }
 }
 
 #[derive(PartialEq, Eq)]
@@ -318,6 +370,11 @@ impl<'a> ResponseStream<'a> {
         outcome: SubmissionOutcome,
     ) -> ProviderError {
         let count = |value: usize| u32::try_from(value).unwrap_or(u32::MAX);
+        let done_items = self
+            .items
+            .values()
+            .filter(|item| item.phase.is_done())
+            .count();
         let mut error = self.reject(reason, outcome);
         error
             .response_format
@@ -328,7 +385,7 @@ impl<'a> ResponseStream<'a> {
             terminal_items: self.terminal_items,
             terminal_text_parts: self.terminal_text_parts,
             streamed_parts: count(self.texts.len()),
-            finalized_items: count(self.items.values().filter(|item| item.done).count()),
+            finalized_items: count(done_items),
             empty_added_items: self.empty_added_items,
             cause,
             output_index: location.0,
@@ -473,7 +530,7 @@ impl<'a> ResponseStream<'a> {
                     outcome,
                 ));
             }
-            if !done || previous.done {
+            if !done || previous.phase.is_done() {
                 return Err(self.correlation_error(
                     ResponseRejection::TextOrder,
                     CorrelationCause::ItemChanged,
@@ -498,7 +555,9 @@ impl<'a> ResponseStream<'a> {
                 outcome,
             ));
         }
-        let message = if done && kind == ItemKind::Message {
+        let phase = if !done {
+            ItemPhase::Added
+        } else if kind == ItemKind::Message {
             let parsed = self.message(item, outcome)?;
             let bytes: usize = parsed
                 .parts
@@ -513,17 +572,18 @@ impl<'a> ResponseStream<'a> {
                 return Err(self.byte_limit_error(MAX_OUTPUT_BYTES, outcome));
             }
             self.finalized_text_bytes = total;
-            Some(item.clone())
+            ItemPhase::Done {
+                message: Some(item.clone()),
+            }
         } else {
-            None
+            ItemPhase::Done { message: None }
         };
         self.items.insert(
             index,
             StreamedItem {
                 id: id.into(),
                 kind,
-                done,
-                message,
+                phase,
             },
         );
         Ok(())
@@ -569,7 +629,7 @@ impl<'a> ResponseStream<'a> {
                     SubmissionOutcome::Unknown,
                 ));
             }
-            if item.done {
+            if item.phase.is_done() {
                 return Err(self.reject(ResponseRejection::TextOrder, SubmissionOutcome::Unknown));
             }
         }
@@ -588,7 +648,7 @@ impl<'a> ResponseStream<'a> {
             ));
         }
         let previous = self.texts.get(&location);
-        if previous.is_some_and(|part| part.done.is_some()) {
+        if previous.is_some_and(StreamedText::is_done) {
             return Err(self.reject(ResponseRejection::TextOrder, SubmissionOutcome::Unknown));
         }
         if let Some(id) = item_id
@@ -608,10 +668,16 @@ impl<'a> ResponseStream<'a> {
                 SubmissionOutcome::Unknown,
             ));
         }
-        if done && previous.is_some_and(|part| part.delta_seen && part.delta != text) {
+        if done
+            && previous
+                .and_then(StreamedText::streaming_delta)
+                .is_some_and(|delta| delta != text)
+        {
             return Err(self.reject(ResponseRejection::TextMismatch, SubmissionOutcome::Unknown));
         }
-        let previous_bytes = previous.map_or(0, |part| part.delta.len());
+        let previous_bytes = previous
+            .and_then(StreamedText::streaming_delta)
+            .map_or(0, str::len);
         let next_bytes = if done {
             text.len()
         } else {
@@ -641,15 +707,18 @@ impl<'a> ResponseStream<'a> {
             part.item_id = Some(id.into());
         }
         if done {
-            part.done = Some(text.into());
-        } else {
-            part.delta.push_str(text);
-            part.delta_seen = true;
-            if part.delta.len() >= self.next_repetition_check {
-                self.next_repetition_check = part.delta.len() + REPETITION_CHECK_BYTES;
-                if ends_in_repetition(part.delta.as_bytes()) {
-                    return Err(self.error(ErrorKind::Repetition, SubmissionOutcome::Unknown));
-                }
+            part.phase = TextPhase::Done { text: text.into() };
+            return Ok(());
+        }
+        let TextPhase::Streaming { delta } = &mut part.phase else {
+            // Unreachable: a completed part rejects new text above.
+            return Err(self.reject(ResponseRejection::TextOrder, SubmissionOutcome::Unknown));
+        };
+        delta.push_str(text);
+        if delta.len() >= self.next_repetition_check {
+            self.next_repetition_check = delta.len() + REPETITION_CHECK_BYTES;
+            if ends_in_repetition(delta.as_bytes()) {
+                return Err(self.error(ErrorKind::Repetition, SubmissionOutcome::Unknown));
             }
         }
         Ok(())
@@ -665,7 +734,7 @@ impl<'a> ResponseStream<'a> {
     pub(crate) fn citations(&self) -> usize {
         self.items
             .values()
-            .filter_map(|item| item.message.as_ref())
+            .filter_map(|item| item.phase.message())
             .filter_map(|message| message.get("content").and_then(Value::as_array))
             .flatten()
             .filter_map(|part| part.get("annotations").and_then(Value::as_array))
@@ -873,7 +942,7 @@ impl<'a> ResponseStream<'a> {
                             outcome,
                         ));
                     }
-                    if let Some(done) = &tracked.message
+                    if let Some(done) = tracked.phase.message()
                         && self.message(done, outcome)? != self.message(item, outcome)?
                     {
                         return Err(self.correlation_error(
@@ -883,14 +952,14 @@ impl<'a> ResponseStream<'a> {
                             outcome,
                         ));
                     }
-                } else if !tracked.done {
+                } else if !tracked.phase.is_done() {
                     return Err(self.correlation_error(
                         ResponseRejection::TextLocation,
                         CorrelationCause::UnfinishedItem,
                         (Some(*index), None),
                         outcome,
                     ));
-                } else if let Some(done) = &tracked.message {
+                } else if let Some(done) = tracked.phase.message() {
                     resolved.push(done);
                 }
             }
@@ -898,9 +967,9 @@ impl<'a> ResponseStream<'a> {
             self.terminal_output,
             TerminalOutput::Absent | TerminalOutput::Null
         ) && !self.items.is_empty()
-            && self.items.values().all(|item| item.done)
+            && self.items.values().all(|item| item.phase.is_done())
         {
-            resolved.extend(self.items.values().filter_map(|item| item.message.as_ref()));
+            resolved.extend(self.items.values().filter_map(|item| item.phase.message()));
         } else {
             return Err(self.correlation_error(
                 ResponseRejection::OutputShape,
@@ -990,9 +1059,12 @@ impl<'a> ResponseStream<'a> {
                     outcome,
                 ));
             };
-            if (streamed.delta_seen && streamed.delta != text)
-                || streamed.done.as_deref().is_some_and(|done| done != text)
-            {
+            // The streamed text is either the deltas received so far or the part's final text.
+            let streamed_text = match &streamed.phase {
+                TextPhase::Streaming { delta } => delta.as_str(),
+                TextPhase::Done { text: done } => done.as_str(),
+            };
+            if streamed_text != text {
                 return Err(self.correlation_error(
                     ResponseRejection::TextMismatch,
                     CorrelationCause::ItemChanged,

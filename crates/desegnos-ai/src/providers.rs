@@ -1095,6 +1095,22 @@ struct Block {
     kind: String,
     closed: bool,
 }
+/// How far a foreign stream got, from open until its terminal marker.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StreamState {
+    /// Frames still arrive and the answer text may still grow.
+    Open,
+    /// The provider reported its stop reason; only the terminal marker may follow.
+    Stopped,
+    /// The terminal marker arrived; nothing may follow.
+    Terminal,
+}
+impl StreamState {
+    /// Whether the provider reported its stop reason, so no more text may arrive.
+    fn stopped(self) -> bool {
+        !matches!(self, Self::Open)
+    }
+}
 struct ForeignStream {
     provider: ProviderId,
     response_id: Option<String>,
@@ -1103,8 +1119,7 @@ struct ForeignStream {
     anthropic_tokens: [u64; 4],
     blocks: BTreeMap<u64, Block>,
     result: Option<u64>,
-    stopped: bool,
-    terminal: bool,
+    state: StreamState,
     searches: usize,
     citations: usize,
 }
@@ -1118,8 +1133,7 @@ impl ForeignStream {
             anthropic_tokens: [0; 4],
             blocks: BTreeMap::new(),
             result: None,
-            stopped: false,
-            terminal: false,
+            state: StreamState::Open,
             searches: 0,
             citations: 0,
         }
@@ -1143,17 +1157,17 @@ impl ForeignStream {
             ProviderId::Openrouter | ProviderId::Deepseek | ProviderId::Local
         ) && data.trim() == "[DONE]"
         {
-            if self.terminal || !self.stopped {
+            if self.state != StreamState::Stopped {
                 return Err(self.error(ErrorKind::Truncated));
             }
-            self.terminal = true;
+            self.state = StreamState::Terminal;
             return Ok(());
         }
         let v: Value = serde_json::from_str(data).map_err(|_| self.error(ErrorKind::Malformed))?;
         if v.get("error").is_some() || v["type"] == "error" {
             return Err(self.error(ErrorKind::Transport));
         }
-        if self.terminal {
+        if self.state == StreamState::Terminal {
             return Err(self.error(ErrorKind::Malformed));
         }
         if self.provider == ProviderId::Google {
@@ -1187,7 +1201,7 @@ impl ForeignStream {
                 if self.response_id.is_none()
                     || self.blocks.len() >= 4096
                     || self.blocks.contains_key(&i)
-                    || self.stopped
+                    || self.state.stopped()
                 {
                     return Err(self.error(ErrorKind::Malformed));
                 }
@@ -1262,7 +1276,7 @@ impl ForeignStream {
                 self.blocks.get_mut(&i).unwrap().closed = true;
             }
             Some("message_delta") => {
-                if self.stopped
+                if self.state.stopped()
                     || self.blocks.values().any(|b| !b.closed)
                     || self.result.is_none()
                     || v["delta"]["stop_reason"] != "tool_use"
@@ -1270,13 +1284,13 @@ impl ForeignStream {
                     return Err(self.error(ErrorKind::Incomplete));
                 }
                 self.usage = Some(anthropic_usage(&v["usage"], &mut self.anthropic_tokens)?);
-                self.stopped = true;
+                self.state = StreamState::Stopped;
             }
             Some("message_stop") => {
-                if !self.stopped {
+                if self.state != StreamState::Stopped {
                     return Err(self.error(ErrorKind::Truncated));
                 }
-                self.terminal = true;
+                self.state = StreamState::Terminal;
             }
             _ => return Err(self.error(ErrorKind::Malformed)),
         }
@@ -1333,7 +1347,7 @@ impl ForeignStream {
                         continue;
                     }
                     if let Some(t) = p["text"].as_str() {
-                        if self.stopped {
+                        if self.state.stopped() {
                             return Err(self.error(ErrorKind::Malformed));
                         }
                         self.append(t)?;
@@ -1356,10 +1370,10 @@ impl ForeignStream {
                     .max(g["groundingChunks"].as_array().map_or(0, Vec::len));
             }
             if let Some(reason) = c["finishReason"].as_str() {
-                if self.stopped || reason != "STOP" {
+                if self.state.stopped() || reason != "STOP" {
                     return Err(self.error(ErrorKind::Incomplete));
                 }
-                self.stopped = true;
+                self.state = StreamState::Stopped;
             }
         } else if v.get("usageMetadata").is_none() {
             return Err(self.error(ErrorKind::Malformed));
@@ -1409,7 +1423,7 @@ impl ForeignStream {
                 Err(self.error(ErrorKind::Malformed))
             };
         }
-        if choices.len() != 1 || choices[0]["index"] != 0 || self.stopped {
+        if choices.len() != 1 || choices[0]["index"] != 0 || self.state.stopped() {
             return Err(self.error(ErrorKind::Malformed));
         }
         let delta = &choices[0]["delta"];
@@ -1435,13 +1449,20 @@ impl ForeignStream {
                     ErrorKind::Incomplete
                 }));
             }
-            self.stopped = true;
+            self.state = StreamState::Stopped;
         }
         Ok(())
     }
 
     fn finish(self) -> Result<ProviderResponse> {
-        if !self.stopped || (self.provider != ProviderId::Google && !self.terminal) {
+        // Google ends its stream with the finish reason; every other provider also sends a
+        // separate terminal marker.
+        let complete = if self.provider == ProviderId::Google {
+            self.state.stopped()
+        } else {
+            self.state == StreamState::Terminal
+        };
+        if !complete {
             return Err(self.error(ErrorKind::Truncated));
         }
         if self.response_id.is_none() {
@@ -2427,7 +2448,7 @@ mod validation_repair_tests {
         let mut stream = ForeignStream::new(ProviderId::Google);
         stream.response_id = Some("repair-fixture".into());
         stream.text = "{unfinished JSON".into();
-        stream.stopped = true;
+        stream.state = StreamState::Stopped;
         let error = stream.finish().unwrap_err();
         assert_eq!(error.outcome, SubmissionOutcome::Received);
         assert_eq!(
