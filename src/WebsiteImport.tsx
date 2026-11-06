@@ -5,7 +5,17 @@ import { EXTRACTOR_SCRIPT } from './websiteImportExtract';
 import type { WebCapture, WebsiteImportPageView, WebsiteImportResultView, WebsiteImportSourceView } from './types';
 import './shell.css';
 
-type Phase = 'idle' | 'reading' | 'rendering' | 'applying';
+type Progress = { done: number; total: number; label: string };
+
+/** The one page being rendered: the frame showing it and the promise waiting for it. */
+type Capture = { id: string; src: string; timer: number; resolve: (capture: WebCapture) => void; reject: (reason: Error) => void };
+
+type Phase =
+  | { kind: 'idle' }
+  | { kind: 'reading'; progress: Progress }
+  | { kind: 'rendering'; progress: Progress; capture: Capture | null }
+  | { kind: 'applying'; progress: Progress }
+  | { kind: 'imported' };
 
 function messageOf(error: unknown) {
   return error instanceof Error ? error.message : String(error);
@@ -13,37 +23,33 @@ function messageOf(error: unknown) {
 
 /** Read a website, render its pages locally, and turn the captures into canvas boundaries. */
 export function useWebsiteImport(busy: boolean, onImported: (result: WebsiteImportResultView) => void) {
-  const [imported, setImported] = useState(false);
   const serial = useRef(0);
   const [source, setSource] = useState<WebsiteImportSourceView | null>(null);
-  const [phase, setPhase] = useState<Phase>('idle');
-  const [progress, setProgress] = useState({ done: 0, total: 0, label: '' });
+  const [phase, setPhase] = useState<Phase>({ kind: 'idle' });
   const [error, setError] = useState('');
   const [warnings, setWarnings] = useState<string[]>([]);
-  const [frame, setFrame] = useState<{ id: string; src: string } | null>(null);
-  const pending = useRef<{ id: string; resolve: (capture: WebCapture) => void; reject: (reason: Error) => void; timer: number } | null>(null);
   const stopped = useRef(false);
-  const phaseRef = useRef<Phase>('idle');
+  const phaseRef = useRef<Phase>(phase);
   phaseRef.current = phase;
-  const working = phase !== 'idle';
+  const working = phase.kind === 'reading' || phase.kind === 'rendering' || phase.kind === 'applying';
   const locked = busy || working;
   const origin = useMemo(() => { try { return source ? new URL(source.baseUrl).origin : ''; } catch { return ''; } }, [source?.baseUrl]);
 
   const finishCapture = useCallback((id: string, errorMessage?: string, capture?: WebCapture) => {
-    const request = pending.current;
-    if (!request || request.id !== id) return;
-    pending.current = null;
-    window.clearTimeout(request.timer);
-    setFrame(null);
-    if (errorMessage || !capture) request.reject(new Error(errorMessage ?? 'That page could not be read.'));
-    else request.resolve(capture);
+    const current = phaseRef.current;
+    if (current.kind !== 'rendering' || current.capture?.id !== id) return;
+    const { timer, resolve, reject } = current.capture;
+    window.clearTimeout(timer);
+    setPhase(state => state.kind === 'rendering' && state.capture?.id === id ? { ...state, capture: null } : state);
+    if (errorMessage || !capture) reject(new Error(errorMessage ?? 'That page could not be read.'));
+    else resolve(capture);
   }, []);
 
   useEffect(() => {
     const receive = (event: MessageEvent) => {
       if (origin && event.origin !== origin) return;
       const data = event.data as { type?: string; id?: string; capture?: WebCapture; message?: string } | null;
-      if (!data || !data.id || !pending.current || data.id !== pending.current.id) return;
+      if (!data || !data.id) return;
       if (data.type === 'desegnos-extract' && data.capture) finishCapture(data.id, undefined, data.capture);
       else if (data.type === 'desegnos-extract-error') finishCapture(data.id, data.message || 'That page could not be read.');
     };
@@ -54,27 +60,27 @@ export function useWebsiteImport(busy: boolean, onImported: (result: WebsiteImpo
   useEffect(() => () => {
     serial.current += 1;
     stopped.current = true;
-    if (pending.current) {
-      window.clearTimeout(pending.current.timer);
-      pending.current.reject(new Error('The import was stopped.'));
-      pending.current = null;
+    const current = phaseRef.current;
+    if (current.kind === 'rendering' && current.capture) {
+      window.clearTimeout(current.capture.timer);
+      current.capture.reject(new Error('The import was stopped.'));
     }
-    if (phaseRef.current !== 'applying') void native('cancel_website_import').catch(() => {});
+    if (current.kind !== 'applying') void native('cancel_website_import').catch(() => {});
   }, []);
 
   async function read(operation: () => Promise<WebsiteImportSourceView | null>) {
     if (locked) return null;
     const request = ++serial.current;
-    setError(''); setWarnings([]); setProgress({ done: 0, total: 0, label: 'Reading source…' }); setPhase('reading');
+    setError(''); setWarnings([]); setPhase({ kind: 'reading', progress: { done: 0, total: 0, label: 'Reading source…' } });
     try {
       const view = await operation();
       if (request !== serial.current) return null;
-      if (view) { setSource(view); setImported(false); setWarnings(view.skipped); }
+      if (view) { setSource(view); setWarnings(view.skipped); }
       return view;
     } catch (reason) {
       if (request === serial.current) setError(messageOf(reason));
     } finally {
-      if (request === serial.current) setPhase('idle');
+      if (request === serial.current) setPhase({ kind: 'idle' });
     }
     return null;
   }
@@ -93,25 +99,27 @@ export function useWebsiteImport(busy: boolean, onImported: (result: WebsiteImpo
     const id = crypto.randomUUID();
     return new Promise<WebCapture>((resolve, reject) => {
       const timer = window.setTimeout(() => finishCapture(id, 'That page took too long to render.'), 32000);
-      pending.current = { id, resolve: capture => resolve({ ...capture, site: source.name, route: page.route,
-        scripts: capture.scripts.map(script => ({ ...script, src: script.src?.startsWith(source.baseUrl) ? script.src.slice(source.baseUrl.length) : script.src })) }), reject, timer };
-      setFrame({ id, src: `${source.extractorUrl}?id=${encodeURIComponent(id)}&url=${encodeURIComponent(page.url)}&width=${width}` });
+      const src = `${source.extractorUrl}?id=${encodeURIComponent(id)}&url=${encodeURIComponent(page.url)}&width=${width}`;
+      const resolveCapture = (capture: WebCapture) => resolve({ ...capture, site: source.name, route: page.route,
+        scripts: capture.scripts.map(script => ({ ...script, src: script.src?.startsWith(source.baseUrl) ? script.src.slice(source.baseUrl.length) : script.src })) });
+      setPhase(current => current.kind === 'rendering' ? { ...current, capture: { id, src, timer, resolve: resolveCapture, reject } } : current);
     });
   }
 
   async function runImport() {
-    if (!source || locked || imported) return null;
+    if (!source || locked || phase.kind === 'imported') return null;
     stopped.current = false;
-    setError(''); setWarnings(source.skipped); setPhase('rendering');
+    setError(''); setWarnings(source.skipped);
     const captures: WebCapture[] = [];
     const notes: string[] = [...source.skipped];
     const pages = source.pages.slice(0, 30);
     const total = pages.length * 2;
-    setProgress({ done: 0, total, label: 'Rendering pages at 1440 px and 390 px…' });
+    const report = (progress: Progress) => setPhase(current => current.kind === 'rendering' ? { ...current, progress } : current);
+    setPhase({ kind: 'rendering', progress: { done: 0, total, label: 'Rendering pages at 1440 px and 390 px…' }, capture: null });
     try {
       for (const [index, page] of pages.entries()) {
         if (stopped.current) throw new Error('The import was stopped.');
-        setProgress({ done: index * 2, total, label: `Rendering ${page.title || page.route}…` });
+        report({ done: index * 2, total, label: `Rendering ${page.title || page.route}…` });
         try {
           captures.push(await capturePage(page, 1440));
         } catch (reason) {
@@ -122,7 +130,7 @@ export function useWebsiteImport(busy: boolean, onImported: (result: WebsiteImpo
           continue;
         }
         if (stopped.current) throw new Error('The import was stopped.');
-        setProgress({ done: index * 2 + 1, total, label: `Rendering ${page.title || page.route} on a phone…` });
+        report({ done: index * 2 + 1, total, label: `Rendering ${page.title || page.route} on a phone…` });
         try {
           captures.push(await capturePage(page, 390));
         } catch (reason) {
@@ -135,41 +143,43 @@ export function useWebsiteImport(busy: boolean, onImported: (result: WebsiteImpo
       }
       if (stopped.current) throw new Error('The import was stopped.');
       if (!captures.length) throw new Error('No page could be rendered.');
-      setPhase('applying');
-      setProgress({ done: total, total, label: 'Adding pages to the canvas…' });
+      setPhase({ kind: 'applying', progress: { done: total, total, label: 'Adding pages to the canvas…' } });
       const result = await native<WebsiteImportResultView>('import_website_pages', { captures });
       setWarnings(items => [...items, ...result.warnings]);
       onImported({ ...result, warnings: [...notes, ...result.warnings] });
-      setImported(true);
-      setPhase('idle');
+      setPhase({ kind: 'imported' });
       // What this import left out beyond the files the read already listed.
       return [...notes.slice(source.skipped.length), ...result.warnings];
     } catch (reason) {
       if (!stopped.current) setError(messageOf(reason));
-      setPhase('idle');
+      setPhase({ kind: 'idle' });
       return null;
     }
   }
 
   async function cancel() {
-    if (phaseRef.current === 'applying') return;
+    const current = phaseRef.current;
+    if (current.kind === 'applying') return;
     serial.current += 1;
     stopped.current = true;
-    if (pending.current) finishCapture(pending.current.id, 'The import was stopped.');
+    if (current.kind === 'rendering' && current.capture) finishCapture(current.capture.id, 'The import was stopped.');
     await native('cancel_website_import').catch(() => {});
-    setSource(null); setPhase('idle');
+    setSource(null); setPhase({ kind: 'idle' });
   }
 
-  return { source, imported, working, phase, progress, error, warnings, frame,
+  return { source, working, phase, error, warnings,
     readUrl, pick, runImport, cancel, dismissWarning: (index: number) => setWarnings(items => items.filter((_, position) => position !== index)) };
 }
 
 export function WebsiteImportStatus({ flow, busy }: { flow: ReturnType<typeof useWebsiteImport>; busy: boolean }) {
+  const phase = flow.phase;
+  const progress = phase.kind === 'reading' || phase.kind === 'rendering' || phase.kind === 'applying' ? phase.progress : null;
+  const capture = phase.kind === 'rendering' ? phase.capture : null;
   return <>
-    {flow.frame && <iframe key={flow.frame.id} className="website-import-frame" title="Rendering imported page" src={flow.frame.src}
+    {capture && <iframe key={capture.id} className="website-import-frame" title="Rendering imported page" src={capture.src}
       sandbox="allow-scripts allow-same-origin" tabIndex={-1} aria-hidden="true" />}
-    {flow.working && <div className="identity-progress" role="status"><span>{flow.progress.label || 'Reading source…'}{flow.progress.total > 0 ? ` ${Math.min(flow.progress.done, flow.progress.total)} of ${flow.progress.total}` : ''}</span>
-      {flow.phase !== 'applying' && <button type="button" disabled={busy} onClick={() => { void flow.cancel(); }}>Stop</button>}
+    {progress && <div className="identity-progress" role="status"><span>{progress.label || 'Reading source…'}{progress.total > 0 ? ` ${Math.min(progress.done, progress.total)} of ${progress.total}` : ''}</span>
+      {phase.kind !== 'applying' && <button type="button" disabled={busy} onClick={() => { void flow.cancel(); }}>Stop</button>}
     </div>}
     {flow.error && <p className="field-help field-error" role="alert">{flow.error}</p>}
     {flow.warnings.map((warning, index) => <Notice key={`${index}:${warning}`} variant="warning" message={warning} dismiss={() => flow.dismissWarning(index)} />)}
