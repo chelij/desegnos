@@ -21,8 +21,9 @@ export function GenerationFeedback({ controller, action, openSettings, openImpor
   controller: GenerationController; action?: ProblemAction; openSettings?: () => void; openImport?: () => void; openBrief?: () => void;
   changeRequest?: (elementId: string) => void; project?: Project;
 }) {
-  const { job: currentJob, operation, elapsedSeconds, error } = controller;
-  const job = operation === 'Preparing AI instructions…' ? null : currentJob;
+  const { job: currentJob, phase, operation, elapsedSeconds, error } = controller;
+  // While fresh instructions are still being prepared, the loaded job is not what the notice is about.
+  const job = phase.name === 'preparing' && phase.step === 'reading' ? null : currentJob;
   if (!job && !operation && !error && !controller.stopped) return null;
   const minutes = elapsedSeconds ?? 0;
   const review = jobOutcome(job, id => project && projectElement(project, id) ? requestText(project, id) : undefined);
@@ -37,7 +38,7 @@ export function GenerationFeedback({ controller, action, openSettings, openImpor
   const headings = { prepared: 'Getting ready…', generating: minutes >= 60 ? 'Still building your layers…' : 'Building your layers…',
     ready: 'Updating your layers…', blocked: staleResult(job) ? 'Design changed — not applied' : needsInput ? 'Needs your input' : 'Needs attention', failed: cutOff ? 'Reply cut off' : 'Couldn’t build the layers', unknown: cutOff ? 'Reply cut off' : 'Not sure the layers were built',
     cancelled: 'Stopped', discarded: 'Result discarded', applying: 'Updating your layers…', applied: 'Layers updated' };
-  const heading = operation === 'Stopping…' ? 'Stopping…' : controller.stopped ? 'Stopped' : operation ? 'Getting ready…' : job ? headings[job.status] : 'Couldn’t start';
+  const heading = phase.name === 'stopping' ? 'Stopping…' : controller.stopped ? 'Stopped' : operation ? 'Getting ready…' : job ? headings[job.status] : 'Couldn’t start';
   const fix = blocked?.fix ? () => {
     const open = blocked.fix === 'aiSettings' ? openSettings : blocked.fix === 'import' ? openImport : openBrief;
     open?.();
