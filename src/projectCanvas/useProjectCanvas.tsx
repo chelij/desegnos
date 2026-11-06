@@ -1,10 +1,10 @@
 import { selectionEntries as resolveSelectionEntries } from './selectionGeometry';
 import { createRequestTool } from './requestTool';
 import { createPointerTool } from './pointerTool';
-import { createDrawingActions, type PendingText } from './drawing';
+import { createDrawingActions, type TextEditing, type TextEditingEvent } from './drawing';
 import { createMovingActions } from './moving';
 import { createPasteDrop } from './pasteDrop';
-import { createKeyboardActions } from './keyboardActions';
+import { createKeyboardActions, type Painter, type PainterEvent } from './keyboardActions';
 import { createCanvasInteraction } from './interaction';
 import {
   ElementEntry, ClipboardEntry, PasteChoice, LinkDecision, Drag, NIL_UUID, DragInput, ProjectCanvasHandle,
@@ -70,7 +70,7 @@ export function useProjectCanvas({
   const {
     chooseImage, insertionPoint, elementRectAt, placeElement, drawElementDrag, persistDraw,
   } = createDrawingActions(() => ({
-    setPendingImage, project, boundaryRect, createdElement, editingAllSizes, insertElements, selectElement, pendingText,
+    setPendingImage, project, boundaryRect, createdElement, editingAllSizes, insertElements, selectElement, transitionText,
     boundaryUnder, boundaryNear: boundaryNearPress, beginPointerSession, drag, busy, boundaryKind, createBoundary, onTool,
     selectBoundary,
   }));
@@ -98,9 +98,9 @@ export function useProjectCanvas({
     canRunCanvasAction, runCanvasAction,
     keyDown,
   } = createKeyboardActions(() => ({
-    editProject, createBoundary, drag, cancelDrag, painterArmed, setPainterArmed, latest, onPlayExit, requestDraft, polygonDraft, draftArea,
+    editProject, createBoundary, drag, cancelDrag, painterArmed, transitionPainter, latest, onPlayExit, requestDraft, polygonDraft, draftArea,
     cancelRequestDraft, editing, finishEditingText, selection, selectBoundary, focused, project, selectTargets,
-    pageFor, elementEntries, moveElements, copiedStyle, updateElements, surface, boundaryRect, removeSelection,
+    pageFor, elementEntries, moveElements, painter, updateElements, surface, boundaryRect, removeSelection,
     elementScreenRect, setLinkChoice, linkElements, unlinkElements, groupElements, ungroupElements,
     rememberRepeatMove, clipboard, pasteTarget, deleteBoundary, focusedSize, startRequestOnSelection, onTool,
     startRequestFromShape, copyElements, pasteElements, duplicateElements, setMinimapPreference,
@@ -109,14 +109,14 @@ export function useProjectCanvas({
   const {
     pointerDown, beginPointerSession, endPointerSession, cancelDrag, pointerMove, pointerUp, doubleClick,
   } = createCanvasInteraction(() => ({
-    busy, startPan, pasteChoice, linkChoice, setPasteChoice, setLinkChoice, worldPoint, lastPointer, zoom,
-    space, drag, painterArmed, project, selection, applyPainterStyle, surface, setPainterArmed, selectRequest,
+    busy, startPan, pasteChoice, linkChoice, setPasteChoice, setLinkChoice, worldPoint, lastPointer, held,
+    drag, painterArmed, project, selection, applyPainterStyle, surface, transitionPainter, selectRequest,
     latest, tool, requestShape, requestTargetAt, requestDraft, setRequestDraft, requestEditorScreen,
     setPolygonDraft, polygonDraft, camera, closeRequestArea, boundaryUnder, boundaryNear: boundaryNearPress, pointerSourceAt, pageFor,
     startEditingElement, editingSizeId, drawElementDrag, insertKind, pendingImage, imagePicker, selectElement,
     selectBoundary, elementEntries, nextSelectionFor, selectReference, beginMove, boundaries, movingItems,
     dragSession, dragHandlers, setPanning, touched, setCamera, renderDrag, worldToScreen, persistMove,
-    persistDraw, addReference, createdItem, boundaryRect, placeElement, createdElement, setEditing,
+    persistDraw, addReference, createdItem, boundaryRect, placeElement, createdElement, transitionText,
     setPendingImage, onTool, duplicateElementMove, commitElementMove, updateElements, moveElements,
     marqueeTargets, selectTargets, endpointAt, addPointer, createdPointer, setArmedPointer, selectPointer,
     updatePointer, commitMove, updateReference, focusBehaviour,
@@ -130,6 +130,7 @@ export function useProjectCanvas({
     set current(value: Drag | null) { dragValue.current = value; renderDrag(version => version + 1); },
   }), []);
   const busy = useRef(false);
+  // Independent autofocus markers: closing one editor does not clear the others.
   const createdItem = useRef<string | null>(null);
   const createdPointer = useRef<string | null>(null);
   const createdElement = useRef<string | null>(null);
@@ -143,9 +144,16 @@ export function useProjectCanvas({
   const clipboardMark = useRef<string | null>(null);
   const pasteCount = useRef(0);
   const pasteMode = usePasteDefault();
-  // Format painter: the last copied style, and whether the next click applies it.
-  const copiedStyle = useRef<Element['style'] | null>(null);
-  const [painterArmed, setPainterArmed] = useState(false);
+  // A copied style survives disarming, but an armed painter always has a style.
+  const painter = useRef<Painter>({ kind: 'empty' });
+  const painterArmed = painter.current.kind === 'armed';
+  function transitionPainter(event: PainterEvent) {
+    const current = painter.current;
+    if (event.kind === 'copy') painter.current = { kind: current.kind === 'armed' ? 'armed' : 'ready', style: event.style };
+    else if (current.kind !== 'empty') painter.current = { kind: event.kind === 'arm' ? 'armed' : 'ready', style: current.style };
+    else return;
+    if ((current.kind === 'armed') !== (painter.current.kind === 'armed')) renderDrag(version => version + 1);
+  }
   // Smart duplicate: what the last duplicate was, so Ctrl/Cmd+D can repeat its offset.
   const duplicateRepeat = useRef<DuplicateRepeat | null>(null);
   const duplicateBurst = useRef<{ key: string; at: number; count: number; offset: Point } | null>(null);
@@ -174,7 +182,7 @@ export function useProjectCanvas({
     size.width = widthPreview.width;
     return { project: previewProject, boundaries: boundaries.map(boundary => boundary.sizeId === size.id ? { ...boundary, rect: { ...boundary.rect, width: size.width } } : boundary) };
   }, [project, boundaries, widthPreview]);
-  const { camera, setCamera, panning, setPanning, spaceHeld, space, zoomHeld, zoom, touched, fit, zoomStep, zoomTo, worldPoint, currentCamera, animateTo, stopTransition } = useCanvasCamera(surface, boundaries, project.id);
+  const { camera, setCamera, panning, setPanning, spaceHeld, held, zoomHeld, touched, fit, zoomStep, zoomTo, worldPoint, currentCamera, animateTo, stopTransition } = useCanvasCamera(surface, boundaries, project.id);
   // The minimap hides itself while the whole canvas fits; the shortcut can force it on or off.
   const [minimapPreference, setMinimapPreference] = useState<'auto' | 'on' | 'off'>('auto');
 
@@ -208,9 +216,35 @@ export function useProjectCanvas({
   const dragSession = useRef<{ move: (event: PointerEvent) => void; end: (event: PointerEvent) => void } | null>(null);
   const dragHandlers = useRef<{ move: (event: DragInput) => void; end: (event: DragInput) => void } | null>(null);
   const pasteHandler = useRef<(data: DataTransfer | null, target: EventTarget | null) => boolean>(() => false);
-  const pendingText = useRef<PendingText | null>(null);
-  const [editing, setEditing] = useState<{ pageId: string; sizeId: string; elementId: string; autoWidth: boolean; created: boolean } | null>(null);
-  const [editingBounds, setEditingBounds] = useState<{ session: typeof editing; rect: Rect } | null>(null);
+  const textEditing = useRef<TextEditing>({ kind: 'idle' });
+  const textState = textEditing.current;
+  const editing = textState.kind === 'existing' || textState.kind === 'draft' ? textState.session : null;
+  const textDraft = textState.kind === 'pending' || textState.kind === 'draft' ? textState.draft : null;
+  const textBounds = textState.kind === 'existing' || textState.kind === 'draft' ? textState.bounds : null;
+  function transitionText(event: TextEditingEvent) {
+    const current = textEditing.current;
+    const draft = current.kind === 'pending' || current.kind === 'draft' ? current.draft : null;
+    switch (event.kind) {
+      case 'prepare':
+        textEditing.current = current.kind === 'existing' || current.kind === 'draft'
+          ? { ...current, kind: 'draft', draft: event.draft }
+          : { kind: 'pending', draft: event.draft };
+        return;
+      case 'open':
+        textEditing.current = event.session
+          ? draft ? { kind: 'draft', session: event.session, draft, bounds: null }
+            : { kind: 'existing', session: event.session, bounds: null }
+          : draft ? { kind: 'pending', draft } : { kind: 'idle' };
+        break;
+      case 'measure':
+        if ((current.kind !== 'existing' && current.kind !== 'draft') || current.session !== event.session) return;
+        textEditing.current = { ...current, bounds: event.bounds };
+        break;
+      case 'finish': textEditing.current = { kind: 'idle' }; break;
+      case 'retry': textEditing.current = { kind: 'draft', session: event.session, draft: event.draft, bounds: null }; break;
+    }
+    renderDrag(version => version + 1);
+  }
   const [pendingImage, setPendingImage] = useState<{ uri: string; width: number; height: number; name: string } | null>(null);
   const [viewSize, setViewSize] = useState({ width: 0, height: 0 });
   // The minimap draws boundaries and reference; it stays hidden while all of it fits on screen.
@@ -236,7 +270,7 @@ export function useProjectCanvas({
     if (duplicateRepeat.current && duplicateRepeat.current.key !== selectedElementKey) duplicateRepeat.current = null;
   }, [selectedElementKey]);
   useEffect(() => { if (tool !== 'request') { setRequestDraft(null); if (drag.current?.kind === 'draw-request-area' || drag.current?.kind === 'polygon-request') cancelDrag(); } }, [tool]);
-  useEffect(() => { if (tool !== 'select') setPainterArmed(false); }, [tool]);
+  useEffect(() => { if (tool !== 'select') transitionPainter({ kind: 'disarm' }); }, [tool]);
   useEffect(() => { if (requestShape === 'pick') setPolygonDraft(null); }, [requestShape]);
 
   // Keep the visible world in step with the surface, so far-away pointers can be culled.
@@ -550,7 +584,7 @@ export function useProjectCanvas({
     if (!element) return;
     const over = element.overrides?.[sizeId];
     const rect = over?.rect ?? element.rect;
-    setEditing({ pageId, sizeId, elementId, autoWidth: element.style.sizing?.width === 'fit' || rect.width === 0, created });
+    transitionText({ kind: 'open', session: { pageId, sizeId, elementId, autoWidth: element.style.sizing?.width === 'fit' || rect.width === 0, created } });
     selectElement(pageId, elementId, sizeId);
     surface.current?.focus({ preventScroll: true });
   }
@@ -717,20 +751,20 @@ export function useProjectCanvas({
     selectedElementTargets.forEach((target, index) => selectElement(target.pageId, target.elementId, sizeId, index > 0));
   }
   useEffect(() => onEditScope(setSelectionScope));
-  const editingElement = editing ? pendingText.current?.element ?? findElementIn(pageFor(editing.pageId, editing.sizeId)?.elements ?? [], editing.elementId) : null;
+  const editingElement = editing ? textDraft?.element ?? findElementIn(pageFor(editing.pageId, editing.sizeId)?.elements ?? [], editing.elementId) : null;
   const editingBoundary = editing ? boundaries.find(item => item.sizeId === editing.sizeId) ?? null : null;
   const editingScreen = editing && editingElement
-    ? (editingBounds?.session === editing ? screenRect(editingBounds.rect, camera)
-      : pendingText.current ? screenRect(pendingText.current.worldRect, camera) : elementScreenRect(editing.elementId, editing.sizeId))
+    ? (textBounds ? screenRect(textBounds, camera)
+      : textDraft ? screenRect(textDraft.worldRect, camera) : elementScreenRect(editing.elementId, editing.sizeId))
       ?? (editingBoundary ? textEditorScreen(project, editing.pageId, editingElement, editingBoundary, camera, editing.sizeId) : null)
     : null;
 
   // Both pending Text-tool drafts and double-click edits arrive here. Adjust
   // once on entry, before painting, so typing and later manual zoom stay put.
   useLayoutEffect(() => {
-    if (!editing || !editingElement || !surface.current) { setEditingBounds(null); return; }
+    if (!editing || !editingElement || !surface.current) return;
     const current = currentCamera();
-    const screen = (pendingText.current ? screenRect(pendingText.current.worldRect, current) : elementScreenRect(editing.elementId, editing.sizeId))
+    const screen = (textDraft ? screenRect(textDraft.worldRect, current) : elementScreenRect(editing.elementId, editing.sizeId))
       ?? (editingBoundary ? textEditorScreen(project, editing.pageId, editingElement, editingBoundary, current, editing.sizeId) : null);
     if (!screen) return;
     const font = editingElement.style.textStyle;
@@ -742,7 +776,7 @@ export function useProjectCanvas({
     };
     // Project the measured world bounds on later camera changes: reading the DOM
     // during render would still see the previous camera's transform.
-    setEditingBounds({ session: editing, rect: bounds });
+    transitionText({ kind: 'measure', session: editing, bounds });
     // The dock is beside this surface; the floating selection bar hides while editing.
     const next = textEditingCamera(current, { ...bounds, width: Math.max(bounds.width, font.size),
       height: Math.max(bounds.height, font.size * font.lineHeight) }, font.size, surface.current.getBoundingClientRect());
@@ -765,9 +799,9 @@ export function useProjectCanvas({
     if (!editing) return;
     const current = editing;
     const retainFocus = document.activeElement === surface.current?.querySelector('.element-text-editor');
-    const pending = pendingText.current;
-    setEditing(null);
-    pendingText.current = null;
+    const state = textEditing.current;
+    const pending = state.kind === 'pending' || state.kind === 'draft' ? state.draft : null;
+    transitionText({ kind: 'finish' });
     createdElement.current = null;
     if (!text.trim() && (pending || editingElement?.kind === 'text')) {
       if (!pending) removeElements([{ pageId: current.pageId, elementId: current.elementId }]);
@@ -778,8 +812,7 @@ export function useProjectCanvas({
       try {
         await insertElements(pending.pageId, pending.parentId, pending.index, [{ ...pending.element, text }], undefined, pending.sizeId);
       } catch {
-        pendingText.current = { ...pending, element: { ...pending.element, text } };
-        setEditing(current);
+        transitionText({ kind: 'retry', session: current, draft: { ...pending, element: { ...pending.element, text } } });
         return;
       }
     } else {

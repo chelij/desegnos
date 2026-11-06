@@ -16,14 +16,20 @@ export const screenRect = (rect: Rect, camera: CanvasCamera): ScreenRect => ({
 });
 export const hostname = (url: string) => { try { return new URL(url).hostname; } catch { return url; } };
 
+export type HeldKeys = 'none' | 'space' | 'zoom' | 'space-and-zoom';
+
 // Camera, wheel, Space-pan and Fit: the surface's view of the world, separate from its content.
 export function useCanvasCamera(surface: { current: HTMLDivElement | null }, boundaries: Boundary[], projectId: string) {
   const [camera, setCamera] = useState<CanvasCamera>({ x: 0, y: 0, zoom: 1 });
   const [panning, setPanning] = useState(false);
-  const [spaceHeld, setSpaceHeld] = useState(false);
-  const [zoomHeld, setZoomHeld] = useState(false);
-  const space = useRef(false);
-  const zoom = useRef(false);
+  const [heldKeys, setHeldKeys] = useState<HeldKeys>('none');
+  const held = useRef<HeldKeys>('none');
+  function changeHeldKey(key: 'space' | 'zoom', down: boolean) {
+    const space = key === 'space' ? down : held.current === 'space' || held.current === 'space-and-zoom';
+    const zoom = key === 'zoom' ? down : held.current === 'zoom' || held.current === 'space-and-zoom';
+    held.current = space ? zoom ? 'space-and-zoom' : 'space' : zoom ? 'zoom' : 'none';
+    setHeldKeys(held.current);
+  }
   const touched = useRef(false);
   // The latest camera, for commands that need it without re-rendering the surface.
   const cameraRef = useRef(camera);
@@ -93,19 +99,19 @@ export function useCanvasCamera(surface: { current: HTMLDivElement | null }, bou
       if (isTextField(event.target)) return;
       if (event.code === 'Space' && !event.repeat && !event.shiftKey) {
         event.preventDefault();
-        space.current = true; setSpaceHeld(true);
+        changeHeldKey('space', true);
         return;
       }
       // Z arms the zoom tool: drag a rectangle, or click to zoom in (Alt+click zooms out).
       // Ctrl/Cmd+Z stays Undo, so a command chord never arms it.
       if (event.code !== 'KeyZ' || event.repeat || event.ctrlKey || event.metaKey) return;
-      zoom.current = true; setZoomHeld(true);
+      changeHeldKey('zoom', true);
     };
     const up = (event: KeyboardEvent) => {
-      if (event.code === 'Space') { space.current = false; setSpaceHeld(false); }
-      if (event.code === 'KeyZ') { zoom.current = false; setZoomHeld(false); }
+      if (event.code === 'Space') { changeHeldKey('space', false); }
+      if (event.code === 'KeyZ') { changeHeldKey('zoom', false); }
     };
-    const blur = () => { space.current = false; setSpaceHeld(false); zoom.current = false; setZoomHeld(false); };
+    const blur = () => { held.current = 'none'; setHeldKeys('none'); };
     window.addEventListener('keydown', down);
     window.addEventListener('keyup', up);
     window.addEventListener('blur', blur);
@@ -140,6 +146,7 @@ export function useCanvasCamera(surface: { current: HTMLDivElement | null }, bou
     const box = surface.current!.getBoundingClientRect();
     return { x: (event.clientX - box.left - camera.x) / camera.zoom, y: (event.clientY - box.top - camera.y) / camera.zoom };
   }
-  return { camera, setCamera, panning, setPanning, spaceHeld, space, zoomHeld, zoom, touched, fit, zoomStep, zoomTo, worldPoint,
+  return { camera, setCamera, panning, setPanning, spaceHeld: heldKeys === 'space' || heldKeys === 'space-and-zoom', held,
+    zoomHeld: heldKeys === 'zoom' || heldKeys === 'space-and-zoom', touched, fit, zoomStep, zoomTo, worldPoint,
     currentCamera: () => cameraRef.current, animateTo, stopTransition };
 }
