@@ -35,12 +35,12 @@ try {
     const app = await read('App.tsx');
     assert.match(app, /import \{ projectHasPreviewPages, showsOpener \} from '\.\/visibleActions';/);
     // Import stays in place and shows as pressed, so the bar never shifts under the pointer.
-    assert.match(app, /aria-pressed=\{showImport\} aria-label="Import"/);
+    assert.match(app, /aria-pressed=\{panel\.kind === 'import'\} aria-label="Import"/);
     assert.match(app, /showsOpener\(\{ available: !aiConnected, open: showAiSettings \}\)/);
-    assert.match(app, /showsOpener\(\{ available: !onStartPage && !!project && !!\(generation\.job \|\| generation\.operation\), open: showLog \}\)/);
-    assert.match(app, /showsOpener\(\{ available: true, open: showGridSettings \}\)/);
-    assert.match(app, /showsOpener\(\{ available: true, open: showLog \}\)/, 'Details stands down while the log is open');
-    assert.doesNotMatch(app, /aria-pressed=\{showLog\}/);
+    assert.match(app, /showsOpener\(\{ available: !onStartPage && !!project && !!\(generation\.job \|\| generation\.operation\), open: panel\.kind === 'log' \}\)/);
+    assert.match(app, /showsOpener\(\{ available: true, open: panel\.kind === 'gridSettings' \}\)/);
+    assert.match(app, /showsOpener\(\{ available: true, open: panel\.kind === 'log' \}\)/, 'Details stands down while the log is open');
+    assert.doesNotMatch(app, /aria-pressed=\{panel\.kind === 'log'\}/);
   });
 
   await test('Undo and Redo keep their place and disable when they would change nothing', async () => {

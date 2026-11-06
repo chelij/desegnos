@@ -604,10 +604,10 @@ impl ChatgptManager {
         if !state.sign_in.finish(id, &result) {
             return;
         }
-        if let Err(error) = result {
-            if matches!(error.kind, Kind::Storage | Kind::VaultUnavailable) {
-                state.storage_error = Some(error.message().into());
-            }
+        if let Err(error) = result
+            && matches!(error.kind, Kind::Storage | Kind::VaultUnavailable)
+        {
+            state.storage_error = Some(error.message().into());
         }
     }
 
