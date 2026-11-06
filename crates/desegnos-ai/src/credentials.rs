@@ -4,11 +4,15 @@ use std::sync::{Arc, Mutex};
 use zeroize::Zeroizing;
 
 const ACCOUNT: &str = "api-key";
+pub(crate) const LOCAL_ANONYMOUS_KEY: &str = "desegnos-local-no-auth";
 
 #[derive(Clone)]
 pub struct ApiKey(Arc<Zeroizing<String>>);
 
 impl ApiKey {
+    pub fn local_anonymous() -> Self {
+        Self(Arc::new(Zeroizing::new(LOCAL_ANONYMOUS_KEY.into())))
+    }
     pub fn new(value: String) -> Result<Self> {
         Self::bounded(value, 4096)
     }

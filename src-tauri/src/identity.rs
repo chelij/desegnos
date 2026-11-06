@@ -1064,7 +1064,7 @@ impl IdentityService {
             .clone();
         let (requirements, images) = freeze(&record.source, &record.file_ids, job_id)?;
         let schema = candidate_schema_for(&record.source, &record.file_ids);
-        access
+        let estimate = access
             .client
             .estimate_identity(
                 access.authentication,
@@ -1077,6 +1077,14 @@ impl IdentityService {
                 ErrorKind::ContextLimit | ErrorKind::InputLimit => TOO_MUCH.into(),
                 _ => error(reason),
             })?;
+        if let Some(model) = &access.model {
+            model
+                .validate_input(estimate.input_token_upper_bound)
+                .map_err(error)?;
+        }
+        if let Some(model) = &access.api_model {
+            model.validate_api_input(&access.settings, estimate.input_token_upper_bound).map_err(error)?;
+        }
         record.authentication = Some(access.authentication);
         record.account_id = access.account_id;
         record.submitted = true;

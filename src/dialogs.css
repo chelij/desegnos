@@ -17,6 +17,7 @@
 .ai-key-form > label { flex: 1; min-width: 160px; }
 .ai-model-row { display: flex; align-items: center; gap: var(--space-4); }
 .ai-model-row > label { flex: 1; min-width: 0; }
+.ai-model-actions { display: flex; align-items: center; gap: var(--space-3); }
 .ai-settings .ai-model-row .ai-inline-field { grid-template-columns: 80px minmax(0, 1fr); }
 .ai-settings .ai-usage-link { display: inline-flex; align-items: center; gap: var(--space-2); height: var(--control-sm); border: 0; background: transparent; color: var(--accent-ink); padding: 0 var(--space-2); white-space: nowrap; font-size: var(--text-sm); }
 .ai-settings .ai-usage-link:hover:not(:disabled) { background: transparent; text-decoration: underline; text-underline-offset: 3px; }
@@ -25,9 +26,9 @@
 .ai-features { border-top: 1px solid var(--border-soft); border-bottom: 1px solid var(--border-soft); }
 .ai-feature-row { display: flex; align-items: center; justify-content: space-between; gap: var(--space-6); padding: var(--space-3) 0; min-height: 44px; }
 .ai-feature-row + .ai-feature-row { border-top: 1px solid var(--border-soft); }
-.image-generation-access { align-items: flex-start; }
-.ai-feature-copy { display: grid; gap: var(--space-2); }
-.ai-feature-copy > label { display: flex; align-items: center; min-height: var(--control-sm); }
+.image-generation-access { align-items: center; gap: var(--space-2); }
+.ai-feature-copy { display: flex; align-items: center; gap: var(--space-2); }
+.ai-feature-copy > label { display: flex; align-items: center; min-height: var(--control-sm); white-space: nowrap; }
 .ai-feature-meta { display: flex; align-items: center; gap: var(--space-3); font-size: var(--text-xs); color: var(--muted); }
 .ai-settings .ai-refresh { display: grid; place-items: center; width: var(--control-sm); height: var(--control-sm); min-height: var(--control-sm); padding: 0; border: 0; background: transparent; color: var(--muted); }
 .ai-settings .ai-refresh:hover:not(:disabled) { background: var(--surface-muted); color: var(--text); }

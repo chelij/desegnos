@@ -106,6 +106,20 @@ pub struct OpenAiClient {
 }
 
 impl OpenAiClient {
+    pub async fn list_api_models(
+        &self,
+        key: &ApiKey,
+        cancellation: &CancellationToken,
+    ) -> Result<Vec<crate::ModelInfo>> {
+        crate::model_discovery::list_models(
+            crate::ProviderId::Openai,
+            &self.client,
+            &self.endpoint,
+            key,
+            cancellation,
+        )
+        .await
+    }
     pub fn new() -> Result<Self> {
         Self::build(ENDPOINT.into(), true, DEADLINE)
     }
@@ -564,12 +578,7 @@ impl OpenAiClient {
         let mut models = Vec::new();
         let mut slugs = std::collections::HashSet::new();
         for model in catalogue.models {
-            if model.slug.is_empty()
-                || model.slug.len() > 128
-                || !model
-                    .slug
-                    .bytes()
-                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+            if !crate::settings::valid_model_id(&model.slug)
                 || model.display_name.trim().is_empty()
                 || model.display_name.len() > 256
                 || model.display_name.chars().any(char::is_control)
@@ -582,14 +591,36 @@ impl OpenAiClient {
                 || key.appears_in(&model.slug)
                 || key.appears_in(&model.display_name)
                 || key.appears_in(&model.visibility)
+                || model.context_window == Some(0)
+                || model.max_output_tokens == Some(0)
                 || !slugs.insert(model.slug.clone())
             {
                 return Err(ProviderError::before(ErrorKind::Malformed));
+            }
+            let mut efforts = match model.supported_reasoning_levels {
+                Some(levels) => levels
+                    .into_iter()
+                    .map(|level| level.effort)
+                    .collect::<Vec<_>>(),
+                None => crate::settings::default_reasoning_efforts(),
+            };
+            if efforts.len() > 32
+                || efforts.iter().enumerate().any(|(index, effort)| {
+                    key.appears_in(effort.as_str()) || efforts[..index].contains(effort)
+                })
+            {
+                return Err(ProviderError::before(ErrorKind::Malformed));
+            }
+            if efforts.is_empty() {
+                efforts.push(crate::ReasoningEffort::Other("none".into()));
             }
             if model.visibility == "list" {
                 models.push(ChatgptModel {
                     id: model.slug,
                     name: model.display_name,
+                    reasoning_efforts: efforts,
+                    context_window_tokens: model.context_window,
+                    max_output_tokens: model.max_output_tokens,
                 });
             }
         }
@@ -613,6 +644,17 @@ struct ChatgptCatalogueModel {
     slug: String,
     display_name: String,
     visibility: String,
+    #[serde(default)]
+    supported_reasoning_levels: Option<Vec<ChatgptReasoningLevel>>,
+    #[serde(default)]
+    context_window: Option<u64>,
+    #[serde(default)]
+    max_output_tokens: Option<u32>,
+}
+
+#[derive(Deserialize)]
+struct ChatgptReasoningLevel {
+    effort: crate::ReasoningEffort,
 }
 
 fn authorization(key: &ApiKey) -> Result<HeaderValue> {

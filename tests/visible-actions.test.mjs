@@ -66,7 +66,7 @@ try {
   });
 
   await test('settings and imports offer a save or a pick only while there is something to do', async () => {
-    assert.match(await read('AiSettings.tsx'), /\{dirty && <button className="primary" disabled=\{busy \|\| pending \|\| \(!model && !view\.configurationError\)\}>Save AI settings<\/button>\}/);
+    assert.match(await read('AiSettings.tsx'), /\{dirty && <button className="primary" disabled=\{busy \|\| pending \|\| endpointDirty \|\| \(!model && !view\.configurationError\)\}>Save AI settings<\/button>\}/);
     const importing = await read('ImportContext.tsx');
     assert.match(importing, /\{!automatic && <button type="button" disabled=\{locked \|\| !!candidate\}/);
     assert.match(importing, /\{\(source \|\| pages\.source\) && !connected && <button type="button" onClick=\{openSettings\}>Connect AI<\/button>\}/);

@@ -8,7 +8,7 @@ use desegnos_ai::{
     ApiKey, AuthenticationMethod, CancellationToken, ChatgptView, CredentialInfo,
     CredentialManager, CredentialStorage, ErrorKind, ModelInfo, OpenAiClient, ProviderClient,
     ProviderDescriptor, ProviderError, ProviderId, ProviderResponse, ProviderSettings,
-    SubmissionOutcome, TokenUsage, model_catalogue, provider_catalogue,
+    SubmissionOutcome, TokenUsage, chatgpt_model_catalogue, provider_catalogue,
 };
 use desegnos_core::{GenerationCandidate, GenerationMode, Project, RequirementsSnapshot, digest};
 use desegnos_storage::write_markdown;
@@ -294,6 +294,7 @@ pub struct AiSettingsView {
     settings: ProviderSettings,
     credential: CredentialInfo,
     catalogue: Vec<ModelInfo>,
+    models_error: Option<String>,
     configuration_error: Option<String>,
     authentication: AuthenticationMethod,
     chatgpt: ChatgptView,
@@ -312,6 +313,7 @@ impl AiSettingsView {
 }
 
 pub struct GenerationService {
+    api_models: BTreeMap<(ProviderId, String), desegnos_ai::Result<Vec<ModelInfo>>>,
     image_credentials: Arc<CredentialManager>,
     image_access: BTreeMap<String, desegnos_ai::ImageAccess>,
     image_access_checking: BTreeMap<String, Uuid>,
@@ -327,6 +329,126 @@ pub struct GenerationService {
     jobs: BTreeMap<Uuid, JobRecord>,
     unsaved_jobs: BTreeSet<Uuid>,
     active: BTreeMap<Uuid, (usize, CancellationToken)>,
+}
+
+async fn api_catalogue_for_key(
+    state: &Mutex<GenerationService>,
+    provider: ProviderId,
+    settings: &ProviderSettings,
+    key: &ApiKey,
+    cancellation: &CancellationToken,
+    force: bool,
+) -> desegnos_ai::Result<Vec<ModelInfo>> {
+    let credential_id = catalogue_identity(provider, settings, key)?;
+    let client = {
+        let service = state.lock().map_err(|_| {
+            ProviderError::new(ErrorKind::InvalidSettings, SubmissionOutcome::NotSubmitted)
+        })?;
+        if !force
+            && let Some(Ok(cached)) = service.api_models.get(&(provider, credential_id.clone()))
+        {
+            return Ok(cached.clone());
+        }
+        ProviderClient::with_settings(
+            provider,
+            service.client.clone().map_err(|_| {
+                ProviderError::new(ErrorKind::InvalidSettings, SubmissionOutcome::NotSubmitted)
+            })?,
+            settings,
+        )
+        .map_err(|_| {
+            ProviderError::new(ErrorKind::InvalidSettings, SubmissionOutcome::NotSubmitted)
+        })?
+    };
+    let result = client.list_api_models(key, cancellation).await;
+    if !cancellation.is_cancelled()
+        && let Ok(mut service) = state.lock()
+    {
+        service
+            .api_models
+            .insert((provider, credential_id), result.clone());
+    }
+    result
+}
+
+fn catalogue_identity(
+    provider: ProviderId,
+    settings: &ProviderSettings,
+    key: &ApiKey,
+) -> desegnos_ai::Result<String> {
+    let mut id = key.image_access_cache_key();
+    if provider == ProviderId::Local {
+        id.push_str(&digest(desegnos_ai::local_endpoint(settings)?.as_bytes()));
+    }
+    Ok(id)
+}
+
+fn provider_key(
+    provider: ProviderId,
+    local_authentication: bool,
+    credentials: &CredentialManager,
+) -> desegnos_ai::Result<ApiKey> {
+    if provider == ProviderId::Local && !local_authentication {
+        return Ok(ApiKey::local_anonymous());
+    }
+    credentials.key()
+}
+
+pub(super) async fn api_model_for_key(
+    state: &Mutex<GenerationService>,
+    provider: ProviderId,
+    settings: &ProviderSettings,
+    key: &ApiKey,
+    cancellation: &CancellationToken,
+) -> desegnos_ai::Result<ModelInfo> {
+    let models = api_catalogue_for_key(state, provider, settings, key, cancellation, false).await?;
+    let model = models
+        .into_iter()
+        .find(|model| model.id == settings.model)
+        .ok_or_else(|| {
+            ProviderError::new(ErrorKind::ModelUnavailable, SubmissionOutcome::NotSubmitted)
+        })?;
+    model.validate_api_settings(settings)?;
+    Ok(model)
+}
+
+pub(super) async fn refresh_api_models(state: &Mutex<GenerationService>) -> NativeResult<()> {
+    let (provider, credentials, settings) = {
+        let service = state.lock().map_err(message)?;
+        if service.authentication != AuthenticationMethod::ApiKey {
+            return Ok(());
+        }
+        (
+            service.provider,
+            service.credentials.clone(),
+            service.settings.clone(),
+        )
+    };
+    let local_authentication = settings.local_authentication;
+    let key = tauri::async_runtime::spawn_blocking(move || {
+        provider_key(provider, local_authentication, &credentials)
+    })
+    .await
+    .map_err(message)?;
+    if let Ok(key) = key {
+        // Safe provider failures belong in the returned model status, not an API-key fallback.
+        let _ = api_catalogue_for_key(
+            state,
+            provider,
+            &settings,
+            &key,
+            &CancellationToken::new(),
+            true,
+        )
+        .await;
+    } else {
+        state
+            .lock()
+            .map_err(message)?
+            .api_models
+            .retain(|(id, _), _| *id != provider);
+    }
+    Ok(())
 }
 
 fn private_directory(path: &Path) -> NativeResult<()> {
@@ -587,6 +709,7 @@ impl GenerationService {
             BTreeMap::new()
         };
         let mut service = Self {
+            api_models: BTreeMap::new(),
             image_credentials: Arc::new(CredentialManager::for_images()),
             image_access,
             image_access_checking: BTreeMap::new(),
@@ -632,7 +755,24 @@ impl GenerationService {
         }
     }
     fn adapter(&self, provider: ProviderId) -> NativeResult<ProviderClient> {
-        ProviderClient::new(provider, self.client.clone()?).map_err(message)
+        ProviderClient::with_settings(provider, self.client.clone()?, &self.settings)
+            .map_err(message)
+    }
+    fn set_local_authentication(&mut self, enabled: bool) -> NativeResult<()> {
+        let path = self.settings_path(ProviderId::Local);
+        let mut settings = if self.provider == ProviderId::Local {
+            self.settings.clone()
+        } else if path.exists() {
+            read_json(&path, 65_536)?
+        } else {
+            ProviderId::Local.defaults()
+        };
+        settings.local_authentication = enabled;
+        write_json(&path, &settings)?;
+        if self.provider == ProviderId::Local {
+            self.settings = settings;
+        }
+        Ok(())
     }
     fn credentials_for(&mut self, provider: ProviderId) -> Arc<CredentialManager> {
         if provider == self.provider {
@@ -693,22 +833,29 @@ impl GenerationService {
     }
 
     /// The provider, authentication and frozen settings an export job records.
-    pub(super) fn export_connection(
+    pub(super) fn export_connection(&self) -> (AuthenticationMethod, ProviderId, ProviderSettings) {
+        (self.authentication, self.provider, self.settings.clone())
+    }
+
+    pub(super) fn export_client(
         &self,
-    ) -> (AuthenticationMethod, ProviderId, ProviderSettings) {
-        (
-            self.authentication,
-            self.provider,
-            self.settings.clone(),
+        provider: ProviderId,
+        settings: &ProviderSettings,
+    ) -> NativeResult<ProviderClient> {
+        ProviderClient::with_settings(provider, self.client.clone()?, settings).map_err(message)
+    }
+
+    pub(super) fn export_key(
+        &mut self,
+        provider: ProviderId,
+        settings: &ProviderSettings,
+    ) -> NativeResult<ApiKey> {
+        provider_key(
+            provider,
+            settings.local_authentication,
+            &self.credentials_for(provider),
         )
-    }
-
-    pub(super) fn export_client(&self, provider: ProviderId) -> NativeResult<ProviderClient> {
-        self.adapter(provider)
-    }
-
-    pub(super) fn export_key(&mut self, provider: ProviderId) -> NativeResult<ApiKey> {
-        self.credentials_for(provider).key().map_err(message)
+        .map_err(message)
     }
 
     /// The same complete request check the paid send performs, without credentials or network.
@@ -885,10 +1032,7 @@ impl GenerationService {
 
     /// The derived history index is absent when it was written by another requirements format or
     /// cannot be decoded; the next save replaces it with a current-format index.
-    fn saved_history(
-        &self,
-        project_id: Uuid,
-    ) -> NativeResult<Vec<desegnos_core::EarlierRequest>> {
+    fn saved_history(&self, project_id: Uuid) -> NativeResult<Vec<desegnos_core::EarlierRequest>> {
         let path = self.history_path(project_id);
         if !path.exists() {
             return Ok(Vec::new());
@@ -1968,12 +2112,19 @@ impl GenerationService {
     }
 }
 
-async fn credential_key(state: &AiState<'_>, provider: ProviderId) -> NativeResult<ApiKey> {
+async fn credential_key(
+    state: &AiState<'_>,
+    provider: ProviderId,
+    settings: &ProviderSettings,
+) -> NativeResult<ApiKey> {
     let credentials = state.lock().map_err(message)?.credentials_for(provider);
-    tauri::async_runtime::spawn_blocking(move || credentials.key())
-        .await
-        .map_err(message)?
-        .map_err(message)
+    let local_authentication = settings.local_authentication;
+    tauri::async_runtime::spawn_blocking(move || {
+        provider_key(provider, local_authentication, &credentials)
+    })
+    .await
+    .map_err(message)?
+    .map_err(message)
 }
 
 /// No lock is held across network I/O. The cache key binds results to the captured credential/account.
@@ -2139,9 +2290,43 @@ pub(super) async fn settings_view(
             service.provider,
         )
     };
-    let credential = tauri::async_runtime::spawn_blocking(move || credentials.status())
-        .await
-        .map_err(message)?;
+    let connection_settings = settings.clone();
+    let (credential, credential_id) = tauri::async_runtime::spawn_blocking(move || {
+        let credential =
+            if provider == ProviderId::Local && !connection_settings.local_authentication {
+                CredentialInfo {
+                    configured: true,
+                    storage: desegnos_ai::CredentialLocation::None,
+                    masked_identifier: Some("Local server".into()),
+                    vault_error: None,
+                }
+            } else {
+                credentials.status()
+            };
+        let identity = provider_key(
+            provider,
+            connection_settings.local_authentication,
+            &credentials,
+        )
+        .ok()
+        .and_then(|key| catalogue_identity(provider, &connection_settings, &key).ok());
+        (credential, identity)
+    })
+    .await
+    .map_err(message)?;
+    let (api_catalogue, models_error) = {
+        let service = state.lock().map_err(message)?;
+        match credential_id
+            .as_ref()
+            .and_then(|id| service.api_models.get(&(provider, id.clone())))
+        {
+            Some(cache) => match cache {
+                Ok(models) => (models.clone(), None),
+                Err(error) => (vec![], Some(error.to_string())),
+            },
+            None => (vec![], None),
+        }
+    };
     let chatgpt = chatgpt_state.view().await;
     let catalogue = if authentication == AuthenticationMethod::Chatgpt {
         if chatgpt.accounts.iter().any(|account| {
@@ -2149,24 +2334,12 @@ pub(super) async fn settings_view(
                 && account.connected
                 && account.plan_enabled
         }) {
-            chatgpt
-                .models
-                .iter()
-                .filter_map(|available| {
-                    model_catalogue()
-                        .into_iter()
-                        .find(|verified| verified.id == available.id)
-                        .map(|mut verified| {
-                            verified.name = available.name.clone();
-                            verified
-                        })
-                })
-                .collect()
+            chatgpt_model_catalogue(&chatgpt.models)
         } else {
             vec![]
         }
     } else {
-        provider.catalogue()
+        api_catalogue
     };
     let (
         image_access,
@@ -2232,6 +2405,7 @@ pub(super) async fn settings_view(
         settings,
         credential,
         catalogue,
+        models_error,
         configuration_error,
         authentication,
         chatgpt,
@@ -2243,8 +2417,34 @@ pub async fn get_ai_settings(
     window: WebviewWindow,
     state: AiState<'_>,
     chatgpt: State<'_, ChatgptState>,
+    refresh_models: Option<bool>,
 ) -> NativeResult<AiSettingsView> {
     trusted(&window)?;
+    if refresh_models.unwrap_or(false) {
+        let (authentication, client) = {
+            let service = state.lock().map_err(message)?;
+            (service.authentication, service.client.clone())
+        };
+        let view = chatgpt.view().await;
+        if authentication == AuthenticationMethod::ApiKey {
+            refresh_api_models(&state).await?;
+        }
+        if authentication == AuthenticationMethod::Chatgpt
+            && let Some(account) = view.accounts.iter().find(|account| {
+                Some(account.id) == view.active_account_id
+                    && account.connected
+                    && account.plan_enabled
+                    && !account.storage_repair_required
+            })
+            && let Ok(client) = client
+        {
+            // Discovery errors remain visible in models_error; retain the settings view.
+            let _ = chatgpt
+                .manager()?
+                .discover_models(account.id, &client, &CancellationToken::new())
+                .await;
+        }
+    }
     settings_view(&state, &chatgpt).await
 }
 
@@ -2260,6 +2460,7 @@ pub async fn set_ai_provider(
         .lock()
         .map_err(message)?
         .select_provider(provider, true)?;
+    refresh_api_models(&state).await?;
     settings_view(&state, &chatgpt).await
 }
 
@@ -2269,14 +2470,55 @@ pub async fn save_ai_settings(
     state: AiState<'_>,
     chatgpt: State<'_, ChatgptState>,
     settings: ProviderSettings,
+    connection_only: Option<bool>,
 ) -> NativeResult<AiSettingsView> {
     trusted(&window)?;
+    if connection_only.unwrap_or(false) {
+        {
+            let mut service = state.lock().map_err(message)?;
+            if service.provider != ProviderId::Local {
+                return Err("Choose Local before changing its server address.".into());
+            }
+            service.ensure_switch_allowed()?;
+            let endpoint = desegnos_ai::local_endpoint(&settings).map_err(|_| {
+                "Use a local server address ending in /v1, such as http://127.0.0.1:11434/v1."
+                    .to_owned()
+            })?;
+            let mut next = service.settings.clone();
+            next.endpoint = Some(endpoint);
+            next.local_authentication = settings.local_authentication;
+            write_json(&service.settings_path(ProviderId::Local), &next)?;
+            service.settings = next;
+            service.configuration_error = None;
+        }
+        refresh_api_models(&state).await?;
+        return settings_view(&state, &chatgpt).await;
+    }
+    let account = chatgpt.view().await;
+    let (provider, authentication) = {
+        let service = state.lock().map_err(message)?;
+        (service.provider, service.authentication)
+    };
+    if authentication == AuthenticationMethod::ApiKey {
+        let key = credential_key(&state, provider, &settings).await?;
+        api_model_for_key(&state, provider, &settings, &key, &CancellationToken::new())
+            .await
+            .map_err(message)?;
+    }
     {
         let mut service = state.lock().map_err(message)?;
+        if service.provider != provider || service.authentication != authentication {
+            return Err(
+                "The AI connection changed. Review the current settings and save again.".into(),
+            );
+        }
         service
             .provider
             .validate(&settings, service.authentication)
             .map_err(message)?;
+        if service.authentication == AuthenticationMethod::Chatgpt {
+            account.selected_model(&settings).map_err(message)?;
+        }
         write_json(&service.settings_path(service.provider), &settings)?;
         service.settings = settings;
         service.configuration_error = None;
@@ -2297,18 +2539,27 @@ pub async fn set_ai_key(
     storage: CredentialStorage,
 ) -> NativeResult<AiSettingsView> {
     trusted(&window)?;
-    let credentials = {
+    let (credentials, provider) = {
         let service = state.lock().map_err(message)?;
         if image.unwrap_or(false) {
-            service.image_credentials.clone()
+            (service.image_credentials.clone(), service.provider)
         } else {
-            service.credentials.clone()
+            (service.credentials.clone(), service.provider)
         }
     };
     tauri::async_runtime::spawn_blocking(move || credentials.set_key(key, storage))
         .await
         .map_err(message)?
         .map_err(message)?;
+    if provider == ProviderId::Local && !image.unwrap_or(false) {
+        state
+            .lock()
+            .map_err(message)?
+            .set_local_authentication(true)?;
+    }
+    if !image.unwrap_or(false) {
+        refresh_api_models(&state).await?;
+    }
     refresh_image_access(&state, &chatgpt, true).await?;
     settings_view(&state, &chatgpt).await
 }
@@ -2321,18 +2572,25 @@ pub async fn remove_ai_key(
     image: Option<bool>,
 ) -> NativeResult<AiSettingsView> {
     trusted(&window)?;
-    let credentials = {
+    let (credentials, provider) = {
         let service = state.lock().map_err(message)?;
         if image.unwrap_or(false) {
-            service.image_credentials.clone()
+            (service.image_credentials.clone(), service.provider)
         } else {
-            service.credentials.clone()
+            (service.credentials.clone(), service.provider)
         }
     };
     tauri::async_runtime::spawn_blocking(move || credentials.remove_key())
         .await
         .map_err(message)?
         .map_err(message)?;
+    if provider == ProviderId::Local && !image.unwrap_or(false) {
+        state
+            .lock()
+            .map_err(message)?
+            .set_local_authentication(false)?;
+        refresh_api_models(&state).await?;
+    }
     settings_view(&state, &chatgpt).await
 }
 
@@ -2372,19 +2630,16 @@ pub async fn test_ai_access(
         if view.active_account_id != Some(account_id) {
             return Err("The selected ChatGPT account changed while checking access. Test the currently selected account again.".into());
         }
-        if !view
-            .models
-            .iter()
-            .any(|available| available.id == settings.model)
-        {
-            return Err(view.models_error.unwrap_or_else(|| "The selected model is not available for this ChatGPT account. Choose one of Desegnos's verified models returned by your account.".into()));
-        }
+        view.selected_model(&settings).map_err(message)?;
         return Ok(AccessResult {
             message: "Connected · ChatGPT plan and model access confirmed.".into(),
         });
     }
-    let key = credential_key(&state, provider).await?;
-    ProviderClient::new(provider, client)
+    let key = credential_key(&state, provider, &settings).await?;
+    api_model_for_key(&state, provider, &settings, &key, &CancellationToken::new())
+        .await
+        .map_err(message)?;
+    ProviderClient::with_settings(provider, client, &settings)
         .map_err(message)?
         .test_model_access(&settings, &key, &CancellationToken::new())
         .await
@@ -2570,7 +2825,7 @@ async fn submit(
     retry: bool,
 ) -> NativeResult<GenerationJobView> {
     trusted(&window)?;
-    let (authentication, account_id, provider) = {
+    let (authentication, account_id, provider, frozen_settings) = {
         let workspace = workspace.lock().map_err(message)?;
         let mut service = state.lock().map_err(message)?;
         let record = service.record(workspace.project()?, job_id)?;
@@ -2578,6 +2833,7 @@ async fn submit(
             record.view.authentication,
             record.view.chatgpt_account_id,
             record.view.provider,
+            record.view.settings.clone(),
         )
     };
     let epoch = account_id.map(|id| chatgpt.epoch(id)).transpose()?;
@@ -2585,7 +2841,9 @@ async fn submit(
         let workspace = workspace.lock().map_err(message)?;
         let project = workspace.project()?.clone();
         let mut service = state.lock().map_err(message)?;
-        let client = service.adapter(provider)?;
+        let client =
+            ProviderClient::with_settings(provider, service.client.clone()?, &frozen_settings)
+                .map_err(message)?;
         let (view, cancellation) = service.begin(&project, job_id, retry)?;
         Ok((project, client, view, cancellation))
     };
@@ -2598,13 +2856,16 @@ async fn submit(
     let job_id = view.job_id;
     let request = view.clone();
     tauri::async_runtime::spawn(async move {
-            let ordinal = request.attempts.len();
-            let result = async {
+        let ordinal = request.attempts.len();
+        let result = async {
+            let mut account_model = None;
             // Keep preparation local. All credential refresh/model discovery belongs to
             // the registered, cancellable attempt, before any paid generation submission.
             let credentials = async {
                 if authentication == AuthenticationMethod::Chatgpt {
-                    let account_id = account_id.ok_or("This ChatGPT request has no bound account. Prepare a new request.")?;
+                    let account_id = account_id.ok_or(
+                        "This ChatGPT request has no bound account. Prepare a new request.",
+                    )?;
                     let chatgpt = app.state::<ChatgptState>();
                     let manager = chatgpt.manager()?;
                     let mut available = chatgpt.view().await;
@@ -2612,19 +2873,53 @@ async fn submit(
                         let client = app.state::<Mutex<GenerationService>>().lock().map_err(message)?.client.clone()?;
                         available = manager.discover_models(account_id, &client, &cancellation).await.map_err(message)?;
                     }
-                    if available.active_account_id != Some(account_id)
-                        || !available.models.iter().any(|model| model.id == request.settings.model)
-                    {
-                        return Err("Test ChatGPT access and choose an available verified model before generating.".into());
+                    if available.active_account_id != Some(account_id) {
+                        return Err(
+                            "The selected ChatGPT account changed. Prepare the request again."
+                                .into(),
+                        );
                     }
-                    manager.bearer(account_id, &cancellation).await.map_err(message)
+                    account_model = Some(available.selected_model(&request.settings).cloned());
+                    manager
+                        .bearer(account_id, &cancellation)
+                        .await
+                        .map_err(message)
                 } else {
-                    credential_key(&app.state::<Mutex<GenerationService>>(), provider).await
+                    credential_key(
+                        &app.state::<Mutex<GenerationService>>(),
+                        provider,
+                        &request.settings,
+                    )
+                    .await
                 }
             };
-            let key = cancellation.run_until_cancelled(credentials).await
-                .ok_or_else(|| ProviderError::new(ErrorKind::Cancelled, SubmissionOutcome::NotSubmitted))?
-                .map_err(|_| ProviderError::new(ErrorKind::MissingCredential, SubmissionOutcome::NotSubmitted))?;
+            let key = cancellation
+                .run_until_cancelled(credentials)
+                .await
+                .ok_or_else(|| {
+                    ProviderError::new(ErrorKind::Cancelled, SubmissionOutcome::NotSubmitted)
+                })?
+                .map_err(|_| {
+                    ProviderError::new(
+                        ErrorKind::MissingCredential,
+                        SubmissionOutcome::NotSubmitted,
+                    )
+                })?;
+            let account_model = account_model.transpose()?;
+            let api_model = if authentication == AuthenticationMethod::ApiKey {
+                Some(
+                    api_model_for_key(
+                        &app.state::<Mutex<GenerationService>>(),
+                        provider,
+                        &request.settings,
+                        &key,
+                        &cancellation,
+                    )
+                    .await?,
+                )
+            } else {
+                None
+            };
 
             let (shared_app, request_ref, key_ref, cancel_ref, client_ref) =
                 (&app, &request, &key, &cancellation, &client);
@@ -2633,6 +2928,29 @@ async fn submit(
                 let requirements = requirements.clone();
                 async move {
                     let schema = desegnos_core::result_schema(&requirements);
+                    if let Some(model) = &account_model {
+                        let estimate = client_ref.estimate(
+                            request_ref.authentication,
+                            &requirements,
+                            request_ref.generation_mode,
+                            &schema,
+                            &request_ref.settings,
+                        )?;
+                        model.validate_input(estimate.input_token_upper_bound)?;
+                    }
+                    if let Some(model) = &api_model {
+                        let estimate = client_ref.estimate(
+                            request_ref.authentication,
+                            &requirements,
+                            request_ref.generation_mode,
+                            &schema,
+                            &request_ref.settings,
+                        )?;
+                        model.validate_api_input(
+                            &request_ref.settings,
+                            estimate.input_token_upper_bound,
+                        )?;
+                    }
                     client_ref
                         .generate_for_auth(
                             request_ref.authentication,
@@ -2656,37 +2974,55 @@ async fn submit(
             let mut result = ask(&request.requirements).await;
             // A completed, unambiguous final answer with malformed JSON/schema is a
             // validation failure, not a transport retry. All other provider failures stop here.
-            if let Err(error) = &result && error.outcome == SubmissionOutcome::Received && error.response_format.as_ref().is_some_and(|format|
-                    matches!(format.rejection, Some(desegnos_ai::ResponseRejection::CandidateJson | desegnos_ai::ResponseRejection::CandidateShape))) && let Some(text) = error.response_format.as_ref().and_then(|format| format.diagnostic_reply.as_ref()) {
-                result = Ok(ProviderResponse { text: text.to_string(), response_id: error.response_id.clone().unwrap_or_default(), usage: error.usage });
+            if let Err(error) = &result
+                && error.outcome == SubmissionOutcome::Received
+                && error.response_format.as_ref().is_some_and(|format| {
+                    matches!(
+                        format.rejection,
+                        Some(
+                            desegnos_ai::ResponseRejection::CandidateJson
+                                | desegnos_ai::ResponseRejection::CandidateShape
+                        )
+                    )
+                })
+                && let Some(text) = error
+                    .response_format
+                    .as_ref()
+                    .and_then(|format| format.diagnostic_reply.as_ref())
+            {
+                result = Ok(ProviderResponse {
+                    text: text.to_string(),
+                    response_id: error.response_id.clone().unwrap_or_default(),
+                    usage: error.usage,
+                });
             }
             result
-        }.await;
-            let workspace_state = app.state::<Mutex<Workspace>>();
-            let service_state = app.state::<Mutex<GenerationService>>();
-            if let Ok(mut workspace) = workspace_state.lock()
-                && let Ok(mut service) = service_state.lock()
+        }
+        .await;
+        let workspace_state = app.state::<Mutex<Workspace>>();
+        let service_state = app.state::<Mutex<GenerationService>>();
+        if let Ok(mut workspace) = workspace_state.lock()
+            && let Ok(mut service) = service_state.lock()
+        {
+            let current = workspace.project().ok().cloned();
+            if let Err(error) = service.finish(&original, current.as_ref(), job_id, ordinal, result)
             {
-                let current = workspace.project().ok().cloned();
-                if let Err(error) =
-                    service.finish(&original, current.as_ref(), job_id, ordinal, result)
+                service.handle_finish_error(job_id, ordinal, &error);
+            } else if current
+                .as_ref()
+                .is_some_and(|project| project.id == original.id)
+                && let Some(record) = service.jobs.get(&job_id)
+            {
+                let view = record.view.clone();
+                if let Err(error) = maintain_dossier(&mut workspace, &mut service, view)
+                    && let Some(record) = service.jobs.get_mut(&job_id)
                 {
-                    service.handle_finish_error(job_id, ordinal, &error);
-                } else if current
-                    .as_ref()
-                    .is_some_and(|project| project.id == original.id)
-                    && let Some(record) = service.jobs.get(&job_id)
-                {
-                    let view = record.view.clone();
-                    if let Err(error) = maintain_dossier(&mut workspace, &mut service, view)
-                        && let Some(record) = service.jobs.get_mut(&job_id)
-                    {
-                        record.view.dossier_error = Some(format!(
-                            "The result is preserved, but its project dossier could not be saved: {error}"
-                        ));
-                    }
+                    record.view.dossier_error = Some(format!(
+                        "The result is preserved, but its project dossier could not be saved: {error}"
+                    ));
                 }
             }
+        }
     });
     Ok(view)
 }
@@ -2857,11 +3193,7 @@ pub async fn apply_generation(
         match (client, key) {
             (Some(client), Some(key)) => {
                 client
-                    .generate_requested_images(
-                        &image_requests,
-                        &key,
-                        &CancellationToken::new(),
-                    )
+                    .generate_requested_images(&image_requests, &key, &CancellationToken::new())
                     .await
             }
             _ => BTreeMap::new(),
@@ -2898,6 +3230,8 @@ pub(super) struct IdentityAccess {
     pub settings: ProviderSettings,
     pub client: ProviderClient,
     pub key: ApiKey,
+    pub model: Option<desegnos_ai::ChatgptModel>,
+    pub api_model: Option<ModelInfo>,
 }
 
 impl GenerationService {
@@ -2932,6 +3266,7 @@ pub(super) async fn identity_access(
             service.provider,
         )
     };
+    let mut model = None;
     let (account_id, account_epoch, key) = if authentication == AuthenticationMethod::Chatgpt {
         let mut view = chatgpt.view().await;
         let account = view
@@ -2960,11 +3295,10 @@ pub(super) async fn identity_access(
                 .await
                 .map_err(message)?;
         }
-        if view.active_account_id != Some(account_id)
-            || !view.models.iter().any(|model| model.id == settings.model)
-        {
-            return Err(view.models_error.unwrap_or_else(|| "Choose an available verified ChatGPT model in AI settings before analyzing identity.".into()));
+        if view.active_account_id != Some(account_id) {
+            return Err("The selected ChatGPT account changed. Prepare the analysis again.".into());
         }
+        model = Some(view.selected_model(&settings).map_err(message)?.clone());
         let key = chatgpt
             .manager()?
             .bearer(account_id, cancellation)
@@ -2974,11 +3308,14 @@ pub(super) async fn identity_access(
         chatgpt.with_epoch(account_id, epoch, || Ok(()))?;
         (Some(account_id), Some(epoch), key)
     } else {
-        let key = tauri::async_runtime::spawn_blocking(move || credentials.key())
-            .await
-            .map_err(message)?
-            .map_err(message)?;
-        ProviderClient::new(provider, client.clone())
+        let local_authentication = settings.local_authentication;
+        let key = tauri::async_runtime::spawn_blocking(move || {
+            provider_key(provider, local_authentication, &credentials)
+        })
+        .await
+        .map_err(message)?
+        .map_err(message)?;
+        ProviderClient::with_settings(provider, client.clone(), &settings)
             .map_err(message)?
             .test_model_access(&settings, &key, cancellation)
             .await
@@ -2988,6 +3325,15 @@ pub(super) async fn identity_access(
     if cancellation.is_cancelled() {
         return Err("Identity analysis was cancelled before submission.".into());
     }
+    let api_model = if authentication == AuthenticationMethod::ApiKey {
+        Some(
+            api_model_for_key(state, provider, &settings, &key, cancellation)
+                .await
+                .map_err(message)?,
+        )
+    } else {
+        None
+    };
     let service = state.lock().map_err(message)?;
     if service.authentication != authentication
         || service.provider != provider
@@ -3002,9 +3348,11 @@ pub(super) async fn identity_access(
         authentication,
         account_id,
         account_epoch,
+        client: ProviderClient::with_settings(provider, client, &settings).map_err(message)?,
         settings,
-        client: ProviderClient::new(provider, client).map_err(message)?,
         key,
+        model,
+        api_model,
     })
 }
 
@@ -3026,4 +3374,176 @@ fn validate_identity_account(
         return Err("The selected ChatGPT account, its plan permission, secure storage, or model changed while checking access. Review AI settings and explicitly analyze again.".into());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod api_model_cache_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn local_catalogues_are_bound_to_server_and_key_mode() {
+        let directory =
+            std::env::temp_dir().join(format!("desegnos-local-model-cache-{}", Uuid::new_v4()));
+        let mut service = GenerationService::from_directory(directory.clone()).unwrap();
+        let anonymous = ApiKey::local_anonymous();
+        let settings = ProviderId::Local.defaults();
+        let other_server = ProviderSettings {
+            endpoint: Some("http://127.0.0.1:8080/v1".into()),
+            ..settings.clone()
+        };
+        let authenticated = ApiKey::new("synthetic-local-server-key".into()).unwrap();
+        let identity = catalogue_identity(ProviderId::Local, &settings, &anonymous).unwrap();
+        assert_ne!(
+            identity,
+            catalogue_identity(ProviderId::Local, &other_server, &anonymous).unwrap()
+        );
+        assert_ne!(
+            identity,
+            catalogue_identity(ProviderId::Local, &settings, &authenticated).unwrap()
+        );
+        service
+            .api_models
+            .insert((ProviderId::Local, identity), Ok(Vec::new()));
+        // Anonymous mode must not consult the credential store, even when no key exists.
+        assert!(
+            provider_key(
+                ProviderId::Local,
+                false,
+                &service.credentials_for(ProviderId::Local)
+            )
+            .is_ok()
+        );
+        let state = Mutex::new(service);
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        assert!(
+            api_catalogue_for_key(
+                &state,
+                ProviderId::Local,
+                &settings,
+                &anonymous,
+                &cancel,
+                false
+            )
+            .await
+            .unwrap()
+            .is_empty()
+        );
+        assert_eq!(
+            api_catalogue_for_key(
+                &state,
+                ProviderId::Local,
+                &other_server,
+                &anonymous,
+                &cancel,
+                false
+            )
+            .await
+            .unwrap_err()
+            .kind,
+            ErrorKind::Cancelled
+        );
+        drop(state);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[tokio::test]
+    async fn api_model_cache_isolates_credentials_and_providers_and_survives_cancelled_refresh() {
+        let directory =
+            std::env::temp_dir().join(format!("desegnos-api-model-cache-{}", Uuid::new_v4()));
+        let mut service = GenerationService::from_directory(directory.clone()).unwrap();
+        let first = ApiKey::new("synthetic-first-provider-key".into()).unwrap();
+        let second = ApiKey::new("synthetic-second-provider-key".into()).unwrap();
+        let openai = ProviderId::Openai.catalogue();
+        let anthropic = ProviderId::Anthropic.catalogue();
+        service.api_models.insert(
+            (ProviderId::Openai, first.image_access_cache_key()),
+            Ok(openai.clone()),
+        );
+        service.api_models.insert(
+            (ProviderId::Anthropic, first.image_access_cache_key()),
+            Ok(anthropic.clone()),
+        );
+        service.api_models.insert(
+            (ProviderId::Openai, second.image_access_cache_key()),
+            Err(ProviderError::new(
+                ErrorKind::Authentication,
+                SubmissionOutcome::NotSubmitted,
+            )),
+        );
+        let state = Mutex::new(service);
+        let cancelled = CancellationToken::new();
+        cancelled.cancel();
+        assert_eq!(
+            api_catalogue_for_key(
+                &state,
+                ProviderId::Openai,
+                &ProviderSettings::default(),
+                &first,
+                &cancelled,
+                false
+            )
+            .await
+            .unwrap(),
+            openai
+        );
+        assert_eq!(
+            api_catalogue_for_key(
+                &state,
+                ProviderId::Anthropic,
+                &ProviderSettings::default(),
+                &first,
+                &cancelled,
+                false
+            )
+            .await
+            .unwrap(),
+            anthropic
+        );
+        for (provider, key) in [(ProviderId::Openai, &second), (ProviderId::Google, &first)] {
+            assert_eq!(
+                api_catalogue_for_key(
+                    &state,
+                    provider,
+                    &ProviderSettings::default(),
+                    key,
+                    &cancelled,
+                    false
+                )
+                .await
+                .unwrap_err()
+                .kind,
+                ErrorKind::Cancelled
+            );
+        }
+        assert_eq!(
+            api_catalogue_for_key(
+                &state,
+                ProviderId::Openai,
+                &ProviderSettings::default(),
+                &first,
+                &cancelled,
+                true
+            )
+            .await
+            .unwrap_err()
+            .kind,
+            ErrorKind::Cancelled
+        );
+        assert_eq!(
+            api_catalogue_for_key(
+                &state,
+                ProviderId::Openai,
+                &ProviderSettings::default(),
+                &first,
+                &cancelled,
+                false
+            )
+            .await
+            .unwrap(),
+            openai
+        );
+        drop(state);
+        fs::remove_dir_all(directory).unwrap();
+    }
 }

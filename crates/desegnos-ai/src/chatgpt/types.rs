@@ -148,6 +148,33 @@ pub struct ChatgptView {
 }
 
 impl ChatgptView {
+    pub fn selected_model(
+        &self,
+        settings: &crate::ProviderSettings,
+    ) -> crate::Result<&ChatgptModel> {
+        if !self.accounts.iter().any(|account| {
+            Some(account.id) == self.active_account_id
+                && account.connected
+                && account.plan_enabled
+                && !account.storage_repair_required
+        }) {
+            return Err(
+                crate::ProviderError::before(crate::ErrorKind::MissingCredential)
+                    .with_authentication(crate::AuthenticationMethod::Chatgpt),
+            );
+        }
+        let model = self
+            .models
+            .iter()
+            .find(|model| model.id == settings.model)
+            .ok_or_else(|| {
+                crate::ProviderError::before(crate::ErrorKind::ModelUnavailable)
+                    .with_authentication(crate::AuthenticationMethod::Chatgpt)
+            })?;
+        model.validate_settings(settings)?;
+        Ok(model)
+    }
+
     pub fn unavailable(message: &str) -> Self {
         Self {
             accounts: vec![],

@@ -2148,12 +2148,12 @@ fn settings_catalogue_cost_and_loopback_gate_are_explicit_and_bounded() {
     assert_eq!(info.id, MODEL_ID);
     assert_eq!(info.input_usd_per_million, 2.0);
     assert_eq!(info.output_usd_per_million, 10.0);
-    assert_eq!(info.verified_at, "2026-10-18");
+    assert_eq!(info.verified_at, "2026-10-31");
     assert_eq!(info.long_context_input_usd_per_million, 4.0);
     assert_eq!(info.long_context_output_usd_per_million, 15.0);
     for invalid in [
         ProviderSettings {
-            model: "unverified-model".into(),
+            model: "../invalid-model".into(),
             ..settings.clone()
         },
         ProviderSettings {
@@ -2452,7 +2452,7 @@ async fn chatgpt_preflight_preserves_scope_and_reserves_model_output_capacity() 
         ErrorKind::InputLimit
     );
     let unavailable = ProviderSettings {
-        model: "unverified-model".into(),
+        model: "../invalid-model".into(),
         ..settings
     };
     assert_eq!(
@@ -2535,6 +2535,274 @@ async fn chatgpt_context_reserves_full_verified_model_output_capacity() {
 }
 
 #[tokio::test]
+async fn available_openai_models_remain_selectable_and_reach_the_requested_transport() {
+    let account_models = [
+        ("gpt-6-astra", "Account Astra"),
+        ("gpt-6.1-terra", "Account Terra"),
+        ("gpt-6-luna", "Account Luna"),
+        (MODEL_ID, "Account Sol"),
+        ("unverified-account-model", "Unsupported"),
+    ]
+    .map(|(id, name)| ChatgptModel {
+        id: id.into(),
+        name: name.into(),
+        reasoning_efforts: crate::settings::default_reasoning_efforts(),
+        ..Default::default()
+    });
+    let selectable = chatgpt_model_catalogue(&account_models[..4]);
+    assert_eq!(
+        selectable
+            .iter()
+            .map(|model| model.id.as_str())
+            .collect::<Vec<_>>(),
+        ["gpt-6-astra", "gpt-6.1-terra", "gpt-6-luna", MODEL_ID]
+    );
+    assert_eq!(selectable[0].name, "Account Astra");
+    assert_eq!(chatgpt_model_catalogue(&account_models[2..3]).len(), 1);
+    assert!(chatgpt_model_catalogue(&[]).is_empty());
+    assert_eq!(
+        chatgpt_model_catalogue(&account_models[4..])[0].id,
+        "unverified-account-model"
+    );
+
+    let frozen = snapshot(GenerationMode::Strict);
+    for model in model_catalogue() {
+        let settings = ProviderSettings {
+            model: model.id.clone(),
+            spending_limit_usd: 10.0,
+            ..Default::default()
+        };
+        let saved: ProviderSettings =
+            serde_json::from_slice(&serde_json::to_vec(&settings).unwrap()).unwrap();
+        for auth in [AuthenticationMethod::ApiKey, AuthenticationMethod::Chatgpt] {
+            ProviderId::Openai.validate(&saved, auth).unwrap();
+            let server = Server::start(Reply::sse(stream(&frozen))).await;
+            let response = server
+                .client()
+                .generate_for_auth(
+                    auth,
+                    &frozen,
+                    GenerationMode::Strict,
+                    &schema(),
+                    &saved,
+                    &ApiKey::new(KEY.into()).unwrap(),
+                    &CancellationToken::new(),
+                    |_| {},
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.text, candidate(&frozen));
+            let body: Value = serde_json::from_slice(&server.request().body).unwrap();
+            assert_eq!(body["model"], model.id);
+        }
+        let estimate = estimate_cost(&frozen, GenerationMode::Strict, &schema(), &saved).unwrap();
+        let expected = ((estimate.input_token_upper_bound as f64
+            * model.long_context_input_usd_per_million
+            * 1.25
+            + f64::from(saved.max_output_tokens) * model.long_context_output_usd_per_million)
+            / 1_000_000.0
+            * 100.0)
+            .ceil()
+            / 100.0;
+        assert_eq!(estimate.estimate_usd, expected);
+        let denied = ProviderSettings {
+            spending_limit_usd: expected / 2.0,
+            ..saved
+        };
+        assert_eq!(
+            estimate_cost(&frozen, GenerationMode::Strict, &schema(), &denied)
+                .unwrap_err()
+                .kind,
+            ErrorKind::SpendingLimit
+        );
+    }
+}
+
+#[tokio::test]
+async fn newly_discovered_chatgpt_models_need_no_local_catalogue_entry() {
+    let future_id = format!("future-{}", Uuid::new_v4());
+    let plain_id = format!("plain-{}", Uuid::new_v4());
+    let discovery = Server::start(Reply::json(200, json!({"models":[
+        {"slug":future_id,"display_name":"New account model","visibility":"list",
+         "supported_reasoning_levels":[{"effort":"adaptive","description":"Account option"},{"effort":"max"}],
+         "context_window":100_000,"max_output_tokens":10_000},
+        {"slug":"hidden-future","display_name":"Hidden","visibility":"hide"},
+        {"slug":plain_id,"display_name":"No reasoning model","visibility":"list","supported_reasoning_levels":[]}
+    ]}))).await;
+    let key = ApiKey::from_chatgpt_token(KEY.into()).unwrap();
+    let models = discovery
+        .client()
+        .list_chatgpt_models(&key, &CancellationToken::new())
+        .await
+        .unwrap();
+    let catalogue = chatgpt_model_catalogue(&models);
+    assert_eq!(
+        catalogue
+            .iter()
+            .map(|model| model.id.as_str())
+            .collect::<Vec<_>>(),
+        [future_id.as_str(), plain_id.as_str()]
+    );
+    assert_eq!(catalogue[0].name, "New account model");
+    assert_eq!(catalogue[0].context_window_tokens, 100_000);
+    assert_eq!(
+        catalogue[0]
+            .reasoning_efforts
+            .iter()
+            .map(ReasoningEffort::as_str)
+            .collect::<Vec<_>>(),
+        ["adaptive", "max"]
+    );
+
+    let account_id = Uuid::new_v4();
+    let mut view = ChatgptView::unavailable("fixture");
+    view.active_account_id = Some(account_id);
+    view.accounts.push(ChatgptAccount {
+        id: account_id,
+        label: "Fixture".into(),
+        email: None,
+        connected: true,
+        plan_enabled: true,
+        storage: CredentialLocation::Session,
+        storage_repair_required: false,
+    });
+    view.models = models;
+    let frozen = snapshot(GenerationMode::Strict);
+    for model in &catalogue {
+        let settings = ProviderSettings {
+            model: model.id.clone(),
+            reasoning_effort: model.reasoning_efforts[0].clone(),
+            ..Default::default()
+        };
+        let saved: ProviderSettings =
+            serde_json::from_slice(&serde_json::to_vec(&settings).unwrap()).unwrap();
+        ProviderId::Openai
+            .validate(&saved, AuthenticationMethod::Chatgpt)
+            .unwrap();
+        assert_eq!(
+            estimate_cost(&frozen, GenerationMode::Strict, &schema(), &saved)
+                .unwrap_err()
+                .kind,
+            ErrorKind::InvalidSettings
+        );
+        let selected = view.selected_model(&saved).unwrap();
+        let estimate = estimate_for_auth(
+            AuthenticationMethod::Chatgpt,
+            &frozen,
+            GenerationMode::Strict,
+            &schema(),
+            &saved,
+        )
+        .unwrap();
+        selected
+            .validate_input(estimate.input_token_upper_bound)
+            .unwrap();
+        let server = Server::start(Reply::sse(stream(&frozen))).await;
+        let reply = generate_plan(&server, &frozen, &saved).await.unwrap();
+        assert_eq!(reply.text, candidate(&frozen));
+        let body: Value = serde_json::from_slice(&server.request().body).unwrap();
+        assert_eq!(body["model"], model.id);
+        if model.id == future_id {
+            assert_eq!(body["reasoning"]["effort"], "adaptive");
+            assert_eq!(
+                selected.validate_input(90_001).unwrap_err().kind,
+                ErrorKind::ContextLimit
+            );
+            assert_eq!(
+                selected
+                    .validate_settings(&ProviderSettings {
+                        reasoning_effort: ReasoningEffort::Low,
+                        ..saved.clone()
+                    })
+                    .unwrap_err()
+                    .kind,
+                ErrorKind::InvalidSettings
+            );
+        } else {
+            assert!(body.get("reasoning").is_none());
+        }
+        let mut changed = view.clone();
+        changed.models.clear();
+        assert_eq!(
+            changed.selected_model(&saved).unwrap_err().kind,
+            ErrorKind::ModelUnavailable
+        );
+        changed.models.clone_from(&view.models);
+        changed.active_account_id = Some(Uuid::new_v4());
+        assert_eq!(
+            changed.selected_model(&saved).unwrap_err().kind,
+            ErrorKind::MissingCredential
+        );
+        changed.active_account_id = Some(account_id);
+        changed.accounts[0].storage_repair_required = true;
+        assert_eq!(
+            changed.selected_model(&saved).unwrap_err().kind,
+            ErrorKind::MissingCredential
+        );
+        assert_eq!(server.count.load(Ordering::SeqCst), 1);
+    }
+}
+
+#[tokio::test]
+async fn new_openai_api_model_uses_its_selected_id_and_explicit_prices() {
+    let frozen = snapshot(GenerationMode::Strict);
+    let model = format!("ft:future-model:account:{}", Uuid::new_v4());
+    let settings = ProviderSettings {
+        model: model.clone(),
+        reasoning_effort: ReasoningEffort::Other("none".into()),
+        max_output_tokens: 4096,
+        spending_limit_usd: 10_000.0,
+        pricing: Some(ModelPricing {
+            model: model.clone(),
+            input_usd_per_million: 20.0,
+            output_usd_per_million: 80.0,
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let server = Server::start(Reply::sse(stream(&frozen))).await;
+    server
+        .client()
+        .generate(
+            &frozen,
+            GenerationMode::Strict,
+            &schema(),
+            &settings,
+            &ApiKey::new(KEY.into()).unwrap(),
+            &CancellationToken::new(),
+            |_| {},
+        )
+        .await
+        .unwrap();
+    let body: Value = serde_json::from_slice(&server.request().body).unwrap();
+    assert_eq!(body["model"], model);
+    assert!(body.get("pricing").is_none());
+    assert!(body.get("reasoning").is_none());
+    let no_price = ProviderSettings {
+        pricing: None,
+        ..settings
+    };
+    assert_eq!(
+        server
+            .client()
+            .generate(
+                &frozen,
+                GenerationMode::Strict,
+                &schema(),
+                &no_price,
+                &ApiKey::new(KEY.into()).unwrap(),
+                &CancellationToken::new(),
+                |_| {},
+            )
+            .await
+            .unwrap_err()
+            .kind,
+        ErrorKind::InvalidSettings
+    );
+    assert_eq!(server.count.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
 async fn chatgpt_catalogue_is_authenticated_account_data_in_server_order() {
     let server = Server::start(Reply::json(200, json!({"models":[
         {"slug":"unverified-account-model","display_name":"Account model 日本語","visibility":"list","other_server_field":true},
@@ -2556,11 +2824,15 @@ async fn chatgpt_catalogue_is_authenticated_account_data_in_server_order() {
         [
             ChatgptModel {
                 id: "unverified-account-model".into(),
-                name: "Account model 日本語".into()
+                name: "Account model 日本語".into(),
+                reasoning_efforts: crate::settings::default_reasoning_efforts(),
+                ..Default::default()
             },
             ChatgptModel {
                 id: MODEL_ID.into(),
-                name: "GPT-6.1 Sol".into()
+                name: "GPT-6.1 Sol".into(),
+                reasoning_efforts: crate::settings::default_reasoning_efforts(),
+                ..Default::default()
             }
         ]
     );
@@ -2627,6 +2899,24 @@ async fn chatgpt_catalogue_rejects_malformed_duplicate_unsafe_and_oversized_data
         ),
         (oversized, ErrorKind::OutputLimit),
     ];
+    for metadata in [
+        json!({"context_window":0}),
+        json!({"context_window":-1}),
+        json!({"max_output_tokens":0}),
+        json!({"supported_reasoning_levels":[{"effort":"adaptive\ncontrol"}]}),
+        json!({"supported_reasoning_levels":[{"effort":"max"},{"effort":"max"}]}),
+        json!({"supported_reasoning_levels":[{"effort":"x".repeat(33)}]}),
+    ] {
+        let mut model = json!({"slug":"future-model","display_name":"Future","visibility":"list"});
+        model
+            .as_object_mut()
+            .unwrap()
+            .extend(metadata.as_object().unwrap().clone());
+        cases.push((
+            Reply::json(200, json!({"models":[model]})),
+            ErrorKind::Malformed,
+        ));
+    }
     let mut actual_oversized = Reply::json(200, json!({}));
     actual_oversized.chunks = vec![vec![b' '; 1024 * 1024 + 1]];
     cases.push((actual_oversized, ErrorKind::OutputLimit));

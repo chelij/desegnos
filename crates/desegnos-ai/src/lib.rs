@@ -5,6 +5,7 @@ mod identity;
 mod image_access;
 mod image_generation;
 mod images;
+mod model_discovery;
 mod providers;
 mod request;
 mod schema_wire;

@@ -13,6 +13,40 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, future::Future, pin::Pin, time::Duration};
 
+pub const DEFAULT_LOCAL_ENDPOINT: &str = "http://127.0.0.1:11434/v1";
+
+pub fn local_endpoint(settings: &ProviderSettings) -> Result<String> {
+    let mut url = reqwest::Url::parse(
+        settings
+            .endpoint
+            .as_deref()
+            .unwrap_or(DEFAULT_LOCAL_ENDPOINT),
+    )
+    .map_err(|_| ProviderError::before(ErrorKind::InvalidSettings))?;
+    if url.host_str() == Some("localhost") {
+        url.set_host(Some("127.0.0.1"))
+            .map_err(|_| ProviderError::before(ErrorKind::InvalidSettings))?;
+    }
+    let local = url
+        .host_str()
+        .unwrap_or_default()
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .parse::<std::net::IpAddr>()
+        .is_ok_and(|ip| ip.is_loopback());
+    if !local
+        || !matches!(url.scheme(), "http" | "https")
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+        || url.path().trim_end_matches('/') != "/v1"
+    {
+        return Err(ProviderError::before(ErrorKind::InvalidSettings));
+    }
+    Ok(url.as_str().trim_end_matches('/').into())
+}
+
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ProviderId {
@@ -34,11 +68,11 @@ impl ProviderId {
         }
     }
     pub fn available(self) -> bool {
-        matches!(self, Self::Openai | Self::Anthropic | Self::Google)
+        true
     }
     pub fn capabilities(self) -> GenerationCapabilities {
         GenerationCapabilities {
-            web_search: self.available(),
+            web_search: matches!(self, Self::Openai | Self::Anthropic | Self::Google),
             image_downloads: if self.available() { 8 } else { 0 },
             image_generation: (self == Self::Openai).then(Default::default),
         }
@@ -65,9 +99,12 @@ impl ProviderId {
             model: match self {
                 Self::Anthropic => "claude-sonnet-5-5",
                 Self::Google => "gemini-3.8-flash",
+                Self::Openrouter => "openai/gpt-6.1-sol",
+                Self::Local => "local-model",
                 _ => crate::MODEL_ID,
             }
             .into(),
+            endpoint: (self == Self::Local).then(|| DEFAULT_LOCAL_ENDPOINT.into()),
             ..Default::default()
         }
     }
@@ -77,13 +114,19 @@ impl ProviderId {
         }
         if !self.available()
             || auth != AuthenticationMethod::ApiKey
-            || settings.model != self.defaults().model
+            || !crate::settings::valid_model_id(&settings.model)
         {
             return Err(ProviderError::before(ErrorKind::InvalidSettings));
+        }
+        if self == Self::Local {
+            local_endpoint(settings)?;
         }
         settings.validate_limits(auth)
     }
     pub fn catalogue(self) -> Vec<ModelInfo> {
+        if matches!(self, Self::Openrouter | Self::Local) {
+            return vec![];
+        }
         if self == Self::Openai {
             return crate::model_catalogue();
         }
@@ -123,6 +166,8 @@ impl ProviderId {
             max_output_tokens: MAX_OUTPUT_TOKENS,
             long_context_input_usd_per_million: input,
             long_context_output_usd_per_million: output,
+            pricing_required: false,
+            default_pricing: None,
         }]
     }
 }
@@ -199,6 +244,38 @@ pub struct ProviderClient {
     remote: Option<KeyAdapter>,
 }
 impl ProviderClient {
+    pub fn with_settings(
+        id: ProviderId,
+        openai: OpenAiClient,
+        settings: &ProviderSettings,
+    ) -> Result<Self> {
+        if id == ProviderId::Local {
+            return Ok(Self {
+                id,
+                openai,
+                remote: Some(KeyAdapter::build(id, &local_endpoint(settings)?, false)?),
+            });
+        }
+        Self::new(id, openai)
+    }
+    pub async fn list_api_models(
+        &self,
+        key: &ApiKey,
+        cancel: &CancellationToken,
+    ) -> Result<Vec<ModelInfo>> {
+        if let Some(remote) = &self.remote {
+            crate::model_discovery::list_models(
+                self.id,
+                &remote.client,
+                &remote.endpoint,
+                key,
+                cancel,
+            )
+            .await
+        } else {
+            self.openai.list_api_models(key, cancel).await
+        }
+    }
     pub fn new(id: ProviderId, openai: OpenAiClient) -> Result<Self> {
         if !id.available() {
             return Err(ProviderError::before(ErrorKind::InvalidSettings));
@@ -342,23 +419,50 @@ fn foreign_estimate(
         return Err(ProviderError::before(ErrorKind::InputLimit));
     }
     let input = wire.len() as u64 + reserve + 65_536;
-    let info = id.catalogue().remove(0);
-    if input + u64::from(settings.max_output_tokens) > info.context_window_tokens {
+    let info = id
+        .catalogue()
+        .into_iter()
+        .find(|model| model.id == settings.model);
+    if input + u64::from(settings.max_output_tokens)
+        > info.as_ref().map_or(crate::CONTEXT_WINDOW_TOKENS, |model| {
+            model.context_window_tokens
+        })
+    {
         return Err(ProviderError::before(ErrorKind::InputLimit));
     }
-    let input_rate = if id == ProviderId::Google {
-        1.5
+    let (input_rate, output_rate, verified_at) = if let Some(pricing) = &settings.pricing {
+        pricing.validate(&settings.model)?;
+        (
+            pricing.input_usd_per_million,
+            pricing.output_usd_per_million,
+            String::new(),
+        )
+    } else if let Some(info) = info {
+        if id == ProviderId::Google {
+            (1.5, 7.5, info.verified_at)
+        } else {
+            (
+                info.input_usd_per_million,
+                info.output_usd_per_million,
+                info.verified_at,
+            )
+        }
     } else {
-        info.input_usd_per_million
+        return Err(ProviderError::before(ErrorKind::InvalidSettings));
     };
-    let output_rate = if id == ProviderId::Google {
-        7.5
-    } else {
-        info.output_usd_per_million
-    };
-    let estimate = ((input as f64 * input_rate
+    let fees = settings.pricing.as_ref().map_or(0.0, |pricing| {
+        pricing.request_usd
+            + pricing.image_usd
+                * body
+                    .parts
+                    .iter()
+                    .filter(|part| matches!(part, RequestPart::Image { .. }))
+                    .count() as f64
+    });
+    let estimate = (((input as f64 * input_rate
         + f64::from(settings.max_output_tokens) * output_rate)
         / 1_000_000.0
+        + fees)
         * 100.0)
         .ceil()
         / 100.0;
@@ -368,7 +472,7 @@ fn foreign_estimate(
     Ok(CostEstimate {
         estimate_usd: estimate,
         input_token_upper_bound: input,
-        verified_at: info.verified_at,
+        verified_at,
     })
 }
 
@@ -385,9 +489,11 @@ impl KeyAdapter {
         let endpoint = match id {
             ProviderId::Anthropic => "https://api.anthropic.com/v1",
             ProviderId::Google => "https://generativelanguage.googleapis.com/v1beta",
+            ProviderId::Openrouter => "https://openrouter.ai/api/v1",
+            ProviderId::Local => DEFAULT_LOCAL_ENDPOINT,
             _ => return Err(ProviderError::before(ErrorKind::InvalidSettings)),
         };
-        Self::build(id, endpoint, true)
+        Self::build(id, endpoint, id != ProviderId::Local)
     }
     fn build(id: ProviderId, endpoint: &str, https: bool) -> Result<Self> {
         // Same limits as the OpenAI transport: silence for 90 s or 20 minutes overall.
@@ -421,15 +527,7 @@ impl KeyAdapter {
         request: reqwest::RequestBuilder,
         key: &ApiKey,
     ) -> Result<reqwest::RequestBuilder> {
-        let mut header = reqwest::header::HeaderValue::from_str(key.expose())
-            .map_err(|_| ProviderError::before(ErrorKind::InvalidCredential))?;
-        header.set_sensitive(true);
-        Ok(match self.id {
-            ProviderId::Anthropic => request
-                .header("x-api-key", header)
-                .header("anthropic-version", "2023-06-01"),
-            _ => request.header("x-goog-api-key", header),
-        })
+        crate::model_discovery::authorize(self.id, request, key)
     }
     async fn test_access(
         &self,
@@ -437,6 +535,21 @@ impl KeyAdapter {
         key: &ApiKey,
         cancel: &CancellationToken,
     ) -> Result<()> {
+        if matches!(self.id, ProviderId::Openrouter | ProviderId::Local) {
+            let models = crate::model_discovery::list_models(
+                self.id,
+                &self.client,
+                &self.endpoint,
+                key,
+                cancel,
+            )
+            .await?;
+            return if models.iter().any(|model| model.id == s.model) {
+                Ok(())
+            } else {
+                Err(ProviderError::before(ErrorKind::ModelUnavailable))
+            };
+        }
         let path = match self.id {
             ProviderId::Anthropic => format!("{}/models/{}", self.endpoint, s.model),
             _ => format!("{}/models/{}", self.endpoint, s.model),
@@ -472,6 +585,9 @@ impl KeyAdapter {
         }
         let path = match self.id {
             ProviderId::Anthropic => format!("{}/messages", self.endpoint),
+            ProviderId::Openrouter | ProviderId::Local => {
+                format!("{}/chat/completions", self.endpoint)
+            }
             _ => format!(
                 "{}/models/{}:streamGenerateContent?alt=sse",
                 self.endpoint, s.model
@@ -542,6 +658,13 @@ impl KeyAdapter {
                 })?;
             }
             if key.appears_in(&stream.text) {
+                return Err(stream.error(ErrorKind::Malformed));
+            }
+            if stream
+                .response_id
+                .as_ref()
+                .is_some_and(|id| key.appears_in(id))
+            {
                 return Err(stream.error(ErrorKind::Malformed));
             }
             progress(ProviderProgress {
@@ -756,6 +879,43 @@ fn foreign_body(
     request: &RequestContent<'_>,
     s: &ProviderSettings,
 ) -> Result<Value> {
+    if matches!(id, ProviderId::Openrouter | ProviderId::Local) {
+        if request.web_search {
+            return Err(ProviderError::before(ErrorKind::InvalidRequirements));
+        }
+        let content: Vec<_> = request
+            .parts
+            .iter()
+            .map(|part| {
+                Ok(match part {
+                    RequestPart::Document { text, .. } => json!({"type":"text","text":text}),
+                    RequestPart::Text(text) => json!({"type":"text","text":text}),
+                    RequestPart::Image { uri, detail } => {
+                        if !uri
+                            .strip_prefix("data:")
+                            .is_some_and(|uri| uri.contains(";base64,"))
+                        {
+                            return Err(ProviderError::before(ErrorKind::InvalidRequirements));
+                        }
+                        json!({"type":"image_url","image_url":{"url":uri,"detail":detail}})
+                    }
+                })
+            })
+            .collect::<Result<_>>()?;
+        let mut body = json!({
+            "model":s.model,"stream":true,"stream_options":{"include_usage":true},
+            "max_tokens":s.max_output_tokens,
+            "messages":[{"role":"system","content":request.instructions},{"role":"user","content":content}],
+            "response_format":{"type":"json_schema","json_schema":{"name":request.schema_name,"schema":request.schema,"strict":true}}
+        });
+        if s.reasoning_effort.as_str() != "none" {
+            body["reasoning_effort"] = json!(s.reasoning_effort);
+        }
+        if id == ProviderId::Openrouter {
+            body["provider"] = json!({"require_parameters":true,"allow_fallbacks":false});
+        }
+        return Ok(body);
+    }
     let schema = &request.schema;
     let google = id == ProviderId::Google;
     let text_part = |text: &str| {
@@ -785,7 +945,13 @@ fn foreign_body(
     }
     let search = request.web_search;
     if id == ProviderId::Google {
-        let mut body = json!({"systemInstruction":{"parts":[{"text":request.instructions}]},"contents":[{"role":"user","parts":parts}],"generationConfig":{"maxOutputTokens":s.max_output_tokens,"thinkingConfig":{"thinkingLevel":format!("{:?}",s.reasoning_effort).to_ascii_uppercase()},"responseFormat":{"text":{"mimeType":"APPLICATION_JSON","schema":schema}}}});
+        let mut body = json!({"systemInstruction":{"parts":[{"text":request.instructions}]},"contents":[{"role":"user","parts":parts}],"generationConfig":{"maxOutputTokens":s.max_output_tokens,"thinkingConfig":{"thinkingLevel":s.reasoning_effort.as_str().to_ascii_uppercase()},"responseFormat":{"text":{"mimeType":"APPLICATION_JSON","schema":schema}}}});
+        if s.reasoning_effort.as_str() == "none" {
+            body["generationConfig"]
+                .as_object_mut()
+                .unwrap()
+                .remove("thinkingConfig");
+        }
         if search {
             body["tools"] = json!([{"googleSearch":{}}]);
         }
@@ -798,9 +964,13 @@ fn foreign_body(
         if search {
             tools.push(json!({"type":"web_search_20250305","name":"web_search","max_uses":5}));
         }
-        Ok(
-            json!({"model":s.model,"max_tokens":s.max_output_tokens,"stream":true,"thinking":{"type":"between_tools"},"output_config":{"effort":s.reasoning_effort},"system":format!("{}\nAfter any research, submit the final candidate using submit_result exactly once. Its input must match the schema. Do not call any other client tool.",request.instructions),"messages":[{"role":"user","content":parts}],"tools":tools,"tool_choice":{"type":"auto","disable_parallel_tool_use":true}}),
-        )
+        let mut body = json!({"model":s.model,"max_tokens":s.max_output_tokens,"stream":true,"output_config":{"effort":s.reasoning_effort},"system":format!("{}\nAfter any research, submit the final candidate using submit_result exactly once. Its input must match the schema. Do not call any other client tool.",request.instructions),"messages":[{"role":"user","content":parts}],"tools":tools,"tool_choice":{"type":"auto","disable_parallel_tool_use":true}});
+        if s.reasoning_effort.as_str() == "none" {
+            body.as_object_mut().unwrap().remove("output_config");
+        } else if id.catalogue().iter().any(|model| model.id == s.model) {
+            body["thinking"] = json!({"type":"between_tools"});
+        }
+        Ok(body)
     }
 }
 
@@ -851,6 +1021,15 @@ impl ForeignStream {
         Ok(())
     }
     fn accept(&mut self, data: &str) -> Result<()> {
+        if matches!(self.provider, ProviderId::Openrouter | ProviderId::Local)
+            && data.trim() == "[DONE]"
+        {
+            if self.terminal || !self.stopped {
+                return Err(self.error(ErrorKind::Truncated));
+            }
+            self.terminal = true;
+            return Ok(());
+        }
         let v: Value = serde_json::from_str(data).map_err(|_| self.error(ErrorKind::Malformed))?;
         if v.get("error").is_some() || v["type"] == "error" {
             return Err(self.error(ErrorKind::Transport));
@@ -860,6 +1039,9 @@ impl ForeignStream {
         }
         if self.provider == ProviderId::Google {
             return self.google(v);
+        }
+        if matches!(self.provider, ProviderId::Openrouter | ProviderId::Local) {
+            return self.chat(v);
         }
         match v["type"].as_str() {
             Some("ping") => {}
@@ -1062,8 +1244,82 @@ impl ForeignStream {
         }
         Ok(())
     }
+    fn chat(&mut self, value: Value) -> Result<()> {
+        if let Some(id) = value["id"].as_str() {
+            if id.is_empty()
+                || id.len() > 256
+                || id.chars().any(char::is_control)
+                || self.response_id.as_ref().is_some_and(|prior| prior != id)
+            {
+                return Err(self.error(ErrorKind::Malformed));
+            }
+            self.response_id = Some(id.into());
+        }
+        if let Some(usage) = value.get("usage").filter(|usage| !usage.is_null()) {
+            let input = usage["prompt_tokens"]
+                .as_u64()
+                .ok_or_else(|| self.error(ErrorKind::Malformed))?;
+            let output = usage["completion_tokens"]
+                .as_u64()
+                .ok_or_else(|| self.error(ErrorKind::Malformed))?;
+            let total = input
+                .checked_add(output)
+                .ok_or_else(|| self.error(ErrorKind::Malformed))?;
+            if usage
+                .get("total_tokens")
+                .is_some_and(|reported| reported.as_u64() != Some(total))
+            {
+                return Err(self.error(ErrorKind::Malformed));
+            }
+            self.usage = Some(TokenUsage {
+                input_tokens: input,
+                output_tokens: output,
+                total_tokens: total,
+            });
+        }
+        let choices = value["choices"]
+            .as_array()
+            .ok_or_else(|| self.error(ErrorKind::Malformed))?;
+        if choices.is_empty() {
+            return if value.get("usage").is_some() {
+                Ok(())
+            } else {
+                Err(self.error(ErrorKind::Malformed))
+            };
+        }
+        if choices.len() != 1 || choices[0]["index"] != 0 || self.stopped {
+            return Err(self.error(ErrorKind::Malformed));
+        }
+        let delta = &choices[0]["delta"];
+        if delta.get("tool_calls").is_some() || delta.get("function_call").is_some() {
+            return Err(self.error(ErrorKind::Malformed));
+        }
+        if delta
+            .get("refusal")
+            .is_some_and(|refusal| !refusal.is_null())
+        {
+            return Err(self.error(ErrorKind::Refused));
+        }
+        match delta.get("content") {
+            Some(Value::String(text)) => self.append(text)?,
+            None | Some(Value::Null) => {}
+            _ => return Err(self.error(ErrorKind::Malformed)),
+        }
+        if let Some(reason) = choices[0]["finish_reason"].as_str() {
+            if reason != "stop" {
+                return Err(self.error(if reason == "content_filter" {
+                    ErrorKind::Refused
+                } else {
+                    ErrorKind::Incomplete
+                }));
+            }
+            self.stopped = true;
+        }
+        Ok(())
+    }
+
     fn finish(self) -> Result<ProviderResponse> {
-        if !self.stopped || (self.provider == ProviderId::Anthropic && !self.terminal) {
+        if !self.stopped || (self.provider != ProviderId::Google && !self.terminal) {
             return Err(self.error(ErrorKind::Truncated));
         }
         if self.response_id.is_none() || self.text.is_empty() {
@@ -1138,6 +1394,220 @@ mod tests {
         io::{AsyncReadExt, AsyncWriteExt},
         net::TcpListener,
     };
+    fn chat_chunk(text: &str, reason: Value) -> Value {
+        json!({"id":"chat_fixture","choices":[{"index":0,"delta":{"content":text},"finish_reason":reason}]})
+    }
+
+    #[test]
+    fn local_addresses_are_normalized_and_restricted_to_loopback() {
+        assert_eq!(
+            local_endpoint(&ProviderId::Local.defaults()).unwrap(),
+            DEFAULT_LOCAL_ENDPOINT
+        );
+        for (address, expected) in [
+            ("http://localhost:8080/v1/", "http://127.0.0.1:8080/v1"),
+            ("http://[::1]:1234/v1", "http://[::1]:1234/v1"),
+        ] {
+            assert_eq!(
+                local_endpoint(&ProviderSettings {
+                    endpoint: Some(address.into()),
+                    ..ProviderId::Local.defaults()
+                })
+                .unwrap(),
+                expected
+            );
+        }
+        for address in [
+            "http://example.com/v1",
+            "http://192.168.1.1/v1",
+            "file:///v1",
+            "http://user:secret@localhost/v1",
+            "http://localhost/v1?key=secret",
+            "http://localhost/v1#fragment",
+            "http://localhost/v2",
+        ] {
+            assert!(
+                local_endpoint(&ProviderSettings {
+                    endpoint: Some(address.into()),
+                    ..ProviderId::Local.defaults()
+                })
+                .is_err(),
+                "{address}"
+            );
+        }
+    }
+
+    #[test]
+    fn chat_stream_requires_one_complete_json_answer_and_a_terminal_marker() {
+        for provider in [ProviderId::Openrouter, ProviderId::Local] {
+            let mut stream = ForeignStream::new(provider);
+            let mut first = chat_chunk("{\"html\":", Value::Null);
+            first["choices"][0]["delta"]["reasoning"] = json!("private thoughts");
+            stream.accept(&first.to_string()).unwrap();
+            stream
+                .accept(&chat_chunk("\"Création 💡\"}", json!("stop")).to_string())
+                .unwrap();
+            stream.accept(&json!({"id":"chat_fixture","choices":[],"usage":{"prompt_tokens":42,"completion_tokens":12,"total_tokens":54}}).to_string()).unwrap();
+            stream.accept("[DONE]").unwrap();
+            let answer = stream.finish().unwrap();
+            assert_eq!(answer.text, "{\"html\":\"Création 💡\"}");
+            assert_eq!(answer.usage.unwrap().total_tokens, 54);
+            let mut stream = ForeignStream::new(provider);
+            stream
+                .accept(&chat_chunk("{}", json!("stop")).to_string())
+                .unwrap();
+            assert_eq!(stream.finish().unwrap_err().kind, ErrorKind::Truncated);
+            assert!(ForeignStream::new(provider).accept("[DONE]").is_err());
+            for event in [
+                chat_chunk("{}", json!("length")),
+                json!({"id":"chat_fixture","choices":[{"index":0,"delta":{"tool_calls":[]}}]}),
+                json!({"id":"chat_fixture","choices":[{"index":0,"delta":{"refusal":"No"}}]}),
+                json!({"id":"chat_fixture","choices":[],"usage":{"prompt_tokens":42,"completion_tokens":12,"total_tokens":1}}),
+            ] {
+                assert!(
+                    ForeignStream::new(provider)
+                        .accept(&event.to_string())
+                        .is_err()
+                );
+            }
+            let mut stream = ForeignStream::new(provider);
+            stream
+                .accept(&chat_chunk("{}", json!("stop")).to_string())
+                .unwrap();
+            stream.accept("[DONE]").unwrap();
+            assert!(stream.accept("[DONE]").is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn chat_transports_preserve_requests_and_optional_local_authentication() {
+        for (provider, key) in [
+            (
+                ProviderId::Openrouter,
+                ApiKey::new("synthetic-chat-key".into()).unwrap(),
+            ),
+            (ProviderId::Local, ApiKey::local_anonymous()),
+            (
+                ProviderId::Local,
+                ApiKey::new("synthetic-local-key".into()).unwrap(),
+            ),
+        ] {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let endpoint = format!("http://{}/v1", listener.local_addr().unwrap());
+            let server = tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut bytes = Vec::new();
+                let mut buffer = [0; 4096];
+                loop {
+                    let count = socket.read(&mut buffer).await.unwrap();
+                    assert!(count > 0);
+                    bytes.extend_from_slice(&buffer[..count]);
+                    if let Some(end) = bytes.windows(4).position(|part| part == b"\r\n\r\n") {
+                        let headers = std::str::from_utf8(&bytes[..end]).unwrap();
+                        let length: usize = headers
+                            .lines()
+                            .find_map(|line| {
+                                line.to_ascii_lowercase()
+                                    .strip_prefix("content-length: ")
+                                    .map(str::to_owned)
+                            })
+                            .unwrap()
+                            .parse()
+                            .unwrap();
+                        if bytes.len() >= end + 4 + length {
+                            break;
+                        }
+                    }
+                }
+                let data = format!(
+                    "data: {}\n\ndata: [DONE]\n\n",
+                    chat_chunk("{}", json!("stop"))
+                );
+                socket.write_all(format!("HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{data}",data.len()).as_bytes()).await.unwrap();
+                bytes
+            });
+            let snapshot = crate::tests::snapshot(GenerationMode::Strict);
+            let schema = desegnos_core::candidate_schema();
+            let mut packet =
+                crate::settings::request_content(&snapshot, GenerationMode::Strict, &schema)
+                    .unwrap();
+            packet.web_search = false;
+            packet.parts.push(RequestPart::Image {
+                uri: "data:image/png;base64,AQ==",
+                detail: "low",
+            });
+            let settings = ProviderSettings {
+                model: "vendor/future-model:free".into(),
+                reasoning_effort: ReasoningEffort::Other("none".into()),
+                pricing: Some(crate::ModelPricing {
+                    model: "vendor/future-model:free".into(),
+                    ..Default::default()
+                }),
+                ..provider.defaults()
+            };
+            let adapter = KeyAdapter::build(provider, &endpoint, false).unwrap();
+            let mut sent =
+                crate::settings::request_content(&snapshot, GenerationMode::Strict, &schema)
+                    .unwrap();
+            sent.web_search = false;
+            sent.parts.push(RequestPart::Image {
+                uri: "data:image/png;base64,AQ==",
+                detail: "low",
+            });
+            let response = adapter
+                .submit(sent, &settings, &key, &CancellationToken::new(), &|_| {})
+                .await
+                .unwrap();
+            assert_eq!(response.text, "{}");
+            let bytes = server.await.unwrap();
+            let request = std::str::from_utf8(&bytes).unwrap();
+            assert!(request.starts_with("POST /v1/chat/completions "));
+            assert_eq!(
+                request
+                    .to_ascii_lowercase()
+                    .contains("authorization: bearer"),
+                key.expose() != crate::credentials::LOCAL_ANONYMOUS_KEY
+            );
+            let body: Value =
+                serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1).unwrap();
+            assert_eq!(body["model"], settings.model);
+            assert_eq!(body["messages"][1]["content"][0]["text"], snapshot.markdown);
+            assert_eq!(
+                body["messages"][1]["content"][2]["image_url"]["url"],
+                "data:image/png;base64,AQ=="
+            );
+            assert_eq!(
+                body["response_format"]["json_schema"]["schema"],
+                packet.schema
+            );
+            assert!(
+                body.get("pricing").is_none()
+                    && body.get("endpoint").is_none()
+                    && body.get("reasoning_effort").is_none()
+            );
+            assert_eq!(
+                body.get("provider").is_some(),
+                provider == ProviderId::Openrouter
+            );
+            let mut paid = settings.clone();
+            paid.pricing.as_mut().unwrap().request_usd = 3.0;
+            assert_eq!(
+                foreign_estimate(provider, &packet, &paid, 0)
+                    .unwrap_err()
+                    .kind,
+                ErrorKind::SpendingLimit
+            );
+            packet.web_search = true;
+            assert!(foreign_body(provider, &packet, &settings).is_err());
+            packet.web_search = false;
+            packet.parts.push(RequestPart::Image {
+                uri: "https://example.com/image.png",
+                detail: "low",
+            });
+            assert!(foreign_body(provider, &packet, &settings).is_err());
+        }
+    }
+
     fn anthropic(text: &str) -> Vec<Value> {
         vec![
             json!({"type":"message_start","message":{"id":"msg_test","usage":{"input_tokens":42,"output_tokens":0}}}),
@@ -1423,8 +1893,14 @@ mod tests {
                 assert_eq!(body["tools"], json!([{"googleSearch":{}}]));
             }
             assert!(
-                id.validate(&ProviderSettings::default(), AuthenticationMethod::ApiKey)
-                    .is_err()
+                id.validate(
+                    &ProviderSettings {
+                        model: "../invalid-model".into(),
+                        ..Default::default()
+                    },
+                    AuthenticationMethod::ApiKey
+                )
+                .is_err()
             );
             assert!(
                 id.validate(&id.defaults(), AuthenticationMethod::Chatgpt)
@@ -1589,6 +2065,72 @@ mod tests {
                     .kind,
                 ErrorKind::InvalidRequirements
             );
+        }
+    }
+
+    #[tokio::test]
+    async fn new_provider_model_ids_and_explicit_prices_reach_the_request() {
+        for id in [ProviderId::Anthropic, ProviderId::Google] {
+            let events = if id == ProviderId::Anthropic {
+                anthropic("{\"ok\":true}")
+            } else {
+                google("{\"ok\":true}")
+            };
+            let (remote, server) = fixture(id, events, false).await;
+            let client = ProviderClient {
+                id,
+                openai: OpenAiClient::new().unwrap(),
+                remote: Some(remote),
+            };
+            let model = format!("future-{}", uuid::Uuid::new_v4());
+            let settings = ProviderSettings {
+                model: model.clone(),
+                reasoning_effort: ReasoningEffort::Other("none".into()),
+                max_output_tokens: 2048,
+                spending_limit_usd: 10_000.0,
+                pricing: Some(crate::ModelPricing {
+                    model: model.clone(),
+                    input_usd_per_million: 20.0,
+                    output_usd_per_million: 80.0,
+                    ..Default::default()
+                }),
+                ..id.defaults()
+            };
+            let frozen = crate::tests::snapshot(GenerationMode::Strict);
+            let response = client
+                .generate_for_auth(
+                    AuthenticationMethod::ApiKey,
+                    &frozen,
+                    GenerationMode::Strict,
+                    &desegnos_core::candidate_schema(),
+                    &settings,
+                    &ApiKey::new("private-fixture-credential".into()).unwrap(),
+                    &CancellationToken::new(),
+                    |_| {},
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.text, "{\"ok\":true}");
+            let request = server.await.unwrap();
+            let body: Value =
+                serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1).unwrap();
+            assert!(body.get("pricing").is_none());
+            if id == ProviderId::Anthropic {
+                assert_eq!(body["model"], model);
+                assert_eq!(body["max_tokens"], 2048);
+                assert!(body.get("thinking").is_none());
+                assert!(body.get("output_config").is_none());
+            } else {
+                assert!(
+                    request
+                        .lines()
+                        .next()
+                        .unwrap()
+                        .contains(&format!("/models/{model}:streamGenerateContent"))
+                );
+                assert_eq!(body["generationConfig"]["maxOutputTokens"], 2048);
+                assert!(body["generationConfig"].get("thinkingConfig").is_none());
+            }
         }
     }
 

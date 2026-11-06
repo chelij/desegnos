@@ -146,9 +146,9 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
   const { openExportPanel, chooseExportDestination, runExport, sendExport, cancelExport, openExportFolder, openInBrowser, keepPointerCode, forgetExportPointer, previewSelectedBoundary, closePreview, refreshPreview, showExport, setShowExport, exportDestination, exportJob, exportError, exportSending, checkedStates, checkedProject, preview } = useExportJobs({ current, view, showHistory, play, setPlay }, () => ({ current, panels, panelActions, accept, setNotice, settle, setError, setOpenFailure, setShowHistory, mutate, canvasFocus, selectedElementPageId, play, setPlay, view, showHistory, aiConnected }));
 
   const storeAiSettings = useCallback((value: AiSettingsView) => { aiCurrent.current = value; setAiSettings(value); setAiPollingError(''); }, []);
-  const refreshAiSettings = useCallback(async () => {
+  const refreshAiSettings = useCallback(async (refreshModels = false) => {
     const epoch = aiEpoch.current; const read = ++aiRead.current;
-    const value = await native<AiSettingsView>('get_ai_settings');
+    const value = await native<AiSettingsView>('get_ai_settings', { refreshModels });
     if (epoch === aiEpoch.current && read === aiRead.current) { storeAiSettings(value); return value; }
     return aiCurrent.current ?? value;
   }, [storeAiSettings]);

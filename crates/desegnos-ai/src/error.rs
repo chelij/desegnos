@@ -332,7 +332,7 @@ impl ProviderError {
         if self.authentication == AuthenticationMethod::Chatgpt {
             match self.kind {
                 ErrorKind::InvalidSettings => {
-                    return "Choose a verified model available to the selected ChatGPT account and a supported reasoning level.";
+                    return "Choose a model available to the selected ChatGPT account and a supported reasoning level.";
                 }
                 ErrorKind::InvalidCredential => {
                     return "The selected ChatGPT credential is invalid. Reconnect the account to obtain a valid session.";
@@ -366,7 +366,7 @@ impl ProviderError {
         }
         match self.kind {
             ErrorKind::InvalidSettings => {
-                "Choose a supported model, reasoning level, output limit and positive spending allowance."
+                "Choose an available model, supported reasoning and output settings, valid price ceilings, and a positive budget."
             }
             ErrorKind::InvalidRequirements => {
                 "The frozen requirements or output schema failed validation. Prepare a new generation request."

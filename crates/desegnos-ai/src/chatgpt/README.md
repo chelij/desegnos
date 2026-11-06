@@ -35,7 +35,9 @@ lets optional authentication damage stay visible without blocking authoring.
 Model discovery runs once before a successful authorization becomes active.
 Discovery failure is cached separately from verified identity; `view()` never
 retries it. Models are hidden for disconnected, plan-disabled or repair-blocked
-accounts. The native integration supplies Desegnos's supported-model intersection.
+accounts. The native integration exposes all listed account models and validates saved
+selections against the active account, without a model-name allowlist. Discovery also
+retains advertised reasoning options and token limits.
 
 ## Credentials and interrupted operations
 

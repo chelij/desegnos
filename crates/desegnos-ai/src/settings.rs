@@ -6,7 +6,7 @@ use desegnos_core::{GenerationMode, RequirementsSnapshot, digest};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-pub const VERIFIED_AT: &str = "2026-10-18";
+pub const VERIFIED_AT: &str = "2026-10-31";
 pub const MODEL_ID: &str = "gpt-6.1-sol";
 pub const MODEL_MAX_OUTPUT_TOKENS: u32 = 128_000;
 pub const MAX_OUTPUT_TOKENS: u32 = 32_768;
@@ -24,19 +24,112 @@ pub enum AuthenticationMethod {
     Chatgpt,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ChatgptModel {
     pub id: String,
     pub name: String,
+    #[serde(default = "default_reasoning_efforts")]
+    pub reasoning_efforts: Vec<ReasoningEffort>,
+    #[serde(default)]
+    pub context_window_tokens: Option<u64>,
+    #[serde(default)]
+    pub max_output_tokens: Option<u32>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
 pub enum ReasoningEffort {
     Low,
     Medium,
     High,
+    Other(String),
+}
+
+impl ReasoningEffort {
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+            Self::Other(value) => value,
+        }
+    }
+}
+
+impl TryFrom<String> for ReasoningEffort {
+    type Error = &'static str;
+    fn try_from(value: String) -> std::result::Result<Self, Self::Error> {
+        if value.is_empty()
+            || value.len() > 32
+            || !value
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+        {
+            return Err("Invalid reasoning effort");
+        }
+        Ok(match value.as_str() {
+            "low" => Self::Low,
+            "medium" => Self::Medium,
+            "high" => Self::High,
+            _ => Self::Other(value),
+        })
+    }
+}
+
+impl From<ReasoningEffort> for String {
+    fn from(value: ReasoningEffort) -> Self {
+        value.as_str().into()
+    }
+}
+
+pub(crate) fn default_reasoning_efforts() -> Vec<ReasoningEffort> {
+    vec![
+        ReasoningEffort::Low,
+        ReasoningEffort::Medium,
+        ReasoningEffort::High,
+    ]
+}
+
+pub(crate) fn valid_model_id(id: &str) -> bool {
+    !id.is_empty()
+        && !matches!(id, "." | "..")
+        && id.len() <= 128
+        && id.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':' | b'/')
+        })
+        && id
+            .split('/')
+            .all(|part| !part.is_empty() && !matches!(part, "." | ".."))
+}
+
+impl ChatgptModel {
+    pub fn validate_settings(&self, settings: &ProviderSettings) -> Result<()> {
+        settings.validate_for_auth(AuthenticationMethod::Chatgpt)?;
+        if settings.model != self.id || !self.reasoning_efforts.contains(&settings.reasoning_effort)
+        {
+            return Err(ProviderError::before(ErrorKind::InvalidSettings)
+                .with_authentication(AuthenticationMethod::Chatgpt));
+        }
+        Ok(())
+    }
+
+    /// Account-advertised bounds supplement the transport's application limits.
+    /// Missing output metadata is not an advertised output allowance.
+    pub fn validate_input(&self, input_tokens: u64) -> Result<()> {
+        let context = self
+            .context_window_tokens
+            .unwrap_or(CONTEXT_WINDOW_TOKENS)
+            .min(CONTEXT_WINDOW_TOKENS);
+        let output = self
+            .max_output_tokens
+            .map_or(0, |limit| limit.min(MODEL_MAX_OUTPUT_TOKENS));
+        if input_tokens.saturating_add(u64::from(output)) > context {
+            return Err(ProviderError::before(ErrorKind::ContextLimit)
+                .with_authentication(AuthenticationMethod::Chatgpt));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -47,6 +140,46 @@ pub struct ProviderSettings {
     pub reasoning_effort: ReasoningEffort,
     pub spending_limit_usd: f64,
     pub image_generation: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pricing: Option<ModelPricing>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub endpoint: Option<String>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub local_authentication: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !value
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ModelPricing {
+    pub model: String,
+    pub input_usd_per_million: f64,
+    pub output_usd_per_million: f64,
+    #[serde(default)]
+    pub request_usd: f64,
+    #[serde(default)]
+    pub image_usd: f64,
+}
+
+impl ModelPricing {
+    pub fn validate(&self, model: &str) -> Result<()> {
+        if self.model != model
+            || [
+                self.input_usd_per_million,
+                self.output_usd_per_million,
+                self.request_usd,
+                self.image_usd,
+            ]
+            .iter()
+            .any(|rate| !rate.is_finite() || *rate < 0.0 || *rate > 1_000_000.0)
+        {
+            return Err(ProviderError::before(ErrorKind::InvalidSettings));
+        }
+        Ok(())
+    }
 }
 
 impl Default for ProviderSettings {
@@ -57,6 +190,9 @@ impl Default for ProviderSettings {
             reasoning_effort: ReasoningEffort::Medium,
             spending_limit_usd: 2.0,
             image_generation: true,
+            pricing: None,
+            endpoint: None,
+            local_authentication: false,
         }
     }
 }
@@ -67,7 +203,7 @@ impl ProviderSettings {
     }
 
     pub fn validate_for_auth(&self, authentication: AuthenticationMethod) -> Result<()> {
-        if self.model != MODEL_ID {
+        if !valid_model_id(&self.model) {
             return Err(ProviderError::before(ErrorKind::InvalidSettings)
                 .with_authentication(authentication));
         }
@@ -75,6 +211,11 @@ impl ProviderSettings {
     }
 
     pub(crate) fn validate_limits(&self, authentication: AuthenticationMethod) -> Result<()> {
+        if authentication == AuthenticationMethod::ApiKey
+            && let Some(pricing) = &self.pricing
+        {
+            pricing.validate(&self.model)?;
+        }
         if authentication == AuthenticationMethod::ApiKey
             && (self.max_output_tokens == 0
                 || self.max_output_tokens > MAX_OUTPUT_TOKENS
@@ -103,16 +244,60 @@ pub struct ModelInfo {
     pub max_output_tokens: u32,
     pub long_context_input_usd_per_million: f64,
     pub long_context_output_usd_per_million: f64,
+    #[serde(default)]
+    pub pricing_required: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_pricing: Option<ModelPricing>,
+}
+
+impl ModelInfo {
+    pub fn validate_api_settings(&self, settings: &ProviderSettings) -> Result<()> {
+        settings.validate_for_auth(AuthenticationMethod::ApiKey)?;
+        if self.id != settings.model
+            || !self.reasoning_efforts.contains(&settings.reasoning_effort)
+            || settings.max_output_tokens > self.max_output_tokens
+            || ((self.pricing_required || self.default_pricing.is_some())
+                && settings.pricing.is_none())
+        {
+            return Err(ProviderError::before(ErrorKind::InvalidSettings));
+        }
+        if let (Some(quote), Some(pricing)) = (&self.default_pricing, &settings.pricing)
+            && (pricing.input_usd_per_million < quote.input_usd_per_million
+                || pricing.output_usd_per_million < quote.output_usd_per_million
+                || pricing.request_usd < quote.request_usd
+                || pricing.image_usd < quote.image_usd)
+        {
+            return Err(ProviderError::before(ErrorKind::InvalidSettings));
+        }
+        Ok(())
+    }
+
+    pub fn validate_api_input(&self, settings: &ProviderSettings, input_tokens: u64) -> Result<()> {
+        self.validate_api_settings(settings)?;
+        if input_tokens.saturating_add(u64::from(settings.max_output_tokens))
+            > self.context_window_tokens
+        {
+            return Err(ProviderError::before(ErrorKind::ContextLimit));
+        }
+        Ok(())
+    }
 }
 
 pub fn model_catalogue() -> Vec<ModelInfo> {
-    vec![ModelInfo {
-        id: MODEL_ID.into(),
-        name: "GPT-6.1 Sol".into(),
-        input_usd_per_million: 2.0,
-        output_usd_per_million: 10.0,
+    [
+        (MODEL_ID, "GPT-6.1 Sol", 2.0, 10.0),
+        ("gpt-6-astra", "GPT-6 Astra", 10.0, 50.0),
+        ("gpt-6.1-terra", "GPT-6.1 Terra", 1.0, 5.0),
+        ("gpt-6-luna", "GPT-6 Luna", 0.1, 0.5),
+    ]
+    .into_iter()
+    .map(|(id, name, input, output)| ModelInfo {
+        id: id.into(),
+        name: name.into(),
+        input_usd_per_million: input,
+        output_usd_per_million: output,
         verified_at: VERIFIED_AT.into(),
-        source_url: "https://developers.openai.com/api/docs/models/gpt-6.1-sol".into(),
+        source_url: format!("https://developers.openai.com/api/docs/models/{id}"),
         reasoning_efforts: vec![
             ReasoningEffort::Low,
             ReasoningEffort::Medium,
@@ -120,9 +305,35 @@ pub fn model_catalogue() -> Vec<ModelInfo> {
         ],
         context_window_tokens: CONTEXT_WINDOW_TOKENS,
         max_output_tokens: MAX_OUTPUT_TOKENS,
-        long_context_input_usd_per_million: 4.0,
-        long_context_output_usd_per_million: 15.0,
-    }]
+        long_context_input_usd_per_million: input * 2.0,
+        long_context_output_usd_per_million: output * 1.5,
+        pricing_required: false,
+        default_pricing: None,
+    })
+    .collect()
+}
+
+/// The authenticated account catalogue is authoritative for ChatGPT selection.
+/// API prices are unused for plan requests and must not be guessed for new models.
+pub fn chatgpt_model_catalogue(available: &[ChatgptModel]) -> Vec<ModelInfo> {
+    available
+        .iter()
+        .map(|model| ModelInfo {
+            id: model.id.clone(),
+            name: model.name.clone(),
+            reasoning_efforts: model.reasoning_efforts.clone(),
+            context_window_tokens: model.context_window_tokens.unwrap_or(CONTEXT_WINDOW_TOKENS),
+            max_output_tokens: model.max_output_tokens.unwrap_or(MODEL_MAX_OUTPUT_TOKENS),
+            input_usd_per_million: 0.0,
+            output_usd_per_million: 0.0,
+            long_context_input_usd_per_million: 0.0,
+            long_context_output_usd_per_million: 0.0,
+            verified_at: String::new(),
+            source_url: String::new(),
+            pricing_required: false,
+            default_pricing: None,
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -354,10 +565,48 @@ pub(crate) fn estimate_body_with_reserve(
         });
     }
     // Use long-context cache-write input and output prices without assuming cache discounts.
-    let estimate =
-        ((upper as f64 * 5.0 + f64::from(settings.max_output_tokens) * 15.0) / 1_000_000.0 * 100.0)
-            .ceil()
-            / 100.0;
+    let model = model_catalogue()
+        .into_iter()
+        .find(|model| model.id == settings.model);
+    let (input_rate, output_rate) = if let Some(pricing) = &settings.pricing {
+        pricing.validate(&settings.model)?;
+        (
+            pricing.input_usd_per_million,
+            pricing.output_usd_per_million,
+        )
+    } else if let Some(model) = model {
+        (
+            model.long_context_input_usd_per_million * 1.25,
+            model.long_context_output_usd_per_million,
+        )
+    } else {
+        return Err(ProviderError::before(ErrorKind::InvalidSettings));
+    };
+    let fees = if let Some(pricing) = &settings.pricing {
+        let images = if pricing.image_usd > 0.0 {
+            let value: Value = serde_json::from_slice(body)
+                .map_err(|_| ProviderError::before(ErrorKind::InvalidRequirements))?;
+            value["input"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .flat_map(|input| input["content"].as_array().into_iter().flatten())
+                .filter(|part| part["type"] == "input_image")
+                .count()
+        } else {
+            0
+        };
+        pricing.request_usd + images as f64 * pricing.image_usd
+    } else {
+        0.0
+    };
+    let estimate = (((upper as f64 * input_rate
+        + f64::from(settings.max_output_tokens) * output_rate)
+        / 1_000_000.0
+        + fees)
+        * 100.0)
+        .ceil()
+        / 100.0;
     if estimate > settings.spending_limit_usd {
         return Err(ProviderError::before(ErrorKind::SpendingLimit));
     }
@@ -391,6 +640,9 @@ pub(crate) fn configure_response_body(
     body["stream"] = json!(true);
     body["store"] = json!(false);
     body["reasoning"] = json!({"effort": settings.reasoning_effort});
+    if settings.reasoning_effort.as_str() == "none" {
+        body.as_object_mut().unwrap().remove("reasoning");
+    }
     if authentication == AuthenticationMethod::Chatgpt {
         if let Some(tools) = body.get_mut("tools").and_then(Value::as_array_mut) {
             tools.retain(|tool| tool["type"] != "image_generation");

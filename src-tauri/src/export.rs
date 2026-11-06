@@ -690,55 +690,93 @@ pub async fn start_export(
             job.cancellation.clone(),
         )
     };
-    let client = {
-        let ai = ai.lock().map_err(message)?;
-        ai.export_client(provider).map_err(message)?
-    };
-    let key = if authentication == AuthenticationMethod::Chatgpt {
-        let Some(account_id) = account_id else {
-            return Err("This ChatGPT export has no bound account. Prepare it again.".into());
+    let result = async {
+        let client = {
+            let ai = ai.lock().map_err(message)?;
+            ai.export_client(provider, &settings).map_err(message)?
         };
-        let view = chatgpt.view().await;
-        let account = view
-            .accounts
-            .iter()
-            .find(|account| account.id == account_id)
-            .ok_or("This ChatGPT account is no longer connected.")?;
-        if !account.connected || !account.plan_enabled {
-            return Err(
-                "Sign in to this ChatGPT account and grant plan usage before exporting.".into(),
-            );
+        let mut account_model = None;
+        let key = if authentication == AuthenticationMethod::Chatgpt {
+            let Some(account_id) = account_id else {
+                return Err("This ChatGPT export has no bound account. Prepare it again.".into());
+            };
+            let mut view = chatgpt.view().await;
+            let account = view
+                .accounts
+                .iter()
+                .find(|account| account.id == account_id)
+                .ok_or("This ChatGPT account is no longer connected.")?;
+            if !account.connected || !account.plan_enabled {
+                return Err(
+                    "Sign in to this ChatGPT account and grant plan usage before exporting.".into(),
+                );
+            }
+            let manager = chatgpt.manager()?;
+            if view.models.is_empty() {
+                let client = ai.lock().map_err(message)?.client()?;
+                view = manager
+                    .discover_models(account_id, &client, &cancellation)
+                    .await
+                    .map_err(message)?;
+            }
+            if view.active_account_id != Some(account_id) {
+                return Err(
+                    "The selected ChatGPT account changed. Prepare the export again.".into(),
+                );
+            }
+            account_model = Some(view.selected_model(&settings).map_err(message)?.clone());
+            chatgpt
+                .manager()?
+                .bearer(account_id, &cancellation)
+                .await
+                .map_err(message)?
+        } else {
+            let mut ai = ai.lock().map_err(message)?;
+            ai.export_key(provider, &settings).map_err(message)?
+        };
+        let snapshot = {
+            let workspace = workspace.lock().map_err(message)?;
+            let project = workspace.project()?;
+            if project.id != plan.project_id || project.revision != plan.base_revision {
+                return Err("The design changed. Prepare the export again.".into());
+            }
+            desegnos_core::plan_snapshot(project, &plan)
+        };
+        if authentication == AuthenticationMethod::ApiKey {
+            let model =
+                crate::generation::api_model_for_key(&ai, provider, &settings, &key, &cancellation)
+                    .await
+                    .map_err(message)?;
+            let estimate = client
+                .estimate(authentication, &snapshot, mode, &plan.schema, &settings)
+                .map_err(message)?;
+            model
+                .validate_api_input(&settings, estimate.input_token_upper_bound)
+                .map_err(message)?;
         }
-        chatgpt
-            .manager()?
-            .bearer(account_id, &cancellation)
+        if let Some(model) = &account_model {
+            let estimate = client
+                .estimate(authentication, &snapshot, mode, &plan.schema, &settings)
+                .map_err(message)?;
+            model
+                .validate_input(estimate.input_token_upper_bound)
+                .map_err(message)?;
+        }
+        client
+            .generate_for_auth(
+                authentication,
+                &snapshot,
+                mode,
+                &plan.schema,
+                &settings,
+                &key,
+                &cancellation,
+                |_progress| {},
+            )
             .await
-            .map_err(message)?
-    } else {
-        let mut ai = ai.lock().map_err(message)?;
-        ai.export_key(provider).map_err(message)?
-    };
-    let snapshot = {
-        let workspace = workspace.lock().map_err(message)?;
-        let project = workspace.project()?;
-        if project.id != plan.project_id || project.revision != plan.base_revision {
-            return Err("The design changed. Prepare the export again.".into());
-        }
-        desegnos_core::plan_snapshot(project, &plan)
-    };
-    let result = client
-        .generate_for_auth(
-            authentication,
-            &snapshot,
-            mode,
-            &plan.schema,
-            &settings,
-            &key,
-            &cancellation,
-            |_progress| {},
-        )
-        .await
-        .map_err(message);
+            .map_err(message)
+    }
+    .await;
     finish(&workspace, &service, &site, job_id, plan, result)
 }
 
