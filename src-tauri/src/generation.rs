@@ -88,6 +88,148 @@ fn now() -> String {
         .format(&Rfc3339)
         .expect("UTC timestamps fit RFC3339")
 }
+
+const UNREADABLE_REPLY_RETRY_MESSAGE: &str = "Retrying after an unreadable reply…";
+
+/// A complete reply whose text is not a JSON document even after the same control-character
+/// repair `GenerationCandidate::from_json` applies. A schema, data or validation failure parses
+/// as JSON, so resending the identical frozen request would not help and must not be retried.
+fn is_unreadable_json(text: &str) -> bool {
+    match desegnos_core::parse_provider_json::<serde_json::Value>(text) {
+        Ok(_) => false,
+        Err(error) => matches!(
+            error.classify(),
+            serde_json::error::Category::Syntax | serde_json::error::Category::Eof
+        ),
+    }
+}
+
+fn usage_cost_usd(settings: &ProviderSettings, usage: TokenUsage) -> Option<f64> {
+    let pricing = settings.pricing.as_ref()?;
+    pricing.validate(&settings.model).ok()?;
+    Some(
+        (usage.input_tokens as f64 * pricing.input_usd_per_million
+            + usage.output_tokens as f64 * pricing.output_usd_per_million)
+            / 1_000_000.0
+            + pricing.request_usd,
+    )
+}
+
+fn retry_covers_budget(
+    settings: &ProviderSettings,
+    estimate_usd: f64,
+    usage: Option<TokenUsage>,
+) -> bool {
+    let first = usage
+        .and_then(|usage| usage_cost_usd(settings, usage))
+        .unwrap_or(estimate_usd);
+    first.is_finite()
+        && estimate_usd.is_finite()
+        && first + estimate_usd <= settings.spending_limit_usd + f64::EPSILON
+}
+
+/// Only a complete, received reply with an unreadable JSON body is worth one automatic resend.
+fn should_retry_unreadable_reply(
+    result: &Result<ProviderResponse, ProviderError>,
+    cancelled: bool,
+    settings: &ProviderSettings,
+    estimate_usd: f64,
+) -> bool {
+    if cancelled {
+        return false;
+    }
+    let Ok(response) = result else {
+        return false;
+    };
+    is_unreadable_json(&response.text)
+        && retry_covers_budget(settings, estimate_usd, response.usage)
+}
+
+fn add_usage(first: Option<TokenUsage>, second: Option<TokenUsage>) -> Option<TokenUsage> {
+    match (first, second) {
+        (Some(first), Some(second)) => Some(TokenUsage {
+            input_tokens: first.input_tokens.saturating_add(second.input_tokens),
+            output_tokens: first.output_tokens.saturating_add(second.output_tokens),
+            total_tokens: first.total_tokens.saturating_add(second.total_tokens),
+        }),
+        (first, second) => first.or(second),
+    }
+}
+
+fn with_first_usage(
+    result: Result<ProviderResponse, ProviderError>,
+    first: Option<TokenUsage>,
+) -> Result<ProviderResponse, ProviderError> {
+    let Some(first) = first else {
+        return result;
+    };
+    match result {
+        Ok(mut response) => {
+            response.usage = add_usage(Some(first), response.usage);
+            Ok(response)
+        }
+        Err(mut error) => {
+            error.usage = add_usage(Some(first), error.usage);
+            Err(error)
+        }
+    }
+}
+
+async fn ask_with_one_unreadable_reply_retry<F, Fut>(
+    mut ask: F,
+    cancel: &CancellationToken,
+    settings: &ProviderSettings,
+    estimate_usd: f64,
+    before_retry: impl FnOnce(Option<TokenUsage>),
+) -> (Result<ProviderResponse, ProviderError>, bool)
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<ProviderResponse, ProviderError>>,
+{
+    let first = ask().await;
+    if !should_retry_unreadable_reply(&first, cancel.is_cancelled(), settings, estimate_usd) {
+        return (first, false);
+    }
+    if cancel.is_cancelled() {
+        return (first, false);
+    }
+    let first_usage = first.as_ref().ok().and_then(|response| response.usage);
+    before_retry(first_usage);
+    let second = ask().await;
+    (with_first_usage(second, first_usage), true)
+}
+
+/// A completed, unambiguous final answer with malformed JSON/schema is a validation failure, not
+/// a transport failure. Its text is handed to the candidate parser, which can repair control
+/// characters in strings before deciding whether the reply is readable.
+fn accept_completed_candidate(
+    result: Result<ProviderResponse, ProviderError>,
+) -> Result<ProviderResponse, ProviderError> {
+    if let Err(error) = &result
+        && error.outcome == SubmissionOutcome::Received
+        && error.response_format.as_ref().is_some_and(|format| {
+            matches!(
+                format.rejection,
+                Some(
+                    desegnos_ai::ResponseRejection::CandidateJson
+                        | desegnos_ai::ResponseRejection::CandidateShape
+                )
+            )
+        })
+        && let Some(text) = error
+            .response_format
+            .as_ref()
+            .and_then(|format| format.diagnostic_reply.as_ref())
+    {
+        return Ok(ProviderResponse {
+            text: text.to_string(),
+            response_id: error.response_id.clone().unwrap_or_default(),
+            usage: error.usage,
+        });
+    }
+    result
+}
+
 fn trusted(window: &WebviewWindow) -> NativeResult<()> {
     if window.label() == "editor" {
         Ok(())
@@ -1766,6 +1908,36 @@ impl GenerationService {
         }
     }
 
+    fn retrying_after_unreadable_reply(
+        &mut self,
+        job_id: Uuid,
+        ordinal: usize,
+        usage: Option<TokenUsage>,
+    ) -> NativeResult<()> {
+        if self
+            .active
+            .get(&job_id)
+            .is_none_or(|(active, token)| *active != ordinal || token.is_cancelled())
+        {
+            return Ok(());
+        }
+        let Some(record) = self.jobs.get_mut(&job_id) else {
+            return Ok(());
+        };
+        record.view.message = UNREADABLE_REPLY_RETRY_MESSAGE.into();
+        record.view.received_bytes = 0;
+        record.view.usage = usage;
+        record.view.validation_events.push(desegnos_core::ValidationEvent {
+            kind: "unreadableReply".into(),
+            disposition: "retried".into(),
+            element_id: None,
+            message: "The AI reply was not readable JSON, so Desegnos sent the same frozen request once more.".into(),
+        });
+        let record = record.clone();
+        self.persist_retaining(record)?;
+        Ok(())
+    }
+
     fn finish(
         &mut self,
         original: &Project,
@@ -2954,6 +3126,8 @@ async fn submit(
             let ask = |requirements: &RequirementsSnapshot| {
                 let progress_app = shared_app.clone();
                 let requirements = requirements.clone();
+                let account_model = account_model.clone();
+                let api_model = api_model.clone();
                 async move {
                     let schema = desegnos_core::result_schema(&requirements);
                     if let Some(model) = &account_model {
@@ -2999,31 +3173,22 @@ async fn submit(
                         .await
                 }
             };
-            let mut result = ask(&request.requirements).await;
-            // A completed, unambiguous final answer with malformed JSON/schema is a
-            // validation failure, not a transport retry. All other provider failures stop here.
-            if let Err(error) = &result
-                && error.outcome == SubmissionOutcome::Received
-                && error.response_format.as_ref().is_some_and(|format| {
-                    matches!(
-                        format.rejection,
-                        Some(
-                            desegnos_ai::ResponseRejection::CandidateJson
-                                | desegnos_ai::ResponseRejection::CandidateShape
-                        )
-                    )
-                })
-                && let Some(text) = error
-                    .response_format
-                    .as_ref()
-                    .and_then(|format| format.diagnostic_reply.as_ref())
-            {
-                result = Ok(ProviderResponse {
-                    text: text.to_string(),
-                    response_id: error.response_id.clone().unwrap_or_default(),
-                    usage: error.usage,
-                });
-            }
+            let mut send = || {
+                let response = ask(&request.requirements);
+                async move { accept_completed_candidate(response.await) }
+            };
+            let (result, _) = ask_with_one_unreadable_reply_retry(
+                &mut send,
+                &cancellation,
+                &request.settings,
+                request.estimate_usd,
+                |usage| {
+                    if let Ok(mut service) = app.state::<Mutex<GenerationService>>().lock() {
+                        let _ = service.retrying_after_unreadable_reply(job_id, ordinal, usage);
+                    }
+                },
+            )
+            .await;
             result
         }
         .await;
@@ -3402,6 +3567,337 @@ fn validate_identity_account(
         return Err("The selected ChatGPT account, its plan permission, secure storage, or model changed while checking access. Review AI settings and explicitly analyze again.".into());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod unreadable_reply_retry_tests {
+    use super::*;
+    use desegnos_core::{
+        Appearance, ElementKind, PendingRequest, Project, Rect, RequestTarget, Viewport,
+        apply_generation_output, empty_element,
+    };
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    fn usage(count: u64) -> TokenUsage {
+        TokenUsage {
+            input_tokens: count,
+            output_tokens: count,
+            total_tokens: count * 2,
+        }
+    }
+
+    fn response(text: &str, count: u64) -> Result<ProviderResponse, ProviderError> {
+        Ok(ProviderResponse {
+            text: text.into(),
+            response_id: "resp_retry_test".into(),
+            usage: Some(usage(count)),
+        })
+    }
+
+    fn settings() -> ProviderSettings {
+        ProviderSettings {
+            spending_limit_usd: 2.0,
+            pricing: Some(desegnos_ai::ModelPricing {
+                model: desegnos_ai::MODEL_ID.into(),
+                input_usd_per_million: 1.0,
+                output_usd_per_million: 1.0,
+                request_usd: 0.0,
+                image_usd: 0.0,
+            }),
+            ..ProviderSettings::default()
+        }
+    }
+
+    fn project_and_element() -> (Project, Uuid) {
+        let mut project = Project::new(
+            "Retry".into(),
+            Viewport {
+                width: 800,
+                height: 600,
+            },
+            Appearance::Light,
+        )
+        .unwrap();
+        let page = project.pages[0].id;
+        let size = project.pages[0].sizes[0].id;
+        let mut element = empty_element(
+            ElementKind::Text,
+            Rect {
+                x: 10.0,
+                y: 10.0,
+                width: 120.0,
+                height: 40.0,
+            },
+        );
+        element.text = "Before".into();
+        let element_id = element.id;
+        project.pages[0].elements.push(element);
+        project.requests.push(PendingRequest {
+            id: Uuid::new_v4(),
+            text: "Change the text.".into(),
+            attachments: vec![],
+            targets: vec![RequestTarget::Element {
+                page,
+                size: Some(size),
+                id: element_id,
+            }],
+            area: None,
+            requested_at: "2026-01-01T00:00:00Z".into(),
+        });
+        project.validate().unwrap();
+        (project, element_id)
+    }
+
+    fn candidate_json(snapshot: &RequirementsSnapshot, element_id: Uuid) -> String {
+        serde_json::json!({
+            "jobId": snapshot.job_id,
+            "requirementsSha256": snapshot.sha256,
+            "summary": "Updated the text.",
+            "requests": [{
+                "requestId": null,
+                "elementId": element_id,
+                "status": "implemented",
+                "explanation": "Updated the text.",
+                "operations": [{
+                    "kind": "update",
+                    "patches": [{"elementId": element_id, "text": "After"}],
+                }],
+            }],
+            "images": [],
+            "pointerClassifications": [],
+            "decisionProposals": [],
+            "criticism": [],
+        })
+        .to_string()
+    }
+
+    fn prepared(
+        settings: ProviderSettings,
+    ) -> (GenerationService, Project, Uuid, Uuid, std::path::PathBuf) {
+        let directory =
+            std::env::temp_dir().join(format!("desegnos-retry-test-{}", Uuid::new_v4()));
+        let mut service = GenerationService::from_directory(directory.clone()).unwrap();
+        service.settings = settings;
+        let (project, element_id) = project_and_element();
+        let view = service
+            .prepare_requests(&project, None, None, Some(&[element_id]), Some(&[]))
+            .unwrap();
+        (service, project, view.job_id, element_id, directory)
+    }
+
+    #[test]
+    fn json_syntax_failures_are_retryable_but_data_and_validation_failures_are_not() {
+        let settings = settings();
+        assert!(is_unreadable_json("{\"a\": 1,}"));
+        assert!(is_unreadable_json("{\"a\": 1"));
+        let data_error = "{\"summary\": 42}";
+        let validation_error = "{\"requests\":[{\"elementId\":\"out-of-scope\"}]}";
+        for text in [data_error, validation_error] {
+            assert!(!is_unreadable_json(text));
+            assert!(!should_retry_unreadable_reply(
+                &response(text, 100),
+                false,
+                &settings,
+                0.01
+            ));
+        }
+        // The same control-character repair the candidate parser uses makes this readable.
+        assert!(!is_unreadable_json("{\"html\":\"<p>one\n<p>two\"}"));
+    }
+
+    #[test]
+    fn truncated_cancelled_and_over_budget_replies_are_not_retried() {
+        let settings = settings();
+        let malformed = response("{\"a\": 1", 100).unwrap();
+        for kind in [ErrorKind::Incomplete, ErrorKind::OutputLimit, ErrorKind::Truncated] {
+            let truncated = Err(ProviderError::new(kind, SubmissionOutcome::Received));
+            assert!(!should_retry_unreadable_reply(
+                &truncated,
+                false,
+                &settings,
+                0.01
+            ));
+        }
+        let cancelled = Err(ProviderError::new(
+            ErrorKind::Cancelled,
+            SubmissionOutcome::NotSubmitted,
+        ));
+        assert!(!should_retry_unreadable_reply(
+            &cancelled,
+            true,
+            &settings,
+            0.01
+        ));
+        assert!(!should_retry_unreadable_reply(
+            &Ok(malformed.clone()),
+            true,
+            &settings,
+            0.01
+        ));
+        let too_small = ProviderSettings {
+            spending_limit_usd: 0.01,
+            pricing: Some(desegnos_ai::ModelPricing {
+                model: desegnos_ai::MODEL_ID.into(),
+                input_usd_per_million: 1_000_000.0,
+                output_usd_per_million: 1_000_000.0,
+                request_usd: 0.0,
+                image_usd: 0.0,
+            }),
+            ..ProviderSettings::default()
+        };
+        assert!(!should_retry_unreadable_reply(
+            &Ok(malformed),
+            false,
+            &too_small,
+            0.01
+        ));
+    }
+
+    #[tokio::test]
+    async fn malformed_reply_is_retried_once_and_the_valid_layers_are_applied() {
+        let (mut service, project, job_id, element_id, directory) = prepared(settings());
+        let requirements = service
+            .jobs
+            .get(&job_id)
+            .unwrap()
+            .view
+            .requirements
+            .clone();
+        let estimate = service.jobs.get(&job_id).unwrap().view.estimate_usd;
+        let settings = service.settings.clone();
+        let valid = candidate_json(&requirements, element_id);
+        let malformed = valid[..valid.len() - 1].to_string();
+        let (_, cancellation) = service.begin(&project, job_id, false).unwrap();
+        let sends = Arc::new(AtomicUsize::new(0));
+        let counter = sends.clone();
+        let first = malformed.clone();
+        let second = valid.clone();
+        let (result, retried) = ask_with_one_unreadable_reply_retry(
+            || {
+                let index = counter.fetch_add(1, Ordering::SeqCst);
+                let text = if index == 0 {
+                    first.clone()
+                } else {
+                    second.clone()
+                };
+                async move { response(&text, if index == 0 { 100 } else { 300 }) }
+            },
+            &cancellation,
+            &settings,
+            estimate,
+            |_| {
+                service
+                    .retrying_after_unreadable_reply(job_id, 1, Some(usage(100)))
+                    .unwrap();
+            },
+        )
+        .await;
+        assert!(retried);
+        assert_eq!(sends.load(Ordering::SeqCst), 2);
+        let result = result.unwrap();
+        assert_eq!(result.usage.unwrap().total_tokens, 800);
+        service
+            .finish(&project, Some(&project), job_id, 1, Ok(result))
+            .unwrap();
+        let view = &service.jobs.get(&job_id).unwrap().view;
+        assert!(matches!(view.status, JobStatus::Ready));
+        assert_eq!(view.usage.unwrap().total_tokens, 800);
+        assert!(view.validation_events.iter().any(|event| {
+            event.kind == "unreadableReply" && event.disposition == "retried"
+        }));
+        let applied = apply_generation_output(
+            &project,
+            view.request_requirements(),
+            view.candidate.as_ref().unwrap(),
+            &[],
+            &BTreeMap::new(),
+        )
+        .unwrap();
+        assert_eq!(applied.pages[0].elements[0].text, "After");
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[tokio::test]
+    async fn both_malformed_replies_fail_after_exactly_two_sends() {
+        let (mut service, project, job_id, element_id, directory) = prepared(settings());
+        let requirements = service
+            .jobs
+            .get(&job_id)
+            .unwrap()
+            .view
+            .requirements
+            .clone();
+        let estimate = service.jobs.get(&job_id).unwrap().view.estimate_usd;
+        let settings = service.settings.clone();
+        let valid = candidate_json(&requirements, element_id);
+        let malformed = valid[..valid.len() - 1].to_string();
+        let (_, cancellation) = service.begin(&project, job_id, false).unwrap();
+        let sends = Arc::new(AtomicUsize::new(0));
+        let counter = sends.clone();
+        let (result, retried) = ask_with_one_unreadable_reply_retry(
+            || {
+                counter.fetch_add(1, Ordering::SeqCst);
+                let text = malformed.clone();
+                async move { response(&text, 100) }
+            },
+            &cancellation,
+            &settings,
+            estimate,
+            |_| {
+                service
+                    .retrying_after_unreadable_reply(job_id, 1, Some(usage(100)))
+                    .unwrap();
+            },
+        )
+        .await;
+        assert!(retried);
+        assert_eq!(sends.load(Ordering::SeqCst), 2);
+        service
+            .finish(&project, Some(&project), job_id, 1, result)
+            .unwrap();
+        let view = &service.jobs.get(&job_id).unwrap().view;
+        assert!(matches!(view.status, JobStatus::Blocked));
+        assert!(view.message.starts_with("Desegnos rejected the candidate:"));
+        assert_eq!(view.usage.unwrap().total_tokens, 400);
+        assert!(view.validation_events.iter().any(|event| {
+            event.kind == "unreadableReply" && event.disposition == "retried"
+        }));
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_budget_without_room_for_a_second_request_sends_once() {
+        let settings = ProviderSettings {
+            spending_limit_usd: 0.01,
+            pricing: Some(desegnos_ai::ModelPricing {
+                model: desegnos_ai::MODEL_ID.into(),
+                input_usd_per_million: 1_000_000.0,
+                output_usd_per_million: 1_000_000.0,
+                request_usd: 0.0,
+                image_usd: 0.0,
+            }),
+            ..ProviderSettings::default()
+        };
+        let sends = Arc::new(AtomicUsize::new(0));
+        let counter = sends.clone();
+        let (result, retried) = ask_with_one_unreadable_reply_retry(
+            || {
+                counter.fetch_add(1, Ordering::SeqCst);
+                async move { response("{\"a\": 1", 100) }
+            },
+            &CancellationToken::new(),
+            &settings,
+            0.01,
+            |_| panic!("must not retry past the spending limit"),
+        )
+        .await;
+        assert!(!retried);
+        assert_eq!(sends.load(Ordering::SeqCst), 1);
+        assert!(result.is_ok());
+    }
 }
 
 #[cfg(test)]
