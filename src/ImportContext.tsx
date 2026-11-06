@@ -199,7 +199,7 @@ export function ImportContext({ busy, settings, openSettings, importInto, onPage
   const account = settings?.chatgpt.accounts.find(item => item.id === settings.chatgpt.activeAccountId);
   const connected = !settings?.configurationError && (settings?.authentication === 'chatgpt' ? account?.connected && account.planEnabled && !account.storageRepairRequired : settings?.credential.configured);
   const alsoBrand = connected && brandChoice !== 'skipped';
-  const hasPages = !!pages.source?.pages.length && !pages.imported;
+  const hasPages = !!pages.source?.pages.length && pages.phase.kind !== 'imported';
   const requestedFiles = automatic ? null : files;
   const previousReadError = previousBrand.status === 'ready' ? '' : previousBrand.status === 'failed' ? previousBrand.error : previousBrand.retrying;
   function change(next: Change) { setStep(current => reduce(current, next)); }
@@ -341,7 +341,7 @@ export function ImportContext({ busy, settings, openSettings, importInto, onPage
         <>
         <h2>Source</h2>
         <div className="identity-address"><label>Website address<input type="text" inputMode="url" placeholder="example.com" value={address} disabled={locked} onChange={event => setAddress(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); if (address.trim()) void fetchSite(); } }} /></label>
-          <button type="button" disabled={locked || !address.trim()} onClick={() => { void fetchSite(); }}>{pages.phase === 'reading' ? 'Reading…' : 'Read'}</button></div>
+          <button type="button" disabled={locked || !address.trim()} onClick={() => { void fetchSite(); }}>{pages.phase.kind === 'reading' ? 'Reading…' : 'Read'}</button></div>
         <div className="identity-source-actions"><span className="identity-or">or</span><button type="button" disabled={locked} onClick={() => { void pick('folder'); }}>Choose folder…</button><button type="button" disabled={locked} onClick={() => { void pick('zip'); }}>Choose ZIP…</button><button type="button" disabled={locked} onClick={() => { void pick('file'); }}>Choose HTML files…</button></div>
 
         {source && <h3 className="identity-source-name">{source.name}</h3>}
@@ -353,7 +353,7 @@ export function ImportContext({ busy, settings, openSettings, importInto, onPage
         {pages.source && pages.source.pages.length > 0 && <section className="website-import-pages" aria-label="Pages to import">
           <p>{pages.source.totalPages} {pages.source.totalPages === 1 ? 'page' : 'pages'} found.{pages.source.totalPages > 30 ? ' The 30 closest to the home page are imported.' : ''}</p>
           <ul className="website-import-list">{pages.source.pages.map(page => <li key={page.route}><span>{page.title || page.route}</span>{page.title && <span className="muted">{page.route}</span>}</li>)}</ul>
-          {pages.imported && <Notice message="Pages imported." />}
+          {pages.phase.kind === 'imported' && <Notice message="Pages imported." />}
         </section>}
         {hasPages && source && connected && !candidate && <label className="identity-choice"><input type="checkbox" checked={!!alsoBrand} disabled={!!locked} onChange={event => setBrandChoice(event.target.checked ? 'included' : 'skipped')} />Also read brand and content</label>}
         {hasPages && <button type="button" className="primary" disabled={locked || (!!alsoBrand && !!source && !selection?.fits)} onClick={() => { void importSource(); }}>Import {pages.source!.pages.length > 1 ? `${pages.source!.pages.length} pages` : 'page'}</button>}
