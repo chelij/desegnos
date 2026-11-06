@@ -1,19 +1,19 @@
 import { type EditorTool } from './EditorTools';
 import { type ProjectCanvasHandle } from './ProjectCanvas';
 import { viewSlot, type ShortcutAction } from './shortcuts';
-import type { CanvasTemplate, ElementKind, WorkspaceView } from './types';
+import type { CanvasTemplate, WorkspaceView } from './types';
 import { ActionEvent, NO_ACTION_EVENT } from './editorShared';
 
 type Context = {
   showStartPage: boolean;
   current: import("react").RefObject<WorkspaceView | null>;
-  setShowShortcuts: import("react").Dispatch<import("react").SetStateAction<boolean>>;
+  openPanel: (panel: Exclude<import('./session/useEditor').EditorPanel, { kind: 'closed' }>) => void;
   setShowPalette: import("react").Dispatch<import("react").SetStateAction<boolean>>;
   newUntitled: (template?: CanvasTemplate) => Promise<void>;
   open: (folder?: boolean, path?: string, discardRecovery?: boolean) => Promise<void>;
-  setInsertKind: import("react").Dispatch<import("react").SetStateAction<ElementKind | null>>;
+  clearInsertKind: () => void;
   setInsertSignal: import("react").Dispatch<import("react").SetStateAction<number>>;
-  setCanvasTool: import("react").Dispatch<import("react").SetStateAction<EditorTool>>;
+  changeCanvasTool: (tool: EditorTool) => void;
   panelActions: import("./EditorDock").PanelActions;
   canvasRef: import("react").RefObject<ProjectCanvasHandle | null>;
   togglePlay: (pageId?: string | null) => void;
@@ -27,7 +27,7 @@ type Context = {
 
 export function createEditorShortcuts(context: () => Context) {
   function performAction(action: ShortcutAction, event: ActionEvent = NO_ACTION_EVENT) {
-    const { showStartPage, current, setShowShortcuts, setShowPalette, newUntitled, open, setInsertKind, setInsertSignal, setCanvasTool, panelActions, canvasRef, togglePlay, previewSelectedBoundary, openExportPanel, runExport, travel, save, closeProject } = context();
+    const { showStartPage, current, openPanel, setShowPalette, newUntitled, open, clearInsertKind, setInsertSignal, changeCanvasTool, panelActions, canvasRef, togglePlay, previewSelectedBoundary, openExportPanel, runExport, travel, save, closeProject } = context();
     // The start page has no canvas: project commands wait until a canvas is open again.
     if ((showStartPage || !current.current?.project) && !['new', 'open', 'help', 'commandPalette'].includes(action)) return;
     const project = current.current?.project;
@@ -45,7 +45,7 @@ export function createEditorShortcuts(context: () => Context) {
       // Plain paste stays with the paste event, which also carries content from other apps.
       case 'paste':
         return;
-      case 'help': event.preventDefault(); setShowShortcuts(true); return;
+      case 'help': event.preventDefault(); openPanel({ kind: 'shortcuts' }); return;
       case 'commandPalette': event.preventDefault(); setShowPalette(true); return;
       case 'new': event.preventDefault(); void newUntitled().catch(() => {}); return;
       case 'open': event.preventDefault(); void open().catch(() => {}); return;
@@ -54,12 +54,12 @@ export function createEditorShortcuts(context: () => Context) {
         if (!field) return;
         event.preventDefault(); field.focus({ preventScroll: true }); field.select(); return;
       }
-      case 'insert': event.preventDefault(); setInsertKind(null); setInsertSignal(value => value + 1); return;
-      case 'imageTool': event.preventDefault(); setInsertKind(null); setCanvasTool('image'); return;
+      case 'insert': event.preventDefault(); clearInsertKind(); setInsertSignal(value => value + 1); return;
+      case 'imageTool': event.preventDefault(); changeCanvasTool('image'); return;
       case 'selectTool': case 'boundaryTool': case 'pointerTool': case 'textTool': case 'panTool':
       case 'rectTool': case 'ellipseTool': case 'lineTool': case 'noteTool': {
-        event.preventDefault(); setInsertKind(null);
-        setCanvasTool(action === 'selectTool' ? 'select' : action === 'boundaryTool' ? 'boundary'
+        event.preventDefault();
+        changeCanvasTool(action === 'selectTool' ? 'select' : action === 'boundaryTool' ? 'boundary'
           : action === 'pointerTool' ? 'pointer' : action === 'textTool' ? 'text' : action === 'panTool' ? 'pan'
             : action === 'rectTool' ? 'rect' : action === 'ellipseTool' ? 'ellipse' : action === 'lineTool' ? 'line' : 'note');
         return;

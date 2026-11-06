@@ -49,13 +49,14 @@ export default function App({ initialView }: { initialView?: WorkspaceView } = {
 
 function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
   const {
+    panel, openPanel, closePanel, togglePanel, saving, updateState, dismissUpdate, changeCanvasTool,
     showPalette, paletteCommands, setShowPalette, closeRequest, setCloseRequest, onStartPage, project, view,
-    run, switchProjectTab, closeProjectTab, menuItems, resolvedTheme, setTheme, showImport,
-    setImportSource, setShowImport, travel, showHistory, setShowHistory, panels, panelActions, play,
-    togglePlay, previewSelectedBoundary, showExport, openExportPanel, aiConnected, showAiSettings,
-    setShowAiSettings, generation, showLog, setShowLog, requestedAreas, working, generate,
-    error, setError, problemAction, openFailure, setNotice, setOpenFailure, updateResult, openRelease,
-    setUpdateResult, updateError, setUpdateError, notices, setNotices, dismissedRecovery, setDismissedRecovery,
+    run, switchProjectTab, closeProjectTab, menuItems, resolvedTheme, setTheme,
+    travel, panels, panelActions, play,
+    togglePlay, previewSelectedBoundary, openExportPanel, aiConnected, showAiSettings,
+    setShowAiSettings, generation, requestedAreas, working, generate,
+    error, setError, problemAction, openFailure, setNotice, setOpenFailure, openRelease,
+    notices, setNotices, dismissedRecovery, setDismissedRecovery,
     loading, load, pending, newUntitled, open, appSettings, changeShowStartPage, recentProjects, openRecent,
     forgetRecent, pinRecent, recover, dismissRecoveries, canvasTool, chooseTool, canvasZoom, canvasRef,
     boundaryKind, setBoundaryKind, requestToolShape, setRequestToolShape, armInsert, insertSignal,
@@ -63,14 +64,14 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
     canvasSelection, canvasFocus, canvasFocusSize, widthPreview, setWidthPreview, selectCanvasReference, selectCanvasPointer,
     selectCanvasRequest, clearCanvasSelection, removeCanvasSelection, addCanvasReference,
     updateCanvasReference, elementToReference, referenceToElement, attachToRequest, addCanvasRequest,
-    updateCanvasRequest, deleteBoundary, addCanvasPointer, updateCanvasPointer, pointerStateMap, insertKind,
-    setCanvasTool, setInsertKind, reportCanvasZoom, selectCanvasElement, insertCanvasElements,
+    updateCanvasRequest, deleteBoundary, addCanvasPointer, updateCanvasPointer, pointerStateMap,
+    reportCanvasZoom, selectCanvasElement, insertCanvasElements,
     updateCanvasElements, moveCanvasElements, groupCanvasElements, ungroupCanvasElements, linkCanvasElements,
     unlinkCanvasElements, pasteLinkedInstances, playElement, setPlay, preview, closePreview, refreshPreview,
-    showGenerationStatus, openImportDialog, setShowNotes, editGenerationRequest,
-    openGeneration, logFocus, aiSettings, manageChatgptUsage, replyToGeneration, exportDestination,
+    showGenerationStatus, openImportDialog, editGenerationRequest,
+    openGeneration, aiSettings, manageChatgptUsage, replyToGeneration, exportDestination,
     exportJob, exportSending, exportError, chooseExportDestination, runExport, sendExport, cancelExport,
-    openExportFolder, openInBrowser, setShowExport, historyEpoch, accept, untitledSave, projectLocation,
+    openExportFolder, openInBrowser, historyEpoch, accept, projectLocation,
     closeUntitledSave, saveUntitledProject, selectedPointer, selectedPointerState, forgetExportPointer,
     keepPointerComment, keepPointerCode, keepPointerThis, mergePointerClash,
     selectedReferenceItem, selectedRequest, attachReferenceContext, selectedElements, selectedElementPageId,
@@ -78,12 +79,10 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
     selectedBoundary, updateCanvasPage, mutate, updateCanvasPageSize,
     addCanvasPageSize, renameProject, showDotGrid, changeGridFlags, save, canvasBoundaries,
     moveCanvasElementTo, removeLinkedDefinition, views, addNamedView, renameNamedView, removeNamedView,
-    selectedBounds, clashPointers, selectNextPointerClash, zoomPercent, showGridSettings, setShowGridSettings,
-    showShortcuts, setShowShortcuts, recovery, showProjectLocation, setShowProjectLocation,
-    changeProjectLocation, showRecovery, setShowRecovery, importSource, importContext,
-    setCanvasSelection, setCanvasFocus, focusCanvasBehaviour, behaviourFocus, showStyleGuide,
-    setShowStyleGuide, showNotes, changeBrief, showRename, setShowRename,
-    saveConflict, chooseSaveConflict, replacement, setReplacement, confirmation, setConfirmation,
+    selectedBounds, clashPointers, selectNextPointerClash, zoomPercent,
+    recovery, changeProjectLocation, importContext,
+    setCanvasSelection, setCanvasFocus, focusCanvasBehaviour, behaviourFocus, changeBrief,
+    chooseSaveConflict, replacement, setReplacement, confirmation, setConfirmation,
     refreshAiSettings, updateAiSettings, aiPollingError, compactHistory,
   } = useEditor({ initialView });
   // Behaviours are ordinary pointers on one layer or boundary; the dock edits their comment.
@@ -128,7 +127,7 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
   const previewAvailable = !onStartPage && !!project && projectHasPreviewPages(project);
   return <div className={presenting ? 'application editor-shell presenting' : 'application editor-shell'}>
     {showPalette && <CommandPalette commands={paletteCommands} close={() => setShowPalette(false)} />}
-    {untitledSave && view?.untitled && project && <ModalDialog title="Save project" close={() => closeUntitledSave(null)}>
+    {saving.kind !== 'idle' && saving.untitled && view?.untitled && project && <ModalDialog title="Save project" close={() => closeUntitledSave(null)}>
       <UntitledSaveForm key={project.id} project={project} location={projectLocation} busy={pending > 0}
         cancel={() => closeUntitledSave(null)}
         chooseLocation={name => native<string | null>('pick_project_save_path', { name })}
@@ -149,14 +148,14 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
       <MenuButton label="Menu" ariaLabel="Editor menu" items={menuItems} />
       <div className="shell-primary-actions">
         {(onStartPage || !project) && <button type="button" className="theme-toggle icon-button" aria-label={resolvedTheme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'} title={resolvedTheme === 'dark' ? 'Light mode' : 'Dark mode'} onClick={() => setTheme(resolvedTheme === 'dark' ? 'light' : 'dark')}>{resolvedTheme === 'dark' ? <Icon name="sun" /> : <Icon name="moon" />}</button>}
-        {project && <button type="button" className={`icon-button labeled${showImport ? ' active' : ''}`} aria-pressed={showImport} aria-label="Import" title="Import" onClick={() => { setImportSource(null); setShowImport(value => !value); }}><Icon name="folder" /><span className="button-label">Import</span></button>}
+        {project && <button type="button" className={`icon-button labeled${panel.kind === 'import' ? ' active' : ''}`} aria-pressed={panel.kind === 'import'} aria-label="Import" title="Import" onClick={() => togglePanel({ kind: 'import', source: null })}><Icon name="folder" /><span className="button-label">Import</span></button>}
         {!onStartPage && project && <><button aria-label="Undo last change" type="button" className="icon-button" disabled={!view?.canUndo} title={withShortcut('Undo', 'undo')} onClick={() => run(() => travel('undo_project'))}><Icon name="undo" /></button><button aria-label="Redo last change" type="button" className="icon-button" disabled={!view?.canRedo} title={withShortcut('Redo', 'redo')} onClick={() => run(() => travel('redo_project'))}><Icon name="redo" /></button>
-          <button type="button" className={showHistory ? 'icon-button active' : 'icon-button'} aria-pressed={showHistory} aria-label="History and alternatives" title="History and alternatives" onClick={() => { setShowHistory(value => !value); if (panels.hidden) panelActions.toggleHidden(); if (panels.collapsed) panelActions.setCollapsed(false); }}><Icon name="history" /></button></>}
+          <button type="button" className={panel.kind === 'history' ? 'icon-button active' : 'icon-button'} aria-pressed={panel.kind === 'history'} aria-label="History and alternatives" title="History and alternatives" onClick={() => { togglePanel({ kind: 'history' }); if (panels.hidden) panelActions.toggleHidden(); if (panels.collapsed) panelActions.setCollapsed(false); }}><Icon name="history" /></button></>}
         {!onStartPage && project && <button type="button" className={`icon-button labeled${playIsActive(play) ? ' active' : ''}`} aria-pressed={playIsActive(play)} aria-label={playIsActive(play) ? 'Stop Play' : 'Play'} title={withShortcut(playIsActive(play) ? 'Stop Play' : 'Play', 'play')} onClick={() => playIsActive(play) ? setPlay(idlePlay) : togglePlay()}><Icon name={playIsActive(play) ? 'stop' : 'play'} /><span className="button-label">{playIsActive(play) ? 'Stop' : 'Play'}</span></button>}
         {previewAvailable && <button type="button" className="icon-button labeled" aria-label="Preview export" title={withShortcut('Preview export', 'preview')} onClick={() => previewSelectedBoundary()}><Icon name="monitor" /><span className="button-label">Preview</span></button>}
-        {!onStartPage && project && <button type="button" className={`icon-button labeled${showExport ? ' active' : ''}`} aria-pressed={showExport} aria-label="Export" title={withShortcut('Export', 'export')} onClick={() => showExport ? setShowExport(false) : openExportPanel()}><Icon name="download" /><span className="button-label">Export</span></button>}
+        {!onStartPage && project && <button type="button" className={`icon-button labeled${panel.kind === 'export' ? ' active' : ''}`} aria-pressed={panel.kind === 'export'} aria-label="Export" title={withShortcut('Export', 'export')} onClick={() => panel.kind === 'export' ? closePanel('export') : openExportPanel()}><Icon name="download" /><span className="button-label">Export</span></button>}
         {showsOpener({ available: !aiConnected, open: showAiSettings }) && <button className="ai-shortcut needs-connection" onClick={() => setShowAiSettings(true)} aria-label="AI settings" title="Connect AI to generate">Connect AI</button>}
-        {showsOpener({ available: !onStartPage && !!project && !!(generation.job || generation.operation), open: showLog }) && <button type="button" className="icon-button" aria-label="AI log" title="AI conversation" onClick={() => setShowLog(true)}><Icon name="note" /></button>}
+        {showsOpener({ available: !onStartPage && !!project && !!(generation.job || generation.operation), open: panel.kind === 'log' }) && <button type="button" className="icon-button" aria-label="AI log" title="AI conversation" onClick={() => openPanel({ kind: 'log', focus: 0 })}><Icon name="note" /></button>}
         {!onStartPage && project && <button className={generation.canStop ? undefined : 'primary'} title={generation.canStop ? 'Stop generation (Esc)' : nothingToGenerate ? 'Describe at least one request first.' : working ? 'Wait for the current generation to finish.' : !aiConnected ? 'Connect AI to generate' : 'Generate the described changes'} disabled={!generation.canStop && (nothingToGenerate || working)} onClick={generation.canStop ? () => { void generation.cancel(); } : !aiConnected && !nothingToGenerate ? () => setShowAiSettings(true) : () => generate()}>{generation.canStop ? 'Stop' : 'Generate'}</button>}
       </div>
     </header>
@@ -164,8 +163,8 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
     {onStartPage && <NoticeHost />}
     {error && <ProblemBanner message={userError(error)} dismiss={() => setError('')} action={problemAction} />}
     {openFailure && <Notice variant="warning" title="Couldn't open your browser" message={openFailure.message} action={{ label: 'Copy link', onClick: () => { const url = openFailure.url; void native('copy_text', { text: url }).then(() => setNotice('Link copied.')).catch(error => setError(errorMessage(error))); } }} dismiss={() => setOpenFailure(null)} />}
-    {updateResult && <Notice variant={updateResult.variant} message={updateResult.message} action={updateResult.download ? { label: 'Download', onClick: () => { const url = updateResult.download; if (url) void openRelease(url); } } : undefined} dismiss={() => setUpdateResult(null)} />}
-    {updateError && <ProblemBanner message={userError(updateError)} dismiss={() => setUpdateError('')} />}
+    {updateState.kind === 'done' && <Notice variant={updateState.result.variant} message={updateState.result.message} action={updateState.result.download ? { label: 'Download', onClick: () => { const url = updateState.result.download; if (url) void openRelease(url); } } : undefined} dismiss={dismissUpdate} />}
+    {updateState.kind === 'failed' && <ProblemBanner message={userError(updateState.message)} dismiss={dismissUpdate} />}
     {notices.map(item => <Notice key={item.id} variant="info" message={item.message} undo={item.undo ? { label: 'Undo', onClick: item.undo } : undefined} dismiss={() => setNotices(items => items.filter(queued => queued.id !== item.id))} />)}
     <CrashReportNotice />
     {view?.recoveryError && !dismissedRecovery.includes(`error:${view.recoveryError}`) && <ProblemBanner message={userError(view.recoveryError)} dismiss={() => setDismissedRecovery(items => [...items, `error:${view.recoveryError}`])} />}
@@ -178,7 +177,7 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
         recovery={view.recoveries.length ? <RecoveryList items={view.recoveries} busy={pending > 0} recover={id => { void recover(id).catch(() => {}); }} dismiss={dismissRecoveries} /> : null} />
     </> : <>
       <div className="editor-body">
-      {!panels.hidden && <ToolStrip tool={canvasTool} onTool={chooseTool}
+      {!panels.hidden && <ToolStrip tool={canvasTool.kind} onTool={chooseTool}
         zoom={canvasZoom}
         onZoomStep={direction => canvasRef.current?.zoomStep(direction)}
         onZoom={value => canvasRef.current?.zoomTo(value)}
@@ -193,29 +192,29 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
       <SurfaceHost place="canvas" />
       <NoticeHost />
       {playIsActive(play) && !presenting && playingLabel && <div className="play-pill" role="status"><span className="play-pill-label">Playing {playingLabel}</span><button type="button" onClick={() => setPlay(idlePlay)}>Stop</button></div>}
-      <ProjectCanvas ref={canvasRef} editProject={mutate} project={project} openPage={id => selectCanvasBoundary(id)} createBoundary={createCanvasBoundary} savePlacements={saveCanvasPlacements} saveView={(slot, camera) => slot === null ? addNamedViewAt(camera) : saveCurrentView(slot, camera)} selection={canvasSelection} focused={canvasFocus} focusedSize={canvasFocusSize} widthPreview={widthPreview} selectBoundary={selectCanvasBoundary} selectReference={selectCanvasReference} selectPointer={selectCanvasPointer} selectRequest={id => selectCanvasRequest(id)} clearSelection={clearCanvasSelection} removeSelection={removeCanvasSelection} addReference={addCanvasReference} updateReference={updateCanvasReference} elementToReference={elementToReference} referenceToElement={referenceToElement} attachToRequest={(requestId, files, links) => run(() => attachToRequest(requestId, files, links))} addRequest={addCanvasRequest} deleteBoundary={deleteBoundary} addPointer={addCanvasPointer} updatePointer={updateCanvasPointer} focusBehaviour={focusCanvasBehaviour} pointerStates={pointerStateMap} tool={canvasTool} insertKind={insertKind} onTool={next => { setCanvasTool(next); if (next !== 'insert') setInsertKind(null); }} boundaryKind={boundaryKind} requestShape={requestToolShape} onZoom={reportCanvasZoom} onLayout={ignoreCanvasLayout}
+      <ProjectCanvas ref={canvasRef} editProject={mutate} project={project} openPage={id => selectCanvasBoundary(id)} createBoundary={createCanvasBoundary} savePlacements={saveCanvasPlacements} saveView={(slot, camera) => slot === null ? addNamedViewAt(camera) : saveCurrentView(slot, camera)} selection={canvasSelection} focused={canvasFocus} focusedSize={canvasFocusSize} widthPreview={widthPreview} selectBoundary={selectCanvasBoundary} selectReference={selectCanvasReference} selectPointer={selectCanvasPointer} selectRequest={id => selectCanvasRequest(id)} clearSelection={clearCanvasSelection} removeSelection={removeCanvasSelection} addReference={addCanvasReference} updateReference={updateCanvasReference} elementToReference={elementToReference} referenceToElement={referenceToElement} attachToRequest={(requestId, files, links) => run(() => attachToRequest(requestId, files, links))} addRequest={addCanvasRequest} deleteBoundary={deleteBoundary} addPointer={addCanvasPointer} updatePointer={updateCanvasPointer} focusBehaviour={focusCanvasBehaviour} pointerStates={pointerStateMap} tool={canvasTool.kind} insertKind={canvasTool.kind === 'insert' ? canvasTool.insertKind : null} onTool={changeCanvasTool} boundaryKind={boundaryKind} requestShape={requestToolShape} onZoom={reportCanvasZoom} onLayout={ignoreCanvasLayout}
         selectElement={selectCanvasElement} removeElements={items => removeCanvasSelection([], [], [], items)} insertElements={insertCanvasElements} updateElements={updateCanvasElements} moveElements={moveCanvasElements}
         groupElements={groupCanvasElements} ungroupElements={ungroupCanvasElements}
         linkElements={linkCanvasElements} unlinkElements={unlinkCanvasElements} pasteLinked={pasteLinkedInstances}
         play={play} onPlayBoundary={id => setPlay(current => ({ ...current, boundary: id }))} onPlayElement={playElement} onPlayExit={() => setPlay(idlePlay)}
         preview={preview} previewClose={closePreview} previewRefresh={refreshPreview} generate={ids => generate(ids)} />
-      {showGenerationStatus ? <GenerationFeedback controller={generation} project={project} openSettings={() => setShowAiSettings(true)} openImport={openImportDialog} openBrief={() => setShowNotes('decisions')} changeRequest={editGenerationRequest} details={showsOpener({ available: true, open: showLog }) ? openGeneration : undefined} /> : null}
+      {showGenerationStatus ? <GenerationFeedback controller={generation} project={project} openSettings={() => setShowAiSettings(true)} openImport={openImportDialog} openBrief={() => openPanel({ kind: 'notes', section: 'decisions' })} changeRequest={editGenerationRequest} details={showsOpener({ available: true, open: panel.kind === 'log' }) ? openGeneration : undefined} /> : null}
       </div>
-      {showLog && project && <GenerationLog key={`${project.id}:${logFocus}`} controller={generation} job={generation.job} operation={generation.operation} error={generation.error} project={project} settings={aiSettings} openSettings={() => setShowAiSettings(true)} openImport={openImportDialog} openBrief={() => setShowNotes('decisions')} editRequest={editGenerationRequest} reply={replyToGeneration} close={() => setShowLog(false)} />}
+      {panel.kind === 'log' && project && <GenerationLog key={`${project.id}:${panel.focus}`} controller={generation} job={generation.job} operation={generation.operation} error={generation.error} project={project} settings={aiSettings} openSettings={() => setShowAiSettings(true)} openImport={openImportDialog} openBrief={() => openPanel({ kind: 'notes', section: 'decisions' })} editRequest={editGenerationRequest} reply={replyToGeneration} close={() => closePanel('log')} />}
       <SurfaceHost place="panel" />
       </main>
       </div>
       <EditorDock state={panels} actions={panelActions}
-        exportPanel={showExport && project
+        exportPanel={panel.kind === 'export' && project
           ? <ExportPanel project={project} destination={exportDestination} busy={pending > 0} job={exportJob} sending={exportSending} error={exportError}
               chooseDestination={() => run(chooseExportDestination)} runExport={() => runExport()} sendExport={() => run(sendExport)}
               cancelExport={() => run(cancelExport)} retryExport={() => run(sendExport)}
               openFolder={openExportFolder} openInBrowser={() => run(openInBrowser)} previewExport={pageId => runExport(pageId)}
               selectBoundary={selectCanvasBoundary} setIncluded={(pageId, included) => updateCanvasPage(pageId, { included })}
               setOutput={(pageId, output) => void mutate({ type: 'set_page_output', page_id: pageId, output })}
-              close={() => setShowExport(false)} />
+              close={() => closePanel('export')} />
           : undefined}
-        history={showHistory && project
+        history={panel.kind === 'history' && project
           ? <HistoryPanel projectId={project.id} refreshKey={`${project.id}:${view?.dirty ? 'dirty' : 'saved'}:${view?.history?.version ?? 0}:${historyEpoch}`}
               apply={accept} notice={setNotice} error={setError} compact={() => run(compactHistory)} />
           : undefined}
@@ -264,22 +263,22 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
           removeReference={id => removeCanvasSelection([id])} removePointer={id => removeCanvasSelection([], [id])}
           addBoundary={() => run(addProjectBoundary)} views={views} addView={addNamedView} jumpToView={view => canvasRef.current?.goToView(view)} renameView={renameNamedView} removeView={removeNamedView} />} />
       </div>
-      <footer className="status-bar"><span className="status-selection" title={view.path ?? undefined}>{canvasSelection.length > 1 && <span className="status-count">{canvasSelection.length} selected</span>}{selectedBounds && <span className="status-bounds" aria-label="Selection bounds"><span>{Math.round(selectedBounds.width)} × {Math.round(selectedBounds.height)}</span><span className="status-coordinate">X {Math.round(selectedBounds.x)} · Y {Math.round(selectedBounds.y)}</span></span>}</span><div className="canvas-status-actions">{clashPointers.length > 0 && <StatusChip tone="warning" className="clash-chip" onClick={selectNextPointerClash} role="status" ariaLabel="Select the next pointer clash">{clashPointers.length} clash{clashPointers.length === 1 ? '' : 'es'}</StatusChip>}<div className="status-zoom" role="group" aria-label="Canvas zoom controls"><button type="button" aria-label="Fit all boundaries" title={withShortcut('Fit all boundaries', 'fitAll')} onClick={() => canvasRef.current?.fit()}>Fit</button><input type="range" min={0} max={1000} step={1} value={sliderFromZoom(canvasZoom)} aria-label="Canvas zoom" title={`${zoomPercent}%`} onChange={event => canvasRef.current?.zoomTo(zoomFromSlider(Number(event.target.value)))} /><button type="button" className="status-zoom-value" aria-label="Zoom to 100%" title={withShortcut('Zoom to 100%', 'zoomReset')} onClick={() => canvasRef.current?.zoomTo(1)}>{zoomPercent}%</button></div>{showsOpener({ available: true, open: showGridSettings }) && <button onClick={() => setShowGridSettings(true)} aria-label="Grid settings">{project.gridSettings.spacing}{project.gridSettings.unit === 'percent' ? '%' : ' px'} grid{project.gridSettings.snap ? ' · Snap' : ''}</button>}<StatusChip tone={pending > 0 ? 'neutral' : view.dirty ? 'warning' : 'success'} role="status" className="save-state">{pending > 0 ? 'Saving locally…' : view.dirty ? 'Unsaved' : 'Saved'}</StatusChip></div></footer>
+      <footer className="status-bar"><span className="status-selection" title={view.path ?? undefined}>{canvasSelection.length > 1 && <span className="status-count">{canvasSelection.length} selected</span>}{selectedBounds && <span className="status-bounds" aria-label="Selection bounds"><span>{Math.round(selectedBounds.width)} × {Math.round(selectedBounds.height)}</span><span className="status-coordinate">X {Math.round(selectedBounds.x)} · Y {Math.round(selectedBounds.y)}</span></span>}</span><div className="canvas-status-actions">{clashPointers.length > 0 && <StatusChip tone="warning" className="clash-chip" onClick={selectNextPointerClash} role="status" ariaLabel="Select the next pointer clash">{clashPointers.length} clash{clashPointers.length === 1 ? '' : 'es'}</StatusChip>}<div className="status-zoom" role="group" aria-label="Canvas zoom controls"><button type="button" aria-label="Fit all boundaries" title={withShortcut('Fit all boundaries', 'fitAll')} onClick={() => canvasRef.current?.fit()}>Fit</button><input type="range" min={0} max={1000} step={1} value={sliderFromZoom(canvasZoom)} aria-label="Canvas zoom" title={`${zoomPercent}%`} onChange={event => canvasRef.current?.zoomTo(zoomFromSlider(Number(event.target.value)))} /><button type="button" className="status-zoom-value" aria-label="Zoom to 100%" title={withShortcut('Zoom to 100%', 'zoomReset')} onClick={() => canvasRef.current?.zoomTo(1)}>{zoomPercent}%</button></div>{showsOpener({ available: true, open: panel.kind === 'gridSettings' }) && <button onClick={() => openPanel({ kind: 'gridSettings' })} aria-label="Grid settings">{project.gridSettings.spacing}{project.gridSettings.unit === 'percent' ? '%' : ' px'} grid{project.gridSettings.snap ? ' · Snap' : ''}</button>}<StatusChip tone={pending > 0 ? 'neutral' : view.dirty ? 'warning' : 'success'} role="status" className="save-state">{pending > 0 ? 'Saving locally…' : view.dirty ? 'Unsaved' : 'Saved'}</StatusChip></div></footer>
     </>}
-    {showShortcuts && <WorkspaceSurface place={onStartPage ? 'start' : 'panel'} title="Keyboard shortcuts" close={() => setShowShortcuts(false)}><div className="dialog-body shortcut-help">{SHORTCUT_GROUPS.map(group => <section key={group.group}><h3>{group.group}</h3><dl>{group.items.map(({ label, keys }) => <div key={label}><dt>{label}</dt><dd>{keys}</dd></div>)}</dl></section>)}<p className="field-help">Hold Space while dragging to pan. Alt+drag duplicates the selected layers. Escape stops Play, closes a preview, or cancels the current gesture.</p></div></WorkspaceSurface>}
+    {panel.kind === 'shortcuts' && <WorkspaceSurface place={onStartPage ? 'start' : 'panel'} title="Keyboard shortcuts" close={() => closePanel('shortcuts')}><div className="dialog-body shortcut-help">{SHORTCUT_GROUPS.map(group => <section key={group.group}><h3>{group.group}</h3><dl>{group.items.map(({ label, keys }) => <div key={label}><dt>{label}</dt><dd>{keys}</dd></div>)}</dl></section>)}<p className="field-help">Hold Space while dragging to pan. Alt+drag duplicates the selected layers. Escape stops Play, closes a preview, or cancels the current gesture.</p></div></WorkspaceSurface>}
     {recovery && <WorkspaceSurface place="banner" title="Unsaved changes" close={recovery.dismiss}><RecoveryChoice {...recovery} /></WorkspaceSurface>}
-    {showProjectLocation && <WorkspaceSurface place={onStartPage ? 'start' : 'panel'} title="Project location" close={() => setShowProjectLocation(false)}><div className="dialog-body"><ProjectLocationSettings location={projectLocation} change={changeProjectLocation} /></div></WorkspaceSurface>}
-    {showRecovery && view && <WorkspaceSurface place={onStartPage ? 'start' : 'panel'} title={project ? 'Recover unsaved projects' : 'Unsaved work'} close={() => setShowRecovery(false)}>
+    {panel.kind === 'projectLocation' && <WorkspaceSurface place={onStartPage ? 'start' : 'panel'} title="Project location" close={() => closePanel('projectLocation')}><div className="dialog-body"><ProjectLocationSettings location={projectLocation} change={changeProjectLocation} /></div></WorkspaceSurface>}
+    {panel.kind === 'recovery' && view && <WorkspaceSurface place={onStartPage ? 'start' : 'panel'} title={project ? 'Recover unsaved projects' : 'Unsaved work'} close={() => closePanel('recovery')}>
       <RecoveryList items={view.recoveries} busy={pending > 0} recover={id => { void recover(id).catch(() => {}); }} dismiss={dismissRecoveries} /></WorkspaceSurface>}
-    {showImport && <WorkspaceSurface place={onStartPage ? 'start' : 'panel'} title="Import" close={() => setShowImport(false)}><ImportContext key={`${project?.id ?? 'new'}:${importSource?.id ?? ''}`} initialSource={importSource} busy={pending > 0} settings={aiSettings} openSettings={() => setShowAiSettings(true)} importInto={importContext} onPagesImported={result => { accept(result.workspace); setCanvasSelection([]); setCanvasFocus(null); setNotice(`Imported ${result.pages} ${result.pages === 1 ? 'page' : 'pages'} with ${result.layers} ${result.layers === 1 ? 'layer' : 'layers'}${result.warnings.length ? `; ${result.warnings.length} item${result.warnings.length === 1 ? '' : 's'} left out` : ''}.`); requestAnimationFrame(() => canvasRef.current?.fit()); }} close={() => setShowImport(false)} /></WorkspaceSurface>}
-    {showStyleGuide && project && <WorkspaceSurface place={onStartPage ? 'start' : 'panel'} title="Style guide" close={() => setShowStyleGuide(false)}><StyleGuide project={project} apply={command => mutate(command).then(() => undefined)} openBrief={() => { setShowStyleGuide(false); setShowNotes('decisions'); }} /></WorkspaceSurface>}
-    {showNotes && project && <WorkspaceSurface place={onStartPage ? 'start' : 'panel'} title="Project brief" close={() => setShowNotes(null)}><Notes project={project} initialSection={showNotes} reviewGeneration={project.latestGeneration?.jobId === generation.job?.jobId ? openGeneration : undefined} apply={command => mutate(command).then(() => undefined)} changeBrief={changeBrief} /></WorkspaceSurface>}
-    {showGridSettings && project && <WorkspaceSurface place={onStartPage ? 'start' : 'panel'} title="Grid settings" close={() => setShowGridSettings(false)}><GridForm settings={project.gridSettings} showGrid={project.showGrid} busy={pending > 0} submit={async (settings, visible) => {
+    {panel.kind === 'import' && <WorkspaceSurface place={onStartPage ? 'start' : 'panel'} title="Import" close={() => closePanel('import')}><ImportContext key={`${project?.id ?? 'new'}:${panel.source?.id ?? ''}`} initialSource={panel.source} busy={pending > 0} settings={aiSettings} openSettings={() => setShowAiSettings(true)} importInto={importContext} onPagesImported={result => { accept(result.workspace); setCanvasSelection([]); setCanvasFocus(null); setNotice(`Imported ${result.pages} ${result.pages === 1 ? 'page' : 'pages'} with ${result.layers} ${result.layers === 1 ? 'layer' : 'layers'}${result.warnings.length ? `; ${result.warnings.length} item${result.warnings.length === 1 ? '' : 's'} left out` : ''}.`); requestAnimationFrame(() => canvasRef.current?.fit()); }} close={() => closePanel('import')} /></WorkspaceSurface>}
+    {panel.kind === 'styleGuide' && project && <WorkspaceSurface place={onStartPage ? 'start' : 'panel'} title="Style guide" close={() => closePanel('styleGuide')}><StyleGuide project={project} apply={command => mutate(command).then(() => undefined)} openBrief={() => openPanel({ kind: 'notes', section: 'decisions' })} /></WorkspaceSurface>}
+    {panel.kind === 'notes' && project && <WorkspaceSurface place={onStartPage ? 'start' : 'panel'} title="Project brief" close={() => closePanel('notes')}><Notes project={project} initialSection={panel.section} reviewGeneration={project.latestGeneration?.jobId === generation.job?.jobId ? openGeneration : undefined} apply={command => mutate(command).then(() => undefined)} changeBrief={changeBrief} /></WorkspaceSurface>}
+    {panel.kind === 'gridSettings' && project && <WorkspaceSurface place={onStartPage ? 'start' : 'panel'} title="Grid settings" close={() => closePanel('gridSettings')}><GridForm settings={project.gridSettings} showGrid={project.showGrid} busy={pending > 0} submit={async (settings, visible) => {
       if (visible !== project.showGrid) await mutate({ type: 'set_grid', enabled: visible });
-      await mutate({ type: 'set_grid_settings', settings }); setShowGridSettings(false);
+      await mutate({ type: 'set_grid_settings', settings }); closePanel('gridSettings');
     }} /></WorkspaceSurface>}
-    {showRename && project && <WorkspaceSurface place={onStartPage ? 'start' : 'panel'} title="Rename project" close={() => setShowRename(false)}><RenameProject name={project.name} submit={async name => { await mutate({ type: 'rename_project', name }); setShowRename(false); }} /></WorkspaceSurface>}
-    {saveConflict && <SaveConflictDialog conflict={saveConflict} choose={chooseSaveConflict} />}
+    {panel.kind === 'rename' && project && <WorkspaceSurface place={onStartPage ? 'start' : 'panel'} title="Rename project" close={() => closePanel('rename')}><RenameProject name={project.name} submit={async name => { await mutate({ type: 'rename_project', name }); closePanel('rename'); }} /></WorkspaceSurface>}
+    {saving.kind === 'conflict' && <SaveConflictDialog conflict={saving.conflict} choose={chooseSaveConflict} />}
     {replacement && <ModalDialog title="Save your changes?" close={() => setReplacement(null)}><p>Save “{project?.name}” before you {replacement.label}?</p><div className="form-actions">
       <button className="primary" disabled={pending > 0} onClick={() => { void (async () => { const saved = await save(); if (saved && !saved.dirty) { const run = replacement.run; setReplacement(null); await run(false); } })().catch(() => {}); }}>Save</button>
       <button className="danger" disabled={pending > 0} onClick={() => { const run = replacement.run; setReplacement(null); void run(true).catch(() => {}); }}>Discard</button><button onClick={() => setReplacement(null)}>Keep editing</button>

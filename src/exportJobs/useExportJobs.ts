@@ -10,7 +10,9 @@ import { projectHasPreviewPages } from '../visibleActions';
 
 type Context = {
   view: WorkspaceView | null;
-  showHistory: boolean;
+  panel: import('../session/useEditor').EditorPanel;
+  openPanel: (panel: Exclude<import('../session/useEditor').EditorPanel, { kind: 'closed' }>) => void;
+  closePanel: (kind: import('../session/useEditor').EditorPanel['kind']) => void;
   current: import("react").RefObject<WorkspaceView | null>;
   panels: import("../EditorDock").PanelState;
   panelActions: import("../EditorDock").PanelActions;
@@ -19,7 +21,6 @@ type Context = {
   settle: () => Promise<void>;
   setError: import("react").Dispatch<import("react").SetStateAction<string>>;
   setOpenFailure: import("react").Dispatch<import("react").SetStateAction<{ message: string; url: string; } | null>>;
-  setShowHistory: import("react").Dispatch<import("react").SetStateAction<boolean>>;
   mutate: (command: Command | ((project: Project) => Command | null), quiet?: boolean) => Promise<WorkspaceView>;
   canvasFocus: string | null;
   selectedElementPageId: string | null;
@@ -50,9 +51,8 @@ async function defaultExportFolder(name: string): Promise<string> {
   return join(await documentDir(), 'Desegnos', exportFolderName(name));
 }
 
-export function useExportJobs(input: Pick<Context, 'current' | 'view' | 'showHistory' | 'play' | 'setPlay'>, context: () => Context) {
-  const { current, view, showHistory, play, setPlay } = input;
-  const [showExport, setShowExport] = useState(false);
+export function useExportJobs(input: Pick<Context, 'current' | 'view' | 'panel' | 'play' | 'setPlay' | 'openPanel' | 'closePanel'>, context: () => Context) {
+  const { current, view, panel, play, setPlay, openPanel, closePanel } = input;
   const [exportFolders, setExportFolders] = useState<Record<string, string>>(readExportFolders);
   const projectId = view?.project?.id ?? null;
   const exportDestination = projectId ? exportFolders[projectId] ?? null : null;
@@ -87,8 +87,8 @@ export function useExportJobs(input: Pick<Context, 'current' | 'view' | 'showHis
     window.addEventListener('focus', onFocus);
     return () => window.removeEventListener('focus', onFocus);
   }, [scheduleExportCheck]);
-  useEffect(() => { if (showHistory) scheduleExportCheck(); }, [showHistory, scheduleExportCheck]);
-  useEffect(() => { setShowExport(false); setExportJob(null); setExportError(''); setPreview(null); setPlay(idlePlay); }, [view?.project?.id]);
+  useEffect(() => { if (panel.kind === 'history') scheduleExportCheck(); }, [panel.kind, scheduleExportCheck]);
+  useEffect(() => { closePanel('export'); setExportJob(null); setExportError(''); setPreview(null); setPlay(idlePlay); }, [view?.project?.id]);
   // An error about a boundary that was added or removed no longer describes the current export.
   const pageIds = view?.project?.pages.map(page => page.id).join() ?? '';
   useEffect(() => { setExportError(''); }, [pageIds]);
@@ -120,7 +120,7 @@ export function useExportJobs(input: Pick<Context, 'current' | 'view' | 'showHis
     const { current, panels, panelActions } = context();
     const project = current.current?.project;
     if (!project) return;
-    setShowExport(true);
+    openPanel({ kind: 'export' });
     if (restore && !exportJob) void native<ExportJobView | null>('get_export_job', { projectId: project.id }).then(job => { if (job) setExportJob(job); }).catch(() => {});
     if (panels.hidden) panelActions.toggleHidden();
     if (panels.collapsed) panelActions.setCollapsed(false);
@@ -167,7 +167,7 @@ export function useExportJobs(input: Pick<Context, 'current' | 'view' | 'showHis
     if (!project) return;
     const destination = previewPageId ? null : await ensureExportDestination(project);
     if (!previewPageId && !destination) { await chooseExportDestination(); return; }
-    setExportError(''); setShowExport(true); setExportSending(false); setExportJob(null);
+    setExportError(''); openPanel({ kind: 'export' }); setExportSending(false); setExportJob(null);
     try {
       const job = await native<ExportJobView>('prepare_export', {
         projectId: project.id, revision: project.revision,
@@ -223,12 +223,12 @@ export function useExportJobs(input: Pick<Context, 'current' | 'view' | 'showHis
   }
 
   async function keepPointerCode(pointerId: string) {
-    const { current, setShowHistory, setError } = context();
+    const { current, setError } = context();
     const project = current.current?.project;
     if (!project) return;
     try {
       const job = await native<ExportJobView>('keep_pointer_code', { projectId: project.id, pointerId });
-      setExportJob(job); openExportPanel(false); setShowHistory(false);
+      setExportJob(job); openExportPanel(false);
     } catch (error) { setError(errorMessage(error)); }
   }
 
@@ -265,7 +265,7 @@ export function useExportJobs(input: Pick<Context, 'current' | 'view' | 'showHis
   }
 
   return {
-    showExport, setShowExport, exportDestination, exportJob, exportError, exportSending, checkedStates,
+    exportDestination, exportJob, exportError, exportSending, checkedStates,
     checkedProject, preview, openExportPanel, chooseExportDestination,
     runExport, sendExport, cancelExport, openExportFolder, openInBrowser, keepPointerCode, forgetExportPointer,
     previewSelectedBoundary, closePreview, refreshPreview,

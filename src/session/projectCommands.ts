@@ -4,16 +4,24 @@ import { isPendingRecovery, type PendingRecovery } from '../RecoveryBanner';
 import { type SaveConflict, type SaveOutcome, type SaveChoice } from '../SaveConflict';
 import { type CanvasTarget } from '../projectCanvasGeometry';
 import type { CanvasTemplate, CompactReport, WorkspaceView } from '../types';
-import { Replacement, UntitledSaveRequest, Confirmation } from '../editorShared';
+import { Replacement, Confirmation } from '../editorShared';
+
+type UntitledSave = {
+  name: string;
+  resolve: (workspace: WorkspaceView | null) => void;
+};
+type SaveFlight = { promise: Promise<WorkspaceView | null>; untitled: UntitledSave | null };
+export type SaveState =
+  | { kind: 'idle' }
+  | (SaveFlight & { kind: 'naming'; untitled: UntitledSave })
+  | (SaveFlight & { kind: 'saving' })
+  | (SaveFlight & { kind: 'conflict'; conflict: SaveConflict; choose: (choice: SaveChoice) => void });
 
 type Context = {
   setPendingRecovery: import("react").Dispatch<import("react").SetStateAction<PendingRecovery | null>>;
   setError: import("react").Dispatch<import("react").SetStateAction<string>>;
-  saveChoice: import("react").RefObject<((choice: SaveChoice) => void) | null>;
-  setSaveConflict: import("react").Dispatch<import("react").SetStateAction<SaveConflict | null>>;
-  untitledSaveResolve: import("react").RefObject<((workspace: WorkspaceView | null) => void) | null>;
-  setUntitledSave: import("react").Dispatch<import("react").SetStateAction<UntitledSaveRequest | null>>;
-  untitledSaveFlight: import("react").RefObject<Promise<WorkspaceView | null> | null>;
+  saveState: import("react").RefObject<SaveState>;
+  transitionSave: (state: SaveState) => void;
   current: import("react").RefObject<WorkspaceView | null>;
   panels: import("../EditorDock").PanelState;
   panelActions: import("../EditorDock").PanelActions;
@@ -22,7 +30,6 @@ type Context = {
   accept: (next: WorkspaceView) => void;
   setNotice: (message: string, undo?: () => void) => void;
   refreshRecent: () => Promise<void>;
-  saveFlight: import("react").RefObject<Promise<WorkspaceView | null> | null>;
   setReplacement: import("react").Dispatch<import("react").SetStateAction<Replacement | null>>;
   setCanvasSelection: import("react").Dispatch<import("react").SetStateAction<CanvasTarget[]>>;
   setCanvasFocus: import("react").Dispatch<import("react").SetStateAction<string | null>>;
@@ -30,7 +37,7 @@ type Context = {
   setConfirmation: import("react").Dispatch<import("react").SetStateAction<Confirmation | null>>;
   resolvedTheme: "dark" | "light";
   canvasRef: import("react").RefObject<ProjectCanvasHandle | null>;
-  setShowRecovery: import("react").Dispatch<import("react").SetStateAction<boolean>>;
+  closePanel: (kind: import('./useEditor').EditorPanel['kind']) => void;
   setHistoryEpoch: import("react").Dispatch<import("react").SetStateAction<number>>;
 };
 
@@ -47,60 +54,88 @@ export function createProjectCommands(context: () => Context) {
   }
 
   function chooseSaveConflict(choice: SaveChoice) {
-    const { saveChoice, setSaveConflict } = context(); const resolve = saveChoice.current; saveChoice.current = null; setSaveConflict(null); resolve?.(choice); }
+    const { saveState, transitionSave } = context();
+    const state = saveState.current;
+    if (state.kind !== 'conflict') return;
+    transitionSave({ kind: 'saving', promise: state.promise, untitled: state.untitled });
+    state.choose(choice);
+  }
 
   function closeUntitledSave(workspace: WorkspaceView | null) {
-    const { untitledSaveResolve, setUntitledSave } = context();
-    untitledSaveResolve.current?.(workspace);
-    untitledSaveResolve.current = null;
-    setUntitledSave(null);
+    const { saveState, transitionSave } = context();
+    const state = saveState.current;
+    if (state.kind === 'idle' || !state.untitled) return;
+    // Closing the name dialog must not discard a pending conflict choice.
+    transitionSave(state.kind === 'conflict' ? { ...state, untitled: null } : { kind: 'idle' });
+    state.untitled.resolve(workspace);
   }
 
   function requestUntitledSave(): Promise<WorkspaceView | null> {
-    const { untitledSaveFlight, current, panels, panelActions, setUntitledSave, untitledSaveResolve } = context();
-    if (untitledSaveFlight.current) return untitledSaveFlight.current;
+    const { saveState, current, panels, panelActions, transitionSave } = context();
+    if (saveState.current.kind !== 'idle') return saveState.current.promise;
     const project = current.current?.project;
     if (!project) return Promise.resolve(null);
     if (panels.hidden) panelActions.toggleHidden();
     if (panels.collapsed) panelActions.setCollapsed(false);
-    setUntitledSave({ name: project.name === 'Untitled project' ? '' : project.name });
-    const promise = new Promise<WorkspaceView | null>(resolve => { untitledSaveResolve.current = resolve; });
-    untitledSaveFlight.current = promise.finally(() => { untitledSaveFlight.current = null; });
-    return untitledSaveFlight.current;
+    let resolve!: UntitledSave['resolve'];
+    const promise = new Promise<WorkspaceView | null>(done => { resolve = done; });
+    transitionSave({ kind: 'naming', promise, untitled: { name: project.name === 'Untitled project' ? '' : project.name, resolve } });
+    return promise;
   }
 
-  async function resolveSaveOutcome(outcome: SaveOutcome) {
-    const { queue, saveChoice, setSaveConflict } = context();
+  async function resolveSaveOutcome(outcome: SaveOutcome, flight: SaveFlight) {
+    const { queue, saveState, transitionSave } = context();
     while (outcome.status === 'conflict') {
       const conflict = outcome.conflict;
-      const choice = await new Promise<SaveChoice>(resolve => { saveChoice.current = resolve; setSaveConflict(conflict); });
+      const choice = await new Promise<SaveChoice>(choose => {
+        const current = saveState.current;
+        const untitled = current.kind !== 'idle' && current.promise === flight.promise ? current.untitled : null;
+        transitionSave({ kind: 'conflict', promise: flight.promise, untitled, conflict, choose });
+      });
       outcome = await queue(() => native<SaveOutcome>('resolve_save_conflict', { token: conflict.token, choice }));
     }
     return outcome;
   }
 
   async function saveUntitledProject(name: string, path: string | null) {
-    const { settle, queue, accept, setNotice, refreshRecent } = context();
-    await settle();
-    const outcome = await resolveSaveOutcome(await queue(() => native<SaveOutcome>('save_untitled_project', { name, path, label: null })));
-    if (outcome.status === 'cancelled') throw new Error('Save cancelled.');
-    accept(outcome.workspace); setNotice('Project saved.'); void refreshRecent().catch(() => {});
-    closeUntitledSave(outcome.workspace);
+    const { saveState, transitionSave, settle, queue, accept, setNotice, refreshRecent } = context();
+    const state = saveState.current;
+    if (state.kind !== 'naming') return;
+    transitionSave({ kind: 'saving', promise: state.promise, untitled: state.untitled });
+    try {
+      await settle();
+      const outcome = await resolveSaveOutcome(await queue(() => native<SaveOutcome>('save_untitled_project', { name, path, label: null })), state);
+      if (outcome.status === 'cancelled') throw new Error('Save cancelled.');
+      accept(outcome.workspace); setNotice('Project saved.'); void refreshRecent().catch(() => {});
+      if (saveState.current.kind !== 'idle' && saveState.current.promise === state.promise) {
+        transitionSave({ kind: 'idle' });
+      }
+      state.untitled.resolve(outcome.workspace);
+    } catch (error) {
+      // A failed attempt leaves the name dialog and its original save promise available for retry.
+      if (saveState.current.kind !== 'idle' && saveState.current.promise === state.promise) {
+        transitionSave(saveState.current.untitled ? state : { kind: 'idle' });
+      }
+      throw error;
+    }
   }
 
   function save(saveAs = false): Promise<WorkspaceView | null> {
-    const { current, saveFlight, settle, queue, accept, setNotice, refreshRecent } = context();
+    const { current, saveState, transitionSave, settle, queue, accept, setNotice, refreshRecent } = context();
+    if (saveState.current.kind !== 'idle') return saveState.current.promise;
     if (current.current?.untitled) return requestUntitledSave();
-    if (saveFlight.current) return saveFlight.current;
-    const operation = async () => {
+    // Install the flight before work starts, so every concurrent caller receives the same promise.
+    const promise = Promise.resolve().then(async () => {
       await settle();
-      const outcome = await resolveSaveOutcome(await queue(() => native<SaveOutcome>('save_project_checked', { saveAs, label: null })));
+      const outcome = await resolveSaveOutcome(await queue(() => native<SaveOutcome>('save_project_checked', { saveAs, label: null })), { promise, untitled: null });
       if (outcome.status === 'cancelled') return null;
       accept(outcome.workspace); setNotice('Project saved.'); void refreshRecent().catch(() => {});
       return outcome.workspace;
-    };
-    saveFlight.current = operation().finally(() => { saveFlight.current = null; });
-    return saveFlight.current;
+    }).finally(() => {
+      if (saveState.current.kind !== 'idle' && saveState.current.promise === promise) transitionSave({ kind: 'idle' });
+    });
+    transitionSave({ kind: 'saving', promise, untitled: null });
+    return promise;
   }
 
   async function replace(label: string, run: Replacement['run']) {
@@ -191,12 +226,12 @@ export function createProjectCommands(context: () => Context) {
   }
 
   async function recover(projectId: string) {
-    const { queue, accept, setShowStartPage, setShowRecovery, setPendingRecovery, setNotice } = context();
+    const { queue, accept, setShowStartPage, closePanel, setPendingRecovery, setNotice } = context();
     await openAlongside(async discard => {
       await queue(async () => {
         const recovered = await native<WorkspaceView>('recover_project', { projectId, discard });
         accept(recovered);
-        setShowStartPage(false); setShowRecovery(false); setPendingRecovery(null);
+        setShowStartPage(false); closePanel('recovery'); setPendingRecovery(null);
         setNotice('Project recovered.');
       });
     });
