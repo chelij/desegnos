@@ -24,10 +24,76 @@ const AUTHORIZATION_DEADLINE: Duration = Duration::from_secs(300);
 const ROTATION_STORAGE_MESSAGE: &str = "Refreshed ChatGPT credentials are retained privately in native memory because secure storage could not be updated. Repair secure storage before generating or closing Desegnos; the consumed refresh token will not be reused.";
 const INTERRUPTED_REFRESH_MESSAGE: &str = "A ChatGPT refresh was interrupted before its replacement credentials were committed. Reconnect the saved account; Desegnos will not replay the previous refresh token.";
 
-struct Pending {
-    id: Uuid,
-    account_id: Option<Uuid>,
-    cancellation: CancellationToken,
+enum SignIn {
+    Idle,
+    SigningIn {
+        id: Uuid,
+        account_id: Option<Uuid>,
+        cancellation: CancellationToken,
+    },
+    Complete,
+    Cancelled {
+        message: String,
+    },
+    Failed {
+        error: ChatgptError,
+    },
+}
+
+impl SignIn {
+    fn view(&self) -> ChatgptSignIn {
+        let (status, message) = match self {
+            Self::Idle => (ChatgptSignInStatus::Idle, None),
+            Self::SigningIn { .. } => (
+                ChatgptSignInStatus::AwaitingBrowser,
+                Some("Finish signing in through your browser.".into()),
+            ),
+            Self::Complete => (
+                ChatgptSignInStatus::Complete,
+                Some("ChatGPT sign-in complete.".into()),
+            ),
+            Self::Cancelled { message } => (ChatgptSignInStatus::Cancelled, Some(message.clone())),
+            Self::Failed { error } => (ChatgptSignInStatus::Failed, Some(error.message().into())),
+        };
+        ChatgptSignIn { status, message }
+    }
+
+    fn start(&mut self, id: Uuid, account_id: Option<Uuid>, cancellation: CancellationToken) {
+        *self = Self::SigningIn {
+            id,
+            account_id,
+            cancellation,
+        };
+    }
+
+    fn is_attempt(&self, attempt_id: Uuid) -> bool {
+        matches!(self, Self::SigningIn { id, .. } if *id == attempt_id)
+    }
+
+    fn cancel(&mut self, message: &str) {
+        if let Self::SigningIn { cancellation, .. } = self {
+            cancellation.cancel();
+            *self = Self::Cancelled {
+                message: message.into(),
+            };
+        }
+    }
+
+    fn finish(&mut self, id: Uuid, result: &ChatgptResult<()>) -> bool {
+        if !self.is_attempt(id) {
+            return false;
+        }
+        *self = match result {
+            Ok(()) => Self::Complete,
+            Err(error) if error.kind == Kind::Cancelled => Self::Cancelled {
+                message: error.message().into(),
+            },
+            Err(error) => Self::Failed {
+                error: error.clone(),
+            },
+        };
+        true
+    }
 }
 #[derive(Clone)]
 struct PendingRotation {
@@ -41,8 +107,7 @@ struct State {
     model_errors: BTreeMap<Uuid, String>,
     epochs: BTreeMap<Uuid, Uuid>,
     pending_rotations: BTreeMap<Uuid, PendingRotation>,
-    pending: Option<Pending>,
-    sign_in: ChatgptSignIn,
+    sign_in: SignIn,
     storage_error: Option<String>,
     message: Option<String>,
 }
@@ -108,11 +173,7 @@ impl ChatgptManager {
             model_errors: BTreeMap::new(),
             epochs: BTreeMap::new(),
             pending_rotations: BTreeMap::new(),
-            pending: None,
-            sign_in: ChatgptSignIn {
-                status: ChatgptSignInStatus::Idle,
-                message: None,
-            },
+            sign_in: SignIn::Idle,
             storage_error: None,
             message: None,
         };
@@ -204,7 +265,7 @@ impl ChatgptManager {
         ChatgptView {
             accounts,
             active_account_id: active,
-            sign_in: state.sign_in.clone(),
+            sign_in: state.sign_in.view(),
             models: active
                 .filter(|_| can_use_plan)
                 .and_then(|id| state.models.get(&id).cloned())
@@ -233,7 +294,7 @@ impl ChatgptManager {
     ) -> ChatgptResult<ChatgptAuthorization> {
         let _gate = self.inner.gate.lock().await;
         let mut state = self.inner.state.lock().await;
-        if state.pending.is_some() {
+        if matches!(&state.sign_in, SignIn::SigningIn { .. }) {
             return Err(Kind::Busy.into());
         }
         let metadata = self.inner.store.read()?;
@@ -323,15 +384,7 @@ impl ChatgptManager {
         let id = Uuid::new_v4();
         let cancellation = CancellationToken::new();
         state.metadata = metadata;
-        state.pending = Some(Pending {
-            id,
-            account_id,
-            cancellation: cancellation.clone(),
-        });
-        state.sign_in = ChatgptSignIn {
-            status: ChatgptSignInStatus::AwaitingBrowser,
-            message: Some("Finish signing in through your browser.".into()),
-        };
+        state.sign_in.start(id, account_id, cancellation.clone());
         let attempt = Attempt {
             id,
             registration,
@@ -357,13 +410,9 @@ impl ChatgptManager {
 
     pub async fn cancel_sign_in(&self) -> ChatgptView {
         let mut state = self.inner.state.lock().await;
-        if let Some(pending) = state.pending.take() {
-            pending.cancellation.cancel();
-            state.sign_in = ChatgptSignIn {
-                status: ChatgptSignInStatus::Cancelled,
-                message: Some(ChatgptError::from(Kind::Cancelled).message().into()),
-            };
-        }
+        state
+            .sign_in
+            .cancel(ChatgptError::from(Kind::Cancelled).message());
         drop(state);
         self.view().await
     }
@@ -438,12 +487,7 @@ impl ChatgptManager {
         let _gate = self.inner.gate.lock().await;
         let _lease = self.lease(&attempt.cancellation).await?;
         let mut state = self.inner.state.lock().await;
-        if attempt.cancellation.is_cancelled()
-            || state
-                .pending
-                .as_ref()
-                .is_none_or(|pending| pending.id != attempt.id)
-        {
+        if attempt.cancellation.is_cancelled() || !state.sign_in.is_attempt(attempt.id) {
             return Err(Kind::Cancelled.into());
         }
         let mut metadata = self.inner.store.read()?;
@@ -557,33 +601,12 @@ impl ChatgptManager {
 
     async fn finish_attempt(&self, id: Uuid, result: ChatgptResult<()>) {
         let mut state = self.inner.state.lock().await;
-        if state
-            .pending
-            .as_ref()
-            .is_none_or(|pending| pending.id != id)
-        {
+        if !state.sign_in.finish(id, &result) {
             return;
         }
-        state.pending = None;
-        match result {
-            Ok(()) => {
-                state.sign_in = ChatgptSignIn {
-                    status: ChatgptSignInStatus::Complete,
-                    message: Some("ChatGPT sign-in complete.".into()),
-                }
-            }
-            Err(error) => {
-                state.sign_in = ChatgptSignIn {
-                    status: if error.kind == Kind::Cancelled {
-                        ChatgptSignInStatus::Cancelled
-                    } else {
-                        ChatgptSignInStatus::Failed
-                    },
-                    message: Some(error.message().into()),
-                };
-                if matches!(error.kind, Kind::Storage | Kind::VaultUnavailable) {
-                    state.storage_error = Some(error.message().into());
-                }
+        if let Err(error) = result {
+            if matches!(error.kind, Kind::Storage | Kind::VaultUnavailable) {
+                state.storage_error = Some(error.message().into());
             }
         }
     }
@@ -597,15 +620,9 @@ impl ChatgptManager {
         metadata.active = Some(account_id);
         self.inner.store.write(&metadata)?;
         let mut state = self.inner.state.lock().await;
-        if let Some(pending) = state.pending.take() {
-            pending.cancellation.cancel();
-            state.sign_in = ChatgptSignIn {
-                status: ChatgptSignInStatus::Cancelled,
-                message: Some(
-                    "Pending sign-in was cancelled when you selected a saved account.".into(),
-                ),
-            };
-        }
+        state
+            .sign_in
+            .cancel("Pending sign-in was cancelled when you selected a saved account.");
         state.metadata = metadata;
         drop(state);
         drop(_lease);
@@ -881,21 +898,14 @@ impl ChatgptManager {
     pub async fn sign_out(&self, account_id: Uuid) -> ChatgptResult<ChatgptView> {
         {
             let mut state = self.inner.state.lock().await;
-            if state
-                .pending
-                .as_ref()
-                .is_some_and(|pending| pending.account_id == Some(account_id))
-            {
-                if let Some(pending) = state.pending.take() {
-                    pending.cancellation.cancel();
-                }
-                state.sign_in = ChatgptSignIn {
-                    status: ChatgptSignInStatus::Cancelled,
-                    message: Some(
-                        "Pending reconnect was cancelled when you signed out of this registration."
-                            .into(),
-                    ),
-                };
+            if matches!(
+                &state.sign_in,
+                SignIn::SigningIn { account_id: pending_account, .. }
+                    if *pending_account == Some(account_id)
+            ) {
+                state.sign_in.cancel(
+                    "Pending reconnect was cancelled when you signed out of this registration.",
+                );
             }
         }
         let _gate = self.inner.gate.lock().await;
