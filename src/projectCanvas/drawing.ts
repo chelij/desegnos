@@ -9,8 +9,21 @@ import { DrawElementDrag, Drag, boxParentAt } from './interactionTypes';
 
 export type PendingText = { element: Element; pageId: string; parentId: string | null; index: number; sizeId: string | null; worldRect: Rect };
 
+export type TextSession = { pageId: string; sizeId: string; elementId: string; autoWidth: boolean; created: boolean };
+export type TextEditing =
+  | { kind: 'idle' }
+  | { kind: 'pending'; draft: PendingText }
+  | { kind: 'existing'; session: TextSession; bounds: Rect | null }
+  | { kind: 'draft'; session: TextSession; bounds: Rect | null; draft: PendingText };
+export type TextEditingEvent =
+  | { kind: 'prepare'; draft: PendingText }
+  | { kind: 'open'; session: TextSession | null }
+  | { kind: 'measure'; session: TextSession; bounds: Rect }
+  | { kind: 'finish' }
+  | { kind: 'retry'; session: TextSession; draft: PendingText };
+
 type Context = {
-  pendingText: import("react").RefObject<PendingText | null>;
+  transitionText: (event: TextEditingEvent) => void;
   setPendingImage: import("react").Dispatch<import("react").SetStateAction<{ uri: string; width: number; height: number; name: string; } | null>>;
   project: Project;
   boundaryRect: (sizeId: string) => Rect | null;
@@ -55,7 +68,7 @@ export function createDrawingActions(context: () => Context) {
   }
 
   async function placeElement(kind: ElementKind, pageId: string, sizeId: string, parentId: string | null, parentOrigin: Point, boundary: Rect, rect: Rect, picture?: string, rotation?: number) {
-    const { project, createdElement, editingAllSizes, insertElements, selectElement, pendingText } = context();
+    const { project, createdElement, editingAllSizes, insertElements, selectElement, transitionText } = context();
     const page = project.pages.find(item => item.id === pageId);
     // A new shape must not repeat the fill of the box, or boundary, it is drawn into.
     const container = parentId ? findPageElement(project, pageId, parentId, sizeId) : null;
@@ -68,7 +81,7 @@ export function createDrawingActions(context: () => Context) {
     createdElement.current = element.id;
     const singleSize = !!page && hasManySizes(page) && !editingAllSizes(pageId);
     if (kind === 'text') {
-      pendingText.current = { element, pageId, parentId, index: insertionPoint(pageId, parentId), sizeId, worldRect: rect };
+      transitionText({ kind: 'prepare', draft: { element, pageId, parentId, index: insertionPoint(pageId, parentId), sizeId, worldRect: rect } });
       return element;
     }
     await insertElements(pageId, parentId, insertionPoint(pageId, parentId), [element], picture, sizeId);

@@ -17,13 +17,19 @@ import { playIsActive } from './play';
 import { elementChildrenOf, elementParents, findPageElement } from './elementGeometry';
 import { ElementEntry, ClipboardEntry, PasteTarget, LinkDecision, Drag, CanvasActionOptions, isElementTarget } from './interactionTypes';
 
+export type Painter =
+  | { kind: 'empty' }
+  | { kind: 'ready'; style: import('../types').ElementStyle }
+  | { kind: 'armed'; style: import('../types').ElementStyle };
+export type PainterEvent = { kind: 'copy'; style: import('../types').ElementStyle } | { kind: 'arm' | 'disarm' };
+
 type Context = {
   editProject: ProjectCanvasProps['editProject'];
   createBoundary: ProjectCanvasProps['createBoundary'];
   drag: { current: Drag | null; };
   cancelDrag: () => void;
   painterArmed: boolean;
-  setPainterArmed: import("react").Dispatch<import("react").SetStateAction<boolean>>;
+  transitionPainter: (event: PainterEvent) => void;
   latest: import("react").RefObject<Pick<ProjectCanvasProps, 'play'>>;
   onPlayExit: () => void;
   requestDraft: { targets: RequestTarget[]; area: RequestArea | null; screen: ScreenRect; } | null;
@@ -40,7 +46,7 @@ type Context = {
   pageFor: (pageId: string, sizeId?: string | null) => Page | null;
   elementEntries: (targets: CanvasTarget[], project?: Project) => ElementEntry[];
   moveElements: (moves: ElementMove[]) => Promise<unknown> | void;
-  copiedStyle: import("react").RefObject<import("../types").ElementStyle | null>;
+  painter: import("react").RefObject<Painter>;
   updateElements: (pageId: string, patches: ElementPatch[]) => Promise<unknown> | void;
   surface: import("react").RefObject<HTMLDivElement | null>;
   boundaryRect: (sizeId: string) => Rect | null;
@@ -73,9 +79,9 @@ type Context = {
 
 export function createKeyboardActions(context: () => Context) {
   function escapeCanvas() {
-    const { drag, cancelDrag, painterArmed, setPainterArmed, latest, onPlayExit, requestDraft, polygonDraft, draftArea, cancelRequestDraft, editing, finishEditingText, selection, selectBoundary, focused } = context();
+    const { drag, cancelDrag, painterArmed, transitionPainter, latest, onPlayExit, requestDraft, polygonDraft, draftArea, cancelRequestDraft, editing, finishEditingText, selection, selectBoundary, focused } = context();
     if (drag.current) { cancelDrag(); return; }
-    if (painterArmed) { setPainterArmed(false); return; }
+    if (painterArmed) { transitionPainter({ kind: 'disarm' }); return; }
     if (playIsActive(latest.current.play)) { onPlayExit(); return; }
     if (requestDraft || polygonDraft || draftArea) { cancelRequestDraft(); return; }
     if (editing) { finishEditingText(); return; }
@@ -130,14 +136,14 @@ export function createKeyboardActions(context: () => Context) {
   }
 
   function copyStyle() {
-    const { elementEntries, selection, copiedStyle } = context();
+    const { elementEntries, selection } = context();
     const entry = elementEntries(selection)[0];
-    if (entry) copiedStyle.current = structuredClone(entry.element.style);
+    if (entry) context().transitionPainter({ kind: 'copy', style: structuredClone(entry.element.style) });
   }
 
   function pasteStyle() {
-    const { copiedStyle, elementEntries, selection, updateElements } = context();
-    const style = copiedStyle.current;
+    const { painter, elementEntries, selection, updateElements } = context();
+    const style = painter.current.kind === 'empty' ? null : painter.current.style;
     const entries = elementEntries(selection);
     if (!style || !entries.length) return;
     const byPage = new Map<string, ElementPatch[]>();
@@ -149,20 +155,20 @@ export function createKeyboardActions(context: () => Context) {
   }
 
   function paintFormat() {
-    const { elementEntries, selection, copiedStyle, setPainterArmed, surface } = context();
+    const { elementEntries, selection, painter, transitionPainter, surface } = context();
     if (elementEntries(selection).length) copyStyle();
-    if (!copiedStyle.current) return;
-    setPainterArmed(true);
+    if (painter.current.kind === 'empty') return;
+    transitionPainter({ kind: 'arm' });
     surface.current?.focus({ preventScroll: true });
   }
 
   function applyPainterStyle(target: ElementTarget) {
-    const { copiedStyle, updateElements, setPainterArmed } = context();
-    const style = copiedStyle.current;
+    const { painter, updateElements, transitionPainter } = context();
+    const style = painter.current.kind === 'empty' ? null : painter.current.style;
     if (!style) return;
     const patch: ElementPatch = { id: target.elementId, style: structuredClone(style), ...(target.sizeId === null ? { all_sizes: true } : { size_id: target.sizeId }) };
     void Promise.resolve(updateElements(target.pageId, [patch])).catch(() => {});
-    setPainterArmed(false);
+    transitionPainter({ kind: 'disarm' });
   }
 
   function alignSelection(edge: SelectionAlign) {
@@ -340,7 +346,7 @@ export function createKeyboardActions(context: () => Context) {
   }
 
   function canRunCanvasAction(action: ShortcutAction): boolean | null {
-    const { selection, project, focused, clipboard, pasteTarget, copiedStyle } = context();
+    const { selection, project, focused, clipboard, pasteTarget, painter } = context();
     const elements = selection.filter(isElementTarget);
     const views = project.views ?? [];
     if (action.startsWith('opacity') || action.startsWith('flip') || action.startsWith('align') || action === 'toggleHidden' || action === 'toggleLocked' || action === 'stack') return elements.length > 0;
@@ -363,8 +369,8 @@ export function createKeyboardActions(context: () => Context) {
         return !!first && elementChildrenOf(project, first.pageId, first.elementId).length > 0;
       }
       case 'paste': case 'pasteChoice': return clipboard.current.length > 0 && pasteTarget() !== null;
-      case 'pasteStyle': return elements.length > 0 && copiedStyle.current !== null;
-      case 'paintFormat': return elements.length > 0 || copiedStyle.current !== null;
+      case 'pasteStyle': return elements.length > 0 && painter.current.kind !== 'empty';
+      case 'paintFormat': return elements.length > 0 || painter.current.kind !== 'empty';
       case 'duplicate': return elements.length > 0 || (!!focused && !selection.length);
       case 'copy': case 'cut': case 'copyStyle': case 'unlink':
       case 'forward': case 'backward': case 'front': case 'back':
@@ -375,7 +381,7 @@ export function createKeyboardActions(context: () => Context) {
   }
 
   function runCanvasAction(action: ShortcutAction, options: CanvasActionOptions = {}): boolean {
-    const { selection, focused, deleteBoundary, focusedSize, removeSelection, startRequestOnSelection, onTool, startRequestFromShape, copyElements, clipboard, pasteElements, duplicateElements, copiedStyle, setMinimapPreference, minimapVisible, saveView, currentCamera, project, goToView } = context();
+    const { selection, focused, deleteBoundary, focusedSize, removeSelection, startRequestOnSelection, onTool, startRequestFromShape, copyElements, clipboard, pasteElements, duplicateElements, painter, setMinimapPreference, minimapVisible, saveView, currentCamera, project, goToView } = context();
     const elements = selection.filter(isElementTarget);
     if (action.startsWith('align')) {
       if (!elements.length) return false;
@@ -454,11 +460,11 @@ export function createKeyboardActions(context: () => Context) {
         copyStyle();
         return true;
       case 'pasteStyle':
-        if (!elements.length || !copiedStyle.current) return false;
+        if (!elements.length || painter.current.kind === 'empty') return false;
         pasteStyle();
         return true;
       case 'paintFormat':
-        if (!elements.length && !copiedStyle.current) return false;
+        if (!elements.length && painter.current.kind === 'empty') return false;
         paintFormat();
         return true;
       case 'group':

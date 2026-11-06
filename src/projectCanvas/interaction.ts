@@ -34,15 +34,14 @@ type Context = {
   setLinkChoice: import("react").Dispatch<import("react").SetStateAction<LinkDecision | null>>;
   worldPoint: (event: { clientX: number; clientY: number; }) => Point;
   lastPointer: import("react").RefObject<Point | null>;
-  zoom: import("react").RefObject<boolean>;
-  space: import("react").RefObject<boolean>;
+  held: import("react").RefObject<import("./surface").HeldKeys>;
   drag: { current: Drag | null; };
   painterArmed: boolean;
   project: Project;
   selection: CanvasTarget[];
   applyPainterStyle: (target: ElementTarget) => void;
   surface: import("react").RefObject<HTMLDivElement | null>;
-  setPainterArmed: import("react").Dispatch<import("react").SetStateAction<boolean>>;
+  transitionPainter: (event: import("./keyboardActions").PainterEvent) => void;
   selectRequest: (requestId: string) => void;
   latest: import("react").RefObject<Pick<ProjectCanvasProps, 'play' | 'onPlayElement'>>;
   tool: import("../EditorTools").EditorTool;
@@ -87,7 +86,7 @@ type Context = {
   boundaryRect: (sizeId: string) => Rect | null;
   placeElement: (kind: ElementKind, pageId: string, sizeId: string, parentId: string | null, parentOrigin: Point, boundary: Rect, rect: Rect, picture?: string, rotation?: number) => Promise<Element>;
   createdElement: import("react").RefObject<string | null>;
-  setEditing: import("react").Dispatch<import("react").SetStateAction<{ pageId: string; sizeId: string; elementId: string; autoWidth: boolean; created: boolean; } | null>>;
+  transitionText: (event: import("./drawing").TextEditingEvent) => void;
   setPendingImage: import("react").Dispatch<import("react").SetStateAction<{ uri: string; width: number; height: number; name: string; } | null>>;
   onTool: (tool: ProjectTool) => void;
   duplicateElementMove: (active: MoveElementsDrag, point: Point, snap: boolean) => Promise<void>;
@@ -109,7 +108,7 @@ type Context = {
 
 export function createCanvasInteraction(context: () => Context) {
   function pointerDown(event: ReactPointerEvent<HTMLDivElement>) {
-    const { busy, startPan, pasteChoice, linkChoice, setPasteChoice, setLinkChoice, worldPoint, lastPointer, zoom, space, drag, painterArmed, project, selection, applyPainterStyle, surface, setPainterArmed, selectRequest, latest, tool, requestShape, requestTargetAt, requestDraft, setRequestDraft, requestEditorScreen, setPolygonDraft, polygonDraft, camera, closeRequestArea, boundaryUnder, boundaryNear, pointerSourceAt, pageFor, startEditingElement, editingSizeId, drawElementDrag, insertKind, pendingImage, imagePicker, selectElement, selectBoundary, elementEntries, nextSelectionFor, selectReference, beginMove, boundaries, movingItems } = context();
+    const { busy, startPan, pasteChoice, linkChoice, setPasteChoice, setLinkChoice, worldPoint, lastPointer, held, drag, painterArmed, project, selection, applyPainterStyle, surface, transitionPainter, selectRequest, latest, tool, requestShape, requestTargetAt, requestDraft, setRequestDraft, requestEditorScreen, setPolygonDraft, polygonDraft, camera, closeRequestArea, boundaryUnder, boundaryNear, pointerSourceAt, pageFor, startEditingElement, editingSizeId, drawElementDrag, insertKind, pendingImage, imagePicker, selectElement, selectBoundary, elementEntries, nextSelectionFor, selectReference, beginMove, boundaries, movingItems } = context();
     if (busy.current) return;
     // Middle-button drag pans from any tool and never touches the selection.
     if (event.button === 1) { startPan(event, null); return; }
@@ -123,15 +122,16 @@ export function createCanvasInteraction(context: () => Context) {
     const requestNode = target.closest<HTMLElement>('[data-request]');
     const point = worldPoint(event);
     lastPointer.current = point;
+    const spaceHeld = held.current === 'space' || held.current === 'space-and-zoom';
     // Z arms zooming: drag a rectangle to fit it, or click a zoom step at the pointer.
-    if (event.button === 0 && zoom.current && !space.current) {
+    if (event.button === 0 && held.current === 'zoom') {
       event.preventDefault();
       beginPointerSession(event);
       drag.current = { kind: 'zoom-rect', pointerId: event.pointerId, start: point, current: point, zoomOut: event.altKey, moved: false };
       return;
     }
     // The painter applies its style to the next clicked layer and then disarms.
-    if (event.button === 0 && painterArmed && !space.current) {
+    if (event.button === 0 && painterArmed && !spaceHeld) {
       const hit = elementTargetAt(project, selection, target);
       if (hit) {
         event.preventDefault();
@@ -139,15 +139,15 @@ export function createCanvasInteraction(context: () => Context) {
         surface.current?.focus({ preventScroll: true });
         return;
       }
-      setPainterArmed(false);
+      transitionPainter({ kind: 'disarm' });
     }
-    if (requestNode && !space.current) {
+    if (requestNode && !spaceHeld) {
       event.preventDefault();
       selectRequest(requestNode.dataset.request!);
       surface.current?.focus({ preventScroll: true });
       return;
     }
-    if (playIsActive(latest.current.play) && !space.current) {
+    if (playIsActive(latest.current.play) && !spaceHeld) {
       // Play turns the boundary into a clickable surface: no selection, no dragging.
       event.preventDefault();
       const chain = elementChain(target);
@@ -160,7 +160,7 @@ export function createCanvasInteraction(context: () => Context) {
       return;
     }
     const additive = event.shiftKey || event.ctrlKey || event.metaKey;
-    if (event.button === 0 && space.current) { startPan(event, boundaryNode?.dataset.boundary ?? null); return; }
+    if (event.button === 0 && spaceHeld) { startPan(event, boundaryNode?.dataset.boundary ?? null); return; }
     if (event.button === 0 && tool === 'pan') { startPan(event, boundaryNode?.dataset.boundary ?? null); return; }
     if (event.button !== 0) return;
 
@@ -445,7 +445,7 @@ export function createCanvasInteraction(context: () => Context) {
   }
 
   function pointerUp(event: DragInput) {
-    const { project, drag, setPanning, selectBoundary, surface, touched, camera, setCamera, worldToScreen, persistMove, persistDraw, closeRequestArea, busy, addReference, createdItem, selectReference, boundaryRect, pendingImage, placeElement, createdElement, setEditing, setPendingImage, onTool, duplicateElementMove, lastPointer, commitElementMove, updateElements, moveElements, marqueeTargets, selection, selectElement, selectTargets, endpointAt, addPointer, createdPointer, setArmedPointer, selectPointer, updatePointer, commitMove, updateReference } = context();
+    const { project, drag, setPanning, selectBoundary, surface, touched, camera, setCamera, worldToScreen, persistMove, persistDraw, closeRequestArea, busy, addReference, createdItem, selectReference, boundaryRect, pendingImage, placeElement, createdElement, transitionText, setPendingImage, onTool, duplicateElementMove, lastPointer, commitElementMove, updateElements, moveElements, marqueeTargets, selection, selectElement, selectTargets, endpointAt, addPointer, createdPointer, setArmedPointer, selectPointer, updatePointer, commitMove, updateReference } = context();
     const active = drag.current;
     if (!active || active.pointerId !== event.pointerId) return;
     drag.current = null;
@@ -510,8 +510,8 @@ export function createCanvasInteraction(context: () => Context) {
       void placeElement(active.elementKind, active.pageId, active.sizeId, active.parentId, active.parentOrigin, active.boundary, rect, picture, active.rotation).then(element => {
         const createdNow = createdElement.current;
         if (element && createdNow) {
-          if (active.elementKind === 'text') setEditing({ pageId: active.pageId, sizeId: active.sizeId, elementId: createdNow, autoWidth: element.style.sizing?.width === 'fit', created: true });
-          else { createdElement.current = null; setEditing(null); }
+          if (active.elementKind === 'text') transitionText({ kind: 'open', session: { pageId: active.pageId, sizeId: active.sizeId, elementId: createdNow, autoWidth: element.style.sizing?.width === 'fit', created: true } });
+          else { createdElement.current = null; transitionText({ kind: 'open', session: null }); }
           if (active.elementKind === 'image') setPendingImage(null);
           onTool('select');
         }
