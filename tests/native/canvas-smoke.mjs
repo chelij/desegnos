@@ -339,6 +339,18 @@ async function runIsolated() {
       await waitFor(() => driver.execute(() => ![...document.querySelectorAll('ul[role="menu"]')].some(menu => menu.matches(':popover-open'))),
         'The Request area shape flyout stayed open');
     };
+    // A request on layers is saved and then generated. With no AI connected, generating
+    // opens AI settings over the canvas and leaves a "Couldn't start" notice that queues later
+    // toasts behind it; close both so the next steps reach the canvas and its toasts.
+    const dismissAiSetup = async () => {
+      await driver.ready('dialog.ai-settings-dialog');
+      await driver.click('[aria-label="Close AI settings"]');
+      await waitFor(() => driver.execute(() => !document.querySelector('dialog.ai-settings-dialog')), 'AI settings did not close');
+      const couldNotStart = () => [...document.querySelectorAll('.notice-host .notice')].some(notice => notice.textContent.includes('Couldn’t start'));
+      await waitFor(() => driver.execute(couldNotStart), 'Generating without AI did not explain why it could not start');
+      await driver.click('.notice-host .generation-notice .notice-dismiss');
+      await waitFor(async () => !(await driver.execute(couldNotStart)), 'The generation notice did not dismiss');
+    };
     // A corner of the canvas that overlaps no boundary and stays inside the surface.
     const emptyCanvas = async (width, height) => {
       const surface = await canvas();
@@ -541,6 +553,7 @@ async function runIsolated() {
       await waitFor(() => driver.execute(() => !!document.querySelector('.request-marker')), 'The request marker was not drawn');
       const rows = await driver.execute(() => document.querySelectorAll('[data-request-row]').length);
       assert.equal(rows, 1, 'The queued request is not listed under Requests');
+      await dismissAiSetup();
     });
 
     await step('A request rectangle drawn over a layer targets it', async () => {
@@ -553,6 +566,7 @@ async function runIsolated() {
       await driver.fill('Describe the request', 'Turn this ellipse into a badge');
       await driver.press(driver.field('Describe the request'), '\uE007', 'xpath');
       await waitFor(() => driver.execute(() => document.querySelectorAll('[data-request-row]').length === 2), 'The drawn request area did not queue a second request');
+      await dismissAiSetup();
       await driver.click('(//button[@data-request-row])[2]', 'xpath');
       await waitFor(() => driver.execute(() => document.querySelectorAll('[data-request] .request-target-highlight').length >= 1), 'Selecting the request did not highlight the layer its area covers');
     });
