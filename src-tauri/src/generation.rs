@@ -373,6 +373,45 @@ struct JobRecord {
     error: Option<ProviderError>,
 }
 
+impl JobRecord {
+    /// Keep the persisted status mirrors together. Ready and Blocked finish a provider
+    /// attempt even though the job can still be reviewed, retried, or applied.
+    /// Call after setting the message so an active batch receives the same explanation.
+    fn transition(&mut self, status: JobStatus) {
+        use JobStatus::*;
+
+        debug_assert!(
+            self.view.status == status
+                || matches!(
+                    (self.view.status, status),
+                    (Prepared | Failed | Unknown | Cancelled | Blocked, Generating)
+                        | (Generating, Ready | Blocked | Failed | Unknown | Cancelled)
+                        | (Ready, Blocked)
+                        | (Blocked, Ready)
+                        | (Prepared | Ready | Blocked | Failed | Unknown, Cancelled)
+                        | (Prepared | Ready | Blocked | Failed | Unknown | Cancelled, Discarded)
+                        // Recording failures can make even a late result uncertain.
+                        | (_, Unknown)
+                        // The project's applied-job ledger is authoritative during recovery.
+                        | (_, Applied)
+                )
+        );
+        self.view.status = status;
+        if let Some(attempt) = self.view.attempts.last_mut() {
+            attempt.status = status;
+            if !matches!(status, Prepared | Generating | Applying) {
+                attempt.finished_at.get_or_insert_with(now);
+            }
+        }
+        for batch in &mut self.view.batches {
+            if batch.status == Generating {
+                batch.status = status;
+                batch.message.clone_from(&self.view.message);
+            }
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct LatestJob {
@@ -1532,8 +1571,8 @@ impl GenerationService {
         if project.applied_job_ids.contains(&record.view.job_id)
             && record.view.status != JobStatus::Applied
         {
-            record.view.status = JobStatus::Applied;
             record.view.message = "Generation already applied.".into();
+            record.transition(JobStatus::Applied);
             return self.persist(record).map(Some);
         }
         if matches!(
@@ -1541,27 +1580,17 @@ impl GenerationService {
             JobStatus::Generating | JobStatus::Applying
         ) && !self.active.contains_key(&record.view.job_id)
         {
-            record.view.status = JobStatus::Unknown;
             record.view.message = "Desegnos stopped before this operation finished. The outcome may be uncertain; no request was automatically repeated. Review the project before an explicit retry.".into();
-            if let Some(attempt) = record.view.attempts.last_mut() {
-                attempt.status = JobStatus::Unknown;
-                attempt.finished_at = Some(now());
-            }
-            for batch in &mut record.view.batches {
-                if batch.status == JobStatus::Generating {
-                    batch.status = JobStatus::Unknown;
-                    batch.message = record.view.message.clone();
-                }
-            }
+            record.transition(JobStatus::Unknown);
             return self.persist(record).map(Some);
         }
         if record.view.status == JobStatus::Ready
             && let Err(error) = resolve_current(&record.view, project)
         {
-            record.view.status = JobStatus::Blocked;
             record.view.message = format!(
                 "This candidate is stale: {error} Undo the changed requirements to reuse this candidate, or discard it and generate from the current requirements."
             );
+            record.transition(JobStatus::Blocked);
             return self.persist(record).map(Some);
         }
         // A partially failed batched job keeps its finished parts for Try again; it must not
@@ -1581,8 +1610,8 @@ impl GenerationService {
                 .is_some_and(|candidate| candidate.can_apply(record.view.request_requirements()))
             && resolve_current(&record.view, project).is_ok()
         {
-            record.view.status = JobStatus::Ready;
             record.view.message = "Result ready to apply.".into();
+            record.transition(JobStatus::Ready);
             return self.persist(record).map(Some);
         }
         if self.unsaved_jobs.contains(&record.view.job_id) {
@@ -1870,7 +1899,6 @@ impl GenerationService {
             fs::remove_file(reply_path).map_err(message)?;
         }
         record.view.raw_reply = None;
-        record.view.status = JobStatus::Generating;
         record.view.candidate = None;
         record.view.usage = None;
         record.view.received_bytes = 0;
@@ -1886,6 +1914,7 @@ impl GenerationService {
             response_id: None,
             usage: None,
         });
+        record.transition(JobStatus::Generating);
         let view = self.persist(record)?;
         let cancellation = CancellationToken::new();
         self.active.insert(job_id, (ordinal, cancellation.clone()));
@@ -2012,18 +2041,13 @@ impl GenerationService {
                     record.view.usage = usage;
                 }
                 self.record_validation_counts(&mut record);
-                for batch in &mut record.view.batches {
-                    if batch.status == JobStatus::Generating {
-                        batch.status = record.view.status;
-                        batch.message = record.view.message.clone();
-                    }
-                }
+                record.transition(record.view.status);
                 self.persist_retaining(record)?;
             }
             self.active.remove(&job_id);
             return Ok(());
         }
-        match result {
+        let status = match result {
             Ok(response) => {
                 record.view.usage = response.usage;
                 if let Some(attempt) = record.view.attempts.last_mut() {
@@ -2048,17 +2072,17 @@ impl GenerationService {
                 match checked {
                     Ok((candidate, Ok(()))) => {
                         let ready = candidate.can_apply(&record.view.requirements);
-                        record.view.status = if ready {
-                            JobStatus::Ready
-                        } else {
-                            JobStatus::Blocked
-                        };
                         record.view.message = if ready {
                             "Result ready to apply.".into()
                         } else {
                             "Some requests need a choice.".into()
                         };
                         record.view.candidate = Some(candidate);
+                        if ready {
+                            JobStatus::Ready
+                        } else {
+                            JobStatus::Blocked
+                        }
                     }
                     Ok((candidate, Err(error))) => {
                         let element_id =
@@ -2070,10 +2094,10 @@ impl GenerationService {
                             message: error.to_string(),
                         });
                         record.view.raw_reply = Some(desegnos_ai::scrub_diagnostic_reply(&response.text, None));
-                        record.view.status = JobStatus::Blocked;
                         record.view.message = format!(
                             "Desegnos rejected the candidate: {error} Nothing was applied."
                         );
+                        JobStatus::Blocked
                     }
                     Err(error) => {
                         record.view.validation_events.push(desegnos_core::ValidationEvent {
@@ -2083,10 +2107,10 @@ impl GenerationService {
                             message: error.to_string(),
                         });
                         record.view.raw_reply = Some(desegnos_ai::scrub_diagnostic_reply(&response.text, None));
-                        record.view.status = JobStatus::Blocked;
                         record.view.message = format!(
                             "Desegnos rejected the candidate: {error} Nothing was applied."
                         );
+                        JobStatus::Blocked
                     }
                 }
             }
@@ -2101,7 +2125,7 @@ impl GenerationService {
                 if let Some(format) = &error.response_format {
                     record.view.received_bytes = record.view.received_bytes.max(format.body_bytes);
                 }
-                record.view.status = if error.kind == ErrorKind::Cancelled {
+                let status = if error.kind == ErrorKind::Cancelled {
                     JobStatus::Cancelled
                 } else if error.outcome == SubmissionOutcome::Unknown {
                     JobStatus::Unknown
@@ -2115,13 +2139,11 @@ impl GenerationService {
                     attempt.usage = error.usage;
                 }
                 record.error = Some(error);
+                status
             }
-        }
+        };
+        record.transition(status);
         self.record_validation_counts(&mut record);
-        if let Some(attempt) = record.view.attempts.last_mut() {
-            attempt.status = record.view.status;
-            attempt.finished_at = Some(now());
-        }
         let _ = self.persist_retaining(record);
         self.active.remove(&job_id);
         Ok(())
@@ -2184,10 +2206,10 @@ impl GenerationService {
         if let Some(record) = self.jobs.get_mut(&job_id)
             && record.view.status != JobStatus::Cancelled
         {
-            record.view.status = JobStatus::Unknown;
             record.view.message = format!(
                 "Generation stopped while recording its result: {error} No request will be automatically repeated."
             );
+            record.transition(JobStatus::Unknown);
         }
         self.active.remove(&job_id);
     }
@@ -2217,7 +2239,6 @@ impl GenerationService {
         ) {
             return Err("This request is no longer running. Review or discard its result.".into());
         }
-        record.view.status = JobStatus::Cancelled;
         record.view.candidate = None;
         record.view.message = if record.view.authentication == AuthenticationMethod::Chatgpt {
             "Stopped. A submitted request may still consume ChatGPT plan allowance or credits. Late output cannot be applied.".into()
@@ -2225,16 +2246,7 @@ impl GenerationService {
             "Stopped. A submitted request may still incur a charge. Late output cannot be applied."
                 .into()
         };
-        if let Some(attempt) = record.view.attempts.last_mut() {
-            attempt.status = JobStatus::Cancelled;
-            attempt.finished_at = Some(now());
-        }
-        for batch in &mut record.view.batches {
-            if batch.status == JobStatus::Generating {
-                batch.status = JobStatus::Cancelled;
-                batch.message = record.view.message.clone();
-            }
-        }
+        record.transition(JobStatus::Cancelled);
         self.jobs.insert(job_id, record.clone());
         match self.persist(record.clone()) {
             Ok(view) => Ok(view),
@@ -2278,18 +2290,8 @@ impl GenerationService {
                 .get(&job_id)
                 .cloned()
                 .ok_or("The account's generation record is unavailable.")?;
-            record.view.status = JobStatus::Cancelled;
             record.view.message = "Account signed out. Generation was cancelled and late output cannot be applied. A submitted request may still consume ChatGPT plan allowance or credits.".into();
-            if let Some(attempt) = record.view.attempts.last_mut() {
-                attempt.status = JobStatus::Cancelled;
-                attempt.finished_at = Some(now());
-            }
-            for batch in &mut record.view.batches {
-                if batch.status == JobStatus::Generating {
-                    batch.status = JobStatus::Cancelled;
-                    batch.message = record.view.message.clone();
-                }
-            }
+            record.transition(JobStatus::Cancelled);
             self.jobs.insert(job_id, record.clone());
             if let Err(error) = self.persist(record.clone()) {
                 record.view.message = format!(
@@ -3276,8 +3278,8 @@ pub fn discard_generation(
             "Cancel running generation or finish its application before discarding.".into(),
         );
     }
-    record.view.status = JobStatus::Discarded;
     record.view.message = "Result discarded.".into();
+    record.transition(JobStatus::Discarded);
     service.persist(record)
 }
 
@@ -3407,8 +3409,8 @@ pub async fn apply_generation(
         )
         .map_err(message)?;
     let mut record = service.record(workspace.project()?, job_id)?;
-    record.view.status = JobStatus::Applied;
     record.view.message = "Layers updated.".into();
+    record.transition(JobStatus::Applied);
     record.view.accepted_decision_indices = accepted_decision_indices;
     service.persist(record)?;
     Ok(workspace.view())
