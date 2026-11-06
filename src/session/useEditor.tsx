@@ -1,11 +1,11 @@
 import { type BoundaryToolKind, boundaryDefaults, layoutKind, outputKind, pageKind, projectKind, nextBoundaryName } from '../projectCanvas/boundaryDefaults';
 import { canvasView } from '../projectCanvas/canvasView';
 import { useProjectSession } from './useProjectSession';
-import { createProjectCommands } from './projectCommands';
+import { type SaveState, createProjectCommands } from './projectCommands';
 import { useExportJobs } from '../exportJobs/useExportJobs';
 import { createEditorShortcuts } from '../editorShortcuts';
 import {
-  Theme, Replacement, UntitledSaveRequest, Confirmation, errorMessage, sizeName, sizeBoundaries,
+  Theme, Replacement, Confirmation, errorMessage, sizeName, sizeBoundaries,
   readTheme, ownerPageId, selectionBounds, menuPaletteCommands,
   suggestedPagePath,
 } from '../editorShared';
@@ -21,7 +21,6 @@ import { type EditorTool, type ProjectTool, type RequestToolShape } from '../Edi
 import { isTextField } from '../WorkspaceSurface';
 import { type ProjectCanvasHandle } from '../ProjectCanvas';
 import { type PendingRecovery, type RecoveryChoices } from '../RecoveryBanner';
-import { type SaveConflict, type SaveChoice } from '../SaveConflict';
 import type { ProjectLocationView, RequestArea } from '../types';
 import { type DossierSection } from '../Notes';
 import { type MenuItem } from '../Menus';
@@ -42,6 +41,22 @@ import { coveredTargets } from '../projectCanvas/requests';
 import { idlePlay, playClick, playIsActive, type PlayState } from '../projectCanvas/play';
 import { behaviourSourceKey, playShouldPreview } from '../projectCanvas/behaviours';
 
+export type EditorPanel =
+  | { kind: 'closed' }
+  | { kind: 'notes'; section: DossierSection }
+  | { kind: 'import'; source: import('../types').IdentitySource | null }
+  | { kind: 'log'; focus: number }
+  | { kind: 'gridSettings' | 'styleGuide' | 'shortcuts' | 'recovery' | 'rename' | 'projectLocation' | 'history' | 'export' };
+
+type CanvasToolState =
+  | { kind: Exclude<ProjectTool, 'insert'> }
+  | { kind: 'insert'; insertKind: ElementKind | null };
+
+type UpdateState =
+  | { kind: 'idle' | 'checking' }
+  | { kind: 'done'; result: UpdateSummary }
+  | { kind: 'failed'; message: string };
+
 export function useEditor({ initialView }: { initialView?: WorkspaceView } = {}) {
 
   const {
@@ -49,16 +64,15 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
     closeProject, switchProjectTab, closeProjectTab, open, openRecent, newUntitled,
     recover, dismissRecoveries, travel, saveCopy, compactHistory,
   } = createProjectCommands(() => ({
-    setPendingRecovery, setError, saveChoice, setSaveConflict, untitledSaveResolve, setUntitledSave,
-    untitledSaveFlight, current, panels, panelActions, settle, queue, accept, setNotice, refreshRecent,
-    saveFlight, setReplacement, setCanvasSelection, setCanvasFocus, setShowStartPage,
-    setConfirmation, resolvedTheme, canvasRef, setShowRecovery, setHistoryEpoch,
+    setPendingRecovery, setError, saveState, transitionSave, current, panels, panelActions, settle, queue, accept, setNotice, refreshRecent,
+    setReplacement, setCanvasSelection, setCanvasFocus, setShowStartPage,
+    setConfirmation, resolvedTheme, canvasRef, closePanel, setHistoryEpoch,
   }));
   const {
     performAction,
   } = createEditorShortcuts(() => ({
-    showStartPage, current, setShowShortcuts, setShowPalette, newUntitled, open, setInsertKind,
-    setInsertSignal, setCanvasTool, panelActions, canvasRef, togglePlay, previewSelectedBoundary,
+    showStartPage, current, openPanel, setShowPalette, newUntitled, open, clearInsertKind,
+    setInsertSignal, changeCanvasTool, panelActions, canvasRef, togglePlay, previewSelectedBoundary,
     openExportPanel, runExport, travel, save, closeProject,
   }));
 
@@ -67,9 +81,8 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
   const [error, setError] = useState('');
   const { view, current, pending, accept, queue, mutate, settle } = useProjectSession(initialView, setError);
   const [openFailure, setOpenFailure] = useState<{ message: string; url: string } | null>(null);
-  const [checkingUpdates, setCheckingUpdates] = useState(false);
-  const [updateResult, setUpdateResult] = useState<UpdateSummary | null>(null);
-  const [updateError, setUpdateError] = useState('');
+  const [updateState, setUpdateState] = useState<UpdateState>({ kind: 'idle' });
+  function dismissUpdate() { setUpdateState({ kind: 'idle' }); }
   const [notices, setNotices] = useState<{ id: number; message: string; undo?: () => void; history: string }[]>([]);
   const noticeId = useRef(0);
   // A notice may carry one reversible follow-up, which the toast offers as Undo; repeating a
@@ -90,8 +103,15 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
   const [showPalette, setShowPalette] = useState(false);
   const [dismissedRecovery, setDismissedRecovery] = useState<string[]>([]);
   const [theme, setTheme] = useState<Theme>(readTheme);
-  const [canvasTool, setCanvasTool] = useState<ProjectTool>('select');
-  const [insertKind, setInsertKind] = useState<ElementKind | null>(null);
+  const [canvasTool, setCanvasTool] = useState<CanvasToolState>({ kind: 'select' });
+  function changeCanvasTool(kind: ProjectTool, insertKind?: ElementKind | null) {
+    setCanvasTool(previous => kind === 'insert'
+      ? { kind, insertKind: insertKind === undefined ? (previous.kind === 'insert' ? previous.insertKind : null) : insertKind }
+      : { kind });
+  }
+  function clearInsertKind() {
+    setCanvasTool(previous => previous.kind === 'insert' ? { kind: 'insert', insertKind: null } : previous);
+  }
   const [insertSignal, setInsertSignal] = useState(0);
   const [boundaryKind, setBoundaryKind] = useState<BoundaryToolKind>('page');
   const [requestToolShape, setRequestToolShape] = useState<RequestToolShape>('pick');
@@ -109,24 +129,21 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
   const [appSettings, setAppSettings] = useState<AppSettingsView>({ showStartPage: true });
   const [showStartPage, setShowStartPage] = useState(!initialView);
   const [projectLocation, setProjectLocation] = useState<ProjectLocationView | null>(null);
-  const [showProjectLocation, setShowProjectLocation] = useState(false);
   const [play, setPlay] = useState<PlayState>(idlePlay);
-  const [untitledSave, setUntitledSave] = useState<UntitledSaveRequest | null>(null);
   const [pendingRecovery, setPendingRecovery] = useState<PendingRecovery | null>(null);
 
-  const [showNotes, setShowNotes] = useState<DossierSection | null>(null);
-  const [showGridSettings, setShowGridSettings] = useState(false);
-  const [showStyleGuide, setShowStyleGuide] = useState(false);
-  const [showImport, setShowImport] = useState(false);
-  const [importSource, setImportSource] = useState<import('../types').IdentitySource | null>(null);
-  const [showLog, setShowLog] = useState(false);
-  const [logFocus, setLogFocus] = useState(0);
+  const [panel, setPanel] = useState<EditorPanel>({ kind: 'closed' });
+  function openPanel(next: Exclude<EditorPanel, { kind: 'closed' }>) {
+    setPanel(previous => next.kind === 'log' && next.focus === 0 && previous.kind === 'log' ? previous : next);
+  }
+  const closePanel = useCallback((kind: EditorPanel['kind']) => {
+    setPanel(previous => previous.kind === kind ? { kind: 'closed' } : previous);
+  }, []);
+  function togglePanel(next: Exclude<EditorPanel, { kind: 'closed' }>) {
+    setPanel(previous => previous.kind === next.kind ? { kind: 'closed' } : next);
+  }
   const [resolvedTheme, setResolvedTheme] = useState<'light' | 'dark'>('light');
-  const [showHistory, setShowHistory] = useState(false);
   const [historyEpoch, setHistoryEpoch] = useState(0);
-  const [showShortcuts, setShowShortcuts] = useState(false);
-  const [showRecovery, setShowRecovery] = useState(false);
-  const [showRename, setShowRename] = useState(false);
   const [showAiSettings, setShowAiSettings] = useState(false);
   const [aiSettings, setAiSettings] = useState<AiSettingsView | null>(null);
   const aiCurrent = useRef<AiSettingsView | null>(null);
@@ -137,15 +154,13 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
   const [replacement, setReplacement] = useState<Replacement | null>(null);
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
   const closing = useRef(false);
-  const [saveConflict, setSaveConflict] = useState<SaveConflict | null>(null);
-  const saveChoice = useRef<((choice: SaveChoice) => void) | null>(null);
-  const saveFlight = useRef<Promise<WorkspaceView | null> | null>(null);
-  const untitledSaveFlight = useRef<Promise<WorkspaceView | null> | null>(null);
-  const untitledSaveResolve = useRef<((workspace: WorkspaceView | null) => void) | null>(null);
+  const [saving, setSaving] = useState<SaveState>({ kind: 'idle' });
+  const saveState = useRef<SaveState>(saving);
+  function transitionSave(next: SaveState) { saveState.current = next; setSaving(next); }
   const generationRef = useRef<GenerationJobView | null>(null);
   const generationOwns = useRef(false);
   const briefGenerateFlight = useRef(false);
-  const { openExportPanel, chooseExportDestination, runExport, sendExport, cancelExport, openExportFolder, openInBrowser, keepPointerCode, forgetExportPointer, previewSelectedBoundary, closePreview, refreshPreview, showExport, setShowExport, exportDestination, exportJob, exportError, exportSending, checkedStates, checkedProject, preview } = useExportJobs({ current, view, showHistory, play, setPlay }, () => ({ current, panels, panelActions, accept, setNotice, settle, setError, setOpenFailure, setShowHistory, mutate, canvasFocus, selectedElementPageId, play, setPlay, view, showHistory, aiConnected }));
+  const { openExportPanel, chooseExportDestination, runExport, sendExport, cancelExport, openExportFolder, openInBrowser, keepPointerCode, forgetExportPointer, previewSelectedBoundary, closePreview, refreshPreview, exportDestination, exportJob, exportError, exportSending, checkedStates, checkedProject, preview } = useExportJobs({ current, view, panel, play, setPlay, openPanel, closePanel }, () => ({ current, panels, panelActions, accept, setNotice, settle, setError, setOpenFailure, openPanel, closePanel, mutate, canvasFocus, selectedElementPageId, play, setPlay, view, panel, aiConnected }));
 
   const storeAiSettings = useCallback((value: AiSettingsView) => { aiCurrent.current = value; setAiSettings(value); setAiPollingError(''); }, []);
   const refreshAiSettings = useCallback(async (refreshModels = false) => {
@@ -187,7 +202,7 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
   useEffect(() => { void refreshRecent().catch(error => setError(errorMessage(error))); }, [refreshRecent]);
   useEffect(() => { void native<ProjectLocationView>('get_project_location').then(setProjectLocation).catch(error => setError(errorMessage(error))); }, []);
   // The export panel belongs to an open canvas; Home and project switches close it.
-  useEffect(() => { if (showStartPage) setShowExport(false); }, [showStartPage]);
+  useEffect(() => { if (showStartPage) closePanel('export'); }, [showStartPage]);
   async function changeProjectLocation(reset: boolean) {
     const path = reset ? null : await native<string | null>('pick_project_location');
     if (!reset && !path) return;
@@ -461,7 +476,7 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
       if (!loaded.project && !settings.showStartPage) loaded = await native<WorkspaceView>('new_untitled_project', {});
       accept(loaded);
       setShowStartPage(settings.showStartPage && !loaded.project);
-      if (!settings.showStartPage && loaded.recoveries.length) setShowRecovery(true);
+      if (!settings.showStartPage && loaded.recoveries.length) openPanel({ kind: 'recovery' });
     }
     catch (error) { setError(errorMessage(error)); }
     finally { setLoading(false); }
@@ -528,10 +543,9 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
   }
   // The only update request: a manual read of the newest release, with no install step.
   async function checkForUpdates() {
-    setCheckingUpdates(true); setUpdateError(''); setUpdateResult(null);
-    try { setUpdateResult(updateSummary(await native<UpdateCheck>('check_for_updates'))); }
-    catch (error) { setUpdateError(errorMessage(error)); }
-    finally { setCheckingUpdates(false); }
+    setUpdateState({ kind: 'checking' });
+    try { setUpdateState({ kind: 'done', result: updateSummary(await native<UpdateCheck>('check_for_updates')) }); }
+    catch (error) { setUpdateState({ kind: 'failed', message: errorMessage(error) }); }
   }
   async function openRelease(url: string) {
     try { await native('open_preview_link', { url }); }
@@ -565,7 +579,7 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
     });
   }
 
-  useEffect(() => { if (!view?.recoveries.length) setShowRecovery(false); }, [view?.recoveries.length]);
+  useEffect(() => { if (!view?.recoveries.length) closePanel('recovery'); }, [view?.recoveries.length]);
   const changeBrief = useCallback((patch: Partial<Brief>) => mutate(project => ({ type: 'set_brief', brief: { ...project.brief, ...patch } }))
     .then(workspace => workspace.project!.brief), [mutate]);
 
@@ -623,7 +637,7 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
   generationRef.current = generation.job;
   generationOwns.current = generation.owns;
   const working = generation.canStop || activeGeneration(generation.job) || !!generation.operation;
-  useEffect(() => { setShowLog(false); }, [activeProjectId]);
+  useEffect(() => { closePanel('log'); }, [activeProjectId]);
   useEffect(() => { setCanvasSelection([]); setCanvasFocus(null); setCanvasFocusSize(null); }, [view?.project?.id]);
   useEffect(() => {
     const pages = view?.project?.pages, reference = view?.project?.reference ?? [], pointers = view?.project?.pointers ?? [];
@@ -639,7 +653,7 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
     });
     if (canvasFocus && !pages?.some(page => page.id === canvasFocus)) setCanvasFocus(null);
   }, [view?.project?.pages, view?.project?.reference, view?.project?.pointers, view?.project?.requests, canvasFocus]);
-  useEffect(() => { if (generation.visible) { setShowLog(true); generation.close(); } }, [generation.visible]);
+  useEffect(() => { if (generation.visible) { openPanel({ kind: 'log', focus: 0 }); generation.close(); } }, [generation.visible]);
   const showGenerationStatus = !!generation.error || announcesStatus(generation.job, { owns: generation.owns, stopped: generation.stopped, working });
   const composeJob = generation.job && ['prepared', 'generating', 'ready', 'blocked', 'applying'].includes(generation.job.status) ? generation.job : null;
   const composeUsesChatgpt = (composeJob?.authentication ?? aiSettings?.authentication) === 'chatgpt';
@@ -647,8 +661,7 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
   const composeAccount = aiSettings?.chatgpt.accounts.find(account => account.id === composeAccountId);
   const aiConnected = !!aiSettings && !aiSettings.configurationError && (composeUsesChatgpt ? !!composeAccount?.connected && composeAccount.planEnabled && !composeAccount.storageRepairRequired : aiSettings.credential.configured);
   function openGeneration() {
-    setLogFocus(value => value + 1);
-    setShowLog(true);
+    openPanel({ kind: 'log', focus: panel.kind === 'log' ? panel.focus + 1 : 1 });
     void generation.refresh();
     void refreshAiSettings().catch(() => {});
   }
@@ -668,11 +681,11 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
     if (!elementIds.length) throw new Error('Those requests are no longer in the project.');
     await generation.prepare(elementIds);
   }
-  function openImportDialog() { setImportSource(null); setShowImport(true); }
+  function openImportDialog() { openPanel({ kind: 'import', source: null }); }
   async function generate(elementIds?: string[]) {
     const contextItems = selectedReference(canvasSelection);
     setError('');
-    setShowLog(true);
+    openPanel({ kind: 'log', focus: 0 });
     // With nothing described, a filled brief captures the first empty page as one request area.
     const page = project?.pages[0];
     const boundary = page && canvasBoundaries.find(item => item.pageId === page.id && item.sizeId === baseSizeId(page));
@@ -800,26 +813,26 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
     { id: 'close-project', label: 'Close project', shortcut: shortcutLabel('closeProject'), disabled: !canEditProject, action: () => run(closeProject) },
     { id: 'save-as', label: 'Save as', shortcut: shortcutLabel('saveAs'), disabled: !canEditProject, action: () => run(() => save(true)) },
     { id: 'save-copy', label: 'Save a copy without history…', disabled: !canEditProject || pending > 0, action: () => run(saveCopy) },
-    { id: 'rename-project', label: 'Rename project…', disabled: !canEditProject, action: () => setShowRename(true) },
-    ...(view?.recoveries.length ? [{ id: 'recover', label: 'Recover unsaved projects', action: () => setShowRecovery(true) }] : []),
+    { id: 'rename-project', label: 'Rename project…', disabled: !canEditProject, action: () => openPanel({ kind: 'rename' }) },
+    ...(view?.recoveries.length ? [{ id: 'recover', label: 'Recover unsaved projects', action: () => openPanel({ kind: 'recovery' }) }] : []),
     { id: 'file-divider', label: '', separator: true },
     { id: 'export', label: 'Export…', shortcut: shortcutLabel('export'), disabled: !canEditProject, action: openExportPanel },
     ...(canEditProject && project.lastExport ? [{ id: 'open-browser', label: 'Open in browser', action: () => run(openInBrowser) }] : []),
     { id: 'ai-divider', label: '', separator: true },
     { id: 'settings', label: 'AI settings', action: () => setShowAiSettings(true) },
     { id: 'mode', label: 'AI style', disabled: !canEditProject || working, children: (['fuzzy', 'strict'] as GenerationMode[]).map(mode => ({ id: mode, label: mode === 'fuzzy' ? 'Flexible' : 'Precise', checked: project?.generationMode === mode, action: () => run(() => mutate(current => current.generationMode === mode ? null : { type: 'set_generation_mode', mode })) })) },
-    { id: 'style-guide', label: 'Style guide', disabled: !canEditProject, action: () => setShowStyleGuide(true) },
-    { id: 'import', label: 'Import…', disabled: !canEditProject, action: () => { setImportSource(null); setShowImport(true); } },
-    { id: 'dossier', label: 'Project brief', disabled: !canEditProject, action: () => setShowNotes('overview') },
+    { id: 'style-guide', label: 'Style guide', disabled: !canEditProject, action: () => openPanel({ kind: 'styleGuide' }) },
+    { id: 'import', label: 'Import…', disabled: !canEditProject, action: () => { openPanel({ kind: 'import', source: null }); } },
+    { id: 'dossier', label: 'Project brief', disabled: !canEditProject, action: () => openPanel({ kind: 'notes', section: 'overview' }) },
     { id: 'help-divider', label: '', separator: true },
     { id: 'preferences', label: 'Preferences', children: [
       { id: 'show-start-page', label: 'Show start page on launch', checked: appSettings.showStartPage, action: () => run(() => changeShowStartPage(!appSettings.showStartPage)) },
       { id: 'preferences-divider', label: '', separator: true },
       { id: 'appearance', label: 'Editor theme', children: (['system', 'light', 'dark'] as Theme[]).map(value => ({ id: value, label: value === 'system' ? 'System' : value === 'light' ? 'Light' : 'Dark', checked: theme === value, action: () => setTheme(value) })) },
-      { id: 'project-location', label: 'Default project location', action: () => setShowProjectLocation(true) },
+      { id: 'project-location', label: 'Default project location', action: () => openPanel({ kind: 'projectLocation' }) },
     ] },
-    { id: 'check-updates', label: 'Check for updates…', disabled: checkingUpdates, action: () => { void checkForUpdates(); } },
-    { id: 'help', label: 'Keyboard shortcuts', shortcut: shortcutLabel('help'), action: () => setShowShortcuts(true) },
+    { id: 'check-updates', label: 'Check for updates…', disabled: updateState.kind === 'checking', action: () => { void checkForUpdates(); } },
+    { id: 'help', label: 'Keyboard shortcuts', shortcut: shortcutLabel('help'), action: () => openPanel({ kind: 'shortcuts' }) },
   ];
 
   const problemAction = needsAiSettings(error) ? { label: 'AI settings', onClick: () => setShowAiSettings(true) }
@@ -863,13 +876,13 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
     setCanvasSelection([{ kind: 'pointer', pointerId: ids[(index + 1) % ids.length] }]);
   }
   function chooseTool(next: EditorTool) {
-    setInsertKind(null); setCanvasTool(next);
+    changeCanvasTool(next, null);
     // The next press belongs to the canvas: leave the tool strip or its flyout behind, so no
     // button keeps focus or the pointer.
     canvasRef.current?.focusCanvas();
   }
   // The inline preview covers its page, so a tool that draws or types there would act on nothing.
-  useEffect(() => { if (preview && canvasTool !== 'select' && canvasTool !== 'pan') closePreview(); }, [canvasTool]);
+  useEffect(() => { if (preview && canvasTool.kind !== 'select' && canvasTool.kind !== 'pan') closePreview(); }, [canvasTool.kind]);
   function moveCanvasElementTo(pageId: string, sizeId: string, elementId: string, parentId: string | null, index: number) {
     const projectNow = current.current?.project;
     const page = projectNow?.pages.find(page => page.id === pageId);
@@ -885,10 +898,7 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
     void moveCanvasElements([{ id: elementId, to_page_id: pageId, to_parent_id: parentId, index, rect, size_id: sizeId }]);
   }
   function armInsert(kind: ElementKind) {
-    if (kind === 'image') { setInsertKind(null); setCanvasTool('image'); canvasRef.current?.focusCanvas(); return; }
-    if (kind === 'text') { setInsertKind(null); setCanvasTool('text'); canvasRef.current?.focusCanvas(); return; }
-    setInsertKind(kind);
-    setCanvasTool('insert');
+    changeCanvasTool(kind === 'image' || kind === 'text' ? kind : 'insert', kind);
     canvasRef.current?.focusCanvas();
   }
   // Status readouts: what is selected and where it sits, then the canvas zoom. A boundary the
@@ -915,13 +925,14 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
   ];
 
   return {
+    panel, openPanel, closePanel, togglePanel, saving, updateState, dismissUpdate, changeCanvasTool,
     showPalette, paletteCommands, setShowPalette, closeRequest, setCloseRequest, onStartPage, project, view,
-    run, switchProjectTab, closeProjectTab, menuItems, resolvedTheme, setTheme, compactHistory, showImport,
-    setImportSource, setShowImport, travel, showHistory, setShowHistory, panels, panelActions, play,
-    togglePlay, previewSelectedBoundary, showExport, openExportPanel, aiConnected, showAiSettings,
-    setShowAiSettings, generation, showLog, setShowLog, requestedAreas, working, generate,
-    error, setError, problemAction, openFailure, setNotice, setOpenFailure, updateResult, openRelease,
-    setUpdateResult, updateError, setUpdateError, notices, setNotices, dismissedRecovery, setDismissedRecovery,
+    run, switchProjectTab, closeProjectTab, menuItems, resolvedTheme, setTheme, compactHistory,
+    travel, panels, panelActions, play,
+    togglePlay, previewSelectedBoundary, openExportPanel, aiConnected, showAiSettings,
+    setShowAiSettings, generation, requestedAreas, working, generate,
+    error, setError, problemAction, openFailure, setNotice, setOpenFailure, openRelease,
+    notices, setNotices, dismissedRecovery, setDismissedRecovery,
     loading, load, pending, newUntitled, open, appSettings, changeShowStartPage, recentProjects, openRecent,
     forgetRecent, pinRecent, recover, dismissRecoveries, canvasTool, chooseTool, canvasZoom, canvasRef,
     boundaryKind, setBoundaryKind, requestToolShape, setRequestToolShape, armInsert, insertSignal,
@@ -929,14 +940,14 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
     canvasSelection, canvasFocus, canvasFocusSize, widthPreview, setWidthPreview, selectCanvasReference, selectCanvasPointer,
     selectCanvasRequest, clearCanvasSelection, removeCanvasSelection, addCanvasReference,
     updateCanvasReference, elementToReference, referenceToElement, attachToRequest, addCanvasRequest,
-    updateCanvasRequest, deleteBoundary, addCanvasPointer, updateCanvasPointer, pointerStateMap, insertKind,
-    setCanvasTool, setInsertKind, reportCanvasZoom, selectCanvasElement, insertCanvasElements,
+    updateCanvasRequest, deleteBoundary, addCanvasPointer, updateCanvasPointer, pointerStateMap,
+    reportCanvasZoom, selectCanvasElement, insertCanvasElements,
     updateCanvasElements, moveCanvasElements, groupCanvasElements, ungroupCanvasElements, linkCanvasElements,
     unlinkCanvasElements, pasteLinkedInstances, playElement, setPlay, preview, closePreview, refreshPreview,
-    showGenerationStatus, openImportDialog, setShowNotes, editGenerationRequest,
-    openGeneration, logFocus, aiSettings, manageChatgptUsage, replyToGeneration, exportDestination,
+    showGenerationStatus, openImportDialog, editGenerationRequest,
+    openGeneration, aiSettings, manageChatgptUsage, replyToGeneration, exportDestination,
     exportJob, exportSending, exportError, chooseExportDestination, runExport, sendExport, cancelExport,
-    openExportFolder, openInBrowser, setShowExport, historyEpoch, accept, untitledSave, projectLocation,
+    openExportFolder, openInBrowser, historyEpoch, accept, projectLocation,
     closeUntitledSave, saveUntitledProject, selectedPointer, selectedPointerState, forgetExportPointer,
     keepPointerComment, keepPointerCode, selectedPointerOther, keepPointerThis, mergePointerClash,
     selectedReferenceItem, selectedRequest, attachReferenceContext, selectedElements, selectedElementPageId,
@@ -944,12 +955,10 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
     selectedBoundary, updateCanvasPage, mutate, updateCanvasPageSize,
     addCanvasPageSize, renameProject, showDotGrid, changeGridFlags, save, canvasBoundaries,
     moveCanvasElementTo, removeLinkedDefinition, views, addNamedView, renameNamedView, removeNamedView,
-    selectedBounds, clashPointers, selectNextPointerClash, zoomPercent, showGridSettings, setShowGridSettings,
-    showShortcuts, setShowShortcuts, recovery, showProjectLocation, setShowProjectLocation,
-    changeProjectLocation, showRecovery, setShowRecovery, importSource, importContext,
-    setCanvasSelection, setCanvasFocus, focusCanvasBehaviour, behaviourFocus, showStyleGuide,
-    setShowStyleGuide, showNotes, changeBrief, showRename, setShowRename,
-    saveConflict, chooseSaveConflict, replacement, setReplacement, confirmation, setConfirmation,
+    selectedBounds, clashPointers, selectNextPointerClash, zoomPercent,
+    recovery, changeProjectLocation, importContext,
+    setCanvasSelection, setCanvasFocus, focusCanvasBehaviour, behaviourFocus, changeBrief,
+    chooseSaveConflict, replacement, setReplacement, confirmation, setConfirmation,
     refreshAiSettings, updateAiSettings, aiPollingError,
   };
 }

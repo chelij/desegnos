@@ -16,13 +16,14 @@ try {
       setPendingRecovery: value => { state.pending = value; }, setError: value => { state.error = value; },
       settle: async () => {}, queue: operation => operation(),
       accept: workspace => state.accepted.push(workspace), setNotice() {},
-      setShowRecovery: value => { state.showRecovery = value; },
+      closePanel: kind => { if (kind === 'recovery') state.showRecovery = false; },
       setShowStartPage() {}, refreshRecent: async () => {},
-      saveFlight: { current: null }, saveChoice: { current: null },
-      untitledSaveResolve: { current: null }, setUntitledSave() {},
-      setSaveConflict: conflict => {
-        if (!conflict) return;
-        state.conflicts.push(conflict);
+      panels: { hidden: false, collapsed: false },
+      saveState: { current: { kind: 'idle' } },
+      transitionSave: next => {
+        env.saveState.current = next;
+        if (next.kind !== 'conflict') return;
+        state.conflicts.push(next.conflict);
         queueMicrotask(() => commands.chooseSaveConflict(state.choice ?? 'copy'));
       },
     };
@@ -81,10 +82,12 @@ try {
       const conflicts = [{ token: 'first' }, { token: 'second' }];
       const outcomes = [...conflicts.map(conflict => ({ status: 'conflict', conflict })), { status: 'saved', workspace }];
       state.respond = () => outcomes.shift();
-      let completed;
-      env.untitledSaveResolve.current = value => { completed = value; };
-      if (untitled) await saveUntitledProject('Example', '/example.desegnos');
-      else assert.equal(await save(), workspace);
+      let completion;
+      if (untitled) {
+        env.current.current = { untitled: true, project: { id: 'project', name: 'Example' } };
+        completion = save();
+        await saveUntitledProject('Example', '/example.desegnos');
+      } else assert.equal(await save(), workspace);
       assert.deepEqual(state.calls, [
         untitled
           ? { command: 'save_untitled_project', args: { name: 'Example', path: '/example.desegnos', label: null } }
@@ -93,8 +96,8 @@ try {
       ]);
       assert.deepEqual(state.conflicts, conflicts);
       assert.deepEqual(state.accepted, [workspace]);
-      assert.equal(env.saveChoice.current, null);
-      if (untitled) assert.equal(completed, workspace);
+      assert.equal(env.saveState.current.kind, 'idle');
+      if (untitled) assert.equal(await completion, workspace);
     });
 
     await test(`${untitled ? 'untitled' : 'named'} save cancellation publishes no workspace`, async () => {
@@ -103,12 +106,14 @@ try {
       state.respond = command => command === 'resolve_save_conflict'
         ? { status: 'cancelled' } : { status: 'conflict', conflict: { token: 'conflict' } };
       let completed = false;
-      env.untitledSaveResolve.current = () => { completed = true; };
-      if (untitled) await assert.rejects(saveUntitledProject('Example', null), /Save cancelled/);
-      else assert.equal(await save(), null);
+      if (untitled) {
+        env.current.current = { untitled: true, project: { id: 'project', name: 'Example' } };
+        void save().then(() => { completed = true; });
+        await assert.rejects(saveUntitledProject('Example', null), /Save cancelled/);
+      } else assert.equal(await save(), null);
       assert.deepEqual(state.accepted, []);
       assert.equal(completed, false, 'cancelling the disk conflict leaves the untitled save open');
-      assert.equal(env.saveFlight.current, null);
+      assert.equal(env.saveState.current.kind, untitled ? 'naming' : 'idle');
     });
   }
 
