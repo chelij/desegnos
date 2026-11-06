@@ -220,6 +220,13 @@ impl OpenProject {
     fn dirty(&self) -> bool {
         self.untitled || Some(self.session.project().revision) != self.saved_revision
     }
+
+    /// A pending save conflict describes one destination and one project revision. Every
+    /// transition that could change either of those — a save attempt, a resolution, or a
+    /// wholesale swap of the tab's state — ends the choice here.
+    fn invalidate_pending_save(&mut self) {
+        self.pending_save = None;
+    }
 }
 
 #[derive(Serialize)]
@@ -641,6 +648,14 @@ impl Workspace {
         self.active.as_ref().is_some_and(OpenProject::dirty)
     }
 
+    /// End the active project's pending save conflict; see
+    /// [`OpenProject::invalidate_pending_save`].
+    fn invalidate_pending_save(&mut self) {
+        if let Some(open) = self.active.as_mut() {
+            open.invalidate_pending_save();
+        }
+    }
+
     /// "Discard and continue": the unsaved work is gone, so it is no longer offered for
     /// recovery and no longer blocks opening the saved file.
     fn set_aside_recovery(&mut self) -> NativeResult<()> {
@@ -781,7 +796,7 @@ impl Workspace {
         }
         if let Some(mut project) = self.active.take() {
             project.prepared = None;
-            project.pending_save = None;
+            project.invalidate_pending_save();
             project.last_autosave = None;
             self.parked.push(project);
         }
@@ -1238,7 +1253,7 @@ impl Workspace {
         label: Option<String>,
     ) -> NativeResult<SaveProjectOutcome> {
         self.check_snapshot(project)?;
-        self.active.as_mut().expect("active project").pending_save = None;
+        self.invalidate_pending_save();
         let labels = self.take_version_labels();
         let destination = self.save_destination(Some(path))?;
         match self.write_destination_checked(
@@ -1259,7 +1274,7 @@ impl Workspace {
 
     fn save_snapshot(&mut self, project: &Project, path: Option<PathBuf>) -> NativeResult<()> {
         self.check_snapshot(project)?;
-        self.active.as_mut().expect("active project").pending_save = None;
+        self.invalidate_pending_save();
         let labels = self.take_version_labels();
         let destination = self.save_destination(path)?;
         self.write_destination(destination, project, &labels, None)?;
@@ -1354,7 +1369,7 @@ impl Workspace {
         label: Option<String>,
     ) -> NativeResult<SaveProjectOutcome> {
         self.check_snapshot(project)?;
-        self.active.as_mut().expect("active project").pending_save = None;
+        self.invalidate_pending_save();
         let labels = self.take_version_labels();
         let destination = self.save_destination(path)?;
         match self.write_destination_checked(
@@ -1386,6 +1401,7 @@ impl Workspace {
         if current.id != pending.project_id || current.revision != pending.revision {
             return Err("The project changed while this save choice was open. Save again.".into());
         }
+        // Choosing replace or copy consumes the conflict, the same way cancelling ends it.
         self.active
             .as_mut()
             .expect("active project")
@@ -1403,7 +1419,8 @@ impl Workspace {
         {
             return Err("This save choice expired. Save again.".into());
         }
-        self.active.as_mut().expect("active project").pending_save = None;
+        // Cancelling is a resolution: the choice ends like any other.
+        self.invalidate_pending_save();
         Ok(())
     }
 
@@ -1767,7 +1784,7 @@ impl Workspace {
         active.stamp = Some(stamp);
         self.active.as_mut().expect("active project").last_autosave = None;
         self.active.as_mut().expect("active project").prepared = None;
-        self.active.as_mut().expect("active project").pending_save = None;
+        self.invalidate_pending_save();
         self.refresh_recoveries();
         Ok(())
     }
@@ -1814,7 +1831,7 @@ impl Workspace {
             Some(session.project().revision);
         self.active.as_mut().expect("active project").stamp = Some(stamp);
         self.active.as_mut().expect("active project").last_autosave = None;
-        self.active.as_mut().expect("active project").pending_save = None;
+        self.invalidate_pending_save();
         Ok(())
     }
 }
@@ -2088,7 +2105,7 @@ pub async fn save_project_checked(
     let (project, choose_path) = {
         let mut state = state.lock().map_err(message)?;
         let project = state.project()?.clone();
-        state.active.as_mut().expect("active project").pending_save = None;
+        state.invalidate_pending_save();
         (project, save_as)
     };
     let picked = if choose_path {
