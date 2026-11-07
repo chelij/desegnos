@@ -36,7 +36,12 @@ export function GenerationFeedback({ controller, action, openSettings, openImpor
     else void controller.prepare(review.retryable.length ? review.retryable : undefined).catch(() => {});
   };
   const blocked = review.blocked[0];
-  const headings = { prepared: 'Getting ready…', generating: minutes >= 60 ? 'Still building your layers…' : 'Building your layers…',
+  // Live progress from the stream: the page being written now, and how many have started.
+  const started = job?.status === 'generating' ? job.pagesStarted ?? [] : [];
+  const buildingPage = started.length ? project?.pages.find(page => page.id === started[started.length - 1]) : undefined;
+  const pageTotal = Math.max(job?.requirements?.pageCount ?? 0, started.length);
+  const pageProgress = started.length && pageTotal > 1 ? ` · ${started.length} of ${pageTotal} pages` : '';
+  const headings = { prepared: 'Getting ready…', generating: buildingPage ? `Building ${buildingPage.name}…` : minutes >= 60 ? 'Still building your layers…' : 'Building your layers…',
     ready: 'Updating your layers…', blocked: staleResult(job) ? 'Design changed — not applied' : needsInput ? 'Needs your input' : 'Needs attention', failed: cutOff ? 'Reply cut off' : 'Couldn’t build the layers', unknown: cutOff ? 'Reply cut off' : 'Not sure the layers were built',
     cancelled: 'Stopped', discarded: 'Result discarded', applying: 'Updating your layers…', applied: partial ? 'Layers updated with warnings' : 'Layers updated' };
   const providerMessage = job && !cutOff && ['failed', 'unknown'].includes(job.status) ? providerFailureMessage(job.providerError, job.provider) : null;
@@ -50,7 +55,7 @@ export function GenerationFeedback({ controller, action, openSettings, openImpor
   const changeAction = change ?? fixAction;
   const secondaryAction = details ? { label: 'Details', onClick: details } : needsInput && change && fixAction ? fixAction : undefined;
   return <Notice className={`generation-notice status-${job?.status ?? 'preparing'}`} variant={error || job && ['failed', 'blocked', 'unknown'].includes(job.status) ? 'error' : partial ? 'warning' : job?.status === 'applied' ? 'success' : 'info'} priority="result" title={heading} dismissKey={`${job?.jobId}:${job?.status}:${operation}:${error}`}
-    message={providerMessage || (job?.status === 'generating' && job.providerRetry ? job.message : error ? userError(error) : elapsedSeconds !== null && controller.canStop ? `${Math.floor(minutes / 60)}:${String(minutes % 60).padStart(2, '0')}` : cutOff ? replyCutOffMessage : job?.status === 'applied' ? review.reason : blocked?.reason || review.reason)}
+    message={providerMessage || (job?.status === 'generating' && job.providerRetry ? job.message : error ? userError(error) : elapsedSeconds !== null && controller.canStop ? `${Math.floor(minutes / 60)}:${String(minutes % 60).padStart(2, '0')}${pageProgress}` : cutOff ? replyCutOffMessage : job?.status === 'applied' ? review.reason : blocked?.reason || review.reason)}
     action={action ?? (cutOff && openSettings ? { label: 'AI settings', onClick: openSettings } : needsAiSettings(error || job?.message || '', job?.providerError, job?.provider) && openSettings ? { label: 'AI settings', onClick: openSettings } : controller.canStop ? { label: 'Stop', onClick: () => { void controller.cancel(); } } : changeAction ?? (retry ? { label: 'Try again', onClick: retryRequests } : undefined))}
     secondaryAction={secondaryAction} />;
 }

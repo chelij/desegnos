@@ -100,6 +100,80 @@ pub fn parse_structured_reply<T: DeserializeOwned>(
     serde_json::from_value(value).map_err(|error| crate::Error(error.to_string()))
 }
 
+/// Repair a reply that was cut off mid-stream so the operations that did arrive can still be
+/// used. The text is cut back to the last complete object of the innermost open `operations`
+/// array, then every open container is closed. Returns `None` when the text is already complete
+/// JSON or when no `operations` array was open (nothing usable arrived). Validation of the
+/// repaired reply is unchanged; a half-written operation never survives the cut.
+pub fn complete_truncated_operations(text: &str) -> Option<String> {
+    struct Open {
+        array: bool,
+        key: Option<String>,
+        /// Byte offset just after this container's last complete child container.
+        last_child_end: Option<usize>,
+        /// Byte offset just after the opening bracket.
+        start: usize,
+    }
+    let mut stack: Vec<Open> = Vec::new();
+    let mut in_string = false;
+    let mut escaped = false;
+    let mut string_start = 0;
+    let mut last_string: Option<String> = None;
+    let mut pending_key: Option<String> = None;
+    for (index, character) in text.char_indices() {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if character == '\\' {
+                escaped = true;
+            } else if character == '"' {
+                in_string = false;
+                last_string = Some(text[string_start..index].to_owned());
+            }
+            continue;
+        }
+        match character {
+            '"' => {
+                in_string = true;
+                string_start = index + 1;
+            }
+            ':' => pending_key = last_string.take(),
+            '{' | '[' => {
+                let key = if stack.last().is_some_and(|open| !open.array) {
+                    pending_key.take()
+                } else {
+                    None
+                };
+                stack.push(Open { array: character == '[', key, last_child_end: None, start: index + 1 });
+            }
+            '}' | ']' => {
+                stack.pop()?;
+                if let Some(parent) = stack.last_mut() {
+                    parent.last_child_end = Some(index + 1);
+                }
+                pending_key = None;
+            }
+            ',' => {
+                last_string = None;
+                pending_key = None;
+            }
+            _ => {}
+        }
+    }
+    if stack.is_empty() {
+        return None;
+    }
+    let operations = stack
+        .iter()
+        .rposition(|open| open.array && open.key.as_deref() == Some("operations"))?;
+    let cut = stack[operations].last_child_end.unwrap_or(stack[operations].start);
+    let mut repaired = text[..cut].trim_end().to_owned();
+    for open in stack[..=operations].iter().rev() {
+        repaired.push(if open.array { ']' } else { '}' });
+    }
+    Some(repaired)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -154,5 +228,38 @@ mod tests {
             .to_string();
         assert_eq!(parsed, strict);
         assert!(strict.contains("trailing comma"), "{strict}");
+    }
+
+    #[test]
+    fn truncated_operations_keep_only_complete_objects() {
+        let head = r#"{"images":[],"requests":[{"requestId":"r","status":"implemented","operations":[{"kind":"insertInBoundary","pageId":"a","element":{"kind":"text","children":[]}},{"kind":"insertInBoundary","pageId":"b","element":{"kind":"te"#;
+        let repaired = super::complete_truncated_operations(head).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&repaired).unwrap();
+        let operations = value["requests"][0]["operations"].as_array().unwrap();
+        assert_eq!(operations.len(), 1);
+        assert_eq!(operations[0]["pageId"], "a");
+        assert_eq!(value["requests"][0]["requestId"], "r");
+    }
+
+    #[test]
+    fn truncated_operations_handle_cuts_in_strings_and_between_items() {
+        for (cut, kept) in [
+            (r#"{"requests":[{"requestId":"r","operations":[{"kind":"setPage","pageId":"a","name":"Ho"#, 0),
+            (r#"{"requests":[{"requestId":"r","operations":[{"kind":"setPage","pageId":"a"},"#, 1),
+            (r#"{"requests":[{"requestId":"r","operations":[{"kind":"setPage","pageId":"a","name":"A \"quoted\" {brace"},{"#, 1),
+        ] {
+            let repaired = super::complete_truncated_operations(cut).unwrap();
+            let value: serde_json::Value = serde_json::from_str(&repaired).unwrap();
+            assert_eq!(value["requests"][0]["operations"].as_array().unwrap().len(), kept, "{cut}");
+        }
+    }
+
+    #[test]
+    fn complete_or_operation_free_text_is_not_repaired() {
+        assert_eq!(super::complete_truncated_operations(r#"{"requests":[]}"#), None);
+        assert_eq!(super::complete_truncated_operations(r#"{"summary":"cut"#), None);
+        let empty = super::complete_truncated_operations(r#"{"requests":[{"requestId":"r","operations":[{"kind":"ins"#).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&empty).unwrap();
+        assert!(value["requests"][0]["operations"].as_array().unwrap().is_empty());
     }
 }

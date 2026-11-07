@@ -254,6 +254,8 @@ struct Message<'a> {
 }
 
 pub(crate) struct ResponseStream<'a> {
+    /// Output text not yet handed to a progress event.
+    text_delta: String,
     authentication: AuthenticationMethod,
     key: &'a ApiKey,
     job_id: String,
@@ -312,6 +314,7 @@ impl<'a> ResponseStream<'a> {
             response_id: None,
             usage: None,
             texts: BTreeMap::new(),
+            text_delta: String::new(),
             items: BTreeMap::new(),
             text_bytes: 0,
             finalized_text_bytes: 0,
@@ -745,6 +748,10 @@ impl<'a> ResponseStream<'a> {
             .count()
     }
 
+    pub(crate) fn take_text_delta(&mut self) -> String {
+        std::mem::take(&mut self.text_delta)
+    }
+
     pub(crate) fn accept(&mut self, frame: Frame) -> Result<Option<ProviderResponse>> {
         if frame.data == "[DONE]" {
             return Err(self.error(ErrorKind::Truncated, SubmissionOutcome::Unknown));
@@ -770,6 +777,9 @@ impl<'a> ResponseStream<'a> {
             }
             "response.output_text.delta" => {
                 self.track_text(&data, false)?;
+                if let Some(delta) = data.get("delta").and_then(Value::as_str) {
+                    self.text_delta.push_str(delta);
+                }
             }
             "response.output_text.done" => {
                 self.track_text(&data, true)?;

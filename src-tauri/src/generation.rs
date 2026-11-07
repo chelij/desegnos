@@ -90,6 +90,90 @@ fn now() -> String {
 }
 
 const UNREADABLE_REPLY_RETRY_MESSAGE: &str = "Retrying after an unreadable reply…";
+/// The streamed text kept for progress and cut-off recovery; replies are bounded far below.
+const MAX_PARTIAL_REPLY_BYTES: usize = 16 * 1024 * 1024;
+
+/// Page ids named by `"pageId": "<uuid>"` in streamed reply text, in order of appearance.
+fn page_ids_in(text: &str) -> Vec<Uuid> {
+    let mut found = Vec::new();
+    let mut rest = text;
+    while let Some(at) = rest.find("\"pageId\"") {
+        rest = &rest[at + 8..];
+        let value = rest.trim_start().strip_prefix(':').map(str::trim_start);
+        if let Some(id) = value
+            .and_then(|value| value.strip_prefix('"'))
+            .and_then(|value| value.get(..36))
+            .and_then(|id| Uuid::parse_str(id).ok())
+            && !found.contains(&id)
+        {
+            found.push(id);
+        }
+    }
+    found
+}
+
+/// Validate a model reply into the job's candidate and say what the job becomes. Used for a
+/// complete reply and for the complete part of a reply that was cut off mid-stream.
+fn candidate_status(text: &str, record: &mut JobRecord, original: &Project) -> JobStatus {
+    let checked = GenerationCandidate::from_json_for_project(
+        text,
+        &record.view.requirements,
+        original,
+        &mut record.view.validation_events,
+    )
+    .map(|mut candidate| {
+        let valid = candidate.retain_valid_operations(
+            &record.view.requirements,
+            original,
+            &mut record.view.validation_events,
+        );
+        (candidate, valid)
+    });
+    match checked {
+        Ok((candidate, Ok(()))) => {
+            let ready = candidate.can_apply(&record.view.requirements);
+            record.view.message = if ready {
+                "Result ready to apply.".into()
+            } else {
+                "Some requests need a choice.".into()
+            };
+            record.view.candidate = Some(candidate);
+            if ready {
+                JobStatus::Ready
+            } else {
+                JobStatus::Blocked
+            }
+        }
+        Ok((candidate, Err(error))) => {
+            let element_id =
+                candidate.rejected_element(&record.view.requirements, original);
+            record.view.validation_events.push(desegnos_core::ValidationEvent {
+                kind: desegnos_core::validation_failure_kind(&error.to_string()).into(),
+                disposition: "conflicted".into(),
+                element_id,
+                message: error.to_string(),
+            });
+            record.view.raw_reply = Some(desegnos_ai::scrub_diagnostic_reply(text, None));
+            record.view.message = format!(
+                "Desegnos rejected the candidate: {error} Nothing was applied."
+            );
+            JobStatus::Blocked
+        }
+        Err(error) => {
+            record.view.validation_events.push(desegnos_core::ValidationEvent {
+                kind: desegnos_core::validation_failure_kind(&error.to_string()).into(),
+                disposition: "conflicted".into(),
+                element_id: None,
+                message: error.to_string(),
+            });
+            record.view.raw_reply = Some(desegnos_ai::scrub_diagnostic_reply(text, None));
+            record.view.message = format!(
+                "Desegnos rejected the candidate: {error} Nothing was applied."
+            );
+            JobStatus::Blocked
+        }
+    }
+}
 
 /// A complete reply whose text is not a JSON document even after the same control-character
 /// repair `GenerationCandidate::from_json` applies. A schema, data or validation failure parses
@@ -339,6 +423,9 @@ pub struct GenerationJobView {
     status: JobStatus,
     estimate_usd: f64,
     received_bytes: usize,
+    /// Boundaries the streaming reply has started building, in order, for live progress.
+    #[serde(default)]
+    pages_started: Vec<Uuid>,
     message: String,
     candidate: Option<GenerationCandidate>,
     usage: Option<TokenUsage>,
@@ -373,6 +460,10 @@ struct JobRecord {
     version: u32,
     view: GenerationJobView,
     error: Option<ProviderError>,
+    /// The reply text streamed so far in this attempt; kept in memory only, so a reply cut
+    /// off mid-stream can still apply the operations that arrived complete.
+    #[serde(skip)]
+    partial_text: String,
 }
 
 impl JobRecord {
@@ -1731,6 +1822,7 @@ impl GenerationService {
         let record = JobRecord {
             version: 1,
             error: None,
+            partial_text: String::new(),
             view: GenerationJobView {
                 job_id: requirements.job_id,
                 project_id: project.id,
@@ -1773,6 +1865,7 @@ impl GenerationService {
                 status: JobStatus::Prepared,
                 estimate_usd,
                 received_bytes: 0,
+                pages_started: Vec::new(),
                 message,
                 candidate: None,
                 usage: None,
@@ -1906,6 +1999,8 @@ impl GenerationService {
         record.view.candidate = None;
         record.view.usage = None;
         record.view.received_bytes = 0;
+        record.view.pages_started.clear();
+        record.partial_text.clear();
         record.view.failure_kind = None;
         record.view.provider_error = None;
         record.view.provider_retry = None;
@@ -1936,6 +2031,19 @@ impl GenerationService {
         }
         if let Some(record) = self.jobs.get_mut(&job_id) {
             record.view.received_bytes = progress.received_bytes;
+            if !progress.text_delta.is_empty()
+                && record.partial_text.len() + progress.text_delta.len() <= MAX_PARTIAL_REPLY_BYTES
+            {
+                // Rescan a short overlap so a page id split across two deltas is still found.
+                let from = record.partial_text.len().saturating_sub(64);
+                record.partial_text.push_str(&progress.text_delta);
+                let from = (0..=from).rev().find(|at| record.partial_text.is_char_boundary(*at)).unwrap_or(0);
+                for page in page_ids_in(&record.partial_text[from..]) {
+                    if !record.view.pages_started.contains(&page) {
+                        record.view.pages_started.push(page);
+                    }
+                }
+            }
             if let Some(retry) = &progress.retry {
                 record.view.message = retry.message(record.view.provider);
             }
@@ -1964,6 +2072,8 @@ impl GenerationService {
         };
         record.view.message = UNREADABLE_REPLY_RETRY_MESSAGE.into();
         record.view.received_bytes = 0;
+        record.view.pages_started.clear();
+        record.partial_text.clear();
         record.view.usage = usage;
         record.view.validation_events.push(desegnos_core::ValidationEvent {
             kind: "unreadableReply".into(),
@@ -2072,64 +2182,7 @@ impl GenerationService {
                     &response.text,
                     std::env::var("DESEGNOS_GENERATION_BENCHMARK").as_deref() == Ok("1"),
                 )?;
-                let checked = GenerationCandidate::from_json_for_project(
-                    &response.text,
-                    &record.view.requirements,
-                    original,
-                    &mut record.view.validation_events,
-                )
-                .map(|mut candidate| {
-                    let valid = candidate.retain_valid_operations(
-                        &record.view.requirements,
-                        original,
-                        &mut record.view.validation_events,
-                    );
-                    (candidate, valid)
-                });
-                match checked {
-                    Ok((candidate, Ok(()))) => {
-                        let ready = candidate.can_apply(&record.view.requirements);
-                        record.view.message = if ready {
-                            "Result ready to apply.".into()
-                        } else {
-                            "Some requests need a choice.".into()
-                        };
-                        record.view.candidate = Some(candidate);
-                        if ready {
-                            JobStatus::Ready
-                        } else {
-                            JobStatus::Blocked
-                        }
-                    }
-                    Ok((candidate, Err(error))) => {
-                        let element_id =
-                            candidate.rejected_element(&record.view.requirements, original);
-                        record.view.validation_events.push(desegnos_core::ValidationEvent {
-                            kind: desegnos_core::validation_failure_kind(&error.to_string()).into(),
-                            disposition: "conflicted".into(),
-                            element_id,
-                            message: error.to_string(),
-                        });
-                        record.view.raw_reply = Some(desegnos_ai::scrub_diagnostic_reply(&response.text, None));
-                        record.view.message = format!(
-                            "Desegnos rejected the candidate: {error} Nothing was applied."
-                        );
-                        JobStatus::Blocked
-                    }
-                    Err(error) => {
-                        record.view.validation_events.push(desegnos_core::ValidationEvent {
-                            kind: desegnos_core::validation_failure_kind(&error.to_string()).into(),
-                            disposition: "conflicted".into(),
-                            element_id: None,
-                            message: error.to_string(),
-                        });
-                        record.view.raw_reply = Some(desegnos_ai::scrub_diagnostic_reply(&response.text, None));
-                        record.view.message = format!(
-                            "Desegnos rejected the candidate: {error} Nothing was applied."
-                        );
-                        JobStatus::Blocked
-                    }
-                }
+                candidate_status(&response.text, &mut record, original)
             }
             Err(mut error) => {
                 record.view.raw_reply = error
@@ -2157,8 +2210,45 @@ impl GenerationService {
                     attempt.response_id = error.response_id.clone();
                     attempt.usage = error.usage;
                 }
+                // A reply cut off mid-stream still carries every operation that arrived whole.
+                // Validate and apply those like any reply; the untouched boundaries stay queued
+                // for Generate. A credential echo (Malformed) or a cancel never gets here.
+                let recovered = (status != JobStatus::Cancelled
+                    && error.kind != ErrorKind::Malformed
+                    && !record.partial_text.is_empty())
+                .then(|| desegnos_core::complete_truncated_operations(&record.partial_text))
+                .flatten();
                 record.error = Some(error);
-                status
+                match recovered {
+                    Some(text) => {
+                        let before = record.view.validation_events.len();
+                        let recovered_status = candidate_status(&text, &mut record, original);
+                        let kept = record.view.candidate.as_ref().is_some_and(|candidate| {
+                            candidate.requests.iter().any(|request| !request.operations.is_empty())
+                        });
+                        if kept && recovered_status != JobStatus::Blocked {
+                            // Treated as a partial success, not a failed attempt.
+                            record.view.provider_error = None;
+                            record.view.failure_kind = None;
+                            record.error = None;
+                            record.view.message = format!(
+                                "The reply was cut off. Kept what arrived complete; Generate again for the rest. {}",
+                                record.view.message
+                            );
+                            recovered_status
+                        } else {
+                            record.view.candidate = None;
+                            record.view.validation_events.truncate(before);
+                            record.view.message = record
+                                .error
+                                .as_ref()
+                                .map(ToString::to_string)
+                                .unwrap_or_default();
+                            status
+                        }
+                    }
+                    None => status,
+                }
             }
         };
         record.transition(status);
@@ -3654,6 +3744,18 @@ fn validate_identity_account(
 
 #[cfg(test)]
 mod unreadable_reply_retry_tests {
+    #[test]
+    fn page_ids_in_streamed_text_are_found_once_in_order() {
+        let a = "11111111-1111-4111-8111-111111111111";
+        let b = "22222222-2222-4222-8222-222222222222";
+        let text = format!(r#"{{"kind":"insertInBoundary","pageId": "{b}"}},{{"pageId":"{a}"}},{{"pageId":"{b}"}},{{"pageId":"{a}"#);
+        assert_eq!(
+            super::page_ids_in(&text),
+            vec![uuid::Uuid::parse_str(b).unwrap(), uuid::Uuid::parse_str(a).unwrap()]
+        );
+        assert!(super::page_ids_in(r#"{"pageId":"1111"#).is_empty());
+    }
+
     use super::*;
     use desegnos_core::{
         Appearance, ElementKind, PendingRequest, Project, Rect, RequestTarget, Viewport,

@@ -80,6 +80,10 @@ pub struct ProviderProgress {
     pub response_id: Option<String>,
     pub web_search_calls: usize,
     pub citations: usize,
+    /// Model text that arrived since the previous progress event. It stays in the process
+    /// (never serialised) so a caller can show live progress and keep a cut-off reply.
+    #[serde(skip)]
+    pub text_delta: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -367,6 +371,7 @@ impl OpenAiClient {
             response_id: None,
             web_search_calls: 0,
             citations: 0,
+            text_delta: String::new(),
         });
         if cancellation.is_cancelled() {
             return Err(ProviderError::before(ErrorKind::Cancelled));
@@ -476,6 +481,7 @@ impl OpenAiClient {
                             response_id: None,
                             web_search_calls: 0,
                             citations: 0,
+                            text_delta: String::new(),
                         });
                         continue;
                     }
@@ -504,6 +510,7 @@ impl OpenAiClient {
                         response_id: stream.response_id.clone(),
                         web_search_calls: stream.web_search_calls(),
                         citations: stream.citations(),
+                        text_delta: stream.take_text_delta(),
                     });
                     return Ok(complete);
                 }
@@ -514,6 +521,7 @@ impl OpenAiClient {
                 response_id: stream.response_id.clone(),
                 web_search_calls: stream.web_search_calls(),
                 citations: stream.citations(),
+                text_delta: stream.take_text_delta(),
             });
         }
     }
@@ -728,6 +736,7 @@ async fn non_stream_error(
         response_id: None,
         web_search_calls: 0,
         citations: 0,
+        text_delta: String::new(),
     });
     while !truncated {
         let chunk = tokio::select! {
@@ -766,6 +775,7 @@ async fn non_stream_error(
             response_id: None,
             web_search_calls: 0,
             citations: 0,
+            text_delta: String::new(),
         });
         let retained = chunk.len().min(ERROR_BODY_LIMIT - body.len());
         body.extend_from_slice(&chunk[..retained]);

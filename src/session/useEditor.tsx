@@ -696,7 +696,7 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
   async function generate(elementIds?: string[]) {
     const contextItems = selectedReference(canvasSelection);
     setError('');
-    openPanel({ kind: 'log', focus: 0 });
+    // Progress shows in the generation notice; its Details opens the AI conversation.
     // With nothing described, a filled brief captures the first empty page as one request area.
     const page = project?.pages[0];
     const boundary = page && canvasBoundaries.find(item => item.pageId === page.id && item.sizeId === baseSizeId(page));

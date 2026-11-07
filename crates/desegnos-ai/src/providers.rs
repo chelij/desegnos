@@ -771,6 +771,7 @@ impl KeyAdapter {
                 response_id: stream.response_id.clone(),
                 web_search_calls: stream.searches,
                 citations: stream.citations,
+                text_delta: std::mem::take(&mut stream.text_delta),
             });
         }
         decoder.finish()?;
@@ -1134,6 +1135,8 @@ struct ForeignStream {
     provider: ProviderId,
     response_id: Option<String>,
     text: String,
+    /// Text not yet handed to a progress event.
+    text_delta: String,
     usage: Option<TokenUsage>,
     anthropic_tokens: [u64; 4],
     blocks: BTreeMap<u64, Block>,
@@ -1148,6 +1151,7 @@ impl ForeignStream {
             provider,
             response_id: None,
             text: String::new(),
+            text_delta: String::new(),
             usage: None,
             anthropic_tokens: [0; 4],
             blocks: BTreeMap::new(),
@@ -1168,6 +1172,7 @@ impl ForeignStream {
             return Err(self.error(ErrorKind::OutputLimit));
         }
         self.text.push_str(text);
+        self.text_delta.push_str(text);
         Ok(())
     }
     fn accept(&mut self, data: &str) -> Result<()> {

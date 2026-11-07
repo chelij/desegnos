@@ -126,6 +126,7 @@ pub(crate) async fn send(
             response_id: None,
             web_search_calls: 0,
             citations: 0,
+            text_delta: String::new(),
         });
         tokio::select! {
             biased;
