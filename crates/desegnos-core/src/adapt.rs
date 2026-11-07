@@ -24,6 +24,7 @@ pub(crate) fn adapt_with_styles(
     let width = f64::from(size.width);
     let minimum_height = f64::from(size.height);
     let mut measure = crate::render::ResponsiveTextMeasure::new(styles.clone());
+    measure.set_viewport(width);
     let height = children(
         &mut page.elements,
         size_id,
@@ -165,7 +166,10 @@ fn place(
         } else {
             14.0
         };
-        style.text_style.size = (original * ratio).max(minimum);
+        // Display text is capped by the viewport too, not only by its own box: a headline
+        // built from one box per letter keeps each box's width but not its desktop size.
+        let display_cap = (measure.viewport() * 0.16).max(minimum);
+        style.text_style.size = (original * ratio).max(minimum).min(display_cap.max(14.0));
         // Shrink only as far as the longest word needs to fit the box; never below 14 px.
         let longest = e.text.split_whitespace().max_by_key(|word| word.chars().count()).unwrap_or("");
         if !longest.is_empty() {
@@ -529,14 +533,17 @@ fn children(
                 };
                 // Only text that sits together at the base size packs together: touching or
                 // overlapping boxes. A label and an icon pushed to the far edge stay apart.
-                let paired = row.len() == 2
+                let paired = row.len() >= 2
                     && row.iter().all(|&i| short(&elements[i]))
-                    && elements[row[1]].rect.x - (elements[row[0]].rect.x + elements[row[0]].rect.width) <= 24.0;
+                    && row.windows(2).all(|pair| {
+                        elements[pair[1]].rect.x - (elements[pair[0]].rect.x + elements[pair[0]].rect.width) <= 24.0
+                    });
                 if paired {
                     let mut style = measure.resolve_style(&e.style);
                     let original = style.text_style.size;
                     let minimum = if original >= 28.0 { (original * 0.6).clamp(22.0, 40.0) } else { 14.0 };
-                    style.text_style.size = (original * ratio).max(minimum);
+                    let display_cap = (measure.viewport() * 0.16).max(minimum).max(14.0);
+                    style.text_style.size = (original * ratio).max(minimum).min(display_cap);
                     w = w.max(1.0).min(available).min(measure.natural_width(e, &style).max(1.0));
                 }
                 if let Some(&next) = row.get(column + 1) {

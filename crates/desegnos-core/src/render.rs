@@ -2391,10 +2391,17 @@ fn write_items(svg: &mut String, scene: &Scene, items: &[Item], ids: &mut SvgIds
 }
 
 /// Uses exactly the same font advances and word wrapping as canvas fit-text.
-pub(crate) struct ResponsiveTextMeasure(FontSet, crate::ProjectStyles);
+pub(crate) struct ResponsiveTextMeasure(FontSet, crate::ProjectStyles, f64);
 impl ResponsiveTextMeasure {
     pub(crate) fn new(styles: crate::ProjectStyles) -> Self {
-        Self(FontSet::new(), styles)
+        Self(FontSet::new(), styles, f64::INFINITY)
+    }
+    /// The width of the size being adapted; display text never grows past a share of it.
+    pub(crate) fn set_viewport(&mut self, width: f64) {
+        self.2 = width;
+    }
+    pub(crate) fn viewport(&self) -> f64 {
+        self.2
     }
     pub(crate) fn resolve_style(&self, base: &crate::ElementStyle) -> crate::ElementStyle {
         let mut style = base.clone();

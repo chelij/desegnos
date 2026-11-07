@@ -415,3 +415,24 @@ fn adding_a_linked_size_adapts_without_resizing_the_base_in_one_undo_step() {
     session.undo(|_| Ok(())).unwrap();
     assert_eq!(session.project().pages[0], before);
 }
+
+#[test]
+fn letter_by_letter_headline_stays_on_one_line_at_phone() {
+    let (mut p, id) = project();
+    p.pages[0].elements = "EMBER"
+        .chars()
+        .enumerate()
+        .map(|(i, letter)| {
+            let mut e = text(440.0 + i as f64 * 110.0, 230.0, 100.0, 200.0);
+            e.text = letter.to_string();
+            e.style.text_style.size = 170.0;
+            e
+        })
+        .collect();
+    adapt_size(&mut p.pages[0], id).unwrap();
+    let phone = resolve_for_size(&p, &p.pages[0], id);
+    let width = f64::from(p.pages[0].size(id).unwrap().width);
+    assert!(phone.iter().all(|e| e.rect.y == phone[0].rect.y), "letters wrapped");
+    assert!(phone.iter().all(|e| e.rect.x + e.rect.width <= width), "letters overflow the phone");
+    assert!(phone.iter().all(|e| e.style.text_style.size <= width * 0.16 + 0.01));
+}
