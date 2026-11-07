@@ -1,13 +1,12 @@
-import { type BoundaryToolKind, boundaryName, boundaryIcon } from './projectCanvas/boundaryDefaults';
-import { useEffect } from 'react';
+import { type BoundaryToolKind, boundaryKindLabel, boundaryIcon } from './projectCanvas/boundaryDefaults';
+import { useEffect, useState } from 'react';
 import { MenuButton } from './Menus';
-import { zoomLabel, ZOOM_LEVELS, MIN_ZOOM } from './canvasGeometry';
+import { zoomLabel, ZOOM_LEVELS, MIN_ZOOM, MAX_ZOOM } from './projectCanvasGeometry';
 import { Icon } from './icons';
 import { INSERT_GROUPS, ELEMENT_KIND_LABELS } from './projectCanvas/elementGeometry';
-import { shortcutLabel, withShortcut, type ShortcutAction } from './shortcuts';
+import { shortcutLabel, withShortcut, TOOL_ACTIONS } from './shortcuts';
 import type { ElementKind } from './types';
 
-export type CanvasTool = 'select' | 'request' | 'pan';
 export type EditorTool = 'select' | 'request' | 'boundary' | 'pointer' | 'text' | 'pan' | 'rect' | 'ellipse' | 'line' | 'image' | 'note' | 'insert';
 export type RequestToolShape = 'pick' | 'rect' | 'ellipse' | 'polygon' | 'freehand';
 export type ProjectTool = EditorTool;
@@ -27,27 +26,15 @@ const ICONS: Record<EditorTool, string> = {
   pan: 'M4.5 8V3Q4.5 1.5 6 3v4.5V2.5Q6 .5 7.5 2.5V7.5 3Q7.5 1.5 9 3v6 2.5Q9 3.5 10.5 5v4.5L8.5 13H4.5L1.5 9Q1.5 7.5 3 8.5l1.5 1Z',
 };
 
-const LABELS: Record<EditorTool, string> = {
-  select: 'Select', request: 'Request', boundary: 'Boundary', pointer: 'Pointer', text: 'Text', rect: 'Rectangle',
-  ellipse: 'Ellipse', line: 'Line', image: 'Image', note: 'Note', insert: 'Insert', pan: 'Pan',
-};
-const SHORTCUTS: Record<EditorTool, ShortcutAction> = {
-  select: 'selectTool', request: 'requestTool', boundary: 'boundaryTool', pointer: 'pointerTool', text: 'textTool',
-  rect: 'rectTool', ellipse: 'ellipseTool', line: 'lineTool', image: 'imageTool', note: 'noteTool', insert: 'insert', pan: 'panTool',
-};
-
-// Strip order follows the order tools are reached for in a normal design pass; Pan sits last
-// beside the zoom controls.
-const PROJECT_TOOLS: EditorTool[] = ['select', 'boundary', 'request', 'text', 'rect', 'ellipse', 'line', 'image', 'insert', 'pointer', 'note', 'pan'];
+const toolBinding = (tool: EditorTool) => TOOL_ACTIONS.find(binding => binding.tool === tool)!;
+const toolLabel = (tool: EditorTool) => toolBinding(tool).label.replace(/ tool$/, '').replace('Insert any element', 'Insert');
+const PROJECT_TOOLS = TOOL_ACTIONS.map(binding => binding.tool);
 const SHAPE_TOOLS = ['rect', 'ellipse', 'line'] as const;
 type ShapeTool = typeof SHAPE_TOOLS[number];
 
-// The shape group keeps the last shape used, so R, O and L stay one click away after a restart
-// of the strip (the dock can be hidden and shown again).
-let rememberedShape: ShapeTool = 'rect';
-
 function toolTitle(tool: EditorTool) {
-  return withShortcut(LABELS[tool], SHORTCUTS[tool]);
+  const binding = toolBinding(tool);
+  return `${toolLabel(tool)} · ${binding.display}`;
 }
 
 const REQUEST_SHAPES: { id: RequestToolShape; label: string; icon: string }[] = [
@@ -65,26 +52,26 @@ export function ToolStrip({ tool, onTool, zoom, onZoomStep, onZoom, onFit, bound
   requestShape?: RequestToolShape; onRequestShape?: (shape: RequestToolShape) => void;
   onInsert?: (kind: ElementKind) => void; insertSignal?: number;
 }) {
-  const tools = PROJECT_TOOLS;
+  const [rememberedShape, setRememberedShape] = useState<ShapeTool>('rect');
   const isShape = (value: EditorTool): value is ShapeTool => (SHAPE_TOOLS as readonly EditorTool[]).includes(value);
   const activeShape: ShapeTool = isShape(tool) ? tool : rememberedShape;
-  useEffect(() => { if (isShape(tool)) rememberedShape = tool; }, [tool]);
+  useEffect(() => { if (isShape(tool)) setRememberedShape(tool); }, [tool]);
   return <div className="tool-strip" role="toolbar" aria-orientation="vertical" aria-label="Canvas tools">
     <div className="tool-strip-group">
-      {tools.map(value => <div className={`tool-strip-slot${isShape(value) ? ' tool-shape-slot' : ''}${isShape(value) && value !== activeShape ? ' is-alternate' : ''}`} key={value}>
+      {PROJECT_TOOLS.map(value => <div className={`tool-strip-slot${isShape(value) ? ' tool-shape-slot' : ''}${isShape(value) && value !== activeShape ? ' is-alternate' : ''}`} key={value}>
         {isShape(value) && value !== activeShape
-          ? <button type="button" tabIndex={-1} aria-hidden="true" className="tool-strip-button tool-shape-proxy" aria-label={LABELS[value]} title={toolTitle(value)}
+          ? <button type="button" tabIndex={-1} aria-hidden="true" className="tool-strip-button tool-shape-proxy" aria-label={toolLabel(value)} title={toolTitle(value)}
             onClick={() => onTool(value)} />
           : isShape(value)
           ? <>
-            <button type="button" className={`tool-strip-button tool-${value}`} aria-pressed={tool === value} aria-label={LABELS[value]} title={toolTitle(value)}
+            <button type="button" className={`tool-strip-button tool-${value}`} aria-pressed={tool === value} aria-label={toolLabel(value)} title={toolTitle(value)}
               onPointerDown={event => { if (event.button === 0 && tool !== value) onTool(value); }} onClick={() => onTool(value)}>
               <svg viewBox="0 0 16 16" aria-hidden="true"><path d={ICONS[value]} /></svg>
             </button>
             <MenuButton className="tool-flyout tool-shape-flyout" showChevron={false}
               label={<svg viewBox="0 0 10 10" className="tool-shape-caret" aria-hidden="true"><path d="M9.6 0.4v9.2H0.4Z" /></svg>}
-              ariaLabel="Shape tools" title={`Shape tools · ${LABELS[activeShape]}`}
-              items={SHAPE_TOOLS.map(shape => ({ id: `shape-${shape}`, label: LABELS[shape], checked: activeShape === shape, shortcut: shortcutLabel(SHORTCUTS[shape]), action: () => onTool(shape) }))} />
+              ariaLabel="Shape tools" title={`Shape tools · ${toolLabel(activeShape)}`}
+              items={SHAPE_TOOLS.map(shape => ({ id: `shape-${shape}`, label: toolLabel(shape), checked: activeShape === shape, shortcut: shortcutLabel(toolBinding(shape).action), action: () => onTool(shape) }))} />
           </>
           : value === 'insert' && onInsert
           ? <MenuButton className={`tool-insert${tool === "insert" ? " active" : ""}`} showChevron={false} openSignal={insertSignal} label={<Icon name="insert" />}
@@ -93,13 +80,13 @@ export function ToolStrip({ tool, onTool, zoom, onZoomStep, onZoom, onFit, bound
               id: `insert-${group.label}`, label: group.label,
               children: group.kinds.map(kind => ({ id: `insert-${kind}`, label: ELEMENT_KIND_LABELS[kind], action: () => onInsert(kind) })),
             }))} />
-          : <button type="button" className={`tool-strip-button tool-${value}`} aria-pressed={tool === value} aria-label={LABELS[value]} title={toolTitle(value)}
+          : <button type="button" className={`tool-strip-button tool-${value}`} aria-pressed={tool === value} aria-label={toolLabel(value)} title={toolTitle(value)}
             onPointerDown={event => { if (event.button === 0 && tool !== value) onTool(value); }} onClick={() => onTool(value)}>
             <svg viewBox="0 0 16 16" aria-hidden="true"><path d={ICONS[value]} /></svg>
           </button>}
         {value === 'boundary' && boundaryKind && onBoundaryKind && <MenuButton className="tool-flyout" showChevron={false}
-          label={<Icon name={boundaryIcon(boundaryKind)} size={12} />} ariaLabel="Boundary kind" title={`Boundary kind · ${boundaryName(boundaryKind)}`}
-          items={([['page', 'Page'], ['slide', 'Slide'], ['image', 'Image']] as const).map(([kind, label]) => ({ id: kind, label, checked: boundaryKind === kind, action: () => { onBoundaryKind(kind); onTool('boundary'); } }))} />}
+          label={<Icon name={boundaryIcon(boundaryKind)} size={12} />} ariaLabel="Boundary kind" title={`Boundary kind · ${boundaryKindLabel(boundaryKind)}`}
+          items={(['page', 'slide', 'image'] as const).map(kind => ({ id: kind, label: boundaryKindLabel(kind), checked: boundaryKind === kind, action: () => { onBoundaryKind(kind); onTool('boundary'); } }))} />}
         {value === 'request' && requestShape && onRequestShape && <MenuButton className="tool-flyout" showChevron={false}
           label={<svg viewBox="0 0 16 16" aria-hidden="true"><path d={REQUEST_SHAPES.find(shape => shape.id === requestShape)?.icon ?? ICONS.request} /></svg>}
           ariaLabel="Request area shape" title={`Request area shape · ${REQUEST_SHAPES.find(shape => shape.id === requestShape)?.label ?? 'Pick'}`}
@@ -110,7 +97,7 @@ export function ToolStrip({ tool, onTool, zoom, onZoomStep, onZoom, onFit, bound
       <button type="button" className="tool-strip-button" aria-label="Zoom out" title={withShortcut('Zoom out', 'zoomOut')} disabled={zoom <= MIN_ZOOM} onClick={() => onZoomStep(-1)}><Icon name="minus" /></button>
       <MenuButton className="tool-zoom" showChevron={false} label={zoomLabel(zoom)} ariaLabel="Zoom level" title="Zoom level"
         items={ZOOM_LEVELS.map(value => ({ id: `zoom-${value}`, label: zoomLabel(value), checked: Math.abs(zoom - value) < 1e-6, action: () => onZoom(value) }))} />
-      <button type="button" className="tool-strip-button" aria-label="Zoom in" title={withShortcut('Zoom in', 'zoomIn')} disabled={zoom >= (ZOOM_LEVELS.at(-1) ?? 4)} onClick={() => onZoomStep(1)}><Icon name="plus" /></button>
+      <button type="button" className="tool-strip-button" aria-label="Zoom in" title={withShortcut('Zoom in', 'zoomIn')} disabled={zoom >= MAX_ZOOM} onClick={() => onZoomStep(1)}><Icon name="plus" /></button>
       <button type="button" className="tool-strip-fit" title={withShortcut('Fit all', 'fitAll')} onClick={onFit}>Fit</button>
     </div>
   </div>;

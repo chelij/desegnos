@@ -3,7 +3,8 @@ import type { IconName } from '../icons';
 import { BOUNDARY_GAP } from '../projectCanvasGeometry';
 
 export type BoundaryToolKind = 'page' | 'slide' | 'image';
-export const boundaryName = (kind: BoundaryToolKind) => ({ page: 'Page', slide: 'Slide', image: 'Image' })[kind];
+export const boundaryKindLabel = (kind: BoundaryToolKind) => ({ page: 'Page', slide: 'Slide', image: 'Image' })[kind];
+export const boundaryName = boundaryKindLabel;
 export const boundaryIcon = (kind: BoundaryToolKind): IconName => ({ page: 'canvas', slide: 'rectangle', image: 'image' } as const)[kind];
 // The saved page/screen values describe height behaviour, not separate output types.
 export const layoutKind = (kind: BoundaryToolKind, project: Project): BoundaryKind => kind !== 'page' ? 'screen'
@@ -22,7 +23,7 @@ export function boundaryDefaults(project: Project, kind: BoundaryToolKind) {
   return { x: last ? Math.max(...last.sizes.map(size => size.x + size.width)) + BOUNDARY_GAP : 0, y: last?.sizes[0].y ?? 0, width, height };
 }
 export function nextBoundaryName(project: Project, kind: BoundaryToolKind) {
-  const prefix = boundaryName(kind);
+  const prefix = boundaryKindLabel(kind);
   const numbers = project.pages.map(page => page.name.startsWith(`${prefix} `) ? Number(page.name.slice(prefix.length + 1)) : 0).filter(Number.isInteger);
   return `${prefix} ${Math.max(0, ...numbers) + 1}`;
 }

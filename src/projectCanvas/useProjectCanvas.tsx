@@ -1,3 +1,4 @@
+import { shortcutFor } from '../shortcuts';
 import { selectionEntries as resolveSelectionEntries } from './selectionGeometry';
 import { createRequestTool } from './requestTool';
 import { createPointerTool } from './pointerTool';
@@ -28,13 +29,12 @@ import { behaviourEntries } from './behaviours';
 import { screenRect, useCanvasCamera, type NativeDrag, type ScreenRect } from './surface';
 import { contentFitsViewport, overviewRects } from './minimap';
 import { textEditorScreen } from './elements';
-import { resolveElements } from './links';
+import { linkedDefinition, resolveElements } from './links';
 import { usePasteDefault } from '../pastePreference';
 import { baseSizeId, hasManySizes, resolveForSize, sizeAtWidth } from './sizes';
 import { elementLocalRect } from './elementGeometry';
 import { pastedImageRect, pastedNoteRect } from './clipboardPaste';
 import { droppedDataUri, droppedFile, droppedFileKind, droppedImageSize, droppedText } from './fileDrop';
-import { shortcutFor, viewSlot } from '../shortcuts';
 import { playIsActive } from './play';
 import {
   unionRects, createElement, createTextElement, forBackground, withPickedColours, elementChildrenOf,
@@ -50,7 +50,7 @@ export function useProjectCanvas({
   addRequest, selectRequest,
   insertElements, updateElements, moveElements, groupElements, ungroupElements, linkElements, unlinkElements, pasteLinked,
   addPointer, updatePointer, pointerStates, tool, insertKind, onTool, boundaryKind, requestShape, focusedSize, widthPreview = null, onZoom, onLayout,
-  play, onPlayElement, onPlayExit, preview, previewClose, previewRefresh, focusBehaviour, generate,
+  play, onPlayBoundary, onPlayElement, onPlayExit, preview, previewClose, previewRefresh, focusBehaviour, generate,
 }: CanvasHookProps, ref: ForwardedRef<ProjectCanvasHandle>) {
 
   const {
@@ -95,7 +95,7 @@ export function useProjectCanvas({
   const {
     escapeCanvas, copyStyle, pasteStyle, paintFormat, applyPainterStyle,
     alignSelection, distributeSelection, setSelectionFill, deleteSelectedLayers, linkSelection, linkCopies, unlinkSelection,
-    canRunCanvasAction, runCanvasAction,
+    canvasAction,
     keyDown,
   } = createKeyboardActions(() => ({
     editProject, createBoundary, drag, cancelDrag, painterArmed, transitionPainter, latest, onPlayExit, requestDraft, polygonDraft, draftArea,
@@ -182,7 +182,7 @@ export function useProjectCanvas({
     size.width = widthPreview.width;
     return { project: previewProject, boundaries: boundaries.map(boundary => boundary.sizeId === size.id ? { ...boundary, rect: { ...boundary.rect, width: size.width } } : boundary) };
   }, [project, boundaries, widthPreview]);
-  const { camera, setCamera, panning, setPanning, spaceHeld, held, zoomHeld, touched, fit, zoomStep, zoomTo, worldPoint, currentCamera, animateTo, stopTransition } = useCanvasCamera(surface, boundaries, project.id);
+  const { holdTool, heldKeyUp, camera, setCamera, panning, setPanning, spaceHeld, held, zoomHeld, touched, fit, zoomStep, zoomTo, worldPoint, currentCamera, animateTo, stopTransition } = useCanvasCamera(surface, boundaries, project.id);
   // The minimap hides itself while the whole canvas fits; the shortcut can force it on or off.
   const [minimapPreference, setMinimapPreference] = useState<'auto' | 'on' | 'off'>('auto');
 
@@ -283,26 +283,6 @@ export function useProjectCanvas({
     observer.observe(node);
     return () => observer.disconnect();
   }, []);
-
-  // Delete and Escape follow the canvas selection even when focus sits outside the surface.
-  useEffect(() => {
-    const handle = (event: KeyboardEvent) => {
-      if (event.defaultPrevented || isTextField(event.target)) return;
-      // A choice row owns the keyboard until it closes.
-      if (pasteChoice || linkChoice) return;
-      if (event.key === 'Escape') {
-        if (!drag.current && !selection.length && !focused && !editing && !painterArmed && !requestDraft) return;
-        event.preventDefault();
-        escapeCanvas();
-        return;
-      }
-      if (shortcutFor(event, false) !== 'delete') return;
-      event.preventDefault();
-      runCanvasAction('delete');
-    };
-    window.addEventListener('keydown', handle);
-    return () => window.removeEventListener('keydown', handle);
-  }, [selection, focused, focusedSize, editing, selectBoundary, removeSelection, removeElements, deleteBoundary, pasteChoice, linkChoice, painterArmed]);
 
   // Files dropped on the project canvas: pictures and text land inside the boundary under
   // the pointer or become reference outside every boundary, and other accepted files attach
@@ -406,42 +386,42 @@ export function useProjectCanvas({
           }
           const images = elements.filter(item => item.picture);
           let index = elementChildrenOf(state.project, boundary.pageId, null).length;
-          try {
-            if (images.length <= 1) {
-              // One command keeps the drop to one undo step; it carries one picture for the batch.
-              await state.insertElements(boundary.pageId, null, index, elements.map(item => item.element), images[0]?.picture, boundary.sizeId);
-              dropped.push(...elements.map(item => ({ pageId: boundary.pageId, elementId: item.element.id, sizeId })));
-            } else {
-              const text = elements.filter(item => !item.picture);
-              if (text.length) {
-                await state.insertElements(boundary.pageId, null, index, text.map(item => item.element), undefined, boundary.sizeId);
-                index += text.length;
-                dropped.push(...text.map(item => ({ pageId: boundary.pageId, elementId: item.element.id, sizeId })));
-              }
-              for (const item of images) {
-                await state.insertElements(boundary.pageId, null, index, [item.element], item.picture, boundary.sizeId);
-                index += 1;
-                dropped.push({ pageId: boundary.pageId, elementId: item.element.id, sizeId });
-              }
+
+          if (images.length <= 1) {
+            // One command keeps the drop to one undo step; it carries one picture for the batch.
+            await state.insertElements(boundary.pageId, null, index, elements.map(item => item.element), images[0]?.picture, boundary.sizeId);
+            dropped.push(...elements.map(item => ({ pageId: boundary.pageId, elementId: item.element.id, sizeId })));
+          } else {
+            const text = elements.filter(item => !item.picture);
+            if (text.length) {
+              await state.insertElements(boundary.pageId, null, index, text.map(item => item.element), undefined, boundary.sizeId);
+              index += text.length;
+              dropped.push(...text.map(item => ({ pageId: boundary.pageId, elementId: item.element.id, sizeId })));
             }
-          } catch { /* App surfaces the failed command. */ }
+            for (const item of images) {
+              await state.insertElements(boundary.pageId, null, index, [item.element], item.picture, boundary.sizeId);
+              index += 1;
+              dropped.push({ pageId: boundary.pageId, elementId: item.element.id, sizeId });
+            }
+          }
+
         }
       } else if (placeable.length) {
         for (const [index, item] of placeable.entries()) {
           const offset = index * 24;
           const id = crypto.randomUUID();
-          try {
-            if (item.kind === 'image') {
-              const picture = droppedDataUri(item.file);
-              const size = await droppedImageSize(picture);
-              const rect = pastedImageRect({ x: point.x + offset, y: point.y + offset }, size.width, size.height);
-              await state.addReference({ id, rect, kind: { kind: 'image', picture: NIL_UUID, name: item.file.name.slice(0, 120) } }, picture);
-            } else {
-              const rect = { ...pastedNoteRect(point), x: Math.round(point.x + offset), y: Math.round(point.y + offset) };
-              await state.addReference({ id, rect, kind: { kind: 'note', text: droppedText(item.file) } });
-            }
-            references.push(id);
-          } catch { /* App surfaces the failed command. */ }
+
+          if (item.kind === 'image') {
+            const picture = droppedDataUri(item.file);
+            const size = await droppedImageSize(picture);
+            const rect = pastedImageRect({ x: point.x + offset, y: point.y + offset }, size.width, size.height);
+            await state.addReference({ id, rect, kind: { kind: 'image', picture: NIL_UUID, name: item.file.name.slice(0, 120) } }, picture);
+          } else {
+            const rect = { ...pastedNoteRect(point), x: Math.round(point.x + offset), y: Math.round(point.y + offset) };
+            await state.addReference({ id, rect, kind: { kind: 'note', text: droppedText(item.file) } });
+          }
+          references.push(id);
+
         }
       }
 
@@ -528,7 +508,28 @@ export function useProjectCanvas({
     setCamera(fitCamera({ x: left, y: top, width: right - left, height: bottom - top }, { width: box.width, height: box.height }));
   }
 
-  useImperativeHandle(ref, () => ({ focusCanvas: () => surface.current?.focus({ preventScroll: true }), fit, fitSelection, zoomStep, zoomTo, focusBoundary, armPointer, linkSelection, unlinkSelection, copyStyle, pasteStyle, paintFormat, currentCamera, goToView, runCanvasAction, canRunCanvasAction, startRequestOnSelection }));
+  function handleKeyDown(event: KeyboardEvent): boolean {
+    if (pasteChoice || linkChoice || event.isComposing) return false;
+    const presenting = playIsActive(play) && project.pages.length > 0 && project.pages.every(page => page.output === 'slide');
+    const presentationAction = presenting ? shortcutFor(event, false, false, 'presentation') : null;
+    if (presentationAction) {
+      event.preventDefault();
+      if (presentationAction === 'exitPresentation') onPlayExit();
+      else {
+        const index = Math.max(0, project.pages.findIndex(page => page.id === play.boundary));
+        const delta = presentationAction === 'nextSlide' ? 1 : -1;
+        onPlayBoundary(project.pages[Math.max(0, Math.min(project.pages.length - 1, index + delta))].id);
+      }
+      return true;
+    }
+    if (isTextField(event.target)) return false;
+    if (event.key === 'Escape') { event.preventDefault(); escapeCanvas(); return true; }
+    const heldAction = shortcutFor(event, false, false, 'held');
+    if (heldAction !== 'holdPan' && heldAction !== 'holdZoom') return false;
+    event.preventDefault(); holdTool(heldAction); return true;
+  }
+
+  useImperativeHandle(ref, () => ({ containsTarget: target => target instanceof Node && !!surface.current?.contains(target), handleKeyDown, handleKeyUp: heldKeyUp, focusCanvas: () => surface.current?.focus({ preventScroll: true }), fit, fitSelection, zoomStep, zoomTo, focusBoundary, armPointer, linkSelection, unlinkSelection, copyStyle, pasteStyle, paintFormat, currentCamera, goToView, canvasAction, startRequestOnSelection }));
 
   /** Double-click editing is the all-sizes mode: a layer drawn then belongs to every size. */
   const editingAllSizes = (pageId: string): boolean =>
@@ -545,7 +546,7 @@ export function useProjectCanvas({
   }
   async function resolvePlaceholder(choice: { pageId: string; sizeId: string; elementId: string }, include: boolean) {
     setPlaceholderChoice(null);
-    await Promise.resolve(updateElements(choice.pageId, [{ id: choice.elementId, visible: include, size_id: choice.sizeId, dismissed: !include }])).catch(() => {});
+    await updateElements(choice.pageId, [{ id: choice.elementId, visible: include, size_id: choice.sizeId, dismissed: !include }]);
     selectElement(choice.pageId, choice.elementId, choice.sizeId);
   }
   const boundaryRect = (sizeId: string): Rect | null => {
@@ -590,40 +591,6 @@ export function useProjectCanvas({
     surface.current?.focus({ preventScroll: true });
   }
 
-  // Format painter: the style is the only thing that travels, never position, size or text.
-
-  /** Ctrl/Cmd+D follows the paste default; each copy stays beside its original.
-   *  A repeat duplicate keeps the offset of the copy that was just moved, Figma-style. */
-
-  /** One edge of the selection bar: layers align to each other inside their boundary, or a lone
-   *  layer to its parent. Layers in different boundaries align within their own boundary. */
-
-  /**
-   * Whether an action would change the canvas right now. The palette greys out the rows that
-   * would not, and null says the canvas does not own the action at all.
-   */
-
-  /**
-   * One path for every canvas key: its keydown listeners and the command palette both call this,
-   * so a palette row runs exactly what its shortcut runs. True means the canvas took the action,
-   * which is also when a key event may skip the browser's default.
-   */
-
-  // Canvas-wide keys, so focus can sit in the Layers panel or Properties. The actions and keys
-  // come from the same keymap the tool strip and keyboard help read.
-  useEffect(() => {
-    const handle = (event: KeyboardEvent) => {
-      if (event.defaultPrevented || isTextField(event.target)) return;
-      const action = shortcutFor(event, false);
-      // Plain paste is left to the paste event, which can also carry content from other apps.
-      if (!action || action === 'paste') return;
-      if (action.startsWith('opacity') && !(event.target instanceof Node && surface.current?.contains(event.target))) return;
-      if (runCanvasAction(action, { key: event.key, slot: viewSlot(event) ?? undefined, repeat: event.repeat })) event.preventDefault();
-    };
-    window.addEventListener('keydown', handle);
-    return () => window.removeEventListener('keydown', handle);
-  }, [project, selection, focused, minimapVisible]);
-
   // The Image tool opens the platform file picker through the same picture store as reference.
   useEffect(() => {
     if (tool !== 'image' || pendingImage) return;
@@ -656,7 +623,7 @@ export function useProjectCanvas({
     busy.current = true;
     void placeElement('image', boundary.pageId, boundary.sizeId, null, { x: 0, y: 0 }, boundary.rect, rect, picture)
       .then(() => { createdElement.current = null; })
-      .catch(() => {}).finally(() => { busy.current = false; });
+      .finally(() => { busy.current = false; });
   }, [pendingImage]);
 
   /**
@@ -699,7 +666,7 @@ export function useProjectCanvas({
       : activeDrag.end === 'from' ? nearestEdgeAnchors(target, { ...activeDrag.fixed, width: 0, height: 0 })
         : nearestEdgeAnchors({ ...activeDrag.fixed, width: 0, height: 0 }, target);
   }
-  const dots = dotGrid(camera, project.showGrid);
+  const dots = dotGrid(camera, project.showGrid, project.gridSettings.spacing);
   const dotStyle: CSSProperties | undefined = dots ? {
     backgroundImage: `radial-gradient(circle at 1px 1px, color-mix(in srgb, var(--canvas-dot) ${Math.round(dots.fade * 100)}%, transparent) 1px, transparent 1.5px)`,
     backgroundSize: `${dots.size}px ${dots.size}px`,
@@ -728,8 +695,8 @@ export function useProjectCanvas({
   const selectionScreen = selectionEntries.length ? screenRect(unionRects(selectionEntries.map(entry => entry.world)), camera) : null;
   const selectionFills = [...new Set(selectionEntries.map(entry => entry.element.style.fill ?? ''))];
   const selectionFill = selectionFills.length === 1 ? selectionFills[0] : '';
-  const selectionLinked = selectionEntries.length > 0 && selectionEntries.every(entry => !!entry.element.link);
-  const selectionLinkable = selectionEntries.length > 0 && selectionEntries.every(entry => !entry.element.link);
+  const selectionLinked = selectionEntries.length > 0 && selectionEntries.every(entry => !!linkedDefinition(project, entry.element));
+  const selectionLinkable = selectionEntries.length > 0 && selectionEntries.every(entry => !linkedDefinition(project, entry.element));
   // Text, boxes and buttons can carry a hyperlink; the field lives in Properties.
   const selectionHyperlink = selectionEntries.length === 1
     && ['text', 'box', 'button'].includes(selectionEntries[0].element.kind);
@@ -831,7 +798,7 @@ export function useProjectCanvas({
         return;
       }
     } else {
-      await Promise.resolve(updateElements(current.pageId, [{ id: current.elementId, text }])).catch(() => {});
+      await updateElements(current.pageId, [{ id: current.elementId, text }]);
     }
     const page = project.pages.find(item => item.id === current.pageId);
     if (retainFocus || pending) selectElement(current.pageId, current.elementId, page && hasManySizes(page) ? current.sizeId : null);
@@ -844,7 +811,7 @@ export function useProjectCanvas({
   }
 
   return {
-    runCanvasAction, surface, tool, requestShape, panning, spaceHeld, zoomHeld, painterArmed, play, dropHover, dotStyle,
+    surface, tool, requestShape, panning, spaceHeld, zoomHeld, painterArmed, play, dropHover, dotStyle,
     pointerDown, keyDown, doubleClick, paste, dropText, imagePicker, chooseImage, camera, scrubbed, focused,
     selection, moving, openPage, editing, movingElements, openPlaceholder, viewport, inverse, project,
     boundaries, requestDraft, draftArea, selectRequest, movingItems, draftNote, draft, boundaryKind,

@@ -49,7 +49,7 @@ export function loadCanvasFont(style: TextStyle): Promise<LoadedFont> {
 let familiesRequest: Promise<string[]> | null = null;
 
 /** Family names the editor can offer: the bundled face, then installed system families. */
-export function loadFontFamilies(): Promise<string[]> {
+function loadFontFamilies(): Promise<string[]> {
   familiesRequest ??= native<string[]>('list_canvas_fonts')
     .then(list => list.filter(name => name.trim()).sort((first, second) => first === 'Archivo' ? -1 : second === 'Archivo' ? 1 : first.localeCompare(second)))
     .catch(() => ['Archivo']);

@@ -1,7 +1,7 @@
 import { type BoundaryToolKind } from './boundaryDefaults';
 import type { ProjectEdits } from '../session/projectEdits';
 import {
-  drawnBoundaryRect, MIN_BOUNDARY_DRAW_HEIGHT, MIN_BOUNDARY_WIDTH, snapToBoundaryGrid, type Boundary,
+  GRID_SPACING, drawnBoundaryRect, MIN_SIZE, snapValue, type Boundary,
   type CanvasCamera, type CanvasTarget, type ElementTarget, type FrameCorner, type Point,
   type RequestBox,
 } from '../projectCanvasGeometry';
@@ -10,9 +10,9 @@ import type { ProjectTool, RequestToolShape } from '../EditorTools';
 import { type ScreenRect } from './surface';
 import { type LinkCopy } from './linkedChoices';
 import { type PasteMode } from '../pastePreference';
-import { type ShortcutAction } from '../shortcuts';
+import { TOOL_ACTIONS, type ShortcutAction } from '../shortcuts';
 import { type PlayState } from './play';
-import { elementPath, elementParents, findPageElement, axisLockedDelta, snapValue, type ElementCorner } from './elementGeometry';
+import { elementPath, elementParents, findPageElement, axisLockedDelta, type ElementCorner } from './elementGeometry';
 
 export type PanDrag = { kind: 'pan'; pointerId: number; start: Point; camera: CanvasCamera; moved: boolean; pageId: string | null };
 
@@ -62,8 +62,7 @@ export const CORNERS: FrameCorner[] = ['nw', 'ne', 'sw', 'se'];
 
 export const NIL_UUID = '00000000-0000-0000-0000-000000000000';
 
-export const DRAW_TOOLS: ProjectTool[] = ['rect', 'ellipse', 'line', 'insert'];
-
+export const DRAW_TOOLS: ProjectTool[] = TOOL_ACTIONS.filter(binding => !!binding.elementKind || binding.tool === 'insert').map(binding => binding.tool);
 
 export const REQUEST_EDITOR_WIDTH = 280;
 
@@ -75,15 +74,13 @@ export type PreviewState = { pageId: string; url: string; stale: boolean };
 
 export type CanvasActionOptions = { key?: string; slot?: number; repeat?: boolean };
 
-export type ProjectCanvasHandle = { focusCanvas: () => void; fit: () => void; fitSelection: () => void; zoomStep: (direction: number) => void; zoomTo: (zoom: number) => void; focusBoundary: (pageId: string) => void; armPointer: (pointerId: string) => void; linkSelection: () => void; unlinkSelection: () => void;
+export type ProjectCanvasHandle = { containsTarget: (target: EventTarget | null) => boolean; handleKeyDown: (event: KeyboardEvent) => boolean; handleKeyUp: (event: KeyboardEvent) => void; focusCanvas: () => void; fit: () => void; fitSelection: () => void; zoomStep: (direction: number) => void; zoomTo: (zoom: number) => void; focusBoundary: (pageId: string) => void; armPointer: (pointerId: string) => void; linkSelection: () => void; unlinkSelection: () => void;
   copyStyle: () => void; pasteStyle: () => void; paintFormat: () => void;
   /** Opens the request box on the current selection; false when nothing is selected. */
   startRequestOnSelection: () => boolean;
   currentCamera: () => CanvasCamera; goToView: (view: NamedView) => void;
-  /** Runs one keymap action through the same path its key uses; true when the canvas took it. */
-  runCanvasAction: (action: ShortcutAction, options?: CanvasActionOptions) => boolean;
-  /** True when the action applies now, false when it cannot, and null when the canvas does not own it. */
-  canRunCanvasAction: (action: ShortcutAction) => boolean | null; };
+  canvasAction: (action: ShortcutAction) => { enabled: () => boolean; run: (options?: CanvasActionOptions) => boolean } | undefined;
+};
 
 export type DuplicateRepeat = { key: string; offset: Point };
 
@@ -182,22 +179,22 @@ export function elementAt<T extends RequestBox>(boxes: T[], point: Point): T | n
 
 export const intersects = (first: Rect, second: Rect) => first.x < second.x + second.width && first.x + first.width > second.x && first.y < second.y + second.height && first.y + first.height > second.y;
 
-export function elementMoveDelta(entries: ElementEntry[], start: Point, point: Point, snap: boolean, axisLock: boolean): Point {
+export function elementMoveDelta(entries: ElementEntry[], start: Point, point: Point, snap: boolean, axisLock: boolean, spacing = GRID_SPACING): Point {
   const travel = { x: point.x - start.x, y: point.y - start.y };
   if (!snap || !entries.length) return axisLock ? axisLockedDelta(travel) : travel;
   const first = entries[0].world;
-  const delta = { x: snapValue(first.x + travel.x) - first.x, y: snapValue(first.y + travel.y) - first.y };
+  const delta = { x: snapValue(first.x + travel.x, spacing) - first.x, y: snapValue(first.y + travel.y, spacing) - first.y };
   if (!axisLock) return delta;
   // The locked axis stays exactly where it was; snapping only adjusts the axis being dragged.
   const axis = axisLockedDelta(travel);
   return { x: axis.x === 0 ? 0 : delta.x, y: axis.y === 0 ? 0 : delta.y };
 }
 
-export function boundaryDrawRect(start: Point, point: Point, keys: { square?: boolean; fromCentre?: boolean } = {}): Rect {
-  if (!keys.square && !keys.fromCentre) return drawnBoundaryRect(start, point);
-  const from = { x: snapToBoundaryGrid(start.x), y: snapToBoundaryGrid(start.y) };
-  let dx = snapToBoundaryGrid(point.x) - from.x;
-  let dy = snapToBoundaryGrid(point.y) - from.y;
+export function boundaryDrawRect(start: Point, point: Point, keys: { square?: boolean; fromCentre?: boolean } = {}, spacing = GRID_SPACING): Rect {
+  if (!keys.square && !keys.fromCentre) return drawnBoundaryRect(start, point, spacing);
+  const from = { x: snapValue(start.x, spacing), y: snapValue(start.y, spacing) };
+  let dx = snapValue(point.x, spacing) - from.x;
+  let dy = snapValue(point.y, spacing) - from.y;
   if (keys.square) {
     const size = Math.max(Math.abs(dx), Math.abs(dy));
     dx = dx < 0 ? -size : size;
@@ -205,10 +202,10 @@ export function boundaryDrawRect(start: Point, point: Point, keys: { square?: bo
   }
   if (keys.fromCentre) {
     return { x: from.x - Math.abs(dx), y: from.y - Math.abs(dy),
-      width: Math.max(MIN_BOUNDARY_WIDTH, Math.abs(dx) * 2), height: Math.max(MIN_BOUNDARY_DRAW_HEIGHT, Math.abs(dy) * 2) };
+      width: Math.max(MIN_SIZE, Math.abs(dx) * 2), height: Math.max(MIN_SIZE, Math.abs(dy) * 2) };
   }
   return { x: Math.min(from.x, from.x + dx), y: Math.min(from.y, from.y + dy),
-    width: Math.max(MIN_BOUNDARY_WIDTH, Math.abs(dx)), height: Math.max(MIN_BOUNDARY_DRAW_HEIGHT, Math.abs(dy)) };
+    width: Math.max(MIN_SIZE, Math.abs(dx)), height: Math.max(MIN_SIZE, Math.abs(dy)) };
 }
 
 export const targetKey = (targets: { pageId: string; elementId: string }[]): string =>

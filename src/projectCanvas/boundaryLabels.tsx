@@ -1,10 +1,10 @@
 import { useLayoutEffect, useRef } from 'react';
-import { boundaryName as kindName, type BoundaryToolKind } from './boundaryDefaults';
-import { boundaryName, sizeLabel as widthLabel } from './sizes';
+import { boundaryKindLabel, type BoundaryToolKind } from './boundaryDefaults';
+import { boundaryLabel, sizeLabel } from './sizes';
 import type { Boundary, CanvasCamera, CanvasTarget } from '../projectCanvasGeometry';
 import type { Project, Rect } from '../types';
 
-const sizeLabel = (rect: Rect) => `${Math.round(rect.width)} × ${Math.round(rect.height)}`;
+const dimensionsLabel = (rect: Rect) => `${Math.round(rect.width)} × ${Math.round(rect.height)}`;
 
 /**
  * Boundary names sit in screen pixels above each boundary's top-left corner, so small type stays
@@ -58,19 +58,19 @@ export function BoundaryLabels({ project, boundaries, moving, draft, draftKind =
         style={{ left: camera.x + shown.x * camera.zoom, top: camera.y + shown.y * camera.zoom, width: Math.max(0, shown.width * camera.zoom), overflow: 'hidden', pointerEvents: 'auto' }}>
         <span className="boundary-label-name" data-boundary-handle={sizeId} data-label-full
           onDoubleClick={event => { event.stopPropagation(); openPage(pageId); }}>
-          {boundaryName(page, size)}
+          {boundaryLabel(page, size)}
         </span>
-        {page.sizes.length > 1 && <span className="boundary-label-name" data-boundary-handle={sizeId} data-label-short title={boundaryName(page, size)}
+        {page.sizes.length > 1 && <span className="boundary-label-name" data-boundary-handle={sizeId} data-label-short title={boundaryLabel(page, size)}
           onDoubleClick={event => { event.stopPropagation(); openPage(pageId); }}>
-          {widthLabel(size.width)}
+          {sizeLabel(size.width)}
         </span>}
-        {resizing && <span className="boundary-label-size" data-boundary-size>{sizeLabel(shown)}</span>}
+        {resizing && <span className="boundary-label-size" data-boundary-size>{dimensionsLabel(shown)}</span>}
       </div>;
     })}
     {drafting && <div className="boundary-label draft" data-boundary-draft-size
       style={{ left: camera.x + drafting.x * camera.zoom, top: camera.y + drafting.y * camera.zoom, width: Math.max(0, drafting.width * camera.zoom), overflow: 'hidden' }}>
-      <span className="boundary-label-name">{kindName(draftKind)}</span>
-      <span className="boundary-label-size">{sizeLabel(drafting)}</span>
+      <span className="boundary-label-name">{boundaryKindLabel(draftKind)}</span>
+      <span className="boundary-label-size">{dimensionsLabel(drafting)}</span>
     </div>}
   </div>;
 }

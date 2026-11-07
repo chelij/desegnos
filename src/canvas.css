@@ -1,62 +1,4 @@
 
-.free-workspace .canvas.light, .free-workspace .canvas.dark { top: 0; left: 0; background: var(--canvas-bed); box-shadow: none; isolation: isolate; }
-.free-workspace .canvas:focus-visible { outline: none; }
-.free-workspace .workspace-scroll:has(.canvas:focus-visible) { outline: 2px solid var(--focus); outline-offset: -2px; }
-.free-workspace .canvas.dark .screen-guide { background: var(--site-dark); }
-.free-workspace .canvas .screen-guide.has-preview { background: transparent; }
-.free-workspace .canvas.dark .accepted-canvas-preview { background: var(--site-dark); }
-.free-workspace .frame-overlay.interactive { pointer-events: auto; outline: 1px solid var(--accent); outline-offset: -1px; }
-.free-workspace .frame-overlay.interactive iframe { pointer-events: auto; }
-.free-workspace .annotation textarea:focus-visible, .free-workspace .annotation-grip:focus-visible { outline-width: 2px; outline-offset: -2px; }
-.free-workspace.pan-ready .canvas, .free-workspace.pan-ready .annotation textarea, .free-workspace.pan-ready .annotation-grip { cursor: grab; }
-.free-workspace.panning .canvas, .free-workspace.panning .annotation textarea, .free-workspace.panning .annotation-grip { cursor: grabbing; }
-@media (prefers-reduced-motion: reduce) { .free-workspace *, .free-workspace *::before, .free-workspace *::after { scroll-behavior: auto; transition: none; animation: none; } }
-
-.free-workspace .canvas { cursor: grab; }
-.element-toolbar > button, .element-toolbar .menu-anchor > button {
-  height: var(--control-md); min-height: var(--control-md); padding: 0 var(--space-4);
-  border-color: transparent; background: transparent; font-size: var(--text-sm); font-weight: var(--weight-medium);
-}
-.element-toolbar > button:hover:not(:disabled), .element-toolbar .menu-anchor > button:hover:not(:disabled) { background: var(--surface-muted); }
-.element-toolbar > .icon-button { width: var(--control-md); padding: 0; }
-.element-toolbar > .ask-ai, .element-toolbar > .wide { width: auto; padding-inline: var(--space-4); white-space: nowrap; }
-.element-toolbar .icon { width: var(--icon-md); height: var(--icon-md); }
-
-.free-workspace .canvas.element-hover { cursor: move; }
-.free-workspace .canvas.element-transforming { cursor: grabbing; }
-.free-workspace.pan-ready .canvas.element-hover { cursor: grab; }
-.free-workspace.tool-select .canvas { cursor: default; }
-.free-workspace.tool-select .canvas.element-hover { cursor: move; }
-.free-workspace.tool-request .canvas, .free-workspace.tool-request .canvas.element-hover { cursor: crosshair; }
-.free-workspace.tool-pan .canvas, .free-workspace.tool-pan .canvas.element-hover { cursor: grab; }
-.free-workspace.pan-ready .canvas, .free-workspace.pan-ready .canvas.element-hover { cursor: grab; }
-.free-workspace.panning .canvas, .free-workspace.panning .canvas.element-hover { cursor: grabbing; }
-.free-workspace .annotation textarea { overflow-y: auto; }
-.free-workspace .annotation.selected .request-number { background: var(--annotation-focus); }
-.free-workspace .annotation.selected .request-frame { border-color: var(--annotation-focus); }
-.free-workspace .annotation:focus-within .request-frame { outline: 2px solid var(--annotation); outline-offset: -2px; }
-.free-workspace.repicking .canvas { cursor: crosshair; }
-.free-workspace.repicking :is(.annotation, .request-controls) { pointer-events: none; opacity: 0.2; }
-.free-workspace .style-swatch.fill > span { width: 16px; height: 16px; border: 1px solid var(--border); border-radius: var(--radius-sm); }
-.free-workspace .style-swatch.fill.empty > span { background: linear-gradient(135deg, transparent 45%, var(--danger) 45% 55%, transparent 55%); }
-
-/* Request text remains legible over page content in both themes. */
-.free-workspace .annotation { background: color-mix(in srgb, var(--annotation-surface) 96%, transparent); transition: background-color var(--duration-fast) var(--ease-standard); }
-.free-workspace .annotation textarea { background: color-mix(in srgb, var(--annotation-surface) 96%, transparent); }
-.free-workspace .annotation:hover { background: var(--annotation-surface); }
-.free-workspace .annotation.selected, .free-workspace .annotation:focus-within, .free-workspace .annotation.expanded { background: var(--annotation-surface); }
-.free-workspace .annotation.selected textarea, .free-workspace .annotation:focus-within textarea { text-shadow: none; }
-.free-workspace .request-attachments { display: flex; flex-wrap: wrap; gap: var(--space-2); margin: 0; padding: 0; list-style: none; pointer-events: auto; }
-.free-workspace .request-attachments li { display: flex; align-items: center; gap: var(--space-2); min-width: 0; max-width: min(160px, 100%); padding: 1px var(--space-2) 1px var(--space-1); border: 1px solid var(--annotation-border); border-radius: var(--radius-md); background: var(--annotation-surface); color: var(--annotation-text); font-size: var(--text-xs); }
-.free-workspace .request-attachments img { flex: none; width: 18px; height: 18px; object-fit: cover; border-radius: var(--radius-xs); }
-.free-workspace .request-attachments .attachment-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.free-workspace .request-attachments button { flex: none; width: 20px; min-width: 20px; min-height: 20px; height: 20px; color: var(--annotation-text); padding: 0; border: 0; background: transparent; }
-.free-workspace .request-attachments button:hover:not(:disabled) { background: var(--annotation-hover); }
-.free-workspace .canvas.dark .live-canvas-page { background: var(--site-dark); }
-.free-workspace .live-canvas-page.passive { pointer-events: none; }
-.free-workspace.live .screen-guide-label { display: none; }
-.across-pages label.check-label { flex-direction: row; align-items: center; gap: var(--space-3); font-weight: var(--weight-regular); white-space: nowrap; }
-.request-pages-panel label.check-label { flex-direction: row; align-items: center; gap: var(--space-3); font-weight: var(--weight-regular); white-space: nowrap; }
 
 /* Project canvas: every page as a snapshot boundary on one pan/zoom surface. */
 .project-canvas {
@@ -132,7 +74,6 @@
 .project-canvas .project-minimap .minimap-boundary { fill: color-mix(in srgb, var(--text) 18%, transparent); stroke: var(--border); stroke-width: 0.75; }
 .project-canvas .project-minimap .minimap-reference { fill: color-mix(in srgb, var(--muted) 30%, transparent); }
 .project-canvas .project-minimap .minimap-viewport { fill: color-mix(in srgb, var(--accent) 14%, transparent); stroke: var(--accent); stroke-width: 1.25; }
-.project-canvas .page-boundary iframe.page-boundary-live.interactive { pointer-events: auto; }
 /* Hovering a layer outlines it at half strength, so hover never reads as selection. */
 .project-canvas:not(.playing) .boundary-elements > .canvas-element:hover { outline: 1px solid color-mix(in srgb, var(--accent) 55%, transparent); outline-offset: 0; }
 .project-canvas .request-layer { position: absolute; left: 0; top: 0; pointer-events: none; }
@@ -175,7 +116,6 @@
 .project-canvas .canvas-grip:hover { background: var(--annotation); }
 .dock-field textarea { width: 100%; resize: vertical; }
 .dock-action { align-self: flex-start; }
-.dock-attachments { display: flex; flex-direction: column; gap: var(--space-2); }
 .dock-attachment-head { display: flex; align-items: center; justify-content: space-between; font-size: var(--text-sm); font-weight: var(--weight-medium); }
 .dock-form .request-attachments { display: flex; flex-wrap: wrap; gap: var(--space-2); margin: 0; padding: 0; list-style: none; }
 .dock-form .request-attachments li { display: flex; align-items: center; gap: var(--space-2); min-width: 0; max-width: 100%; padding: 1px var(--space-2) 1px var(--space-1); border: 1px solid var(--border-soft); border-radius: var(--radius-md); background: var(--surface-muted); font-size: var(--text-xs); }
@@ -192,8 +132,6 @@
   border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-raised);
   box-shadow: var(--shadow-1); color: var(--text); font-size: var(--text-md); line-height: 1.4;
 }
-.project-canvas .reference-element { border: 0; border-radius: 0; background: transparent; box-shadow: none; overflow: visible; }
-.project-canvas .reference-element .canvas-element { pointer-events: none; }
 .project-canvas .reference-item.selected { outline: 1px solid var(--accent); outline-offset: 1px; }
 .project-canvas .reference-note { padding: 12px; }
 .project-canvas .reference-note-text { overflow: hidden; white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -220,7 +158,6 @@
 }
 .project-canvas .reference-note-editor textarea:focus-visible { outline: none; }
 .project-canvas .reference-note-editor:focus-within { box-shadow: var(--shadow-2), 0 0 0 2px var(--focus); }
-.dock-tree-heading { overflow: hidden; padding: 0 var(--space-3); color: var(--muted); font-size: var(--text-xs); font-weight: var(--weight-semibold); text-overflow: ellipsis; text-transform: uppercase; white-space: nowrap; }
 .dock-inline-name { flex: 1; min-width: 0; height: var(--control-sm); min-height: var(--control-sm); padding: 0 var(--space-2); border: 1px solid var(--focus); border-radius: var(--radius-sm); background: var(--surface-raised); color: var(--text); font: inherit; font-size: var(--text-sm); }
 
 /* Pointers: one SVG on the transformed layer, comments and end handles in screen pixels. */

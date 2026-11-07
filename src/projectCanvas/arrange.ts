@@ -1,3 +1,4 @@
+import { sizeTarget } from '../projectCanvasGeometry';
 import type { ElementMove, Rect } from '../types';
 import type { ElementEntry } from './interactionTypes';
 import type { SelectionAlign } from './selectionBar';
@@ -31,7 +32,7 @@ const positionOrder = (a: ElementMove, b: ElementMove) => a.to_page_id.localeCom
 const moved = (entry: ElementEntry, dx: number, dy: number): ElementMove => ({
   id: entry.id, to_page_id: entry.pageId, to_parent_id: entry.parentId, index: entry.index,
   rect: { ...entry.rect, x: entry.rect.x + dx, y: entry.rect.y + dy },
-  size_id: entry.allSizes ? null : entry.sizeId, all_sizes: entry.allSizes,
+  ...sizeTarget(entry),
 });
 
 function selectionGroups(entries: ElementEntry[]): ElementEntry[][] {

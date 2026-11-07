@@ -1,5 +1,5 @@
 import {
-  pointerAt, POINTER_HIT_PX, referenceItemAt, viewportWorldRect, type Boundary, type CanvasCamera,
+  pointerAt, POINTER_HIT_PX, boundaryAt, viewportWorldRect, type Boundary, type CanvasCamera,
   type CanvasTarget, type Point, type RequestBox,
 } from '../projectCanvasGeometry';
 import type { Command, PendingRequest, Project, Rect, RequestArea, RequestShape, RequestTarget } from '../types';
@@ -42,7 +42,7 @@ export function createRequestTool(context: () => Context) {
       const page = project.pages.find(item => item.id === box.pageId);
       return { kind: 'element', page: box.pageId, size: page && page.sizes.length > 1 ? box.sizeId : null, id: box.elementId };
     }
-    const item = referenceItemAt(project.reference.map(entry => ({ itemId: entry.id, rect: shownReference(entry, movingItems) })), point);
+    const item = boundaryAt(project.reference.map(entry => ({ itemId: entry.id, rect: shownReference(entry, movingItems) })), point);
     if (item) return { kind: 'reference', id: item.itemId };
     const hits = pointerAt(pointerEntries(project.pointers ?? [], pointerWorldNow(), new Set(), viewportWorldRect(camera, viewSize)), point, POINTER_HIT_PX / camera.zoom);
     if (hits) return { kind: 'pointer', id: hits.pointer.id };

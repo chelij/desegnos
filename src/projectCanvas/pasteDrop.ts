@@ -109,7 +109,7 @@ export function createPasteDrop(context: () => Context) {
         };
       });
       const targets = items.map(item => ({ pageId: item.pageId, elementId: item.id, sizeId: target.allSizes ? null : target.sizeId }));
-      void pasteLinked(items).then(() => { onInserted?.(targets); if (selectAfter) selectTargets(targets); }).catch(() => {});
+      void pasteLinked(items).then(() => { onInserted?.(targets); if (selectAfter) selectTargets(targets); });
       return;
     }
     const inserted: { pageId: string; elementId: string; sizeId: string | null }[] = [];
@@ -123,7 +123,7 @@ export function createPasteDrop(context: () => Context) {
     });
     // Keep the insertion size as the source for shared responsive placement.
     void insertElements(target.pageId, target.parentId, index, elements, undefined, target.sizeId)
-      .then(() => { onInserted?.(inserted); if (selectAfter) selectTargets(inserted); }).catch(() => {});
+      .then(() => { onInserted?.(inserted); if (selectAfter) selectTargets(inserted); });
   }
 
   function pasteElements(alwaysAsk = false) {
@@ -203,7 +203,7 @@ export function createPasteDrop(context: () => Context) {
     if (/^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(text)) {
       const id = crypto.randomUUID();
       void addReference({ id, rect: { x: point.x, y: point.y, width: 120, height: 120 }, kind: { kind: 'swatch', color: text.toLowerCase() } })
-        .then(() => selectReference(id)).catch(() => {});
+        .then(() => selectReference(id));
       return true;
     }
     let url: URL;
@@ -211,7 +211,7 @@ export function createPasteDrop(context: () => Context) {
     if (url.protocol !== 'http:' && url.protocol !== 'https:') return false;
     const id = crypto.randomUUID();
     void addReference({ id, rect: { x: point.x, y: point.y, width: 240, height: 100 }, kind: { kind: 'link', url: text, title: url.hostname } })
-      .then(() => selectReference(id)).catch(() => {});
+      .then(() => selectReference(id));
     return true;
   }
 
@@ -229,7 +229,7 @@ export function createPasteDrop(context: () => Context) {
       if (createReference(text, point)) return;
       const id = crypto.randomUUID();
       await addReference({ id, rect: pastedNoteRect(point), kind: { kind: 'note', text: text.slice(0, 16384) } })
-        .then(() => selectReference(id)).catch(() => {});
+        .then(() => selectReference(id));
       return;
     }
     const page = project.pages.find(item => item.id === boundary.pageId);
@@ -240,8 +240,7 @@ export function createPasteDrop(context: () => Context) {
     try {
       await insertElements(boundary.pageId, null, insertionPoint(boundary.pageId, null), [element], undefined, boundary.sizeId);
       selectElement(boundary.pageId, element.id, singleSize ? boundary.sizeId : null);
-    } catch { /* App surfaces the failed command. */ }
-    finally { busy.current = false; }
+    } finally { busy.current = false; }
   }
 
   async function pasteImage(files: File[]) {
@@ -255,13 +254,12 @@ export function createPasteDrop(context: () => Context) {
     if (boundary) {
       busy.current = true;
       try { await placeElement('image', boundary.pageId, boundary.sizeId, null, { x: 0, y: 0 }, boundary.rect, rect, image.uri); }
-      catch { /* App surfaces the failed command. */ }
       finally { busy.current = false; createdElement.current = null; }
       return;
     }
     const id = crypto.randomUUID();
     await addReference({ id, rect, kind: { kind: 'image', picture: NIL_UUID, name: image.name.slice(0, 120) } }, image.uri)
-      .then(() => selectReference(id)).catch(() => {});
+      .then(() => selectReference(id));
   }
 
   function pasteClipboard(data: DataTransfer | null, target: EventTarget | null): boolean {

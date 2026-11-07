@@ -1,36 +1,48 @@
-import { clamp, MIN_ZOOM, ZOOM_LEVELS } from './canvasGeometry';
+export { findElementIn } from './projectCanvas/elementFacts';
+import { elementLabel, findElementIn } from './projectCanvas/elementFacts';
+export const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
+export const MIN_ZOOM = 0.001;
+export const ZOOM_LEVELS = [0.1, 0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4];
+export const zoomLabel = (zoom: number) => `${Math.round(zoom * 100)}%`;
+export function steppedZoom(zoom: number, direction: number): number {
+  return direction > 0 ? ZOOM_LEVELS.find(value => value > zoom + 1e-6) ?? MAX_ZOOM
+    : [...ZOOM_LEVELS].reverse().find(value => value < zoom - 1e-6) ?? MIN_ZOOM;
+}
+export function wheelZoom(zoom: number, delta: number): number {
+  return Number.isFinite(delta) ? clamp(Math.round(zoom * Math.exp(-clamp(delta, -800, 800) * 0.0015) * 1e6) / 1e6, MIN_ZOOM, MAX_ZOOM) : zoom;
+}
+
+export const GRID_SPACING = 8;
+export const MIN_SIZE = 1;
+export function snapValue(value: number, spacing = GRID_SPACING): number {
+  if (spacing === 0) return value;
+  const step = Number.isFinite(spacing) && spacing > 0 ? spacing : GRID_SPACING;
+  return Number.isFinite(value) ? Math.round(value / step) * step : 0;
+}
 import { resolveForSize, sizeLabel } from './projectCanvas/sizes';
 import type { BoundaryKind, PageSize, Pointer, PointerSource, PointerTarget, Project, Rect, Viewport } from './types';
 
 export type Point = { x: number; y: number };
 export type CanvasCamera = { x: number; y: number; zoom: number };
-export type RequestSelection = { pageId: string; elementId: string; sizeId: string | null };
+type RequestSelection = { pageId: string; elementId: string; sizeId: string | null };
 export type RequestBox = RequestSelection & { rect: Rect };
 export type FrameCorner = 'nw' | 'ne' | 'sw' | 'se';
 /** One boundary per linked size: a page with three sizes draws three boundaries side by side. */
-export type BoundarySize = PageSize & { height: number };
-export type BoundaryPage = { id: string; sizes: BoundarySize[] };
+type BoundarySize = PageSize & { height: number };
+type BoundaryPage = { id: string; sizes: BoundarySize[] };
 export type Boundary = { pageId: string; sizeId: string; label: string; rect: Rect; kind: BoundaryKind };
 export type BoundaryMove = { pageId: string; sizeId: string; x: number; y: number; kind: BoundaryKind };
-export const boundaryKey = (item: { pageId: string; sizeId: string }): string => item.sizeId;
 export const BOUNDARY_GAP = 160;
 export const BOUNDARY_PUSH_GAP = 40;
-export const BOUNDARY_SNAP = 8;
-export const FRAME_SNAP = 8;
-export const MIN_FRAME_SIZE = 1;
-export const MIN_BOUNDARY_WIDTH = 1;
-export const MIN_BOUNDARY_DRAW_HEIGHT = 1;
-export const MIN_BOUNDARY_HEIGHT = 1;
 export const MAX_BOUNDARY_HEIGHT = 6000;
-export const MAX_ZOOM = ZOOM_LEVELS.at(-1) ?? 4;
-export const FIT_MAX_ZOOM = 1;
+export const MAX_ZOOM = ZOOM_LEVELS[ZOOM_LEVELS.length - 1];
+const FIT_MAX_ZOOM = 1;
 export const FIT_PADDING = 48;
-export const CANVAS_DOT_SPACING = 8;
 export const CANVAS_DOT_MIN_SCREEN = 6;
-export const CANVAS_DOT_FADE_ZOOM = 0.1;
+const CANVAS_DOT_FADE_ZOOM = 0.1;
 
 export function boundaryHeight(height: number): number {
-  return Number.isFinite(height) && height > 0 ? clamp(height, MIN_BOUNDARY_HEIGHT, MAX_BOUNDARY_HEIGHT) : MIN_BOUNDARY_HEIGHT;
+  return Number.isFinite(height) && height > 0 ? clamp(height, MIN_SIZE, MAX_BOUNDARY_HEIGHT) : MIN_SIZE;
 }
 
 const placeable = (size: PageSize): boolean => Number.isFinite(size.x) && Number.isFinite(size.y);
@@ -63,19 +75,14 @@ function pageWidth(size: PageSize): number {
 }
 
 function fixedHeight(height: number): number {
-  return Number.isFinite(height) && height > 0 ? Math.round(height) : MIN_BOUNDARY_HEIGHT;
+  return Number.isFinite(height) && height > 0 ? Math.round(height) : MIN_SIZE;
 }
 
-// Canvas units snap to 8px.
-export function snapToBoundaryGrid(value: number): number {
-  return Number.isFinite(value) ? Math.round(value / BOUNDARY_SNAP) * BOUNDARY_SNAP : 0;
-}
-
-export function drawnBoundaryRect(start: Point, end: Point): Rect {
-  const left = Math.min(snapToBoundaryGrid(start.x), snapToBoundaryGrid(end.x));
-  const top = Math.min(snapToBoundaryGrid(start.y), snapToBoundaryGrid(end.y));
-  return { x: left, y: top, width: Math.max(MIN_BOUNDARY_WIDTH, Math.abs(snapToBoundaryGrid(end.x) - snapToBoundaryGrid(start.x))),
-    height: Math.max(MIN_BOUNDARY_DRAW_HEIGHT, Math.abs(snapToBoundaryGrid(end.y) - snapToBoundaryGrid(start.y))) };
+export function drawnBoundaryRect(start: Point, end: Point, spacing = GRID_SPACING): Rect {
+  const left = Math.min(snapValue(start.x, spacing), snapValue(end.x, spacing));
+  const top = Math.min(snapValue(start.y, spacing), snapValue(end.y, spacing));
+  return { x: left, y: top, width: Math.max(MIN_SIZE, Math.abs(snapValue(end.x, spacing) - snapValue(start.x, spacing))),
+    height: Math.max(MIN_SIZE, Math.abs(snapValue(end.y, spacing) - snapValue(start.y, spacing))) };
 }
 
 // A frame lives in page coordinates: the boundary origin is the page's top-left corner and a
@@ -88,13 +95,9 @@ export function pageRectFromCanvas(rect: Rect, origin: Point): Rect {
   return { x: rect.x - origin.x, y: rect.y - origin.y, width: rect.width, height: rect.height };
 }
 
-export function snapToFrameGrid(value: number): number {
-  return Number.isFinite(value) ? Math.round(value / FRAME_SNAP) * FRAME_SNAP : 0;
-}
-
 function frameBox(rect: Rect, boundary: Rect): Rect {
-  const width = Math.min(Math.max(MIN_FRAME_SIZE, Math.round(rect.width)), boundary.width);
-  const height = Math.min(Math.max(MIN_FRAME_SIZE, Math.round(rect.height)), boundary.height);
+  const width = Math.min(Math.max(MIN_SIZE, Math.round(rect.width)), boundary.width);
+  const height = Math.min(Math.max(MIN_SIZE, Math.round(rect.height)), boundary.height);
   const x = Math.min(Math.max(rect.x, boundary.x), boundary.x + boundary.width - width);
   const y = Math.min(Math.max(rect.y, boundary.y), boundary.y + boundary.height - height);
   return { x, y, width, height };
@@ -102,83 +105,75 @@ function frameBox(rect: Rect, boundary: Rect): Rect {
 
 // Frames stay inside the boundary they were drawn in.
 // A drag that starts inside a boundary draws a snapped frame; starting outside draws nothing.
-export function drawnFrameRect(start: Point, end: Point, boundary: Rect): Rect | null {
+export function drawnFrameRect(start: Point, end: Point, boundary: Rect, spacing = GRID_SPACING): Rect | null {
   if (!Number.isFinite(start.x) || !Number.isFinite(start.y) || !Number.isFinite(end.x) || !Number.isFinite(end.y)) return null;
   if (start.x < boundary.x || start.x > boundary.x + boundary.width || start.y < boundary.y || start.y > boundary.y + boundary.height) return null;
   // Snap first, then clamp: snapping an edge that is already at the boundary must not make the
   // frame grow past it and shift its anchored corner.
   const inside = (point: Point): Point => ({
-    x: Math.min(Math.max(snapToFrameGrid(point.x), boundary.x), boundary.x + boundary.width),
-    y: Math.min(Math.max(snapToFrameGrid(point.y), boundary.y), boundary.y + boundary.height),
+    x: Math.min(Math.max(snapValue(point.x, spacing), boundary.x), boundary.x + boundary.width),
+    y: Math.min(Math.max(snapValue(point.y, spacing), boundary.y), boundary.y + boundary.height),
   });
   const from = inside(start), to = inside(end);
   const left = Math.min(from.x, to.x), top = Math.min(from.y, to.y);
-  return frameBox({ x: left, y: top, width: Math.max(MIN_FRAME_SIZE, Math.abs(to.x - from.x)),
-    height: Math.max(MIN_FRAME_SIZE, Math.abs(to.y - from.y)) }, boundary);
+  return frameBox({ x: left, y: top, width: Math.max(MIN_SIZE, Math.abs(to.x - from.x)),
+    height: Math.max(MIN_SIZE, Math.abs(to.y - from.y)) }, boundary);
 }
 
-// Moving keeps the frame size and snaps its top-left corner, then pushes it back inside.
-// The opposite corner stays anchored while the dragged corner follows the pointer.
-// Frames render in page order, so the last one drawn is the one a point hits first.
-// The anchor stays where it was put; every other boundary is pushed by the shortest move along
-// its least-overlapping axis until nothing overlaps, keeping a 40px gap. Repeats so a push into
-// a third boundary moves that one too.
+function pushAway(mover: Rect, stayer: Rect, gap: number): boolean {
+  const overlapX = Math.min(mover.x + mover.width, stayer.x + stayer.width) - Math.max(mover.x, stayer.x);
+  const overlapY = Math.min(mover.y + mover.height, stayer.y + stayer.height) - Math.max(mover.y, stayer.y);
+  if (overlapX <= -gap || overlapY <= -gap) return false;
+  const dx = mover.x + mover.width / 2 >= stayer.x + stayer.width / 2
+    ? stayer.x + stayer.width + gap - mover.x : -(mover.x + mover.width - stayer.x + gap);
+  const dy = mover.y + mover.height / 2 >= stayer.y + stayer.height / 2
+    ? stayer.y + stayer.height + gap - mover.y : -(mover.y + mover.height - stayer.y + gap);
+  if (Math.abs(dx) <= Math.abs(dy)) mover.x += dx; else mover.y += dy;
+  return true;
+}
+
 export function pushApartBoundaries(items: Boundary[], anchorId: string, gap = BOUNDARY_PUSH_GAP): Boundary[] {
   const result = items.map(item => ({ ...item, rect: { ...item.rect } }));
-  const anchor = result.find(item => boundaryKey(item) === anchorId);
+  const anchor = result.find(item => item.sizeId === anchorId);
   if (!anchor) return result;
   const centre = (rect: Rect) => ({ x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 });
-  const anchorCentre = centre(anchor.rect), ranks = new Map(result.map((item, index) => [boundaryKey(item), {
-    distance: boundaryKey(item) === anchorId ? -1 : Math.hypot(centre(item.rect).x - anchorCentre.x, centre(item.rect).y - anchorCentre.y), index }]));
+  const anchorCentre = centre(anchor.rect), ranks = new Map(result.map((item, index) => [item.sizeId, {
+    distance: item.sizeId === anchorId ? -1 : Math.hypot(centre(item.rect).x - anchorCentre.x, centre(item.rect).y - anchorCentre.y), index }]));
   const farther = (first: Boundary, second: Boundary) => {
-    const a = ranks.get(boundaryKey(first))!, b = ranks.get(boundaryKey(second))!;
+    const a = ranks.get(first.sizeId)!, b = ranks.get(second.sizeId)!;
     return a.distance > b.distance || (a.distance === b.distance && a.index > b.index) ? first : second;
   };
   for (let pass = 0; pass < 200; pass++) {
     let pushed = false;
     for (let i = 0; i < result.length; i++) for (let j = i + 1; j < result.length; j++) {
       const first = result[i], second = result[j];
-      const overlapX = Math.min(first.rect.x + first.rect.width, second.rect.x + second.rect.width) - Math.max(first.rect.x, second.rect.x);
-      const overlapY = Math.min(first.rect.y + first.rect.height, second.rect.y + second.rect.height) - Math.max(first.rect.y, second.rect.y);
-      if (overlapX <= -gap || overlapY <= -gap) continue;
-      const mover = boundaryKey(first) === anchorId ? second : boundaryKey(second) === anchorId ? first : farther(first, second);
+      const mover = first.sizeId === anchorId ? second : second.sizeId === anchorId ? first : farther(first, second);
       const stayer = mover === first ? second : first;
-      const right = stayer.rect.x + stayer.rect.width + gap - mover.rect.x;
-      const left = mover.rect.x + mover.rect.width - stayer.rect.x + gap;
-      const down = stayer.rect.y + stayer.rect.height + gap - mover.rect.y;
-      const up = mover.rect.y + mover.rect.height - stayer.rect.y + gap;
-      const dx = centre(mover.rect).x >= centre(stayer.rect).x ? right : -left;
-      const dy = centre(mover.rect).y >= centre(stayer.rect).y ? down : -up;
-      if (Math.abs(dx) <= Math.abs(dy)) mover.rect.x += dx; else mover.rect.y += dy;
-      pushed = true;
+      pushed = pushAway(mover.rect, stayer.rect, gap) || pushed;
     }
     if (!pushed) break;
   }
   return result;
 }
 
-// Only boundaries whose stored placement differs need a native round trip.
 export function boundaryMoves(boundaries: Boundary[], previous: Boundary[]): BoundaryMove[] {
   return boundaries.flatMap(item => {
-    const before = previous.find(entry => boundaryKey(entry) === boundaryKey(item));
+    const before = previous.find(entry => entry.sizeId === item.sizeId);
     if (before && before.rect.x === item.rect.x && before.rect.y === item.rect.y && before.kind === item.kind) return [];
     return [{ pageId: item.pageId, sizeId: item.sizeId, x: item.rect.x, y: item.rect.y, kind: item.kind }];
   });
 }
 
-// Layers list boundaries top-left first, so a row maps to what the eye reads on the canvas.
 export function boundariesByPosition(boundaries: Boundary[]): Boundary[] {
-  return [...boundaries].sort((first, second) => first.rect.y - second.rect.y || first.rect.x - second.rect.x || boundaryKey(first).localeCompare(boundaryKey(second)));
+  return [...boundaries].sort((first, second) => first.rect.y - second.rect.y || first.rect.x - second.rect.x || first.sizeId.localeCompare(second.sizeId));
 }
 
-// The spreadsheet dot grid: dots sit every 8 canvas pixels. They step up by powers of two
-// so screen gaps never fall below ~6px, and fade out below 0.1 zoom instead of turning to noise.
-export type DotGrid = { spacing: number; size: number; x: number; y: number; fade: number };
+type DotGrid = { spacing: number; size: number; x: number; y: number; fade: number };
 
-export function dotGrid(camera: CanvasCamera, showGrid: boolean): DotGrid | null {
+export function dotGrid(camera: CanvasCamera, showGrid: boolean, gridSpacing = GRID_SPACING): DotGrid | null {
   const zoom = camera.zoom;
   if (!showGrid || !Number.isFinite(zoom) || zoom <= 0) return null;
-  let spacing = CANVAS_DOT_SPACING;
+  let spacing = Number.isFinite(gridSpacing) && gridSpacing > 0 ? gridSpacing : GRID_SPACING;
   for (let step = 0; step < 32 && spacing * zoom < CANVAS_DOT_MIN_SCREEN; step++) spacing *= 2;
   const size = spacing * zoom;
   const wrap = (value: number) => Number.isFinite(value) ? ((value % size) + size) % size : 0;
@@ -220,7 +215,6 @@ export function textEditingCamera(camera: CanvasCamera, bounds: Rect, fontSize: 
   return fitCamera(bounds, viewport, 24, targetZoom);
 }
 
-// Screen = world * zoom + camera offset, so the world point under `point` stays put.
 export function zoomCameraAt(camera: CanvasCamera, point: Point, zoom: number): CanvasCamera {
   const next = clamp(Number.isFinite(zoom) ? zoom : camera.zoom, MIN_ZOOM, MAX_ZOOM);
   return { zoom: next, x: point.x - (point.x - camera.x) / camera.zoom * next, y: point.y - (point.y - camera.y) / camera.zoom * next };
@@ -238,13 +232,7 @@ export type ReferenceMove = { itemId: string; x: number; y: number };
 export type ElementTarget = { kind: 'element'; pageId: string; elementId: string; sizeId: string | null };
 export type CanvasTarget = { kind: 'reference'; itemId: string } | { kind: 'pointer'; pointerId: string } | { kind: 'request'; requestId: string } | ElementTarget;
 
-export const MIN_REFERENCE_WIDTH = 1;
-export const MIN_REFERENCE_HEIGHT = 1;
-// A click with the Frame tool outside boundaries places a note this size.
 export const CLICK_NOTE_SIZE = { width: 160, height: 80 };
-export const MIN_REFERENCE_ITEM_SIZE = 1;
-export const REFERENCE_NOTE_MIN_WIDTH = 1;
-export const REFERENCE_NOTE_MIN_HEIGHT = 1;
 export const REFERENCE_ATTACHMENT_WIDTH = 200;
 export const REFERENCE_ATTACHMENT_HEIGHT = 140;
 export const REFERENCE_ATTACHMENT_GAP = 16;
@@ -274,33 +262,28 @@ export function insideAnyBoundary(boundaries: { rect: Rect }[], point: Point): b
   return boundaries.some(boundary => insideRect(boundary.rect, point));
 }
 
-export function referenceItemAt<T extends { rect: Rect }>(items: T[], point: Point): T | null {
-  return boundaryAt(items, point);
-}
-
-// The Frame tool outside every boundary draws a note of whatever size was dragged.
-export function referenceNoteRect(start: Point, end: Point): Rect {
-  const clampPoint = (point: Point) => ({ x: snapToFrameGrid(point.x), y: snapToFrameGrid(point.y) });
+export function referenceNoteRect(start: Point, end: Point, spacing = GRID_SPACING): Rect {
+  const clampPoint = (point: Point) => ({ x: snapValue(point.x, spacing), y: snapValue(point.y, spacing) });
   const from = clampPoint(start), to = clampPoint(end);
   return {
     x: Math.min(from.x, to.x), y: Math.min(from.y, to.y),
-    width: Math.max(MIN_REFERENCE_WIDTH, Math.abs(to.x - from.x)),
-    height: Math.max(MIN_REFERENCE_HEIGHT, Math.abs(to.y - from.y)),
+    width: Math.max(MIN_SIZE, Math.abs(to.x - from.x)),
+    height: Math.max(MIN_SIZE, Math.abs(to.y - from.y)),
   };
 }
 
 // Reference items move freely over the canvas; boundaries push them aside instead.
-export function movedReferenceRect(rect: Rect, delta: Point): Rect {
-  return { ...rect, x: snapToFrameGrid(rect.x + delta.x), y: snapToFrameGrid(rect.y + delta.y) };
+export function movedReferenceRect(rect: Rect, delta: Point, spacing = GRID_SPACING): Rect {
+  return { ...rect, x: snapValue(rect.x + delta.x, spacing), y: snapValue(rect.y + delta.y, spacing) };
 }
 
-export function resizedReferenceRect(rect: Rect, corner: FrameCorner, point: Point): Rect {
-  const px = snapToFrameGrid(point.x), py = snapToFrameGrid(point.y);
+export function resizedReferenceRect(rect: Rect, corner: FrameCorner, point: Point, spacing = GRID_SPACING): Rect {
+  const px = snapValue(point.x, spacing), py = snapValue(point.y, spacing);
   const dragsLeft = corner === 'nw' || corner === 'sw', dragsTop = corner === 'nw' || corner === 'ne';
   let left = dragsLeft ? px : rect.x, right = dragsLeft ? rect.x + rect.width : px;
   let top = dragsTop ? py : rect.y, bottom = dragsTop ? rect.y + rect.height : py;
-  if (right - left < MIN_REFERENCE_ITEM_SIZE) { if (dragsLeft) left = right - MIN_REFERENCE_ITEM_SIZE; else right = left + MIN_REFERENCE_ITEM_SIZE; }
-  if (bottom - top < MIN_REFERENCE_ITEM_SIZE) { if (dragsTop) top = bottom - MIN_REFERENCE_ITEM_SIZE; else bottom = top + MIN_REFERENCE_ITEM_SIZE; }
+  if (right - left < MIN_SIZE) { if (dragsLeft) left = right - MIN_SIZE; else right = left + MIN_SIZE; }
+  if (bottom - top < MIN_SIZE) { if (dragsTop) top = bottom - MIN_SIZE; else bottom = top + MIN_SIZE; }
   return { x: left, y: top, width: right - left, height: bottom - top };
 }
 
@@ -308,8 +291,8 @@ export function resizedReferenceRect(rect: Rect, corner: FrameCorner, point: Poi
 export function convertedReferenceRects(frame: Rect, attachmentCount: number): { note: Rect; attachments: Rect[] } {
   const note = {
     x: frame.x, y: frame.y,
-    width: Math.max(REFERENCE_NOTE_MIN_WIDTH, frame.width),
-    height: Math.max(REFERENCE_NOTE_MIN_HEIGHT, frame.height),
+    width: Math.max(MIN_SIZE, frame.width),
+    height: Math.max(MIN_SIZE, frame.height),
   };
   const attachments = Array.from({ length: Math.max(0, attachmentCount) }, (_, index) => ({
     x: note.x + note.width + REFERENCE_ATTACHMENT_GAP + index * (REFERENCE_ATTACHMENT_WIDTH + REFERENCE_ATTACHMENT_GAP),
@@ -319,10 +302,10 @@ export function convertedReferenceRects(frame: Rect, attachmentCount: number): {
 }
 
 // A reference item dropped into a boundary keeps its size where it fits and is clamped inside.
-export function referenceFrameRect(rect: Rect, boundary: Rect): Rect {
+export function referenceFrameRect(rect: Rect, boundary: Rect, spacing = GRID_SPACING): Rect {
   return frameBox({
-    x: snapToFrameGrid(rect.x), y: snapToFrameGrid(rect.y),
-    width: Math.max(MIN_FRAME_SIZE, Math.round(rect.width)), height: Math.max(MIN_FRAME_SIZE, Math.round(rect.height)),
+    x: snapValue(rect.x, spacing), y: snapValue(rect.y, spacing),
+    width: Math.max(MIN_SIZE, Math.round(rect.width)), height: Math.max(MIN_SIZE, Math.round(rect.height)),
   }, boundary);
 }
 
@@ -330,21 +313,10 @@ export function referenceFrameRect(rect: Rect, boundary: Rect): Rect {
 // Items do not push each other, so a reference stays a free collage.
 export function pushApartReference(items: ReferenceBox[], boundaries: { rect: Rect }[], gap = BOUNDARY_PUSH_GAP): ReferenceBox[] {
   const result = items.map(item => ({ ...item, rect: { ...item.rect } }));
-  const centre = (rect: Rect) => ({ x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 });
   for (let pass = 0; pass < 200; pass++) {
     let pushed = false;
     for (const item of result) for (const boundary of boundaries) {
-      const overlapX = Math.min(item.rect.x + item.rect.width, boundary.rect.x + boundary.rect.width) - Math.max(item.rect.x, boundary.rect.x);
-      const overlapY = Math.min(item.rect.y + item.rect.height, boundary.rect.y + boundary.rect.height) - Math.max(item.rect.y, boundary.rect.y);
-      if (overlapX <= -gap || overlapY <= -gap) continue;
-      const right = boundary.rect.x + boundary.rect.width + gap - item.rect.x;
-      const left = item.rect.x + item.rect.width - boundary.rect.x + gap;
-      const down = boundary.rect.y + boundary.rect.height + gap - item.rect.y;
-      const up = item.rect.y + item.rect.height - boundary.rect.y + gap;
-      const dx = centre(item.rect).x >= centre(boundary.rect).x ? right : -left;
-      const dy = centre(item.rect).y >= centre(boundary.rect).y ? down : -up;
-      if (Math.abs(dx) <= Math.abs(dy)) item.rect.x += dx; else item.rect.y += dy;
-      pushed = true;
+      pushed = pushAway(item.rect, boundary.rect, gap) || pushed;
     }
     if (!pushed) break;
   }
@@ -363,7 +335,6 @@ export const canvasTargetKey = (target: CanvasTarget): string => target.kind ===
   : target.kind === 'element' ? `element:${target.pageId}:${target.elementId}:${target.sizeId ?? 'all'}` : `reference:${target.itemId}`;
 
 export const selectedPointers = (selection: CanvasTarget[]): string[] => selection.flatMap(item => item.kind === 'pointer' ? [item.pointerId] : []);
-export const selectedRequests = (selection: CanvasTarget[]): string[] => selection.flatMap(item => item.kind === 'request' ? [item.requestId] : []);
 
 export function hasCanvasTarget(selection: CanvasTarget[], target: CanvasTarget): boolean {
   const key = canvasTargetKey(target);
@@ -381,8 +352,8 @@ export const selectedReference = (selection: CanvasTarget[]): string[] => select
 export const selectedElementIds = (selection: CanvasTarget[]): string[] => selection.flatMap(item => item.kind === 'element' ? [item.elementId] : []);
 export const selectedElementTargets = (selection: CanvasTarget[]): ElementTarget[] => selection.flatMap(item => item.kind === 'element' ? [item] : []);
 /** The patch a selection's edits use: one size's override, or all sizes together. */
-export const sizeTarget = (target: ElementTarget): { size_id?: string | null; all_sizes?: boolean } =>
-  target.sizeId === null ? { all_sizes: true } : { size_id: target.sizeId };
+export const sizeTarget = (target: { sizeId?: string | null; allSizes?: boolean }): { size_id?: string | null; all_sizes?: boolean } =>
+  target.allSizes || target.sizeId === null ? { all_sizes: true } : { size_id: target.sizeId };
 
 // ----------------------------------------------------------------------------
 // Pointers: a thin line from a frame or boundary to what its comment may read or
@@ -393,9 +364,9 @@ export const POINTER_COMMENT_ZOOM = 0.35;
 export const POINTER_HIT_PX = 6;
 export const POINTER_ARROW_PX = 9;
 export const POINTER_BREAK_PX = 7;
-export const POINTER_STUB = 120;
+const POINTER_STUB = 120;
 
-export type PointerEdge = 'left' | 'right' | 'top' | 'bottom';
+type PointerEdge = 'left' | 'right' | 'top' | 'bottom';
 export type PointerWorld = { requests: RequestBox[]; boundaries: { pageId: string; sizeId: string; rect: Rect }[]; reference: { itemId: string; rect: Rect; url?: string }[] };
 export type PointerRoute = { from: Point; to: Point; broken: boolean; brokenEnd: 'from' | 'to' | null; source: Rect | null; target: Rect | null; fromEdge: PointerEdge; toEdge: PointerEdge };
 
@@ -504,25 +475,10 @@ export function viewportWorldRect(camera: CanvasCamera, size: { width: number; h
   return { x: -camera.x / camera.zoom, y: -camera.y / camera.zoom, width: size.width / camera.zoom, height: size.height / camera.zoom };
 }
 
-// Pure broken check against the current project: a target or source that no longer exists.
+export const sameRect = (first: Rect, second: Rect) => first.x === second.x && first.y === second.y && first.width === second.width && first.height === second.height;
 
 export function findIn(project: Project, pageId: string, elementId: string): import('./types').Element | null {
-  const find = (elements: import('./types').Element[]): import('./types').Element | null => {
-    for (const element of elements) {
-      if (element.id === elementId) return element;
-      const child = find(element.children);
-      if (child) return child;
-    }
-    return null;
-  };
-  const page = project.pages.find(item => item.id === pageId);
-  return page ? find(page.elements) : null;
-}
-
-export function elementLabel(element: import('./types').Element): string {
-  if (element.name?.trim()) return element.name;
-  const line = element.text.trim().split('\n')[0];
-  return line || element.kind[0].toUpperCase() + element.kind.slice(1);
+  return findElementIn(project.pages.find(page => page.id === pageId)?.elements ?? [], elementId);
 }
 
 export function pointerBroken(pointer: Pointer, project: Project): boolean {
@@ -582,15 +538,6 @@ export function pointerLabel(pointer: Pointer, project: Project): string {
 
 export type AutoLink = { fromPageId: string; toPageId: string; source: Rect; target: Rect; route: { from: Point; to: Point } };
 
-function findResolved(elements: import('./types').Element[], id: string): import('./types').Element | null {
-  for (const element of elements) {
-    if (element.id === id) return element;
-    const child = findResolved(element.children, id);
-    if (child) return child;
-  }
-  return null;
-}
-
 const pageLinkPath = (path: string): string => path.replace(/\/$/, '') || '/';
 
 /** One line per linked boundary pair, from the layer that links to the boundary it names. */
@@ -601,7 +548,7 @@ export function automaticLinks(project: Project, boundaries: Boundary[], boxes: 
     if (!page) continue;
     const sizeId = box.sizeId ?? page.sizes[0]?.id;
     if (!sizeId) continue;
-    const element = findResolved(resolveForSize(project, page, sizeId), box.elementId);
+    const element = findElementIn(resolveForSize(project, page, sizeId), box.elementId);
     const url = element?.url?.trim();
     if (!url) continue;
     const wanted = pageLinkPath(url);

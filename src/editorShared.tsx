@@ -1,5 +1,5 @@
 import { canvasView } from './projectCanvas/canvasView';
-import { MIN_ZOOM } from './canvasGeometry';
+import { MIN_ZOOM } from './projectCanvasGeometry';
 import { useState } from 'react';
 import { type MenuItem } from './Menus';
 import { MAX_ZOOM, type Boundary, type CanvasTarget } from './projectCanvasGeometry';

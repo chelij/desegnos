@@ -4,10 +4,8 @@ import './palette.css';
 export type PaletteCommand = {
   id: string;
   label: string;
-  /** The shortcut shown on the right, already formatted for the platform. */
   keys?: string;
   group: string;
-  /** Set when the current state leaves the command with nothing to change. */
   disabled?: boolean;
   run: () => void;
 };
@@ -28,7 +26,6 @@ function rememberRecent(id: string) {
   catch { /* The recent order is a convenience, never a requirement. */ }
 }
 
-/** Characters that appear in order win; nearby and word-start characters win more. */
 function fuzzyScore(needle: string, haystack: string): number | null {
   let index = 0, score = 0, streak = 0;
   for (const character of needle) {
@@ -43,7 +40,6 @@ function fuzzyScore(needle: string, haystack: string): number | null {
   return score - haystack.length * 0.15;
 }
 
-/** Quick-action ranking: score first, then what was used last, then the list's own order. */
 function rank(commands: PaletteCommand[], query: string, recents: string[]): PaletteCommand[] {
   const recentRank = new Map(recents.map((id, index) => [id, index]));
   const needle = query.trim().toLocaleLowerCase();
@@ -67,7 +63,6 @@ function rank(commands: PaletteCommand[], query: string, recents: string[]): Pal
   return unique;
 }
 
-/** A quick-actions overlay under the top bar: it never traps focus or blocks the canvas behind it. */
 export function CommandPalette({ commands, close }: { commands: PaletteCommand[]; close: () => void }) {
   const [query, setQuery] = useState('');
   const [recents] = useState(readRecent);
