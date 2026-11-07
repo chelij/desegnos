@@ -106,7 +106,7 @@
 .project-canvas .page-boundary iframe { display: block; border: 0; pointer-events: none; background: var(--site-light); }
 /* Boundary names live in screen pixels above each corner, so small type stays crisp at any zoom. */
 .project-canvas-labels { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
-.project-canvas .boundary-label { position: absolute; display: flex; align-items: baseline; gap: var(--space-2); justify-content: flex-start; transform: translateY(-100%); padding-bottom: 3px; pointer-events: none; }
+.project-canvas .boundary-label { position: absolute; display: flex; align-items: baseline; gap: var(--space-2); justify-content: flex-start; transform: translateY(-100%); padding-bottom: 4px; pointer-events: none; }
 .project-canvas .boundary-label-name {
   overflow: hidden; color: var(--muted); font-size: var(--text-xs); font-weight: var(--weight-medium);
   line-height: 16px; letter-spacing: 0; text-overflow: ellipsis; white-space: nowrap; pointer-events: auto;

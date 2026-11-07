@@ -86,7 +86,7 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
     onDragOver={event => { if (!isTextField(event.target)) event.preventDefault(); }} onDrop={dropText}>
     <input ref={imagePicker} type="file" hidden accept="image/png,image/jpeg,image/webp,image/gif" onChange={event => { chooseImage(event.target.files?.[0]); event.target.value = ''; }} />
     <div className="project-canvas-layer" style={{ transform: `translate(${camera.x}px, ${camera.y}px) scale(${camera.zoom})`, '--canvas-zoom': camera.zoom } as CSSProperties}>
-      <BoundaryLayer project={scrubbed.project} boundaries={scrubbed.boundaries} focused={focused} selection={selection}
+      <BoundaryLayer project={scrubbed.project} boundaries={scrubbed.boundaries} focused={focused} focusedSize={focusedSize} selection={selection}
         moving={moving} tool={tool} spaceHeld={spaceHeld} openPage={openPage} editingId={editing?.elementId ?? null}
         movingElements={movingElements} onPlaceholder={openPlaceholder} play={play} viewport={viewport} margin={200 / camera.zoom} />
       {dropHover?.rect && <div className="canvas-drop-target" style={{ left: dropHover.rect.x, top: dropHover.rect.y, width: dropHover.rect.width, height: dropHover.rect.height, borderWidth: 2 * inverse }} />}
@@ -106,7 +106,7 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
       autoFocusId={createdPointer.current} close={() => { createdPointer.current = null; surface.current?.focus({ preventScroll: true }); }} />
     <BehaviourBadges entries={behaviours} camera={camera} viewport={viewport} pointerStates={pointerStates} enabled={tool === 'select'}
       onSelect={pointer => focusBehaviour(pointer.from)} />
-    <BoundaryLabels project={project} boundaries={boundaries} moving={moving} draft={draft} draftKind={boundaryKind} focused={focused} selection={selection} camera={camera} openPage={openPage} />
+    <BoundaryLabels project={project} boundaries={boundaries} moving={moving} draft={draft} draftKind={boundaryKind} focused={focused} focusedSize={focusedSize} selection={selection} camera={camera} openPage={openPage} />
     {selectionScreen && <SelectionBar screen={selectionScreen} viewWidth={viewSize.width} fill={selectionFill} linked={selectionLinked} linkable={selectionLinkable} hyperlink={selectionHyperlink} scope={selectionScope}
       onFill={setSelectionFill} onAlign={alignSelection} onDistribute={distributeSelection} count={selectedElementTargets.length} onScope={setSelectionScope} onRequest={() => { startRequestOnSelection(); }}
       onLinkTo={focusElementLink} onLink={linkSelection} onUnlink={unlinkSelection} onDuplicate={duplicateElements} onDelete={deleteSelectedLayers} />}

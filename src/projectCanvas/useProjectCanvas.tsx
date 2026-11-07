@@ -17,7 +17,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { isTextField } from '../WorkspaceSurface';
 import {
   automaticLinks, boundaryAt, boundaryNear, canvasTargetKey, dotGrid, fitCamera, nearestEdgeAnchors, selectedPointers,
-  textEditingCamera, viewportWorldRect, type Boundary, type CanvasTarget, type Point, type ReferenceBox, type RequestBox,
+  textEditingCamera, viewportWorldRect, type Boundary, type CanvasCamera, type CanvasTarget, type Point, type ReferenceBox, type RequestBox,
 } from '../projectCanvasGeometry';
 import type { Element, NamedView, Page, Project, Rect, ReferenceItem, RequestArea, RequestShape, RequestTarget } from '../types';
 import { onEditScope, type EditScope } from './selectionBar';
@@ -514,7 +514,8 @@ export function useProjectCanvas({
       }
     }
     if (!rects.length && focused) {
-      const boundary = boundaries.find(item => item.pageId === focused);
+      const boundary = boundaries.find(item => item.pageId === focused && item.sizeId === focusedSize)
+        ?? boundaries.find(item => item.pageId === focused);
       if (boundary) rects.push(boundary.rect);
     }
     const box = node.getBoundingClientRect();
@@ -783,7 +784,21 @@ export function useProjectCanvas({
     if (next === current) return;
     stopTransition();
     touched.current = true;
+    textZoomReturn.current = { before: current, editing: next };
     setCamera(next);
+  }, [editing]);
+
+  // The editing zoom is temporary: when editing ends, glide back to where the user was,
+  // unless they moved the view themselves while typing.
+  const textZoomReturn = useRef<{ before: CanvasCamera; editing: CanvasCamera } | null>(null);
+  useEffect(() => {
+    const pending = textZoomReturn.current;
+    if (editing || !pending) return;
+    textZoomReturn.current = null;
+    const now = currentCamera();
+    const unmoved = Math.abs(now.zoom - pending.editing.zoom) < 1e-6
+      && Math.abs(now.x - pending.editing.x) < 1 && Math.abs(now.y - pending.editing.y) < 1;
+    if (unmoved) animateTo(pending.before);
   }, [editing]);
 
   function elementScreenRect(elementId: string, sizeId?: string | null): ScreenRect | null {

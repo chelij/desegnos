@@ -57,9 +57,9 @@ const BoundaryView = memo(function BoundaryView({ project, boundary, shown, focu
 
 const EMPTY_RECTS: Record<string, Rect> = {};
 /** Offscreen boundaries keep their outline; model geometry continues to own hit testing. */
-export function BoundaryLayer({ project, boundaries, focused, selection, moving, openPage, editingId, movingElements, onPlaceholder, play, viewport, margin = 200 }: {
+export function BoundaryLayer({ project, boundaries, focused, focusedSize = null, selection, moving, openPage, editingId, movingElements, onPlaceholder, play, viewport, margin = 200 }: {
   project: Project; boundaries: Boundary[];
-  focused: string | null; selection: CanvasTarget[]; moving: { sizeId: string; pageId: string; rect: Rect } | null;
+  focused: string | null; focusedSize?: string | null; selection: CanvasTarget[]; moving: { sizeId: string; pageId: string; rect: Rect } | null;
   tool: string; spaceHeld: boolean; openPage: (pageId: string) => void;
   editingId: string | null; movingElements: Record<string, Rect>;
   onPlaceholder: (pageId: string, sizeId: string, elementId: string) => void;
@@ -74,7 +74,8 @@ export function BoundaryLayer({ project, boundaries, focused, selection, moving,
     const page = project.pages.find(item => item.id === pageId);
     if (!page) return null;
     const shown = moving?.sizeId === sizeId ? moving.rect : rect;
-    const focusedHere = focused === pageId;
+    // A clicked size label focuses that size; other linked sizes of the page stay plain.
+    const focusedHere = focused === pageId && (!focusedSize || focusedSize === sizeId);
     const highlighted = focusedHere || selection.some(target => target.kind === 'element' && target.pageId === pageId && (target.sizeId === null || target.sizeId === sizeId));
     const visible = boundaryVisible(shown, viewport, margin);
     const owns = (id: string) => elementIndex(resolveForSize(project, page, sizeId)).has(id);
