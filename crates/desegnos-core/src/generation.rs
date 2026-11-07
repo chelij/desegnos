@@ -301,14 +301,26 @@ pub struct GenerationCandidate {
 
 impl GenerationCandidate {
     pub fn from_json(source: &str) -> Result<Self> {
+        Self::from_json_expected(source, None)
+    }
+
+    /// Restore omitted host echoes while rejecting any supplied stale or foreign identity.
+    pub fn from_json_for_job(source: &str, job_id: Uuid, sha256: &str) -> Result<Self> {
+        Self::from_json_expected(source, Some((job_id, sha256)))
+    }
+
+    fn from_json_expected(source: &str, expected: Option<(Uuid, &str)>) -> Result<Self> {
         ensure(
             source.len() <= MAX_GENERATION_BYTES,
             "The generation result exceeds the 8 MiB response limit.",
         )?;
         let mut value: serde_json::Value = crate::parse_provider_json(source)
             .map_err(|error| Error(format!("The generation result is invalid: {error}")))?;
-        drop_null_optional_draft_fields(&mut value);
+        if let Some((job_id, sha256)) = expected {
+            crate::fill_reply_echoes(&mut value, job_id, sha256)?;
+        }
         conform_to_candidate_schema(&mut value);
+        drop_null_optional_draft_fields(&mut value);
         let candidate: Self = serde_json::from_value(value)
             .map_err(|error| Error(format!("The generation result is invalid: {error}")))?;
         candidate.validate_bounds()?;
@@ -1758,14 +1770,15 @@ fn drop_null_optional_draft_fields(value: &mut serde_json::Value) {
     }
 }
 
-/// Repair the small, different drift a provider without an enforced schema introduces, guided by
-/// the same schema the request carried. The pass only removes what the schema forbids and reads a
-/// null as empty where the schema requires a string and allows one; it never invents a field,
-/// never coerces another type, and leaves a value that already conforms untouched. Whatever it
-/// cannot repair stays as it is, for deserialisation and validation to report.
 fn conform_to_candidate_schema(value: &mut serde_json::Value) {
-    let schema = candidate_schema();
-    conform_value(value, &schema, &schema);
+    conform_to_schema(value, &candidate_schema());
+}
+
+/// Repair provider drift using the request schema: drop forbidden extra properties, replace
+/// null strings where empty is allowed, and fill missing required properties only with an
+/// allowed empty value. Other values remain for deserialisation and validation to reject.
+pub fn conform_to_schema(value: &mut serde_json::Value, schema: &serde_json::Value) {
+    conform_value(value, schema, schema);
 }
 
 fn conform_value(
@@ -1807,6 +1820,17 @@ fn conform_value(
             {
                 object.retain(|key, _| properties.contains_key(key));
             }
+            if let Some(required) = schema.get("required").and_then(serde_json::Value::as_array) {
+                for key in required.iter().filter_map(serde_json::Value::as_str) {
+                    if !object.contains_key(key)
+                        && let Some(property) =
+                            properties.and_then(|properties| properties.get(key))
+                        && let Some(empty) = empty_schema_value(property, root)
+                    {
+                        object.insert(key.into(), empty);
+                    }
+                }
+            }
             for (key, member) in object.iter_mut() {
                 if let Some(property) = properties.and_then(|properties| properties.get(key)) {
                     conform_value(member, property, root);
@@ -1822,6 +1846,67 @@ fn conform_value(
         }
         _ => {}
     }
+}
+
+/// No objects, numbers, booleans or nonempty enum members can be inferred from omission.
+fn empty_schema_value(
+    schema: &serde_json::Value,
+    root: &serde_json::Value,
+) -> Option<serde_json::Value> {
+    use serde_json::{Value, json};
+    let schema = dereference(schema, root);
+    // Prefer null for nullable properties, including nullable enums and union branches.
+    let null = Value::Null;
+    if schema_allows_empty(&null, schema, root) {
+        return Some(null);
+    }
+    [json!([]), json!("")]
+        .into_iter()
+        .find(|empty| schema_allows_empty(empty, schema, root))
+}
+
+fn schema_allows_empty(
+    value: &serde_json::Value,
+    schema: &serde_json::Value,
+    root: &serde_json::Value,
+) -> bool {
+    let schema = dereference(schema, root);
+    if let Some(branches) = union_branches(schema) {
+        let matches = branches
+            .iter()
+            .filter(|branch| schema_allows_empty(value, branch, root))
+            .count();
+        return if schema.get("oneOf").is_some() {
+            matches == 1
+        } else {
+            matches > 0
+        };
+    }
+    if schema
+        .get("const")
+        .is_some_and(|constant| constant != value)
+        || schema
+            .get("enum")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|values| !values.contains(value))
+    {
+        return false;
+    }
+    // An explicit type or literal constraint must establish that the value is safe.
+    if (schema.get("type").is_none() && schema.get("enum").is_none() && schema.get("const").is_none())
+        || !value_fits_type(value, schema)
+    {
+        return false;
+    }
+    if value.is_array() {
+        return schema
+            .get("minItems")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0)
+            == 0;
+    }
+    value.is_null()
+        || (value.is_string() && empty_string_is_allowed(schema) && schema.get("format").is_none())
 }
 
 fn dereference<'a>(
@@ -1935,11 +2020,13 @@ fn value_fits_type(value: &serde_json::Value, schema: &serde_json::Value) -> boo
 /// An empty string is only substituted where the schema does not rule it out: a const, an enum
 /// without `""`, a positive minimum length or any pattern can all forbid it.
 fn empty_string_is_allowed(schema: &serde_json::Value) -> bool {
-    if let Some(constant) = schema.get("const") {
-        return constant.as_str() == Some("");
+    if schema.get("const").is_some_and(|value| value.as_str() != Some("")) {
+        return false;
     }
-    if let Some(values) = schema.get("enum").and_then(serde_json::Value::as_array) {
-        return values.iter().any(|value| value.as_str() == Some(""));
+    if let Some(values) = schema.get("enum").and_then(serde_json::Value::as_array)
+        && !values.iter().any(|value| value.as_str() == Some(""))
+    {
+        return false;
     }
     if schema.get("minLength").and_then(serde_json::Value::as_u64) > Some(0) {
         return false;
@@ -2192,6 +2279,25 @@ mod conformance_tests {
     }
 
     #[test]
+    fn missing_properties_only_receive_schema_allowed_empty_values() {
+        let schema = json!({
+            "type":"object", "required":["array","nullable","text","number","id","choice","nonempty"],
+            "properties":{
+                "array":{"type":"array"},
+                "nullable":{"enum":["known",null]},
+                "text":{"type":"string"},
+                "number":{"type":"number"},
+                "id":uuid_schema(),
+                "choice":{"type":"string","enum":["known"]},
+                "nonempty":{"type":"array","minItems":1}
+            }
+        });
+        let mut value = json!({});
+        conform_to_schema(&mut value, &schema);
+        assert_eq!(value, json!({"array":[],"nullable":null,"text":""}));
+    }
+
+    #[test]
     fn unknown_keys_are_dropped_at_depth() {
         let mut operation = json!({
             "kind": "insert",
@@ -2250,7 +2356,7 @@ mod conformance_tests {
     }
 
     #[test]
-    fn a_conforming_candidate_is_byte_for_byte_unchanged() {
+    fn schema_repair_is_idempotent() {
         let mut drafted = element();
         drafted["style"] = json!({"opacity": 1.0, "textStyle": {"size": 32.0, "align": "center"}});
         drafted["children"] = json!([]);
@@ -2258,6 +2364,7 @@ mod conformance_tests {
             {"kind": "insertInBoundary", "pageId": PAGE, "sizeId": null, "element": drafted},
             {"kind": "remove", "elementId": PAGE}
         ]));
+        let value = conformed(value);
         let before = serde_json::to_string(&value).unwrap();
         let after = conformed(value);
         assert_eq!(serde_json::to_string(&after).unwrap(), before);

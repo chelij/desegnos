@@ -2063,12 +2063,16 @@ impl GenerationService {
                     &response.text,
                     std::env::var("DESEGNOS_GENERATION_BENCHMARK").as_deref() == Ok("1"),
                 )?;
-                let checked =
-                    GenerationCandidate::from_json(&response.text).map(|mut candidate| {
-                        candidate.normalize_boundary_anchors(original);
-                        let valid = candidate.validate(&record.view.requirements, original);
-                        (candidate, valid)
-                    });
+                let checked = GenerationCandidate::from_json_for_job(
+                    &response.text,
+                    record.view.requirements.job_id,
+                    &record.view.requirements.sha256,
+                )
+                .map(|mut candidate| {
+                    candidate.normalize_boundary_anchors(original);
+                    let valid = candidate.validate(&record.view.requirements, original);
+                    (candidate, valid)
+                });
                 match checked {
                     Ok((candidate, Ok(()))) => {
                         let ready = candidate.can_apply(&record.view.requirements);

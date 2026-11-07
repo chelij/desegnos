@@ -1272,3 +1272,53 @@ fn several_boundary_behaviours_in_one_reply_all_survive() {
     let behaviour = applied.pointers.iter().find(|p| p.is_behaviour()).unwrap();
     assert_eq!(behaviour.comment, "Only the countdown.");
 }
+
+#[test]
+fn missing_host_echoes_and_summary_are_restored() {
+    let job_id = Uuid::new_v4();
+    let sha = "a".repeat(64);
+    let parsed =
+        GenerationCandidate::from_json_for_job(r#"{"requests":[]}"#, job_id, &sha).unwrap();
+    assert_eq!(parsed.job_id, job_id);
+    assert_eq!(parsed.requirements_sha256, sha);
+    assert_eq!(parsed.summary, "");
+}
+
+#[test]
+fn supplied_foreign_or_malformed_host_echoes_are_rejected() {
+    let job_id = Uuid::new_v4();
+    let sha = "a".repeat(64);
+    for (key, value) in [
+        ("requirementsSha256", json!("b".repeat(64))),
+        ("jobId", json!(Uuid::new_v4())),
+        ("requirementsSha256", json!(null)),
+        ("jobId", json!(42)),
+    ] {
+        let mut reply = json!({"requests": []});
+        reply[key] = value;
+        assert!(GenerationCandidate::from_json_for_job(&reply.to_string(), job_id, &sha).is_err());
+    }
+}
+
+#[test]
+fn missing_required_array_and_nullable_property_are_filled() {
+    let reply = json!({"requests": [{"status":"implemented", "explanation":"Done"}]});
+    let parsed =
+        GenerationCandidate::from_json_for_job(&reply.to_string(), Uuid::new_v4(), &"a".repeat(64))
+            .unwrap();
+    assert!(parsed.requests[0].operations.is_empty());
+    assert_eq!(parsed.requests[0].element_id, None);
+}
+
+#[test]
+fn missing_required_number_is_not_invented() {
+    let reply = json!({"requests": [{"status":"implemented", "operations":[{
+        "kind":"insertInBoundary", "pageId":Uuid::new_v4(),
+        "element":{"kind":"text", "rect":{"y":0,"width":200,"height":40}, "text":"Hello"}
+    }]}]});
+    let error =
+        GenerationCandidate::from_json_for_job(&reply.to_string(), Uuid::new_v4(), &"a".repeat(64))
+            .unwrap_err()
+            .to_string();
+    assert!(error.contains("missing field `x`"), "{error}");
+}

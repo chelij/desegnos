@@ -794,7 +794,13 @@ fn reply_json(text: &str) -> Result<&str> {
 }
 
 pub fn parse_export_reply(plan: &ExportPlan, text: &str) -> Result<ExportReply> {
-    let value: ExportReply = crate::parse_provider_json(reply_json(text)?).map_err(|error| {
+    let value: ExportReply = crate::parse_structured_reply(
+        reply_json(text)?,
+        &plan.schema,
+        plan.job_id,
+        &plan.sha256,
+    )
+    .map_err(|error| {
         Error(format!(
             "The AI export reply did not match the expected files. {error}"
         ))
@@ -813,7 +819,13 @@ pub struct CommentReply {
 }
 
 pub fn parse_comment_reply(plan: &ExportPlan, text: &str) -> Result<String> {
-    let value: CommentReply = crate::parse_provider_json(reply_json(text)?).map_err(|error| {
+    let value: CommentReply = crate::parse_structured_reply(
+        reply_json(text)?,
+        &comment_schema(plan.job_id, &plan.sha256),
+        plan.job_id,
+        &plan.sha256,
+    )
+    .map_err(|error| {
         Error(format!(
             "The AI comment reply did not match the expected shape. {error}"
         ))

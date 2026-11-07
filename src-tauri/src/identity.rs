@@ -9,7 +9,7 @@ use desegnos_ai::{
     ProviderProgress, ProviderResponse, ProviderSettings, SubmissionOutcome, TokenUsage,
 };
 use desegnos_core::{
-    IdentityAsset, RequirementsSnapshot, digest, fenced_json, parse_provider_json,
+    IdentityAsset, RequirementsSnapshot, digest, fenced_json, parse_structured_reply,
 };
 use desegnos_storage::{
     IdentitySource, IdentitySourceAsset, collect_identity_source, write_markdown,
@@ -1129,7 +1129,12 @@ impl IdentityService {
                 record.response_id = Some(response.response_id);
                 record.usage = response.usage;
                 let candidate = if response.text.len() <= MAX_CANDIDATE_BYTES {
-                    parse_provider_json::<IdentityCandidate>(&response.text).map_err(|reason| {
+                    parse_structured_reply::<IdentityCandidate>(
+                        &response.text,
+                        &candidate_schema_for(&record.source, &record.file_ids),
+                        record.requirements.job_id,
+                        &record.requirements.sha256,
+                    ).map_err(|reason| {
                         // Name the failing field so a rejected reply can be diagnosed.
                         let detail: String = reason.to_string().chars().take(160).collect();
                         format!("The identity reply did not match the required result format ({detail}).")
@@ -1656,6 +1661,29 @@ pub fn analyze_identity(
 mod strict_schema_tests {
     use super::*;
     use std::collections::BTreeSet;
+
+    #[test]
+    fn identity_reply_restores_omitted_echoes_and_empty_fields() {
+        let job_id = Uuid::new_v4();
+        let sha = "a".repeat(64);
+        let reply = r#"{"summary":"Brand evidence", "extra":true}"#;
+        let candidate: IdentityCandidate =
+            parse_structured_reply(reply, &candidate_schema(), job_id, &sha).unwrap();
+        assert_eq!(candidate.job_id, job_id);
+        assert_eq!(candidate.requirements_sha256, sha);
+        assert!(candidate.findings.is_empty());
+        assert!(candidate.content.is_empty());
+        for (key, value) in [
+            ("jobId", json!(Uuid::new_v4())),
+            ("requirementsSha256", json!("b".repeat(64))),
+        ] {
+            let mut invalid = json!({"summary":"Brand evidence"});
+            invalid[key] = value;
+            assert!(parse_structured_reply::<IdentityCandidate>(
+                &invalid.to_string(), &candidate_schema(), job_id, &sha,
+            ).is_err());
+        }
+    }
 
     /// OpenAI Structured Outputs strict mode rejects `oneOf` and any object that does not
     /// require every property, so validate the real identity reply schema the same way the
