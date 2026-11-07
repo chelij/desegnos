@@ -93,12 +93,21 @@ const UNREADABLE_REPLY_RETRY_MESSAGE: &str = "Retrying after an unreadable reply
 /// The streamed text kept for progress and cut-off recovery; replies are bounded far below.
 const MAX_PARTIAL_REPLY_BYTES: usize = 16 * 1024 * 1024;
 
-/// Page ids named by `"pageId": "<uuid>"` in streamed reply text, in order of appearance.
+/// Pages receiving content in streamed reply text: the `pageId` of each `insertInBoundary`
+/// operation, in order of appearance. Page renames name every page up front and don't count.
 fn page_ids_in(text: &str) -> Vec<Uuid> {
     let mut found = Vec::new();
     let mut rest = text;
     while let Some(at) = rest.find("\"pageId\"") {
+        let before = &rest[..at];
+        let operation = before
+            .rfind("\"kind\"")
+            .map(|kind| &before[kind..])
+            .is_some_and(|kind| kind.contains("insertInBoundary") && kind.len() < 400);
         rest = &rest[at + 8..];
+        if !operation {
+            continue;
+        }
         let value = rest.trim_start().strip_prefix(':').map(str::trim_start);
         if let Some(id) = value
             .and_then(|value| value.strip_prefix('"'))
@@ -3748,7 +3757,7 @@ mod unreadable_reply_retry_tests {
     fn page_ids_in_streamed_text_are_found_once_in_order() {
         let a = "11111111-1111-4111-8111-111111111111";
         let b = "22222222-2222-4222-8222-222222222222";
-        let text = format!(r#"{{"kind":"insertInBoundary","pageId": "{b}"}},{{"pageId":"{a}"}},{{"pageId":"{b}"}},{{"pageId":"{a}"#);
+        let text = format!(r#"{{"kind":"setPage","pageId":"{a}"}},{{"kind":"insertInBoundary","pageId": "{b}"}},{{"kind":"insertInBoundary","pageId":"{a}"}},{{"kind":"insertInBoundary","pageId":"{b}"}}"#);
         assert_eq!(
             super::page_ids_in(&text),
             vec![uuid::Uuid::parse_str(b).unwrap(), uuid::Uuid::parse_str(a).unwrap()]

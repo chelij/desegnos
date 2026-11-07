@@ -59,8 +59,8 @@ export function ExportPanel({ project, destination, busy, job, sending, error, c
     <button type="button" className="dock-action" disabled={busy || running} onClick={chooseDestination}>Choose folder…</button>
     {error && !job?.providerError && <p className="dock-error">{userError(error)}</p>}
     {job && <div className="export-panel-job" role="status">
-      <p><strong>{STATUS_LABELS[job.status] ?? job.status}</strong>{job.status === 'prepared' && job.estimateUsd > 0 ? ` · ${money(job.estimateUsd)} estimate` : ''}</p>
-      <p>{job.providerError ? userError(job) : job.message}</p>
+      <p><strong>{prepared && sending ? 'Writing behaviour…' : STATUS_LABELS[job.status] ?? job.status}</strong>{job.status === 'prepared' && job.estimateUsd > 0 ? ` · ${money(job.estimateUsd)} estimate` : ''}</p>
+      {!(prepared && sending) && <p>{job.providerError ? userError(job) : job.message}</p>}
       {job.kind === 'code' && <p className="muted">Export {job.pages.length} {job.pages.length === 1 ? 'boundary' : 'boundaries'} · {job.sizeCount} {job.sizeCount === 1 ? 'size' : 'sizes'} · {job.pointerCount} {job.pointerCount === 1 ? 'behaviour' : 'behaviours'}{job.reusedBehaviourCount ? ` · ${job.reusedBehaviourCount} ${job.reusedBehaviourCount === 1 ? 'behaviour' : 'behaviours'} reused` : ''}</p>}
       {job.summary && <details className="export-panel-notes"><summary>AI notes</summary><p className="muted">{job.summary}</p></details>}
       {job.usage && <p className="muted">{job.usage.inputTokens.toLocaleString()} in · {job.usage.outputTokens.toLocaleString()} out tokens{job.attempts.length > 1 ? ` · ${job.attempts.length} attempts` : ''}</p>}
