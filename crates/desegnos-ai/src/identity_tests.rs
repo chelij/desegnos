@@ -528,3 +528,25 @@ async fn identity_route_failure_and_truncation_never_fall_back_to_generation_or_
         }
     }
 }
+
+#[tokio::test]
+async fn identity_analysis_retries_the_same_frozen_packet_before_output() {
+    let frozen = identity_snapshot();
+    let expected = identity_candidate(&frozen);
+    let server = Server::start_sequence(vec![
+        Reply::json(500, json!({"code":"internal_error"})),
+        Reply::sse(identity_stream(&expected)),
+    ])
+    .await;
+    let response = analyze(&server, &frozen, AuthenticationMethod::ApiKey, &[])
+        .await
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&response.text).unwrap(),
+        expected
+    );
+    assert_eq!(response.usage.unwrap().total_tokens, 300);
+    assert_eq!(server.count.load(Ordering::SeqCst), 2);
+    let requests = server.captured.lock().unwrap();
+    assert_eq!(requests[0].body, requests[1].body);
+}

@@ -1124,8 +1124,10 @@ name = "desegnos-ai"
 version = "0.1.0"
 dependencies = [
  "base64 0.23.1",
+ "bytes",
  "desegnos-core",
  "desegnos-storage",
+ "httpdate",
  "image",
  "jsonwebtoken",
  "keyring",

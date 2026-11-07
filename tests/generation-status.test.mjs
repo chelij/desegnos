@@ -15,6 +15,13 @@ try {
   const frozen = '```json\n' + JSON.stringify({ pages: [{ pageId: 'page' }], requests: [{ elementId: id, request: 'Add a booking form', sizeId: null }] }) + '\n```';
   const base = { jobId: 'job', status: 'blocked', requirements: { markdown: frozen }, areas: [{ pageId: 'page', elementId: id }], candidate: { summary: 'Booking needs a service', requests: [{ elementId: id, status: 'conflict', explanation: 'Which booking service should this use?' }] } };
 
+  await test('automatic transport retries replace the timer with progress and keep Stop', () => {
+    const job = { jobId: 'retry', status: 'generating', providerRetry: { attempt: 2, kind: 'server' }, message: 'DeepSeek had a server problem — retrying (2 of 3)…', areas: [], candidate: null };
+    const html = render(job, { controller: { ...controller(job), canStop: true, elapsedSeconds: 20 } });
+    assert.match(html, /DeepSeek had a server problem — retrying \(2 of 3\)…/);
+    assert.match(html, />Stop</);
+    assert.doesNotMatch(html, />AI settings</);
+  });
   await test('the status bar asks for a change instead of resending a declared question', () => {
     const html = render(base);
     assert.match(html, /Needs your input/);

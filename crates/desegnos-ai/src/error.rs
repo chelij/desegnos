@@ -374,7 +374,7 @@ impl ProviderError {
                     return "Generation was cancelled. A submitted request may still count toward ChatGPT plan or credit usage; late output will not be applied.";
                 }
                 ErrorKind::Deadline => {
-                    return "ChatGPT stopped responding for 90 seconds or ran past 20 minutes. The request may still count toward plan or credit usage; it was not retried.";
+                    return "ChatGPT stopped responding for 90 seconds or ran past 20 minutes. The request may still count toward plan or credit usage.";
                 }
                 ErrorKind::Transport => {
                     return "OpenAI could not complete the ChatGPT connection or admission. Keep the account connected and explicitly try later; a submitted request may have an unknown usage outcome.";
@@ -450,13 +450,13 @@ impl ProviderError {
                 "Generation was cancelled. A submitted request may still incur a charge; late output will not be applied."
             }
             ErrorKind::Deadline => {
-                "The provider stopped responding for 90 seconds or ran past 20 minutes. The request may still incur a charge; it was not retried."
+                "The provider stopped responding for 90 seconds or ran past 20 minutes. The request may still incur a charge."
             }
             ErrorKind::Server => {
                 "The provider had a server problem. Try again in a moment."
             }
             ErrorKind::Transport => {
-                "The provider connection failed. A submitted request may have an unknown outcome; it was not retried."
+                "The provider connection failed. A submitted request may have an unknown billing outcome."
             }
             ErrorKind::ChatgptNotEligible => {
                 "The selected ChatGPT user or workspace is not eligible for this request. Review its plan and workspace policy; signing in repeatedly will not change eligibility."

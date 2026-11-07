@@ -334,6 +334,8 @@ pub struct GenerationJobView {
     chatgpt_account_id: Option<Uuid>,
     failure_kind: Option<ErrorKind>,
     provider_error: Option<ProviderError>,
+    #[serde(default)]
+    provider_retry: Option<desegnos_ai::ProviderRetry>,
     status: JobStatus,
     estimate_usd: f64,
     received_bytes: usize,
@@ -1767,6 +1769,7 @@ impl GenerationService {
                 chatgpt_account_id: account_id,
                 failure_kind: None,
                 provider_error: None,
+                provider_retry: None,
                 status: JobStatus::Prepared,
                 estimate_usd,
                 received_bytes: 0,
@@ -1905,6 +1908,7 @@ impl GenerationService {
         record.view.received_bytes = 0;
         record.view.failure_kind = None;
         record.view.provider_error = None;
+        record.view.provider_retry = None;
         record.view.message = "Generating…".into();
         record.error = None;
         record.view.attempts.push(GenerationAttempt {
@@ -1932,6 +1936,10 @@ impl GenerationService {
         }
         if let Some(record) = self.jobs.get_mut(&job_id) {
             record.view.received_bytes = progress.received_bytes;
+            if let Some(retry) = &progress.retry {
+                record.view.message = retry.message(record.view.provider);
+            }
+            record.view.provider_retry = progress.retry;
             if let Some(attempt) = record.view.attempts.last_mut() {
                 attempt.response_id = progress.response_id;
             }

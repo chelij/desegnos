@@ -636,7 +636,15 @@ impl KeyAdapter {
             ProviderId::Anthropic => format!("{}/models/{}", self.endpoint, s.model),
             _ => format!("{}/models/{}", self.endpoint, s.model),
         };
-        let mut response = tokio::select! {biased;_ = cancel.cancelled()=>return Err(ProviderError::before(ErrorKind::Cancelled)), r=self.authorized(self.client.get(path),key)?.send()=>r.map_err(|_|ProviderError::before(ErrorKind::Transport))?};
+        let mut response = crate::retry::send(
+            self.authorized(self.client.get(path), key)?,
+            cancel,
+            tokio::time::Instant::now() + Duration::from_secs(90),
+            Duration::from_secs(30),
+            65_536,
+            &|_| {},
+        )
+        .await?;
         if response.status().is_success() {
             Ok(())
         } else {
@@ -684,7 +692,15 @@ impl KeyAdapter {
                 .body(body),
             key,
         )?;
-        let mut response = tokio::select! {biased;_ = cancel.cancelled()=>return Err(ProviderError::before(ErrorKind::Cancelled)), _=tokio::time::sleep_until(deadline.min(tokio::time::Instant::now()+PROVIDER_IDLE))=>return Err(failure(ErrorKind::Deadline)),r=request.send()=>r.map_err(|_|failure(ErrorKind::Transport))?};
+        let mut response = crate::retry::send(
+            request,
+            cancel,
+            deadline,
+            PROVIDER_IDLE,
+            MAX_STREAM_BYTES,
+            progress,
+        )
+        .await?;
         if !response.status().is_success() {
             return Err(read_http_error(&mut response, key, cancel, deadline).await);
         }
@@ -750,6 +766,7 @@ impl KeyAdapter {
                 return Err(stream.error(ErrorKind::Malformed));
             }
             progress(ProviderProgress {
+                retry: None,
                 received_bytes: bytes,
                 response_id: stream.response_id.clone(),
                 web_search_calls: stream.searches,
@@ -799,7 +816,7 @@ fn http_error(status: u16) -> ProviderError {
 }
 
 async fn read_http_error(
-    response: &mut reqwest::Response,
+    response: &mut crate::retry::RetryResponse,
     key: &ApiKey,
     cancel: &CancellationToken,
     deadline: tokio::time::Instant,
@@ -2487,5 +2504,49 @@ mod http_status_tests {
                 assert!(error.message().contains("Nothing was changed"));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod retry_tests {
+    use super::*;
+    use crate::tests::{Reply, Server};
+    use std::sync::atomic::Ordering;
+
+    #[tokio::test]
+    async fn deepseek_retries_http_500_before_streaming_and_returns_one_result() {
+        let answer = json!({"id":"chat_retry", "choices":[{"index":0,"delta":{"content":"{\"ok\":true}"},"finish_reason":"stop"}],
+            "usage":{"prompt_tokens":20,"completion_tokens":10,"total_tokens":30}});
+        let bytes = format!("data: {answer}\n\ndata: [DONE]\n\n").into_bytes();
+        let server = Server::start_sequence(vec![
+            Reply::json(500, json!({"code":"internal_error"})),
+            Reply::sse(bytes),
+        ])
+        .await;
+        let adapter = KeyAdapter::build(ProviderId::Deepseek, &server.endpoint, false).unwrap();
+        let common = RequestContent {
+            instructions: "Frozen task",
+            parts: vec![RequestPart::Text("Same request".into())],
+            schema: json!({"type":"object"}),
+            schema_name: "fixture",
+            web_search: false,
+        };
+        let settings = ProviderSettings {
+            model: "deepseek-flash".into(),
+            ..ProviderSettings::default()
+        };
+        let response = adapter
+            .submit(
+                common,
+                &settings,
+                &ApiKey::new("test-retry-key".into()).unwrap(),
+                &CancellationToken::new(),
+                &|_| {},
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.text, "{\"ok\":true}");
+        assert_eq!(response.usage.unwrap().total_tokens, 30);
+        assert_eq!(server.count.load(Ordering::SeqCst), 2);
     }
 }

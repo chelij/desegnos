@@ -10,6 +10,8 @@ default = []
 test-support = []
 
 [dependencies]
+bytes = "=1.12.1"
+httpdate = "=1.0.3"
 desegnos-core = { path = "../desegnos-core" }
 serde.workspace = true
 serde_json.workspace = true

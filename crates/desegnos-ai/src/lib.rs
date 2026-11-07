@@ -8,6 +8,7 @@ mod images;
 mod model_discovery;
 mod providers;
 mod request;
+mod retry;
 mod schema_wire;
 mod settings;
 mod sse;

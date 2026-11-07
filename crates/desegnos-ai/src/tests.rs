@@ -28,7 +28,7 @@ struct Captured {
 }
 
 #[derive(Clone)]
-struct Reply {
+pub(crate) struct Reply {
     status: u16,
     content_type: Option<&'static str>,
     headers: String,
@@ -39,7 +39,7 @@ struct Reply {
 }
 
 impl Reply {
-    fn sse(bytes: Vec<u8>) -> Self {
+    pub(crate) fn sse(bytes: Vec<u8>) -> Self {
         Self {
             status: 200,
             content_type: Some("text/event-stream; charset=utf-8"),
@@ -50,11 +50,15 @@ impl Reply {
             drop_before_headers: false,
         }
     }
-    fn json(status: u16, value: Value) -> Self {
+    pub(crate) fn json(status: u16, value: Value) -> Self {
         Self {
             status,
             content_type: Some("application/json"),
-            headers: String::new(),
+            headers: if status == 429 || status >= 500 {
+                "retry-after: 0\r\n".into()
+            } else {
+                String::new()
+            },
             chunks: vec![serde_json::to_vec(&value).unwrap()],
             delay: Duration::ZERO,
             declared_length: None,
@@ -63,9 +67,9 @@ impl Reply {
     }
 }
 
-struct Server {
-    endpoint: String,
-    count: Arc<AtomicUsize>,
+pub(crate) struct Server {
+    pub(crate) endpoint: String,
+    pub(crate) count: Arc<AtomicUsize>,
     captured: Arc<Mutex<Vec<Captured>>>,
     task: JoinHandle<()>,
 }
@@ -74,7 +78,7 @@ impl Server {
     async fn start(reply: Reply) -> Self {
         Self::start_sequence(vec![reply]).await
     }
-    async fn start_sequence(replies: Vec<Reply>) -> Self {
+    pub(crate) async fn start_sequence(replies: Vec<Reply>) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let captured = Arc::new(Mutex::new(vec![]));
@@ -1405,7 +1409,10 @@ async fn authentication_quota_rate_model_and_server_failures_have_redacted_typed
             )
             .contains(KEY)
         );
-        assert_eq!(server.count.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            server.count.load(Ordering::SeqCst),
+            if status == 429 || status >= 500 { 3 } else { 1 }
+        );
     }
 }
 
@@ -1805,7 +1812,7 @@ async fn streamed_errors_and_truncated_streams_never_trigger_an_automatic_retry(
     assert_eq!(error.kind, ErrorKind::Transport);
     assert_eq!(error.outcome, SubmissionOutcome::Unknown);
     tokio::time::sleep(Duration::from_millis(50)).await;
-    assert_eq!(server.count.load(Ordering::SeqCst), 1);
+    assert_eq!(server.count.load(Ordering::SeqCst), 3);
 }
 
 #[tokio::test]
@@ -2047,8 +2054,9 @@ async fn a_silent_provider_times_out_long_before_the_overall_deadline() {
         .await
         .unwrap_err();
     assert_eq!(error.kind, ErrorKind::Deadline);
-    assert!(started.elapsed() < Duration::from_millis(900));
-    assert_eq!(server.count.load(Ordering::SeqCst), 1);
+    assert!(started.elapsed() >= Duration::from_secs(10));
+    assert!(started.elapsed() < Duration::from_secs(12));
+    assert_eq!(server.count.load(Ordering::SeqCst), 3);
 }
 
 #[tokio::test]
@@ -2954,7 +2962,7 @@ async fn chatgpt_catalogue_rejects_malformed_duplicate_unsafe_and_oversized_data
 }
 
 #[tokio::test]
-async fn chatgpt_structured_admission_failures_keep_safe_metadata_and_never_retry() {
+async fn chatgpt_structured_admission_failures_keep_safe_metadata_after_bounded_retries() {
     let frozen = snapshot(GenerationMode::Strict);
     for (status, code, kind) in [
         (
@@ -3007,7 +3015,7 @@ async fn chatgpt_structured_admission_failures_keep_safe_metadata_and_never_retr
             status,
             json!({"error":{"code":code,"param":"input[0].content","message":KEY,"raw_private_data":KEY}}),
         );
-        reply.headers = "x-request-id: req_plan_123\r\n".into();
+        reply.headers.push_str("x-request-id: req_plan_123\r\n");
         let server = Server::start(reply).await;
         let error = generate_plan(&server, &frozen, &ProviderSettings::default())
             .await
@@ -3026,7 +3034,10 @@ async fn chatgpt_structured_admission_failures_keep_safe_metadata_and_never_retr
             )
             .contains(KEY)
         );
-        assert_eq!(server.count.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            server.count.load(Ordering::SeqCst),
+            if status == 429 || status >= 500 { 3 } else { 1 }
+        );
     }
 }
 
@@ -4231,7 +4242,7 @@ async fn stream_accepts_absent_host_echoes_but_rejects_present_nulls() {
 }
 
 #[tokio::test]
-async fn http_error_statuses_are_definite_rejections_without_retry_or_output() {
+async fn http_error_statuses_are_definite_rejections_after_only_transient_retries() {
     let frozen = snapshot(GenerationMode::Strict);
     for status in [400, 401, 402, 403, 408, 429, 500, 502, 503, 504] {
         let server = Server::start(Reply::json(
@@ -4245,7 +4256,10 @@ async fn http_error_statuses_are_definite_rejections_without_retry_or_output() {
         assert!(error.response_id.is_none());
         assert!(error.message().contains("Nothing was changed"));
         assert!(!error.message().contains("unknown outcome"));
-        assert_eq!(server.count.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            server.count.load(Ordering::SeqCst),
+            if status == 429 || status >= 500 { 3 } else { 1 }
+        );
     }
 }
 
@@ -4259,5 +4273,180 @@ async fn an_interrupted_http_error_body_does_not_make_the_generation_outcome_unk
     assert_eq!(error.kind, ErrorKind::Server);
     assert_eq!(error.outcome, SubmissionOutcome::Rejected);
     assert_eq!(error.http_status, Some(500));
+    assert_eq!(server.count.load(Ordering::SeqCst), 3);
+}
+
+#[tokio::test]
+async fn transient_http_retries_reuse_the_frozen_request_and_count_only_returned_usage() {
+    let frozen = snapshot(GenerationMode::Strict);
+    for (status, failures) in [(500, 1), (500, 2), (429, 1), (429, 2)] {
+        let mut replies = vec![Reply::json(status, json!({"code":"internal_error"})); failures];
+        replies.push(Reply::sse(stream(&frozen)));
+        let server = Server::start_sequence(replies).await;
+        let updates = Mutex::new(vec![]);
+        let response = server
+            .client()
+            .generate(
+                &frozen,
+                GenerationMode::Strict,
+                &schema(),
+                &ProviderSettings::default(),
+                &ApiKey::new(KEY.into()).unwrap(),
+                &CancellationToken::new(),
+                |update| updates.lock().unwrap().push(update),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.text, candidate(&frozen));
+        assert_eq!(response.usage.unwrap().total_tokens, 300);
+        assert_eq!(server.count.load(Ordering::SeqCst), failures + 1);
+        let requests = server.captured.lock().unwrap();
+        assert!(
+            requests
+                .windows(2)
+                .all(|pair| pair[0].body == pair[1].body && pair[0].path == pair[1].path)
+        );
+        let retries = updates
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|update| update.retry.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            retries
+                .iter()
+                .map(|retry| retry.attempt)
+                .collect::<Vec<_>>(),
+            (2..=(failures + 1) as u8).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            retries[0].message(ProviderId::Deepseek),
+            if status == 500 {
+                "DeepSeek had a server problem — retrying (2 of 3)…"
+            } else {
+                "DeepSeek is rate-limiting requests — retrying (2 of 3)…"
+            }
+        );
+    }
+}
+
+#[tokio::test]
+async fn three_http_500s_produce_one_definite_failure_without_usage() {
+    let frozen = snapshot(GenerationMode::Strict);
+    let server = Server::start(Reply::json(500, json!({"code":"internal_error"}))).await;
+    let error = generate(&server, &frozen).await.unwrap_err();
+    assert_eq!(server.count.load(Ordering::SeqCst), 3);
+    assert_eq!(error.kind, ErrorKind::Server);
+    assert_eq!(error.outcome, SubmissionOutcome::Rejected);
+    assert_eq!(error.http_status, Some(500));
+    assert_eq!(error.usage, None);
+}
+
+#[tokio::test]
+async fn output_then_transport_error_never_resends_even_when_the_next_request_would_succeed() {
+    let frozen = snapshot(GenerationMode::Strict);
+    let mut partial = Reply::sse(frame(
+        json!({"type":"response.output_text.delta","delta":"partial"}),
+    ));
+    partial.declared_length = Some(10_000);
+    let server = Server::start_sequence(vec![partial, Reply::sse(stream(&frozen))]).await;
+    let error = generate(&server, &frozen).await.unwrap_err();
+    assert!(matches!(
+        error.kind,
+        ErrorKind::Transport | ErrorKind::Truncated
+    ));
+    assert_eq!(server.count.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn cancelling_during_backoff_never_submits_the_next_attempt() {
+    let frozen = snapshot(GenerationMode::Strict);
+    let mut failed = Reply::json(500, json!({"code":"internal_error"}));
+    failed.headers.clear(); // Exercise the real two-second backoff, not Retry-After: 0.
+    let server = Server::start_sequence(vec![failed, Reply::sse(stream(&frozen))]).await;
+    let cancel = CancellationToken::new();
+    let started = tokio::time::Instant::now();
+    let error = server
+        .client()
+        .generate(
+            &frozen,
+            GenerationMode::Strict,
+            &schema(),
+            &ProviderSettings::default(),
+            &ApiKey::new(KEY.into()).unwrap(),
+            &cancel,
+            |update| {
+                if update.retry.is_some() {
+                    let cancel = cancel.clone();
+                    tokio::spawn(async move {
+                        tokio::time::sleep(Duration::from_millis(20)).await;
+                        cancel.cancel();
+                    });
+                }
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind, ErrorKind::Cancelled);
+    assert!(started.elapsed() < Duration::from_secs(1));
+    assert_eq!(server.count.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn retry_after_wait_is_honoured_and_long_waits_are_not_shortened() {
+    let frozen = snapshot(GenerationMode::Strict);
+    let mut limited = Reply::json(429, json!({"code":"rate_limit_exceeded"}));
+    limited.headers = "Retry-After: 1\r\n".into();
+    let server = Server::start_sequence(vec![limited, Reply::sse(stream(&frozen))]).await;
+    let start = tokio::time::Instant::now();
+    generate(&server, &frozen).await.unwrap();
+    assert!(start.elapsed() >= Duration::from_secs(1));
+    assert_eq!(server.count.load(Ordering::SeqCst), 2);
+    let mut limited = Reply::json(429, json!({"code":"rate_limit_exceeded"}));
+    limited.headers = "Retry-After: 31\r\n".into();
+    let server = Server::start(limited).await;
+    assert_eq!(
+        generate(&server, &frozen).await.unwrap_err().http_status,
+        Some(429)
+    );
+    assert_eq!(server.count.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn reset_before_headers_or_first_body_byte_retries_but_4xx_never_do() {
+    let frozen = snapshot(GenerationMode::Strict);
+    // The initial successful response's socket closes without its promised first byte.
+    let mut reset = Reply::sse(vec![]);
+    reset.declared_length = Some(100);
+    let server = Server::start_sequence(vec![reset, Reply::sse(stream(&frozen))]).await;
+    let response = generate(&server, &frozen).await.unwrap();
+    assert_eq!(response.text, candidate(&frozen));
+    assert_eq!(server.count.load(Ordering::SeqCst), 2);
+    for status in [400, 401, 402, 403, 404, 408, 422] {
+        let server = Server::start_sequence(vec![
+            Reply::json(status, json!({})),
+            Reply::sse(stream(&frozen)),
+        ])
+        .await;
+        assert_eq!(
+            generate(&server, &frozen).await.unwrap_err().http_status,
+            Some(status)
+        );
+        assert_eq!(server.count.load(Ordering::SeqCst), 1);
+    }
+}
+
+#[tokio::test]
+async fn read_only_preflight_network_failures_do_not_claim_an_unknown_generation_outcome() {
+    let mut reset = Reply::sse(vec![]);
+    reset.drop_before_headers = true;
+    let server = Server::start(reset).await;
+    let cancel = CancellationToken::new();
+    let client = reqwest::Client::builder().retry(reqwest::retry::never()).build().unwrap();
+    let error = crate::retry::send(client.get(&server.endpoint), &cancel,
+        tokio::time::Instant::now() + Duration::from_millis(100), Duration::from_secs(30),
+        1024, &|_| {}).await.err().unwrap();
+    assert_eq!(error.kind, ErrorKind::Transport);
+    assert_eq!(error.outcome, SubmissionOutcome::NotSubmitted);
     assert_eq!(server.count.load(Ordering::SeqCst), 1);
 }

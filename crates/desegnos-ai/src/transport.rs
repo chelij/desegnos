@@ -1,3 +1,4 @@
+use crate::retry::RetryResponse as Response;
 use crate::{
     ApiKey, AuthenticationMethod, ChatgptModel, ErrorKind, IdentityImage, MODEL_MAX_OUTPUT_TOKENS,
     ProviderError, ProviderSettings, ResponseBodyKind, Result, SubmissionOutcome, TokenUsage,
@@ -10,7 +11,7 @@ use crate::{
 };
 use desegnos_core::{GenerationMode, RequirementsSnapshot};
 use reqwest::{
-    Client, Response, StatusCode,
+    Client, StatusCode,
     header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, HeaderValue},
 };
 use serde::{Deserialize, Serialize};
@@ -74,10 +75,32 @@ impl CancellationToken {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderProgress {
+    pub retry: Option<ProviderRetry>,
     pub received_bytes: usize,
     pub response_id: Option<String>,
     pub web_search_calls: usize,
     pub citations: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderRetry {
+    pub attempt: u8,
+    pub kind: ErrorKind,
+}
+impl ProviderRetry {
+    pub fn message(&self, provider: crate::ProviderId) -> String {
+        let name = crate::provider_catalogue()
+            .into_iter()
+            .find(|item| item.id == provider)
+            .map_or("The AI provider", |item| item.name);
+        let reason = match self.kind {
+            ErrorKind::Server => "had a server problem",
+            ErrorKind::RateLimited => "is rate-limiting requests",
+            _ => "lost the connection before replying",
+        };
+        format!("{name} {reason} — retrying ({} of 3)…", self.attempt)
+    }
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -339,6 +362,7 @@ impl OpenAiClient {
         let deadline = Instant::now() + self.deadline;
         let request = self.responses_request(key, body)?;
         progress(ProviderProgress {
+            retry: None,
             received_bytes: 0,
             response_id: None,
             web_search_calls: 0,
@@ -347,13 +371,15 @@ impl OpenAiClient {
         if cancellation.is_cancelled() {
             return Err(ProviderError::before(ErrorKind::Cancelled));
         }
-        let mut response = tokio::select! {
-            biased;
-            _ = cancellation.cancelled() => return Err(ProviderError::new(ErrorKind::Cancelled, SubmissionOutcome::Unknown)),
-            _ = tokio::time::sleep_until(deadline.min(Instant::now() + self.idle)) => return Err(ProviderError::new(ErrorKind::Deadline, SubmissionOutcome::Unknown)),
-            result = request.send() => result.map_err(|error| ProviderError::new(
-                if error.is_timeout() { ErrorKind::Deadline } else { ErrorKind::Transport }, SubmissionOutcome::Unknown))?,
-        };
+        let mut response = crate::retry::send(
+            request,
+            cancellation,
+            deadline,
+            self.idle,
+            MAX_STREAM_BYTES,
+            &progress,
+        )
+        .await?;
         check_status(&mut response, authentication, key, cancellation, deadline).await?;
         let declared_stream = response
             .headers()
@@ -445,6 +471,7 @@ impl OpenAiClient {
                     }
                     None => {
                         progress(ProviderProgress {
+                            retry: None,
                             received_bytes: received,
                             response_id: None,
                             web_search_calls: 0,
@@ -472,6 +499,7 @@ impl OpenAiClient {
                         return Err(stream.error(ErrorKind::Deadline, SubmissionOutcome::Received));
                     }
                     progress(ProviderProgress {
+                        retry: None,
                         received_bytes: received,
                         response_id: stream.response_id.clone(),
                         web_search_calls: stream.web_search_calls(),
@@ -481,6 +509,7 @@ impl OpenAiClient {
                 }
             }
             progress(ProviderProgress {
+                retry: None,
                 received_bytes: received,
                 response_id: stream.response_id.clone(),
                 web_search_calls: stream.web_search_calls(),
@@ -499,18 +528,21 @@ impl OpenAiClient {
         if cancellation.is_cancelled() {
             return Err(ProviderError::before(ErrorKind::Cancelled));
         }
-        let deadline = Instant::now() + Duration::from_secs(30);
+        let deadline = Instant::now() + Duration::from_secs(90);
         let request = self
             .client
             .get(format!("{}/models/{}", self.endpoint, settings.model))
             .header(AUTHORIZATION, authorization(key)?)
             .header(ACCEPT, "application/json");
-        let mut response = tokio::select! {
-            biased;
-            _ = cancellation.cancelled() => return Err(ProviderError::before(ErrorKind::Cancelled)),
-            _ = tokio::time::sleep_until(deadline) => return Err(ProviderError::before(ErrorKind::Deadline)),
-            result = request.send() => result.map_err(|_| ProviderError::before(ErrorKind::Transport))?,
-        };
+        let mut response = crate::retry::send(
+            request,
+            cancellation,
+            deadline,
+            Duration::from_secs(30),
+            ERROR_BODY_LIMIT,
+            &|_| {},
+        )
+        .await?;
         check_status(
             &mut response,
             AuthenticationMethod::ApiKey,
@@ -548,19 +580,21 @@ impl OpenAiClient {
         if cancellation.is_cancelled() {
             return Err(ProviderError::before(ErrorKind::Cancelled));
         }
-        let deadline = Instant::now() + self.deadline.min(Duration::from_secs(30));
+        let deadline = Instant::now() + self.deadline.min(Duration::from_secs(90));
         let request = self
             .client
             .get(format!("{}/models", self.endpoint))
             .header(AUTHORIZATION, authorization(key)?)
             .header(ACCEPT, "application/json");
-        let mut response = tokio::select! {
-            biased;
-            _ = cancellation.cancelled() => return Err(ProviderError::before(ErrorKind::Cancelled)),
-            _ = tokio::time::sleep_until(deadline) => return Err(ProviderError::before(ErrorKind::Deadline)),
-            result = request.send() => result.map_err(|error| ProviderError::before(
-                if error.is_timeout() { ErrorKind::Deadline } else { ErrorKind::Transport }))?,
-        };
+        let mut response = crate::retry::send(
+            request,
+            cancellation,
+            deadline,
+            Duration::from_secs(30),
+            MODELS_BODY_LIMIT,
+            &|_| {},
+        )
+        .await?;
         check_status(
             &mut response,
             AuthenticationMethod::Chatgpt,
@@ -689,6 +723,7 @@ async fn non_stream_error(
     let mut truncated = body.len() > ERROR_BODY_LIMIT;
     body.truncate(ERROR_BODY_LIMIT);
     progress(ProviderProgress {
+        retry: None,
         received_bytes: received,
         response_id: None,
         web_search_calls: 0,
@@ -726,6 +761,7 @@ async fn non_stream_error(
         };
         received = received.saturating_add(chunk.len());
         progress(ProviderProgress {
+            retry: None,
             received_bytes: received,
             response_id: None,
             web_search_calls: 0,

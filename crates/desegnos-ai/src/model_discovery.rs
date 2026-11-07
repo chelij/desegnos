@@ -15,7 +15,7 @@ pub(crate) async fn list_models(
     key: &ApiKey,
     cancel: &CancellationToken,
 ) -> Result<Vec<ModelInfo>> {
-    let deadline = Instant::now() + Duration::from_secs(30);
+    let deadline = Instant::now() + Duration::from_secs(90);
     let mut cursor: Option<String> = None;
     let mut cursors = HashSet::new();
     let mut ids = HashSet::new();
@@ -48,12 +48,15 @@ pub(crate) async fn list_models(
         }
         let request = client.get(url).header("accept", "application/json");
         let request = authorize(provider, request, key)?;
-        let mut response = tokio::select! {
-            biased;
-            _ = cancel.cancelled() => return Err(failure(ErrorKind::Cancelled)),
-            _ = tokio::time::sleep_until(deadline) => return Err(failure(ErrorKind::Deadline)),
-            response = request.send() => response.map_err(|_| failure(ErrorKind::Transport))?,
-        };
+        let mut response = crate::retry::send(
+            request,
+            cancel,
+            deadline,
+            Duration::from_secs(30),
+            1024 * 1024,
+            &|_| {},
+        )
+        .await?;
         if !response.status().is_success() {
             let status = response.status().as_u16();
             let body = crate::transport::bounded_body(&mut response, 65_536, cancel, deadline)
@@ -395,7 +398,7 @@ mod tests {
                     .unwrap()
                     .push(String::from_utf8(request).unwrap());
                 let body = body.to_string();
-                let _ = socket.write_all(format!("HTTP/1.1 {status} Fixture\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}", body.len()).as_bytes()).await;
+                let _ = socket.write_all(format!("HTTP/1.1 {status} Fixture\r\ncontent-type: application/json\r\nretry-after: 0\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}", body.len()).as_bytes()).await;
             }
         });
         (endpoint, requests, task)
@@ -608,7 +611,7 @@ mod tests {
             assert!(!error.to_string().contains(key().expose()));
             assert_eq!(requests.lock().unwrap().len(), 1);
         }
-        let (endpoint, _, task) = server(vec![(429, json!({"error":key().expose()}))]).await;
+        let (endpoint, _, task) = server(vec![(429, json!({"error":key().expose()})); 3]).await;
         assert_eq!(
             list_models(
                 ProviderId::Openai,
@@ -803,5 +806,27 @@ mod tests {
                 ErrorKind::InvalidSettings
             );
         }
+    }
+    #[tokio::test]
+    async fn model_listing_retries_transient_status_without_duplicating_models() {
+        let (endpoint, requests, task) = server(vec![
+            (500, json!({"code":"internal_error"})),
+            (200, json!({"data":[{"id":crate::MODEL_ID}]})),
+        ])
+        .await;
+        let models = list_models(
+            ProviderId::Openai,
+            &client(),
+            &endpoint,
+            &key(),
+            &CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+        task.await.unwrap();
+        assert_eq!(models.len(), 1);
+        let requests = requests.lock().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[0], requests[1]);
     }
 }
