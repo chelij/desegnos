@@ -9,9 +9,7 @@ use crate::workspace::Workspace;
 use base64::{Engine, engine::general_purpose::STANDARD};
 use desegnos_ai::WebUrl as Url;
 use desegnos_core::WebCapture;
-use desegnos_storage::{
-    WebsiteSnapshot, new_import_folder, write_website_snapshot,
-};
+use desegnos_storage::{WebsiteSnapshot, new_import_folder, write_website_snapshot};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -230,13 +228,16 @@ pub async fn prepare_website_import_url(
 ) -> NativeResult<WebsiteImportView> {
     trusted(&window)?;
     let revision = begin_read(&state)?;
+    let fetcher = desegnos_ai::WebsiteFetcher::new();
     #[cfg(feature = "native-tests")]
-    let fixture = std::env::var("DESEGNOS_NATIVE_TEST_WEBSITE_ORIGIN")
-        .ok()
-        .and_then(|value| desegnos_ai::WebUrl::parse(&value).ok());
-    #[cfg(not(feature = "native-tests"))]
-    let fixture: Option<desegnos_ai::WebUrl> = None;
-    let snapshot = desegnos_ai::fetch_website_snapshot(&url, fixture.as_ref()).await?;
+    let fetcher = match std::env::var("DESEGNOS_NATIVE_TEST_WEBSITE_ORIGIN") {
+        Ok(origin) => desegnos_ai::WebsiteFetcher::for_fixture(
+            &desegnos_ai::WebUrl::parse(&origin).map_err(message)?,
+        )?,
+        Err(std::env::VarError::NotPresent) => fetcher,
+        Err(error) => return Err(message(error)),
+    };
+    let snapshot = fetcher.fetch_website_snapshot(&url).await?;
     install(
         &state,
         revision,
@@ -456,12 +457,15 @@ pub async fn import_website_pages(
             sources.len()
         ));
     }
+    let fetcher = desegnos_ai::WebsiteFetcher::new();
     #[cfg(feature = "native-tests")]
-    let fixture = std::env::var("DESEGNOS_NATIVE_TEST_WEBSITE_ORIGIN")
-        .ok()
-        .and_then(|value| desegnos_ai::WebUrl::parse(&value).ok());
-    #[cfg(not(feature = "native-tests"))]
-    let fixture: Option<desegnos_ai::WebUrl> = None;
+    let fetcher = match std::env::var("DESEGNOS_NATIVE_TEST_WEBSITE_ORIGIN") {
+        Ok(origin) => desegnos_ai::WebsiteFetcher::for_fixture(
+            &desegnos_ai::WebUrl::parse(&origin).map_err(message)?,
+        )?,
+        Err(std::env::VarError::NotPresent) => fetcher,
+        Err(error) => return Err(message(error)),
+    };
     let mut picture_ids = BTreeMap::new();
     let mut pictures = BTreeMap::new();
     let mut total = 0usize;
@@ -476,7 +480,7 @@ pub async fn import_website_pages(
             local_image(&folder, &base_url, &source)
                 .and_then(|bytes| image_mime(&path).map(|mime| (mime.to_owned(), bytes)))
         } else {
-            match desegnos_ai::fetch_website_image(&source, fixture.as_ref()).await {
+            match fetcher.fetch_website_image(&source).await {
                 Ok((bytes, mime)) => Some((mime, bytes)),
                 Err(reason) => {
                     warnings.push(reason);

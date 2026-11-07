@@ -1,5 +1,10 @@
 //! Read a local website folder or ZIP into a bounded set of files that can be served read-only
 //! for rendering. Nothing here writes outside the returned list or follows symlinks.
+use crate::io;
+use crate::source_files::{
+    SourcePurpose, excessive_expansion, excluded as source_excluded, extension, open_unchanged,
+    ordinary_zip_mode, priority, read_exact_bounded, safe_archive_name,
+};
 use desegnos_core::{Error, Result};
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
@@ -12,7 +17,7 @@ use zip::ZipArchive;
 const MAX_ENTRIES: usize = 50_000;
 const MAX_FILES: usize = 1_500;
 const MAX_FILE_BYTES: u64 = 8 * 1024 * 1024;
-const MAX_TOTAL_BYTES: u64 = 128 * 1024 * 1024;
+const MAX_TOTAL_BYTES: u64 = crate::source_files::MAX_WEBSITE_BYTES as u64;
 
 /// One renderable website snapshot: relative file names and the pages they serve.
 #[derive(Debug, Clone, Default)]
@@ -32,28 +37,6 @@ pub struct WebsitePage {
     pub file: String,
 }
 
-fn io(error: impl std::fmt::Display) -> Error {
-    Error(error.to_string())
-}
-
-fn extension(name: &str) -> String {
-    name.rsplit('.').next().unwrap_or("").to_ascii_lowercase()
-}
-
-fn priority(name: &str) -> Option<u8> {
-    Some(match extension(name).as_str() {
-        "html" | "htm" => 0,
-        "css" => 1,
-        "svg" | "png" | "jpg" | "jpeg" | "webp" | "gif" | "avif" | "ico" | "bmp" => 2,
-        "woff" | "woff2" | "ttf" | "otf" | "eot" => 3,
-        "js" | "mjs" | "cjs" => 4,
-        "md" | "mdx" | "txt" | "json" | "scss" | "sass" | "less" | "ts" | "tsx" | "jsx"
-        | "astro" | "vue" | "svelte" | "njk" | "hbs" | "liquid" | "php" | "toml" | "yaml"
-        | "yml" => 5,
-        _ => return None,
-    })
-}
-
 fn download(name: &str) -> bool {
     matches!(
         extension(name).as_str(),
@@ -62,33 +45,10 @@ fn download(name: &str) -> bool {
 }
 
 fn excluded(name: &str) -> bool {
-    name.split('/').any(|part| {
-        part.starts_with('.')
-            || matches!(
-                part,
-                "node_modules" | "__MACOSX" | "$RECYCLE.BIN" | "System Volume Information"
-            )
-    })
+    source_excluded(name, SourcePurpose::Render)
 }
-
 fn safe_name(name: &str) -> Option<String> {
-    let name = name.replace('\\', "/");
-    let name = name.trim_start_matches('/');
-    if name.is_empty()
-        || name.contains("//")
-        || name.split('/').any(|part| {
-            part.is_empty()
-                || part == "."
-                || part == ".."
-                || part.ends_with(['.', ' '])
-                || part
-                    .chars()
-                    .any(|character| character.is_control() || "<>\"|*:?".contains(character))
-        })
-    {
-        return None;
-    }
-    Some(name.to_owned())
+    safe_archive_name(name)
 }
 
 fn index_name(name: &str) -> bool {
@@ -181,7 +141,6 @@ fn resolve_link(from: &str, target: &str, files: &BTreeMap<String, String>) -> O
     if resolved.origin() != base.origin() {
         return None;
     }
-    // URL paths escape spaces/non-ASCII file names. Decode before matching the inventory.
     let path = resolved.path().as_bytes();
     let mut decoded = Vec::new();
     let mut i = 0;
@@ -331,76 +290,18 @@ struct Candidate {
     name: String,
     size: u64,
     index: usize,
+    metadata: Option<fs::Metadata>,
+}
+impl Candidate {
+    fn fits(&self, count: usize, total: u64) -> bool {
+        count < MAX_FILES
+            && self.size <= MAX_FILE_BYTES
+            && self.size <= MAX_TOTAL_BYTES.saturating_sub(total)
+    }
 }
 
 // Scan CSS tokens without treating URLs in comments or ordinary strings as dependencies.
-fn css_references(css: &str) -> Vec<String> {
-    fn string_end(bytes: &[u8], start: usize) -> usize {
-        let mut end = start + 1;
-        while end < bytes.len() {
-            if bytes[end] == b'\\' {
-                end += 2;
-            } else if bytes[end] == bytes[start] {
-                return end + 1;
-            } else {
-                end += 1;
-            }
-        }
-        bytes.len()
-    }
-    let bytes = css.as_bytes();
-    let mut references = Vec::new();
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i..].starts_with(b"/*") {
-            i += 2;
-            while i < bytes.len() && !bytes[i..].starts_with(b"*/") {
-                i += 1;
-            }
-            i = (i + 2).min(bytes.len());
-        } else if matches!(bytes[i], b'\'' | b'"') {
-            i = string_end(bytes, i);
-        } else if bytes[i..]
-            .get(..4)
-            .is_some_and(|v| v.eq_ignore_ascii_case(b"url("))
-        {
-            i += 4;
-            while i < bytes.len() && bytes[i].is_ascii_whitespace() {
-                i += 1;
-            }
-            let start = i;
-            if i < bytes.len() && matches!(bytes[i], b'\'' | b'"') {
-                i = string_end(bytes, i);
-                if i > start + 1 && bytes[i - 1] == bytes[start] {
-                    references.push(css[start + 1..i - 1].to_owned());
-                }
-            } else {
-                while i < bytes.len() && bytes[i] != b')' {
-                    i += 1;
-                }
-                references.push(css[start..i].trim().to_owned());
-            }
-        } else if bytes[i..]
-            .get(..7)
-            .is_some_and(|v| v.eq_ignore_ascii_case(b"@import"))
-        {
-            i += 7;
-            while i < bytes.len() && bytes[i].is_ascii_whitespace() {
-                i += 1;
-            }
-            if i < bytes.len() && matches!(bytes[i], b'\'' | b'"') {
-                let start = i;
-                i = string_end(bytes, i);
-                if i > start + 1 && bytes[i - 1] == bytes[start] {
-                    references.push(css[start + 1..i - 1].to_owned());
-                }
-            }
-        } else {
-            i += 1;
-        }
-    }
-    references
-}
+use desegnos_core::css_urls as css_references;
 
 fn render_references(name: &str, bytes: &[u8]) -> Vec<String> {
     if priority(name) == Some(1) {
@@ -469,8 +370,6 @@ fn select_files(
         )
     });
     candidates.dedup_by(|a, b| a.name == b.name);
-    // Use the same root handling as the final snapshot, including root-relative URLs.
-    // Keep source names on candidates so folder reads still use their original paths.
     let mut inventory = candidates
         .iter()
         .map(|c| (c.name.clone(), Vec::new()))
@@ -490,10 +389,7 @@ fn select_files(
         .iter()
         .filter(|c| matches!(priority(&c.name), Some(0 | 1)))
     {
-        if files.len() >= MAX_FILES
-            || file.size > MAX_FILE_BYTES
-            || file.size > MAX_TOTAL_BYTES - total
-        {
+        if !file.fits(files.len(), total) {
             rejected.insert(file.name.clone());
             continue;
         }
@@ -502,7 +398,6 @@ fn select_files(
         selected.insert(file.name.clone());
         files.push((file.name.clone(), bytes));
     }
-    // Strip only names here: the bytes stay in this cache and are never read again.
     for (name, _) in &mut files {
         *name = name[prefix.len()..].to_owned();
     }
@@ -541,10 +436,7 @@ fn select_files(
         if selected.contains(&file.name) || rejected.contains(&file.name) {
             continue;
         }
-        if files.len() >= MAX_FILES
-            || file.size > MAX_FILE_BYTES
-            || file.size > MAX_TOTAL_BYTES - total
-        {
+        if !file.fits(files.len(), total) {
             rejected.insert(file.name);
             continue;
         }
@@ -563,7 +455,6 @@ fn select_files(
     }
     Ok(files)
 }
-
 
 fn inventory_folder(
     root: &Path,
@@ -601,6 +492,7 @@ fn inventory_folder(
                 name,
                 size: metadata.len(),
                 index: 0,
+                metadata: Some(metadata),
             });
         }
     }
@@ -641,18 +533,12 @@ fn collect_snapshot(path: &Path, allow_empty: bool) -> Result<WebsiteSnapshot> {
     if metadata.is_dir() {
         inventory_folder(path, path, &mut candidates, &mut skipped, &mut 0)?;
         files = select_files(candidates, &mut skipped, |file| {
-            let mut bytes = Vec::new();
-            fs::File::open(path.join(&file.name))
-                .map_err(io)?
-                .take(file.size + 1)
-                .read_to_end(&mut bytes)
-                .map_err(io)?;
-            if bytes.len() as u64 != file.size {
-                return Err(Error(
-                    "An imported file changed size. Try importing again.".into(),
-                ));
-            }
-            Ok(bytes)
+            let expected = file
+                .metadata
+                .as_ref()
+                .ok_or_else(|| Error("Missing source metadata.".into()))?;
+            let mut input = open_unchanged(&path.join(&file.name), expected)?;
+            read_exact_bounded(&mut input, file.size, MAX_FILE_BYTES as usize)
         })?;
     } else if metadata.is_file()
         && path
@@ -671,8 +557,7 @@ fn collect_snapshot(path: &Path, allow_empty: bool) -> Result<WebsiteSnapshot> {
             if entry.is_dir() {
                 continue;
             }
-            let name = super::identity_source::safe_archive_name(entry.name())
-                .and_then(|name| safe_name(&name));
+            let name = safe_archive_name(entry.name());
             let Some(name) = name.filter(|_| entry.enclosed_name().is_some()) else {
                 skipped.push(format!("{}: unsafe path", entry.name()));
                 continue;
@@ -680,31 +565,25 @@ fn collect_snapshot(path: &Path, allow_empty: bool) -> Result<WebsiteSnapshot> {
             if excluded(&name) {
                 continue;
             }
-            if entry
-                .unix_mode()
-                .is_some_and(|mode| !matches!(mode & 0o170000, 0 | 0o100000))
+            if entry.encrypted()
+                || !ordinary_zip_mode(entry.unix_mode())
+                || excessive_expansion(entry.size(), entry.compressed_size())
             {
-                skipped.push(format!("{name}: symbolic link or special file"));
+                skipped.push(format!(
+                    "{name}: encrypted, special file or excessive expansion ratio"
+                ));
                 continue;
             }
             candidates.push(Candidate {
                 name,
                 size: entry.size(),
                 index,
+                metadata: None,
             });
         }
         files = select_files(candidates, &mut skipped, |file| {
-            let mut bytes = Vec::new();
-            archive
-                .by_index(file.index)
-                .map_err(io)?
-                .take(file.size + 1)
-                .read_to_end(&mut bytes)
-                .map_err(io)?;
-            if bytes.len() as u64 != file.size {
-                return Err(Error("A ZIP entry has an invalid size.".into()));
-            }
-            Ok(bytes)
+            let mut entry = archive.by_index(file.index).map_err(io)?;
+            read_exact_bounded(&mut entry, file.size, MAX_FILE_BYTES as usize)
         })?;
     } else {
         return Err(Error(
@@ -758,6 +637,7 @@ pub fn collect_import_html(paths: &[PathBuf]) -> Result<WebsiteSnapshot> {
             name,
             size: metadata.len(),
             index: 0,
+            metadata: None,
         });
     }
     let mut skipped = Vec::new();
@@ -807,7 +687,9 @@ fn strip_site_root(files: &mut Vec<(String, Vec<u8>)>) -> String {
                 None
             }
         });
-    let Some(root) = root else { return String::new() };
+    let Some(root) = root else {
+        return String::new();
+    };
     let prefix = format!("{root}/");
     if !files.iter().any(|(name, _)| {
         name.strip_prefix(&prefix)
@@ -1028,6 +910,7 @@ mod tests {
             name: "INDEX.HTM".into(),
             size: 20,
             index: 0,
+            metadata: None,
         }];
         for (name, size) in [
             ("a.mp3", MAX_TOTAL_BYTES * 2),
@@ -1042,6 +925,7 @@ mod tests {
                 name: name.into(),
                 size,
                 index: 0,
+                metadata: None,
             });
         }
         for index in 0..20 {
@@ -1049,6 +933,7 @@ mod tests {
                 name: format!("{index:02}.png"),
                 size: MAX_FILE_BYTES,
                 index: 0,
+                metadata: None,
             });
         }
         let mut skipped = Vec::new();
@@ -1226,6 +1111,7 @@ mod tests {
                 name: (*name).into(),
                 size: bytes.len() as u64,
                 index,
+                metadata: None,
             })
             .collect();
         let mut reads = BTreeSet::new();

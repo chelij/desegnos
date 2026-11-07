@@ -39,14 +39,14 @@ pub(super) async fn receive(
                     404,
                     "This sign-in listener accepts only the authorization callback.",
                 )
-                .await;
+                .await?;
             }
             Ok(Some(value)) => {
-                respond(&mut stream, 200, "Sign-in result received. Return to Desegnos to see the verified account status.").await;
+                respond(&mut stream, 200, "Sign-in result received. Return to Desegnos to see the verified account status.").await?;
                 return Ok(value);
             }
             Err(error) => {
-                respond(&mut stream, 400, "This sign-in result could not be verified. Return to Desegnos and start a fresh sign-in.").await;
+                respond(&mut stream, 400, "This sign-in result could not be verified. Return to Desegnos and start a fresh sign-in.").await?;
                 return Err(error);
             }
         }
@@ -138,15 +138,21 @@ fn parse(request: &[u8], expected: &Url, state: &str) -> ChatgptResult<Option<Ca
     }))
 }
 
-async fn respond(stream: &mut TcpStream, status: u16, message: &str) {
+async fn respond(stream: &mut TcpStream, status: u16, message: &str) -> ChatgptResult<()> {
     let response = format!(
         "HTTP/1.1 {status} {}\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\nContent-Security-Policy: default-src 'none'; frame-ancestors 'none'\r\nX-Content-Type-Options: nosniff\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n{message}",
-        if status == 200 { "OK" } else { "Bad Request" },
+        reqwest::StatusCode::from_u16(status)
+            .ok()
+            .and_then(|status| status.canonical_reason())
+            .unwrap_or("Unknown"),
         message.len()
     );
-    let _ = tokio::time::timeout(
+    tokio::time::timeout(
         Duration::from_secs(2),
         stream.write_all(response.as_bytes()),
     )
-    .await;
+    .await
+    .map_err(|_| Kind::Deadline)?
+    .map_err(|_| Kind::Callback)?;
+    Ok(())
 }

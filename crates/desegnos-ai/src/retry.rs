@@ -47,18 +47,23 @@ fn retry_after(value: Option<&str>, now: SystemTime) -> Option<Duration> {
     (delay <= Duration::from_secs(30)).then_some(delay)
 }
 
-/// Wait before attempt `attempt + 1`: two seconds, then eight. Unit tests scale both down so
-/// they exercise the same policy without waiting out real backoff.
-fn backoff(attempt: u32) -> Duration {
-    let delay = if attempt == 1 {
-        Duration::from_secs(2)
-    } else {
-        Duration::from_secs(8)
-    };
-    if cfg!(test) {
-        delay / 100
-    } else {
-        delay
+pub(crate) const DEFAULT_BACKOFF: [Duration; 2] = [Duration::from_secs(2), Duration::from_secs(8)];
+
+#[derive(Clone, Copy)]
+pub(crate) struct RetryPolicy {
+    pub deadline: Instant,
+    pub idle: Duration,
+    pub max_body: usize,
+    pub backoff: [Duration; 2],
+}
+impl RetryPolicy {
+    pub fn new(deadline: Instant, idle: Duration, max_body: usize) -> Self {
+        Self {
+            deadline,
+            idle,
+            max_body,
+            backoff: DEFAULT_BACKOFF,
+        }
     }
 }
 
@@ -68,14 +73,17 @@ fn backoff(attempt: u32) -> Duration {
 pub(crate) async fn send(
     request: RequestBuilder,
     cancel: &CancellationToken,
-    deadline: Instant,
-    idle: Duration,
-    max_body: usize,
+    policy: RetryPolicy,
     progress: &(dyn Fn(ProviderProgress) + Send + Sync),
 ) -> Result<RetryResponse> {
+    let RetryPolicy {
+        deadline,
+        idle,
+        max_body,
+        backoff,
+    } = policy;
     let (client, request) = request.build_split();
     let request = request.map_err(|_| ProviderError::before(ErrorKind::InvalidRequirements))?;
-    // A failed catalogue/access GET cannot have submitted a generation.
     let outcome = if request.method() == Method::GET {
         SubmissionOutcome::NotSubmitted
     } else {
@@ -125,7 +133,7 @@ pub(crate) async fn send(
                         Some(delay) => delay,
                         None => return result,
                     },
-                    None => backoff(attempt),
+                    None => backoff[(attempt as usize - 1).min(1)],
                 };
                 (kind, delay)
             }
@@ -133,7 +141,7 @@ pub(crate) async fn send(
                 if matches!(error.kind, ErrorKind::Transport | ErrorKind::Deadline)
                     && !unreachable.load(std::sync::atomic::Ordering::Relaxed) =>
             {
-                (error.kind, backoff(attempt))
+                (error.kind, backoff[(attempt as usize - 1).min(1)])
             }
             _ => return result,
         };

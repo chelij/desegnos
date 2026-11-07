@@ -1093,7 +1093,6 @@ impl Workspace {
                 let path = desegnos_storage::create_project_folder(
                     &self.project_location()?,
                     &project.name,
-                    project.id,
                 )
                 .map_err(message)?;
                 Ok(SaveDestination::New(path))
@@ -2026,7 +2025,7 @@ pub async fn save_project(
         session.end_history_step();
     }
     state.check_snapshot(&project)?;
-    let picked = copy_destination(picked, &project)?;
+    let picked = copy_destination(picked)?;
     state.save_snapshot(&project, picked)?;
     Ok(Some(state.view()))
 }
@@ -2053,7 +2052,7 @@ async fn choose_save_path(app: AppHandle, suggested: String) -> NativeResult<Opt
 
 /// New Save As / conflict copies get their own folder. Choosing an existing archive still
 /// runs the established conflict/Replace flow, including standalone destinations.
-fn copy_destination(path: Option<PathBuf>, project: &Project) -> NativeResult<Option<PathBuf>> {
+fn copy_destination(path: Option<PathBuf>) -> NativeResult<Option<PathBuf>> {
     path.map(|path| {
         let path = if path.extension().is_none() {
             path.with_extension("desegnos")
@@ -2075,7 +2074,7 @@ fn copy_destination(path: Option<PathBuf>, project: &Project) -> NativeResult<Op
             .file_stem()
             .and_then(|s| s.to_str())
             .ok_or("Choose a project name.")?;
-        desegnos_storage::create_project_folder(parent, name, project.id).map_err(message)
+        desegnos_storage::create_project_folder(parent, name).map_err(message)
     })
     .transpose()
 }
@@ -2094,12 +2093,8 @@ pub fn move_into_project_folder(state: WorkspaceState<'_>) -> NativeResult<Works
     }) {
         return Ok(state.view());
     }
-    let path = desegnos_storage::create_project_folder(
-        &state.project_location()?,
-        &project.name,
-        project.id,
-    )
-    .map_err(message)?;
+    let path = desegnos_storage::create_project_folder(&state.project_location()?, &project.name)
+        .map_err(message)?;
     // The old file stays as a fallback. The project's current state moves into the managed
     // folder as a new file; only the active save/recovery/recent destination changes.
     state.save_snapshot(&project, Some(path))?;
@@ -2140,7 +2135,7 @@ pub async fn save_project_checked(
         session.end_history_step();
     }
     state.check_snapshot(&project)?;
-    let picked = copy_destination(picked, &project)?;
+    let picked = copy_destination(picked)?;
     state.save_snapshot_checked(&project, picked, choose_path, label)
 }
 
@@ -2177,7 +2172,7 @@ pub async fn resolve_save_conflict(
             };
             let mut state = state.lock().map_err(message)?;
             state.check_snapshot(&project)?;
-            let path = copy_destination(Some(path), &project)?;
+            let path = copy_destination(Some(path))?;
             state.save_snapshot_checked(&project, path, true, label)
         }
     }
@@ -2463,7 +2458,7 @@ pub async fn save_project_copy(
     let Some(path) = choose_save_path(app, suggested).await? else {
         return Ok(None);
     };
-    let path = copy_destination(Some(path), &project)?;
+    let path = copy_destination(Some(path))?;
     let mut state = state.lock().map_err(message)?;
     state.check_snapshot(&project)?;
     if let Some(path) = path {

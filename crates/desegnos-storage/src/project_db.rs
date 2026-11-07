@@ -6,8 +6,8 @@
 //! a crash never leaves a half-written project and no journal files linger beside it. Save,
 //! autosave into the hidden `__autosave` branch, alternatives and history all live here;
 //! Tauri commands stay thin.
-use crate::project_parts::{self, PartData};
 use crate::ensure;
+use crate::project_parts::{self, PartData};
 use desegnos_core::{Error, Project, Result, digest};
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params, types::Value as SqlValue};
 use serde::Serialize;
@@ -50,19 +50,15 @@ CREATE INDEX IF NOT EXISTS versions_branch ON versions(branch);
 CREATE INDEX IF NOT EXISTS versions_parent ON versions(parent);
 ";
 
-fn io(error: impl std::fmt::Display) -> Error {
-    Error(error.to_string())
-}
+use crate::io;
 
-fn sql(error: rusqlite::Error) -> Error {
-    Error(error.to_string())
-}
+
 
 pub fn now_millis() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|elapsed| elapsed.as_millis().min(i64::MAX as u128) as i64)
-        .unwrap_or_default()
+    match SystemTime::now().duration_since(UNIX_EPOCH) {
+        Ok(duration) => i64::try_from(duration.as_millis()).unwrap_or(i64::MAX),
+        Err(error) => -i64::try_from(error.duration().as_millis()).unwrap_or(i64::MAX),
+    }
 }
 
 fn project_extension(path: &Path) -> bool {
@@ -241,7 +237,11 @@ impl ProjectDatabase {
         if let Err(error) = database.initialize(project, now) {
             let path = database.path.clone();
             drop(database);
-            let _ = fs::remove_file(path);
+            if let Err(cleanup) = fs::remove_file(path) {
+                return Err(Error(format!(
+                    "{error}; incomplete project cleanup failed: {cleanup}"
+                )));
+            }
             return Err(error);
         }
         Ok(database)
@@ -253,10 +253,10 @@ impl ProjectDatabase {
 
     fn initialize(&self, project: &Project, now: i64) -> Result<()> {
         project.validate()?;
-        self.connection.execute_batch(SCHEMA).map_err(sql)?;
-        let transaction = self.connection.unchecked_transaction().map_err(sql)?;
+        self.connection.execute_batch(SCHEMA).map_err(io)?;
+        let transaction = self.connection.unchecked_transaction().map_err(io)?;
         initialize_tables(&transaction, project, now)?;
-        transaction.commit().map_err(sql)?;
+        transaction.commit().map_err(io)?;
         Ok(())
     }
 
@@ -325,9 +325,9 @@ impl ProjectDatabase {
         label: Option<&str>,
     ) -> Result<VersionSummary> {
         let now = now_millis();
-        let transaction = self.connection.unchecked_transaction().map_err(sql)?;
+        let transaction = self.connection.unchecked_transaction().map_err(io)?;
         let saved = save_in(&transaction, project, labels, label, now, true)?;
-        transaction.commit().map_err(sql)?;
+        transaction.commit().map_err(io)?;
         Ok(saved)
     }
 
@@ -340,9 +340,8 @@ impl ProjectDatabase {
         label: Option<&str>,
     ) -> std::result::Result<VersionSummary, Box<SaveFailure>> {
         check_stamp(self, project, expected, false)?;
-        self.save(project, labels, label).map_err(|error| {
-            SaveFailure::new(SaveFailureKind::InvalidProject, error.to_string())
-        })
+        self.save(project, labels, label)
+            .map_err(|error| SaveFailure::new(SaveFailureKind::InvalidProject, error.to_string()))
     }
 
     /// Replace the project after an explicit user choice bound to this observed stamp.
@@ -363,30 +362,29 @@ impl ProjectDatabase {
                 SaveFailure::new(SaveFailureKind::InvalidProject, error.to_string())
             })?;
         }
-        self.save(project, labels, label).map_err(|error| {
-            SaveFailure::new(SaveFailureKind::InvalidProject, error.to_string())
-        })
+        self.save(project, labels, label)
+            .map_err(|error| SaveFailure::new(SaveFailureKind::InvalidProject, error.to_string()))
     }
 
     /// Throw away every version and start this file again from this project.
     fn reset(&self, project: &Project) -> Result<()> {
         project.validate()?;
         let now = now_millis();
-        let transaction = self.connection.unchecked_transaction().map_err(sql)?;
+        let transaction = self.connection.unchecked_transaction().map_err(io)?;
         transaction
             .execute_batch(
                 "DELETE FROM head; DELETE FROM branches; DELETE FROM versions; DELETE FROM blobs; DELETE FROM meta;",
             )
-            .map_err(sql)?;
+            .map_err(io)?;
         initialize_tables(&transaction, project, now)?;
-        transaction.commit().map_err(sql)?;
+        transaction.commit().map_err(io)?;
         Ok(())
     }
 
     /// Keep unsaved edits as a version on the hidden autosave branch.
     pub fn autosave(&self, project: &Project, now: i64) -> Result<()> {
         project.validate()?;
-        let transaction = self.connection.unchecked_transaction().map_err(sql)?;
+        let transaction = self.connection.unchecked_transaction().map_err(io)?;
         let (_, head) = current_head(&transaction)?;
         let head_manifest = version_row(&transaction, head)?
             .map(|row| row.manifest)
@@ -409,9 +407,9 @@ impl ProjectDatabase {
                     "INSERT INTO branches(name, head) VALUES (?1, ?2)",
                     params![AUTOSAVE_BRANCH, id],
                 )
-                .map_err(sql)?;
+                .map_err(io)?;
         }
-        transaction.commit().map_err(sql)?;
+        transaction.commit().map_err(io)?;
         Ok(())
     }
 
@@ -422,9 +420,9 @@ impl ProjectDatabase {
 
     /// Stop offering the autosave: the unsaved edits are gone.
     pub fn discard_autosave(&self) -> Result<()> {
-        let transaction = self.connection.unchecked_transaction().map_err(sql)?;
+        let transaction = self.connection.unchecked_transaction().map_err(io)?;
         clear_autosave(&transaction)?;
-        transaction.commit().map_err(sql)?;
+        transaction.commit().map_err(io)?;
         Ok(())
     }
 
@@ -460,7 +458,6 @@ impl ProjectDatabase {
                 head,
             })
             .collect();
-        // The main branch first, then the one being edited, then by name.
         branches.sort_by(|left, right| {
             right
                 .primary
@@ -480,15 +477,15 @@ impl ProjectDatabase {
         let mut statement = self
             .connection
             .prepare("SELECT name, head FROM branches WHERE name <> ?1 ORDER BY name")
-            .map_err(sql)?;
+            .map_err(io)?;
         let rows = statement
             .query_map(params![AUTOSAVE_BRANCH], |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
             })
-            .map_err(sql)?;
+            .map_err(io)?;
         let mut list = Vec::new();
         for row in rows {
-            list.push(row.map_err(sql)?);
+            list.push(row.map_err(io)?);
         }
         Ok(list)
     }
@@ -504,7 +501,7 @@ impl ProjectDatabase {
     pub fn restore(&self, version: i64) -> Result<Project> {
         let project = self.version_project(version)?;
         let now = now_millis();
-        let transaction = self.connection.unchecked_transaction().map_err(sql)?;
+        let transaction = self.connection.unchecked_transaction().map_err(io)?;
         save_in(
             &transaction,
             &project,
@@ -513,7 +510,7 @@ impl ProjectDatabase {
             now,
             false,
         )?;
-        transaction.commit().map_err(sql)?;
+        transaction.commit().map_err(io)?;
         Ok(project)
     }
 
@@ -525,9 +522,9 @@ impl ProjectDatabase {
         )?;
         let head = branch_head(&self.connection, name)?
             .ok_or_else(|| Error("That alternative is no longer in this project.".into()))?;
-        let transaction = self.connection.unchecked_transaction().map_err(sql)?;
+        let transaction = self.connection.unchecked_transaction().map_err(io)?;
         set_head(&transaction, name, head)?;
-        transaction.commit().map_err(sql)?;
+        transaction.commit().map_err(io)?;
         let row = version_row(&self.connection, head)?
             .ok_or_else(|| Error("That alternative's version is missing.".into()))?;
         let project = project_from_manifest(&self.connection, &row.manifest)?;
@@ -547,15 +544,15 @@ impl ProjectDatabase {
             branch_head(&self.connection, &name)?.is_none(),
             "An alternative with that name already exists.".to_string(),
         )?;
-        let transaction = self.connection.unchecked_transaction().map_err(sql)?;
+        let transaction = self.connection.unchecked_transaction().map_err(io)?;
         transaction
             .execute(
                 "INSERT INTO branches(name, head) VALUES (?1, ?2)",
                 params![name, head],
             )
-            .map_err(sql)?;
+            .map_err(io)?;
         set_head(&transaction, &name, head)?;
-        transaction.commit().map_err(sql)?;
+        transaction.commit().map_err(io)?;
         Ok(name)
     }
 
@@ -573,29 +570,29 @@ impl ProjectDatabase {
             branch_head(&self.connection, &to)?.is_none(),
             "An alternative with that name already exists.".to_string(),
         )?;
-        let transaction = self.connection.unchecked_transaction().map_err(sql)?;
+        let transaction = self.connection.unchecked_transaction().map_err(io)?;
         transaction
             .execute(
                 "UPDATE branches SET name = ?1 WHERE name = ?2",
                 params![to, from],
             )
-            .map_err(sql)?;
+            .map_err(io)?;
         transaction
             .execute(
                 "UPDATE versions SET branch = ?1 WHERE branch = ?2",
                 params![to, from],
             )
-            .map_err(sql)?;
+            .map_err(io)?;
         transaction
             .execute(
                 "UPDATE head SET branch = ?1 WHERE branch = ?2",
                 params![to, from],
             )
-            .map_err(sql)?;
+            .map_err(io)?;
         if meta(&transaction, "primary_branch")?.as_deref() == Some(from) {
             set_meta(&transaction, "primary_branch", &to)?;
         }
-        transaction.commit().map_err(sql)?;
+        transaction.commit().map_err(io)?;
         Ok(to)
     }
 
@@ -628,20 +625,20 @@ impl ProjectDatabase {
             "SELECT EXISTS(SELECT 1 FROM versions child JOIN versions parent ON parent.id = child.parent WHERE child.branch <> ?1 AND parent.branch = ?1)",
             params![name],
             |row| row.get::<_, bool>(0),
-        ).map_err(sql)?;
+        ).map_err(io)?;
         ensure(
             !used,
             "Another alternative started from this one. Delete that one first.".to_string(),
         )?;
-        let transaction = self.connection.unchecked_transaction().map_err(sql)?;
+        let transaction = self.connection.unchecked_transaction().map_err(io)?;
         let mut ids = Vec::new();
         {
             let mut statement = transaction
                 .prepare("SELECT id FROM versions WHERE branch = ?1 ORDER BY id DESC")
-                .map_err(sql)?;
-            let rows = statement.query_map(params![name], |row| row.get::<_, i64>(0)).map_err(sql)?;
+                .map_err(io)?;
+            let rows = statement.query_map(params![name], |row| row.get::<_, i64>(0)).map_err(io)?;
             for row in rows {
-                ids.push(row.map_err(sql)?);
+                ids.push(row.map_err(io)?);
             }
         }
         for id in ids {
@@ -652,15 +649,15 @@ impl ProjectDatabase {
                     "UPDATE versions SET parent = ?1 WHERE parent = ?2",
                     params![parent, id],
                 )
-                .map_err(sql)?;
+                .map_err(io)?;
             transaction
                 .execute("DELETE FROM versions WHERE id = ?1", params![id])
-                .map_err(sql)?;
+                .map_err(io)?;
         }
         transaction
             .execute("DELETE FROM branches WHERE name = ?1", params![name])
-            .map_err(sql)?;
-        transaction.commit().map_err(sql)?;
+            .map_err(io)?;
+        transaction.commit().map_err(io)?;
         Ok(())
     }
 
@@ -668,7 +665,7 @@ impl ProjectDatabase {
     /// week; drop blobs nothing references; and shrink the file.
     pub fn compact(&self, now: i64) -> Result<CompactReport> {
         let mut removed_versions = 0;
-        let transaction = self.connection.unchecked_transaction().map_err(sql)?;
+        let transaction = self.connection.unchecked_transaction().map_err(io)?;
         for (branch, _) in self.branch_list()? {
             let chain = branch_chain(&transaction, &branch)?;
             if chain.is_empty() {
@@ -684,10 +681,10 @@ impl ProjectDatabase {
                         "UPDATE versions SET parent = ?1 WHERE parent = ?2",
                         params![version.parent, version.id],
                     )
-                    .map_err(sql)?;
+                    .map_err(io)?;
                 transaction
                     .execute("DELETE FROM versions WHERE id = ?1", params![version.id])
-                    .map_err(sql)?;
+                    .map_err(io)?;
                 removed_versions += 1;
             }
         }
@@ -700,11 +697,11 @@ impl ProjectDatabase {
             }
             transaction
                 .execute("DELETE FROM blobs WHERE hash = ?1", params![hash])
-                .map_err(sql)?;
+                .map_err(io)?;
             removed_blobs += 1;
         }
-        transaction.commit().map_err(sql)?;
-        self.connection.execute_batch("VACUUM").map_err(sql)?;
+        transaction.commit().map_err(io)?;
+        self.connection.execute_batch("VACUUM").map_err(io)?;
         Ok(CompactReport {
             removed_versions,
             removed_blobs,
@@ -758,7 +755,6 @@ fn acquire_lock(path: &Path) -> Result<File> {
     let name = path
         .file_name()
         .ok_or_else(|| Error("Choose a project filename.".into()))?;
-    // A dot-file keeps the saved project looking like one file in its folder.
     let lock_path = path.with_file_name(format!(".{}.lock", name.to_string_lossy()));
     let mut options = OpenOptions::new();
     options.create(true).truncate(false).read(true).write(true);
@@ -779,12 +775,11 @@ fn open_connection(path: &Path, read_only: bool) -> Result<Connection> {
     } else {
         OpenFlags::SQLITE_OPEN_READ_WRITE
     };
-    let connection = Connection::open_with_flags(path, flags).map_err(|error| {
-        Error(format!("This project cannot be read: {error}"))
-    })?;
+    let connection = Connection::open_with_flags(path, flags)
+        .map_err(|error| Error(format!("This project cannot be read: {error}")))?;
     connection
         .busy_timeout(std::time::Duration::from_secs(5))
-        .map_err(sql)?;
+        .map_err(io)?;
     let unreadable = |error: rusqlite::Error| {
         Error(format!(
             "This file is not a readable Desegnos project: {error}"
@@ -819,7 +814,7 @@ fn initialize_tables(connection: &Connection, project: &Project, now: i64) -> Re
             "INSERT INTO branches(name, head) VALUES (?1, ?2)",
             params![DEFAULT_BRANCH, version],
         )
-        .map_err(sql)?;
+        .map_err(io)?;
     set_head(connection, DEFAULT_BRANCH, version)?;
     for (key, value) in [
         ("format", FORMAT.to_owned()),
@@ -837,11 +832,13 @@ fn initialize_tables(connection: &Connection, project: &Project, now: i64) -> Re
 
 fn meta(connection: &Connection, key: &str) -> Result<Option<String>> {
     connection
-        .query_row("SELECT value FROM meta WHERE key = ?1", params![key], |row| {
-            row.get(0)
-        })
+        .query_row(
+            "SELECT value FROM meta WHERE key = ?1",
+            params![key],
+            |row| row.get(0),
+        )
         .optional()
-        .map_err(sql)
+        .map_err(io)
 }
 
 fn set_meta(connection: &Connection, key: &str, value: &str) -> Result<()> {
@@ -851,7 +848,7 @@ fn set_meta(connection: &Connection, key: &str, value: &str) -> Result<()> {
              ON CONFLICT(key) DO UPDATE SET value = excluded.value",
             params![key, value],
         )
-        .map_err(sql)?;
+        .map_err(io)?;
     Ok(())
 }
 
@@ -861,34 +858,36 @@ fn current_head(connection: &Connection) -> Result<(String, i64)> {
             Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
         })
         .optional()
-        .map_err(sql)?
+        .map_err(io)?
         .ok_or_else(|| Error("This project has no current branch.".into()))
 }
 
 fn branch_head(connection: &Connection, name: &str) -> Result<Option<i64>> {
     connection
-        .query_row("SELECT head FROM branches WHERE name = ?1", params![name], |row| {
-            row.get(0)
-        })
+        .query_row(
+            "SELECT head FROM branches WHERE name = ?1",
+            params![name],
+            |row| row.get(0),
+        )
         .optional()
-        .map_err(sql)
+        .map_err(io)
 }
 
 fn set_head(connection: &Connection, branch: &str, version: i64) -> Result<()> {
-    connection.execute("DELETE FROM head", []).map_err(sql)?;
+    connection.execute("DELETE FROM head", []).map_err(io)?;
     connection
         .execute(
             "INSERT INTO head(branch, version) VALUES (?1, ?2)",
             params![branch, version],
         )
-        .map_err(sql)?;
+        .map_err(io)?;
     connection
         .execute(
             "INSERT INTO branches(name, head) VALUES (?1, ?2)
              ON CONFLICT(name) DO UPDATE SET head = excluded.head",
             params![branch, version],
         )
-        .map_err(sql)?;
+        .map_err(io)?;
     Ok(())
 }
 
@@ -913,7 +912,7 @@ fn version_row(connection: &Connection, id: i64) -> Result<Option<VersionRow>> {
             },
         )
         .optional()
-        .map_err(sql)
+        .map_err(io)
 }
 
 fn insert_version(
@@ -930,7 +929,7 @@ fn insert_version(
              VALUES (?1, ?2, ?3, ?4, ?5)",
             params![parent, branch, now, label, manifest],
         )
-        .map_err(sql)?;
+        .map_err(io)?;
     Ok(connection.last_insert_rowid())
 }
 
@@ -941,7 +940,7 @@ fn has_children(connection: &Connection, id: i64) -> Result<bool> {
             params![id],
             |row| row.get(0),
         )
-        .map_err(sql)
+        .map_err(io)
 }
 
 /// Write every part as a blob and return the version's manifest bytes.
@@ -956,7 +955,7 @@ fn write_parts(connection: &Connection, project: &Project) -> Result<Vec<u8>> {
                 "INSERT OR IGNORE INTO blobs(hash, kind, bytes) VALUES (?1, ?2, ?3)",
                 params![hash, part.kind(), bytes],
             )
-            .map_err(sql)?;
+            .map_err(io)?;
         hashes.insert(name, serde_json::Value::String(hash));
     }
     Ok(project_parts::canonical_json(&serde_json::Value::Object(
@@ -976,7 +975,7 @@ fn project_from_manifest(connection: &Connection, manifest: &[u8]) -> Result<Pro
                 |row| Ok((row.get::<_, String>(0)?, row.get::<_, SqlValue>(1)?)),
             )
             .optional()
-            .map_err(sql)?
+            .map_err(io)?
             .ok_or_else(|| Error("A version refers to a stored part that is missing.".into()))?;
         let bytes = match row.1 {
             SqlValue::Blob(bytes) => bytes,
@@ -985,10 +984,7 @@ fn project_from_manifest(connection: &Connection, manifest: &[u8]) -> Result<Pro
         let part = if row.0 == "json" {
             PartData::Json(bytes)
         } else {
-            PartData::Picture {
-                mime: row.0,
-                bytes,
-            }
+            PartData::Picture { mime: row.0, bytes }
         };
         parts.insert(name, part);
     }
@@ -1032,7 +1028,7 @@ fn save_in(
                 "UPDATE versions SET manifest = ?1, created_at = ?2, label = ?3 WHERE id = ?4",
                 params![manifest, now, merged, head],
             )
-            .map_err(sql)?;
+            .map_err(io)?;
         head
     } else {
         let id = insert_version(connection, Some(head), &branch, now, &label, &manifest)?;
@@ -1059,13 +1055,13 @@ fn clear_autosave(connection: &Connection) -> Result<()> {
             "DELETE FROM versions WHERE branch = ?1",
             params![AUTOSAVE_BRANCH],
         )
-        .map_err(sql)?;
+        .map_err(io)?;
     connection
         .execute(
             "DELETE FROM branches WHERE name = ?1",
             params![AUTOSAVE_BRANCH],
         )
-        .map_err(sql)?;
+        .map_err(io)?;
     Ok(())
 }
 
@@ -1077,7 +1073,7 @@ fn read_autosave_work(connection: &Connection) -> Result<Option<AutosaveProject>
             |row| Ok((row.get::<_, i64>(0)?, row.get::<_, Vec<u8>>(1)?)),
         )
         .optional()
-        .map_err(sql)?;
+        .map_err(io)?;
     let Some((created_at, manifest)) = row else {
         return Ok(None);
     };
@@ -1090,9 +1086,15 @@ fn read_autosave_work(connection: &Connection) -> Result<Option<AutosaveProject>
     if manifest == head_row.manifest {
         return Ok(None);
     }
-    let project = project_from_manifest(connection, &manifest)
-        .map_err(|error| Error(format!("The unsaved work in this project is damaged: {error}")))?;
-    Ok(Some(AutosaveProject { project, created_at }))
+    let project = project_from_manifest(connection, &manifest).map_err(|error| {
+        Error(format!(
+            "The unsaved work in this project is damaged: {error}"
+        ))
+    })?;
+    Ok(Some(AutosaveProject {
+        project,
+        created_at,
+    }))
 }
 
 fn check_stamp(
@@ -1224,7 +1226,6 @@ fn kept_versions(chain: &[VersionRow], now: i64) -> BTreeSet<i64> {
                 keep.insert(version.id);
             }
         } else {
-            // Week buckets line up with Monday, like an ordinary calendar week.
             let week = (version.created_at.div_euclid(DAY_MS) + 3).div_euclid(7);
             if weeks.insert(week) {
                 keep.insert(version.id);
@@ -1237,13 +1238,13 @@ fn kept_versions(chain: &[VersionRow], now: i64) -> BTreeSet<i64> {
 fn referenced_blobs(connection: &Connection) -> Result<BTreeSet<String>> {
     let mut statement = connection
         .prepare("SELECT manifest FROM versions")
-        .map_err(sql)?;
+        .map_err(io)?;
     let rows = statement
         .query_map([], |row| row.get::<_, Vec<u8>>(0))
-        .map_err(sql)?;
+        .map_err(io)?;
     let mut referenced = BTreeSet::new();
     for row in rows {
-        let manifest: BTreeMap<String, String> = serde_json::from_slice(&row.map_err(sql)?)
+        let manifest: BTreeMap<String, String> = serde_json::from_slice(&row.map_err(io)?)
             .map_err(|error| Error(format!("A version's manifest is damaged: {error}")))?;
         referenced.extend(manifest.into_values());
     }
@@ -1253,13 +1254,13 @@ fn referenced_blobs(connection: &Connection) -> Result<BTreeSet<String>> {
 fn blob_hashes(connection: &Connection) -> Result<Vec<String>> {
     let mut statement = connection
         .prepare("SELECT hash FROM blobs")
-        .map_err(sql)?;
+        .map_err(io)?;
     let rows = statement
         .query_map([], |row| row.get::<_, String>(0))
-        .map_err(sql)?;
+        .map_err(io)?;
     let mut hashes = Vec::new();
     for row in rows {
-        hashes.push(row.map_err(sql)?);
+        hashes.push(row.map_err(io)?);
     }
     Ok(hashes)
 }
@@ -1331,12 +1332,7 @@ mod tests {
             .unwrap()
     }
 
-    fn version_at(
-        database: &ProjectDatabase,
-        project: &Project,
-        now: i64,
-        label: &str,
-    ) -> i64 {
+    fn version_at(database: &ProjectDatabase, project: &Project, now: i64, label: &str) -> i64 {
         let transaction = database.connection.unchecked_transaction().unwrap();
         let version = save_in(&transaction, project, &[], Some(label), now, true).unwrap();
         transaction.commit().unwrap();

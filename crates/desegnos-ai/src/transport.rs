@@ -1,3 +1,4 @@
+use crate::net::{DEADLINE, ERROR_BODY_LIMIT, IDLE, MODELS_BODY_LIMIT};
 use crate::retry::RetryResponse as Response;
 use crate::{
     ApiKey, AuthenticationMethod, ChatgptModel, ErrorKind, MODEL_MAX_OUTPUT_TOKENS, ProviderError,
@@ -22,10 +23,6 @@ use tokio::{sync::watch, time::Instant};
 const ENDPOINT: &str = "https://api.openai.com/v1";
 // A long, high-effort generation can stream for well over five minutes. Give up only when
 // the provider goes silent for IDLE, or after DEADLINE overall.
-const DEADLINE: Duration = Duration::from_secs(20 * 60);
-const IDLE: Duration = Duration::from_secs(90);
-const ERROR_BODY_LIMIT: usize = 65_536;
-const MODELS_BODY_LIMIT: usize = 1024 * 1024;
 const MAX_MODELS: usize = 2048;
 
 #[derive(Clone)]
@@ -130,6 +127,16 @@ pub struct OpenAiClient {
     pub(crate) endpoint: String,
     deadline: Duration,
     idle: Duration,
+    retry_backoff: [Duration; 2],
+}
+
+struct PreparedRequest<'a> {
+    authentication: AuthenticationMethod,
+    snapshot: &'a RequirementsSnapshot,
+    settings: &'a ProviderSettings,
+    key: &'a ApiKey,
+    cancellation: &'a CancellationToken,
+    body: Vec<u8>,
 }
 
 impl OpenAiClient {
@@ -152,23 +159,10 @@ impl OpenAiClient {
     }
 
     fn build(endpoint: String, https_only: bool, deadline: Duration) -> Result<Self> {
-        let client = Client::builder()
-            .tls_backend_rustls()
-            .https_only(https_only)
-            .redirect(reqwest::redirect::Policy::none())
-            .retry(reqwest::retry::never())
-            .no_proxy()
-            .referer(false)
-            .connection_verbose(false)
-            .tls_sslkeylogfile(false)
-            .no_gzip()
-            .no_brotli()
-            .no_deflate()
-            .no_zstd()
+        let client = crate::net::hardened_client(https_only)
             .timeout(deadline)
             .read_timeout(IDLE)
             .connect_timeout(Duration::from_secs(20))
-            .user_agent(concat!("Desegnos/", env!("CARGO_PKG_VERSION")))
             .build()
             .map_err(|_| ProviderError::before(ErrorKind::Transport))?;
         Ok(Self {
@@ -176,6 +170,7 @@ impl OpenAiClient {
             endpoint,
             deadline,
             idle: IDLE,
+            retry_backoff: crate::retry::DEFAULT_BACKOFF,
         })
     }
 
@@ -194,7 +189,9 @@ impl OpenAiClient {
         {
             return Err(ProviderError::before(ErrorKind::InvalidSettings));
         }
-        Self::build(endpoint.trim_end_matches('/').into(), false, DEADLINE)
+        let mut client = Self::build(endpoint.trim_end_matches('/').into(), false, DEADLINE)?;
+        client.retry_backoff = [Duration::from_millis(20), Duration::from_millis(80)];
+        Ok(client)
     }
 
     #[cfg(test)]
@@ -209,7 +206,6 @@ impl OpenAiClient {
         self
     }
 
-    /// Same client, authorization header and redirect policy as text requests.
     pub(crate) fn image_api_request(
         &self,
         path: &str,
@@ -259,12 +255,14 @@ impl OpenAiClient {
         async {
             let body = prepare_body(authentication, snapshot, mode, schema, settings)?;
             self.submit_for_auth(
-                authentication,
-                snapshot,
-                settings,
-                key,
-                cancellation,
-                body,
+                PreparedRequest {
+                    authentication,
+                    snapshot,
+                    settings,
+                    key,
+                    cancellation: cancellation,
+                    body,
+                },
                 progress,
             )
             .await
@@ -294,12 +292,14 @@ impl OpenAiClient {
         let result = async {
             let body = prepare_identity_body(authentication, snapshot, schema, settings, images)?;
             self.submit_for_auth(
-                authentication,
-                snapshot,
-                settings,
-                key,
-                cancellation,
-                body,
+                PreparedRequest {
+                    authentication,
+                    snapshot,
+                    settings,
+                    key,
+                    cancellation: cancellation,
+                    body,
+                },
                 progress,
             )
             .await
@@ -308,17 +308,19 @@ impl OpenAiClient {
         result.map_err(|error| error.with_authentication(authentication))
     }
 
-    #[allow(clippy::too_many_arguments)]
     async fn submit_for_auth(
         &self,
-        authentication: AuthenticationMethod,
-        snapshot: &RequirementsSnapshot,
-        settings: &ProviderSettings,
-        key: &ApiKey,
-        cancellation: &CancellationToken,
-        body: Vec<u8>,
+        request: PreparedRequest<'_>,
         progress: impl Fn(ProviderProgress) + Send + Sync,
     ) -> Result<ProviderResponse> {
+        let PreparedRequest {
+            authentication,
+            snapshot,
+            settings,
+            key,
+            cancellation,
+            body,
+        } = request;
         if cancellation.is_cancelled() {
             return Err(ProviderError::before(ErrorKind::Cancelled));
         }
@@ -338,9 +340,10 @@ impl OpenAiClient {
         let mut response = crate::retry::send(
             request,
             cancellation,
-            deadline,
-            self.idle,
-            MAX_STREAM_BYTES,
+            crate::retry::RetryPolicy {
+                backoff: self.retry_backoff,
+                ..crate::retry::RetryPolicy::new(deadline, self.idle, MAX_STREAM_BYTES)
+            },
             &progress,
         )
         .await?;
@@ -361,10 +364,7 @@ impl OpenAiClient {
                 AuthenticationMethod::ApiKey => settings.max_output_tokens,
                 AuthenticationMethod::Chatgpt => MODEL_MAX_OUTPUT_TOKENS,
             },
-            response
-                .headers()
-                .get("x-request-id")
-                .and_then(|value| value.to_str().ok()),
+            crate::net::request_id(response.headers()),
             response
                 .headers()
                 .get(CONTENT_TYPE)
@@ -504,9 +504,14 @@ impl OpenAiClient {
         let mut response = crate::retry::send(
             request,
             cancellation,
-            deadline,
-            Duration::from_secs(30),
-            ERROR_BODY_LIMIT,
+            crate::retry::RetryPolicy {
+                backoff: self.retry_backoff,
+                ..crate::retry::RetryPolicy::new(
+                    deadline,
+                    Duration::from_secs(30),
+                    ERROR_BODY_LIMIT,
+                )
+            },
             &|_| {},
         )
         .await?;
@@ -556,9 +561,14 @@ impl OpenAiClient {
         let mut response = crate::retry::send(
             request,
             cancellation,
-            deadline,
-            Duration::from_secs(30),
-            MODELS_BODY_LIMIT,
+            crate::retry::RetryPolicy {
+                backoff: self.retry_backoff,
+                ..crate::retry::RetryPolicy::new(
+                    deadline,
+                    Duration::from_secs(30),
+                    MODELS_BODY_LIMIT,
+                )
+            },
             &|_| {},
         )
         .await?;
@@ -676,11 +686,7 @@ async fn non_stream_error(
     progress: &(impl Fn(ProviderProgress) + Send + Sync),
 ) -> ProviderError {
     let status = response.status().as_u16();
-    let request_id = response
-        .headers()
-        .get("x-request-id")
-        .and_then(|value| value.to_str().ok())
-        .map(str::to_owned);
+    let request_id = crate::net::request_id(response.headers()).map(str::to_owned);
     let content_type = response
         .headers()
         .get(CONTENT_TYPE)
@@ -831,23 +837,15 @@ async fn check_status(
                     Some(status.as_u16()),
                     None,
                     None,
-                    response
-                        .headers()
-                        .get("x-request-id")
-                        .and_then(|value| value.to_str().ok()),
+                    crate::net::request_id(response.headers()),
                 ),
         );
     }
     if status == StatusCode::OK {
         return Ok(());
     }
-    // An HTTP rejection contains no model output, even when its error body cannot be read.
     let outcome = SubmissionOutcome::Rejected;
-    let request_id = response
-        .headers()
-        .get("x-request-id")
-        .and_then(|value| value.to_str().ok())
-        .map(str::to_owned);
+    let request_id = crate::net::request_id(response.headers()).map(str::to_owned);
     let content_type = response
         .headers()
         .get(CONTENT_TYPE)
@@ -879,16 +877,10 @@ async fn check_status(
     {
         classified
     } else {
-        match status {
-            StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => ErrorKind::Authentication,
-            StatusCode::PAYMENT_REQUIRED => ErrorKind::Quota,
-            StatusCode::NOT_FOUND => ErrorKind::ModelUnavailable,
-            StatusCode::TOO_MANY_REQUESTS => match classified {
-                ErrorKind::Quota => ErrorKind::Quota,
-                _ => ErrorKind::RateLimited,
-            },
-            _ if status.is_server_error() => ErrorKind::Server,
-            _ => classified,
+        match (crate::net::status_kind(status.as_u16()), classified) {
+            (ErrorKind::RateLimited, ErrorKind::Quota) => ErrorKind::Quota,
+            (ErrorKind::RequestRejected, classified) => classified,
+            (kind, _) => kind,
         }
     };
     let param = error
@@ -914,38 +906,4 @@ async fn check_status(
         .with_diagnostic_reply(&String::from_utf8_lossy(&body), key))
 }
 
-pub(crate) async fn bounded_body(
-    response: &mut Response,
-    limit: usize,
-    cancellation: &CancellationToken,
-    deadline: Instant,
-) -> Result<Vec<u8>> {
-    if response
-        .content_length()
-        .is_some_and(|length| length > limit as u64)
-    {
-        return Err(ProviderError::new(
-            ErrorKind::OutputLimit,
-            SubmissionOutcome::Unknown,
-        ));
-    }
-    let mut body = vec![];
-    loop {
-        let chunk = tokio::select! {
-            biased;
-            _ = cancellation.cancelled() => return Err(ProviderError::new(ErrorKind::Cancelled, SubmissionOutcome::Unknown)),
-            _ = tokio::time::sleep_until(deadline) => return Err(ProviderError::new(ErrorKind::Deadline, SubmissionOutcome::Unknown)),
-            result = response.chunk() => result.map_err(|_| ProviderError::new(ErrorKind::Transport, SubmissionOutcome::Unknown))?,
-        };
-        let Some(chunk) = chunk else {
-            return Ok(body);
-        };
-        if body.len().saturating_add(chunk.len()) > limit {
-            return Err(ProviderError::new(
-                ErrorKind::OutputLimit,
-                SubmissionOutcome::Unknown,
-            ));
-        }
-        body.extend_from_slice(&chunk);
-    }
-}
+use crate::net::bounded_body;

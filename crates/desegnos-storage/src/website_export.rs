@@ -3,7 +3,7 @@ use desegnos_core::{Error, Result, WebsiteExport, digest};
 use std::{
     collections::BTreeMap,
     fs::{self, File},
-    io::{Read, Write},
+    io::Write,
     path::{Component, Path, PathBuf},
 };
 use uuid::Uuid;
@@ -50,12 +50,9 @@ impl WrittenWebsiteExport {
                     "An exported file was replaced. Export the website again.".into(),
                 ));
             }
-            let mut bytes = Vec::new();
-            File::open(path)
-                .map_err(io)?
-                .take(MAX_BYTES as u64 + 1)
-                .read_to_end(&mut bytes)
-                .map_err(io)?;
+            let mut input = crate::source_files::open_unchanged(&path, &metadata)?;
+            let bytes =
+                crate::source_files::read_exact_bounded(&mut input, metadata.len(), MAX_BYTES)?;
             if digest(&bytes) != *expected {
                 return Err(Error("The exported files have changed. Export the website again before opening them here.".into()));
             }
@@ -63,7 +60,7 @@ impl WrittenWebsiteExport {
         Ok(())
     }
 }
-const MAX_BYTES: usize = 128 * 1024 * 1024;
+use crate::source_files::MAX_WEBSITE_BYTES as MAX_BYTES;
 fn io(error: impl std::fmt::Display) -> Error {
     Error(format!("The website export could not be written: {error}"))
 }
@@ -78,14 +75,7 @@ pub(crate) fn validate(export: &WebsiteExport) -> Result<()> {
     }
     let mut names = std::collections::BTreeSet::new();
     for path in export.files.keys() {
-        if path.is_empty()
-            || path.contains(['\\', ':', '\0'])
-            || Path::new(path)
-                .components()
-                .any(|p| !matches!(p, Component::Normal(_)))
-            || path
-                .split('/')
-                .any(|s| s.is_empty() || s.ends_with(['.', ' ']))
+        if crate::source_files::safe_archive_name(path).as_deref() != Some(path.as_str())
             || !names.insert(path.to_lowercase())
         {
             return Err(Error(
@@ -96,6 +86,9 @@ pub(crate) fn validate(export: &WebsiteExport) -> Result<()> {
     Ok(())
 }
 pub(crate) fn checked_path(root: &Path, relative: &str) -> Result<PathBuf> {
+    if crate::source_files::safe_archive_name(relative).as_deref() != Some(relative) {
+        return Err(Error("Unsafe export path.".into()));
+    }
     let mut path = root.to_path_buf();
     for component in Path::new(relative).components() {
         let Component::Normal(name) = component else {
@@ -123,13 +116,8 @@ pub fn read_export_file(root: &Path, relative: &str) -> Result<Vec<u8>> {
             "An exported file is missing, replaced or too large to check.".into(),
         ));
     }
-    let mut bytes = Vec::new();
-    File::open(path)
-        .map_err(io)?
-        .take(MAX_BYTES as u64 + 1)
-        .read_to_end(&mut bytes)
-        .map_err(io)?;
-    Ok(bytes)
+    let mut input = crate::source_files::open_unchanged(&path, &metadata)?;
+    crate::source_files::read_exact_bounded(&mut input, metadata.len(), MAX_BYTES)
 }
 
 /// Write an export into an existing private folder, used by preview exports. Every path is
@@ -247,7 +235,9 @@ pub fn write_export_at(
         || name.contains(['/', '\\', ':', '\0'])
         || name.ends_with(['.', ' '])
     {
-        return Err(Error("An export folder name must be a safe, single name.".into()));
+        return Err(Error(
+            "An export folder name must be a safe, single name.".into(),
+        ));
     }
     let parent = parent_directory(parent)?;
     let name = name.to_owned();
@@ -300,7 +290,11 @@ fn write_at(
     ) {
         Ok(stage) => stage,
         Err(error) => {
-            let _ = unlinkat(&parent, stage_name, AtFlags::REMOVEDIR);
+            if let Err(cleanup) = unlinkat(&parent, stage_name, AtFlags::REMOVEDIR) {
+                return Err(Error(format!(
+                    "{error}; export staging cleanup failed: {cleanup}"
+                )));
+            }
             return Err(io(error));
         }
     };
@@ -370,24 +364,41 @@ fn write_at(
                 } else {
                     io(error)
                 }
-            })?;
+            },
+        )?;
         published = true;
         parent.try_clone().map(File::from).and_then(|file| file.sync_all())
             .map_err(|error| Error(format!("The complete website was written to {}, but its destination could not confirm durable storage: {error}", parent_path.join(name).display())))?;
         Ok(())
     })();
+    let mut cleanup_errors = Vec::new();
     if result.is_err() && !published {
         // Cleanup uses descriptor-relative paths and never follows a replaced
         // parent or a symbolic link. Only entries created in our private stage.
         for path in created_files.iter().rev() {
-            let _ = unlinkat(&stage, path.as_str(), AtFlags::empty());
+            if let Err(error) = unlinkat(&stage, path.as_str(), AtFlags::empty()) {
+                cleanup_errors.push(error.to_string());
+            }
         }
         for path in directories.iter().rev() {
-            let _ = unlinkat(&stage, path.as_str(), AtFlags::REMOVEDIR);
+            if let Err(error) = unlinkat(&stage, path.as_str(), AtFlags::REMOVEDIR) {
+                cleanup_errors.push(error.to_string());
+            }
         }
-        let _ = unlinkat(&parent, stage_name, AtFlags::REMOVEDIR);
+        if let Err(error) = unlinkat(&parent, stage_name, AtFlags::REMOVEDIR) {
+            cleanup_errors.push(error.to_string());
+        }
     }
-    result
+    result.map_err(|error| {
+        if cleanup_errors.is_empty() {
+            error
+        } else {
+            Error(format!(
+                "{error}; export staging cleanup failed: {}",
+                cleanup_errors.join("; ")
+            ))
+        }
+    })
 }
 
 #[cfg(not(unix))]
@@ -420,7 +431,12 @@ fn write_at(parent: &Path, stage_name: &str, name: &str, export: &WebsiteExport)
         })
     })();
     if result.is_err() {
-        let _ = fs::remove_dir_all(stage);
+        if let Err(cleanup) = fs::remove_dir_all(stage) {
+            return Err(Error(format!(
+                "{}; export staging cleanup failed: {cleanup}",
+                result.unwrap_err()
+            )));
+        }
     }
     result
 }

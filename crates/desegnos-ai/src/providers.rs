@@ -61,6 +61,16 @@ pub enum ProviderId {
     Local,
 }
 impl ProviderId {
+    fn default_model(self) -> &'static str {
+        match self {
+            Self::Openai => crate::MODEL_ID,
+            Self::Anthropic => "claude-sonnet-5-5",
+            Self::Google => "gemini-3.8-flash",
+            Self::Openrouter => "openai/gpt-6.1-sol",
+            Self::Deepseek => "deepseek-flash",
+            Self::Local => "local-model",
+        }
+    }
     pub fn service(self) -> &'static str {
         match self {
             Self::Openai => "io.desegnos.openai",
@@ -71,19 +81,15 @@ impl ProviderId {
             Self::Local => "io.desegnos.local",
         }
     }
-    pub fn available(self) -> bool {
-        true
-    }
     pub fn capabilities(self) -> GenerationCapabilities {
         GenerationCapabilities {
             web_search: matches!(self, Self::Openai | Self::Anthropic | Self::Google),
-            image_downloads: if self.available() { 8 } else { 0 },
+            image_downloads: GenerationCapabilities::default().image_downloads,
             image_generation: (self == Self::Openai).then(Default::default),
         }
     }
     pub fn capabilities_for(
         self,
-        _auth: AuthenticationMethod,
         settings: &ProviderSettings,
         access: Option<&crate::ImageAccess>,
     ) -> GenerationCapabilities {
@@ -99,29 +105,50 @@ impl ProviderId {
         capabilities
     }
     pub fn defaults(self) -> ProviderSettings {
+        let (model, reasoning_effort, max_output_tokens, endpoint) = match self {
+            Self::Openai => (
+                self.default_model(),
+                ReasoningEffort::Medium,
+                crate::DEFAULT_MAX_OUTPUT_TOKENS,
+                None,
+            ),
+            Self::Anthropic => (
+                self.default_model(),
+                ReasoningEffort::Medium,
+                crate::DEFAULT_MAX_OUTPUT_TOKENS,
+                None,
+            ),
+            Self::Google => (
+                self.default_model(),
+                ReasoningEffort::Medium,
+                crate::DEFAULT_MAX_OUTPUT_TOKENS,
+                None,
+            ),
+            Self::Openrouter => (
+                self.default_model(),
+                ReasoningEffort::Medium,
+                crate::DEFAULT_MAX_OUTPUT_TOKENS,
+                None,
+            ),
+            // DeepSeek thinking is always on and counts inside max_tokens.
+            Self::Deepseek => (
+                self.default_model(),
+                ReasoningEffort::High,
+                crate::MAX_OUTPUT_TOKENS,
+                None,
+            ),
+            Self::Local => (
+                self.default_model(),
+                ReasoningEffort::Medium,
+                crate::DEFAULT_MAX_OUTPUT_TOKENS,
+                Some(DEFAULT_LOCAL_ENDPOINT),
+            ),
+        };
         ProviderSettings {
-            model: match self {
-                Self::Anthropic => "claude-sonnet-5-5",
-                Self::Google => "gemini-3.8-flash",
-                Self::Openrouter => "openai/gpt-6.1-sol",
-                Self::Deepseek => "deepseek-flash",
-                Self::Local => "local-model",
-                _ => crate::MODEL_ID,
-            }
-            .into(),
-            // DeepSeek thinking is always on and its API names only the higher efforts.
-            reasoning_effort: if self == Self::Deepseek {
-                ReasoningEffort::High
-            } else {
-                ReasoningEffort::Medium
-            },
-            // DeepSeek counts thinking inside max_tokens; its ceiling still fits the budget.
-            max_output_tokens: if self == Self::Deepseek {
-                crate::MAX_OUTPUT_TOKENS
-            } else {
-                crate::DEFAULT_MAX_OUTPUT_TOKENS
-            },
-            endpoint: (self == Self::Local).then(|| DEFAULT_LOCAL_ENDPOINT.into()),
+            model: model.into(),
+            reasoning_effort,
+            max_output_tokens,
+            endpoint: endpoint.map(str::to_owned),
             ..Default::default()
         }
     }
@@ -129,9 +156,7 @@ impl ProviderId {
         if self == Self::Openai {
             return settings.validate_for_auth(auth);
         }
-        if !self.available()
-            || auth != AuthenticationMethod::ApiKey
-            || !crate::settings::valid_model_id(&settings.model)
+        if auth != AuthenticationMethod::ApiKey || !crate::settings::valid_model_id(&settings.model)
         {
             return Err(ProviderError::before(ErrorKind::InvalidSettings));
         }
@@ -150,14 +175,11 @@ impl ProviderId {
         if self == Self::Openai {
             return crate::model_catalogue();
         }
-        if !self.available() {
-            return vec![];
-        }
         if self == Self::Deepseek {
             // Peak rates are used as the ceilings; discovery publishes neither price nor limit.
             // Desegnos never requests more than its own API-key output ceiling.
             return [
-                ("deepseek-flash", "DeepSeek V4.1 Flash", 0.30, 1.20),
+                (self.default_model(), "DeepSeek V4.1 Flash", 0.30, 1.20),
                 ("deepseek-v4-pro", "DeepSeek V4 Pro", 1.32, 3.96),
             ]
             .into_iter()
@@ -182,19 +204,22 @@ impl ProviderId {
             })
             .collect();
         }
-        let (name, input, output, source, context) = match self {
+        let (name, input, output, ceiling_input, ceiling_output, source, context) = match self {
             Self::Anthropic => (
                 "Claude Sonnet 5.5",
+                2.0,
+                10.0,
                 2.0,
                 10.0,
                 "https://platform.claude.com/docs/en/about-claude/pricing",
                 1_000_000,
             ),
-            // Catalogue rates verified on the date below; estimates use the announced higher ceiling.
             _ => (
                 "Gemini 3.8 Flash",
                 0.75,
                 3.75,
+                1.5,
+                7.5,
                 "https://ai.google.dev/gemini-api/docs/pricing",
                 1_048_576,
             ),
@@ -213,8 +238,8 @@ impl ProviderId {
             ],
             context_window_tokens: context,
             max_output_tokens: MAX_OUTPUT_TOKENS,
-            long_context_input_usd_per_million: input,
-            long_context_output_usd_per_million: output,
+            long_context_input_usd_per_million: ceiling_input,
+            long_context_output_usd_per_million: ceiling_output,
             pricing_required: false,
             default_pricing: None,
         }]
@@ -242,7 +267,7 @@ pub fn provider_catalogue() -> Vec<ProviderDescriptor> {
     .map(|(id, name)| ProviderDescriptor {
         id,
         name,
-        available: id.available(),
+        available: true,
         sign_in_supported: id == ProviderId::Openai,
         capabilities: id.capabilities(),
     })
@@ -300,6 +325,38 @@ pub trait ProviderAdapter: Send + Sync {
         request: GenerationRequest<'a>,
         progress: &'a (dyn Fn(ProviderProgress) + Send + Sync),
     ) -> ProviderFuture<'a>;
+    fn analyze_identity<'a>(
+        &'a self,
+        request: IdentityRequest<'a>,
+        progress: &'a (dyn Fn(ProviderProgress) + Send + Sync),
+    ) -> ProviderFuture<'a>;
+    fn estimate(
+        &self,
+        auth: AuthenticationMethod,
+        snapshot: &RequirementsSnapshot,
+        mode: GenerationMode,
+        schema: &Value,
+        settings: &ProviderSettings,
+    ) -> Result<CostEstimate>;
+    fn estimate_identity(
+        &self,
+        auth: AuthenticationMethod,
+        snapshot: &RequirementsSnapshot,
+        schema: &Value,
+        settings: &ProviderSettings,
+        images: &[IdentityImage],
+    ) -> Result<CostEstimate>;
+    fn list_models<'a>(
+        &'a self,
+        key: &'a ApiKey,
+        cancel: &'a CancellationToken,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<ModelInfo>>> + Send + 'a>>;
+    fn test_access<'a>(
+        &'a self,
+        settings: &'a ProviderSettings,
+        key: &'a ApiKey,
+        cancel: &'a CancellationToken,
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>>;
 }
 impl ProviderAdapter for OpenAiClient {
     fn generate<'a>(
@@ -309,14 +366,53 @@ impl ProviderAdapter for OpenAiClient {
     ) -> ProviderFuture<'a> {
         Box::pin(OpenAiClient::generate(self, r, p))
     }
+    fn analyze_identity<'a>(
+        &'a self,
+        r: IdentityRequest<'a>,
+        p: &'a (dyn Fn(ProviderProgress) + Send + Sync),
+    ) -> ProviderFuture<'a> {
+        Box::pin(OpenAiClient::analyze_identity(self, r, p))
+    }
+    fn estimate(
+        &self,
+        auth: AuthenticationMethod,
+        snapshot: &RequirementsSnapshot,
+        mode: GenerationMode,
+        schema: &Value,
+        settings: &ProviderSettings,
+    ) -> Result<CostEstimate> {
+        crate::estimate_for_auth(auth, snapshot, mode, schema, settings)
+    }
+    fn estimate_identity(
+        &self,
+        auth: AuthenticationMethod,
+        snapshot: &RequirementsSnapshot,
+        schema: &Value,
+        settings: &ProviderSettings,
+        images: &[IdentityImage],
+    ) -> Result<CostEstimate> {
+        crate::estimate_identity_for_auth(auth, snapshot, schema, settings, images)
+    }
+    fn list_models<'a>(
+        &'a self,
+        key: &'a ApiKey,
+        cancel: &'a CancellationToken,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<ModelInfo>>> + Send + 'a>> {
+        Box::pin(self.list_api_models(key, cancel))
+    }
+    fn test_access<'a>(
+        &'a self,
+        settings: &'a ProviderSettings,
+        key: &'a ApiKey,
+        cancel: &'a CancellationToken,
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
+        Box::pin(self.test_model_access(settings, key, cancel))
+    }
 }
-
-/// Keeps the existing OpenAI session/model-discovery client independent of key adapters.
 #[derive(Clone)]
 pub struct ProviderClient {
     pub id: ProviderId,
-    openai: OpenAiClient,
-    remote: Option<KeyAdapter>,
+    adapter: std::sync::Arc<dyn ProviderAdapter>,
 }
 impl ProviderClient {
     pub fn with_settings(
@@ -324,46 +420,24 @@ impl ProviderClient {
         openai: OpenAiClient,
         settings: &ProviderSettings,
     ) -> Result<Self> {
-        if id == ProviderId::Local {
-            return Ok(Self {
-                id,
-                openai,
-                remote: Some(KeyAdapter::build(id, &local_endpoint(settings)?, false)?),
-            });
-        }
-        Self::new(id, openai)
+        let adapter: std::sync::Arc<dyn ProviderAdapter> = match id {
+            ProviderId::Openai => std::sync::Arc::new(openai),
+            ProviderId::Local => {
+                std::sync::Arc::new(KeyAdapter::build(id, &local_endpoint(settings)?, false)?)
+            }
+            _ => std::sync::Arc::new(KeyAdapter::new(id)?),
+        };
+        Ok(Self { id, adapter })
+    }
+    pub fn new(id: ProviderId, openai: OpenAiClient) -> Result<Self> {
+        Self::with_settings(id, openai, &id.defaults())
     }
     pub async fn list_api_models(
         &self,
         key: &ApiKey,
         cancel: &CancellationToken,
     ) -> Result<Vec<ModelInfo>> {
-        if let Some(remote) = &self.remote {
-            crate::model_discovery::list_models(
-                self.id,
-                &remote.client,
-                &remote.endpoint,
-                key,
-                cancel,
-            )
-            .await
-        } else {
-            self.openai.list_api_models(key, cancel).await
-        }
-    }
-    pub fn new(id: ProviderId, openai: OpenAiClient) -> Result<Self> {
-        if !id.available() {
-            return Err(ProviderError::before(ErrorKind::InvalidSettings));
-        }
-        Ok(Self {
-            id,
-            openai,
-            remote: if id == ProviderId::Openai {
-                None
-            } else {
-                Some(KeyAdapter::new(id)?)
-            },
-        })
+        self.adapter.list_models(key, cancel).await
     }
     pub fn estimate(
         &self,
@@ -373,13 +447,8 @@ impl ProviderClient {
         schema: &Value,
         settings: &ProviderSettings,
     ) -> Result<CostEstimate> {
-        if self.id == ProviderId::Openai {
-            return crate::estimate_for_auth(auth, snapshot, mode, schema, settings);
-        }
-        self.id.validate(settings, auth)?;
-        let (counted, reserve) = crate::settings::without_previews(snapshot);
-        let body = crate::settings::request_content(&counted, mode, schema)?;
-        foreign_estimate(self.id, &body, settings, reserve)
+        self.adapter
+            .estimate(auth, snapshot, mode, schema, settings)
     }
     pub fn estimate_identity(
         &self,
@@ -389,7 +458,8 @@ impl ProviderClient {
         settings: &ProviderSettings,
         images: &[IdentityImage],
     ) -> Result<CostEstimate> {
-        estimate_identity_for_provider(self.id, auth, snapshot, schema, settings, images)
+        self.adapter
+            .estimate_identity(auth, snapshot, schema, settings, images)
     }
     pub async fn test_model_access(
         &self,
@@ -397,62 +467,21 @@ impl ProviderClient {
         key: &ApiKey,
         cancel: &CancellationToken,
     ) -> Result<()> {
-        if let Some(remote) = &self.remote {
-            self.id.validate(settings, AuthenticationMethod::ApiKey)?;
-            remote.test_access(settings, key, cancel).await
-        } else {
-            self.openai.test_model_access(settings, key, cancel).await
-        }
+        self.adapter.test_access(settings, key, cancel).await
     }
-    /// Send one frozen generation request to the selected provider and stream its reply.
     pub async fn generate(
         &self,
-        r: GenerationRequest<'_>,
+        request: GenerationRequest<'_>,
         progress: impl Fn(ProviderProgress) + Send + Sync,
     ) -> Result<ProviderResponse> {
-        if let Some(remote) = &self.remote {
-            remote.generate(r, &progress).await
-        } else {
-            ProviderAdapter::generate(&self.openai, r, &progress).await
-        }
+        self.adapter.generate(request, &progress).await
     }
-    /// Analyze reusable brand identity with the selected provider; never generates site code.
     pub async fn analyze_identity(
         &self,
         request: IdentityRequest<'_>,
         progress: impl Fn(ProviderProgress) + Send + Sync,
     ) -> Result<ProviderResponse> {
-        let IdentityRequest {
-            authentication: auth,
-            snapshot,
-            schema,
-            settings,
-            key,
-            cancellation: cancel,
-            images,
-        } = request;
-        if let Some(remote) = &self.remote {
-            self.estimate_identity(auth, snapshot, schema, settings, images)?;
-            let common = crate::identity::identity_content(snapshot, schema, images)?;
-            remote
-                .submit(common, settings, key, cancel, &progress)
-                .await
-        } else {
-            self.openai
-                .analyze_identity(
-                    IdentityRequest {
-                        authentication: auth,
-                        snapshot,
-                        schema,
-                        settings,
-                        key,
-                        cancellation: cancel,
-                        images,
-                    },
-                    progress,
-                )
-                .await
-        }
+        self.adapter.analyze_identity(request, &progress).await
     }
 }
 
@@ -484,10 +513,17 @@ fn foreign_estimate(
     settings: &ProviderSettings,
     reserve: u64,
 ) -> Result<CostEstimate> {
-    // Byte-per-token bound includes schema (in the prompt text for DeepSeek, in response_format
-    // elsewhere), attachments and per-image vision reserve.
-    let wire = serde_json::to_vec(&foreign_body(id, body, settings)?)
-        .map_err(|_| ProviderError::before(ErrorKind::InvalidRequirements))?;
+    let wire = foreign_wire(id, body, settings)?;
+    estimate_wire(id, body, settings, reserve, &wire)
+}
+
+fn estimate_wire(
+    id: ProviderId,
+    body: &RequestContent<'_>,
+    settings: &ProviderSettings,
+    reserve: u64,
+    wire: &[u8],
+) -> Result<CostEstimate> {
     if wire.len() > MAX_REQUEST_BYTES {
         return Err(ProviderError::before(ErrorKind::InputLimit));
     }
@@ -514,15 +550,11 @@ fn foreign_estimate(
             String::new(),
         )
     } else if let Some(info) = info {
-        if id == ProviderId::Google {
-            (1.5, 7.5, info.verified_at)
-        } else {
-            (
-                info.input_usd_per_million,
-                info.output_usd_per_million,
-                info.verified_at,
-            )
-        }
+        (
+            info.long_context_input_usd_per_million,
+            info.long_context_output_usd_per_million,
+            info.verified_at,
+        )
     } else {
         return Err(ProviderError::before(ErrorKind::InvalidSettings));
     };
@@ -559,7 +591,7 @@ struct KeyAdapter {
     endpoint: String,
     deadline: Duration,
 }
-const PROVIDER_IDLE: Duration = Duration::from_secs(90);
+use crate::net::{DEADLINE, ERROR_BODY_LIMIT, IDLE as PROVIDER_IDLE, PROBE_IDLE};
 impl KeyAdapter {
     fn new(id: ProviderId) -> Result<Self> {
         let endpoint = match id {
@@ -574,19 +606,8 @@ impl KeyAdapter {
     }
     fn build(id: ProviderId, endpoint: &str, https: bool) -> Result<Self> {
         // Same limits as the OpenAI transport: silence for 90 s or 20 minutes overall.
-        let deadline = Duration::from_secs(20 * 60);
-        let client = reqwest::Client::builder()
-            .tls_backend_rustls()
-            .https_only(https)
-            .redirect(reqwest::redirect::Policy::none())
-            .retry(reqwest::retry::never())
-            .no_proxy()
-            .referer(false)
-            .tls_sslkeylogfile(false)
-            .no_gzip()
-            .no_brotli()
-            .no_deflate()
-            .no_zstd()
+        let deadline = DEADLINE;
+        let client = crate::net::hardened_client(https)
             .timeout(deadline)
             .read_timeout(PROVIDER_IDLE)
             .connect_timeout(Duration::from_secs(20))
@@ -630,16 +651,15 @@ impl KeyAdapter {
                 Err(ProviderError::before(ErrorKind::ModelUnavailable))
             };
         }
-        let path = match self.id {
-            ProviderId::Anthropic => format!("{}/models/{}", self.endpoint, s.model),
-            _ => format!("{}/models/{}", self.endpoint, s.model),
-        };
+        let path = format!("{}/models/{}", self.endpoint, s.model);
         let mut response = crate::retry::send(
             self.authorized(self.client.get(path), key)?,
             cancel,
-            tokio::time::Instant::now() + Duration::from_secs(90),
-            Duration::from_secs(30),
-            65_536,
+            crate::retry::RetryPolicy::new(
+                tokio::time::Instant::now() + PROVIDER_IDLE,
+                PROBE_IDLE,
+                ERROR_BODY_LIMIT,
+            ),
             &|_| {},
         )
         .await?;
@@ -658,16 +678,19 @@ impl KeyAdapter {
     async fn submit(
         &self,
         common: RequestContent<'_>,
+        reserve: u64,
         s: &ProviderSettings,
         key: &ApiKey,
         cancel: &CancellationToken,
         progress: &(dyn Fn(ProviderProgress) + Send + Sync),
     ) -> Result<ProviderResponse> {
-        let body = foreign_body(self.id, &common, s)?;
-        let body = crate::schema_wire::serialize_body(&body)
-            .map_err(|_| ProviderError::before(ErrorKind::InvalidRequirements))?;
+        let body = foreign_wire(self.id, &common, s)?;
+        estimate_wire(self.id, &common, s, reserve, &body)?;
         if body.len() > MAX_REQUEST_BYTES
-            || key.appears_in(std::str::from_utf8(&body).unwrap_or_default())
+            || key.appears_in(
+                std::str::from_utf8(&body)
+                    .map_err(|_| ProviderError::before(ErrorKind::InvalidRequirements))?,
+            )
         {
             return Err(ProviderError::before(ErrorKind::InputLimit));
         }
@@ -693,9 +716,7 @@ impl KeyAdapter {
         let mut response = crate::retry::send(
             request,
             cancel,
-            deadline,
-            PROVIDER_IDLE,
-            MAX_STREAM_BYTES,
+            crate::retry::RetryPolicy::new(deadline, PROVIDER_IDLE, MAX_STREAM_BYTES),
             progress,
         )
         .await?;
@@ -788,27 +809,90 @@ impl ProviderAdapter for KeyAdapter {
         Box::pin(async move {
             self.id.validate(r.settings, r.authentication)?;
             let body = crate::settings::request_content(r.snapshot, r.mode, r.schema)?;
-            foreign_estimate(self.id, &body, r.settings, 0)?;
-            self.submit(body, r.settings, r.key, r.cancellation, p)
+            self.submit(body, 0, r.settings, r.key, r.cancellation, p)
                 .await
         })
     }
+    fn analyze_identity<'a>(
+        &'a self,
+        r: IdentityRequest<'a>,
+        p: &'a (dyn Fn(ProviderProgress) + Send + Sync),
+    ) -> ProviderFuture<'a> {
+        Box::pin(async move {
+            self.id.validate(r.settings, r.authentication)?;
+            let body = crate::identity::identity_content(r.snapshot, r.schema, r.images)?;
+            self.submit(
+                body,
+                crate::identity::vision_reserve(r.images),
+                r.settings,
+                r.key,
+                r.cancellation,
+                p,
+            )
+            .await
+        })
+    }
+    fn estimate(
+        &self,
+        auth: AuthenticationMethod,
+        snapshot: &RequirementsSnapshot,
+        mode: GenerationMode,
+        schema: &Value,
+        settings: &ProviderSettings,
+    ) -> Result<CostEstimate> {
+        self.id.validate(settings, auth)?;
+        let (counted, reserve) = crate::settings::without_previews(snapshot);
+        let body = crate::settings::request_content(&counted, mode, schema)?;
+        foreign_estimate(self.id, &body, settings, reserve)
+    }
+    fn estimate_identity(
+        &self,
+        auth: AuthenticationMethod,
+        snapshot: &RequirementsSnapshot,
+        schema: &Value,
+        settings: &ProviderSettings,
+        images: &[IdentityImage],
+    ) -> Result<CostEstimate> {
+        self.id.validate(settings, auth)?;
+        let body = crate::identity::identity_content(snapshot, schema, images)?;
+        foreign_estimate(
+            self.id,
+            &body,
+            settings,
+            crate::identity::vision_reserve(images),
+        )
+    }
+    fn list_models<'a>(
+        &'a self,
+        key: &'a ApiKey,
+        cancel: &'a CancellationToken,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<ModelInfo>>> + Send + 'a>> {
+        Box::pin(crate::model_discovery::list_models(
+            self.id,
+            &self.client,
+            &self.endpoint,
+            key,
+            cancel,
+        ))
+    }
+    fn test_access<'a>(
+        &'a self,
+        settings: &'a ProviderSettings,
+        key: &'a ApiKey,
+        cancel: &'a CancellationToken,
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
+        Box::pin(async move {
+            self.id.validate(settings, AuthenticationMethod::ApiKey)?;
+            KeyAdapter::test_access(self, settings, key, cancel).await
+        })
+    }
 }
+
 fn failure(kind: ErrorKind) -> ProviderError {
     ProviderError::new(kind, SubmissionOutcome::Unknown)
 }
-fn http_error(status: u16) -> ProviderError {
-    let kind = match status {
-        401 | 403 => ErrorKind::Authentication,
-        402 => ErrorKind::Quota,
-        404 => ErrorKind::ModelUnavailable,
-        408 => ErrorKind::Deadline,
-        429 => ErrorKind::RateLimited,
-        300..=399 => ErrorKind::Redirect,
-        400..=499 => ErrorKind::RequestRejected,
-        500..=599 => ErrorKind::Server,
-        _ => ErrorKind::RequestRejected,
-    };
+pub(crate) fn http_error(status: u16) -> ProviderError {
+    let kind = crate::net::status_kind(status);
     let mut error = ProviderError::new(kind, SubmissionOutcome::Rejected);
     error.http_status = Some(status);
     error
@@ -832,7 +916,7 @@ async fn read_http_error(
         .get("content-type")
         .and_then(|v| v.to_str().ok())
         .map(str::to_owned);
-    let body = match crate::transport::bounded_body(response, 65_536, cancel, deadline).await {
+    let body = match crate::net::bounded_body(response, ERROR_BODY_LIMIT, cancel, deadline).await {
         Ok(body) => body,
         Err(_) => {
             return http_error(status).with_provider_metadata(
@@ -974,130 +1058,176 @@ fn anthropic_schema(schema: &Value) -> (Value, bool) {
     (schema, true)
 }
 
+fn foreign_wire(
+    id: ProviderId,
+    request: &RequestContent<'_>,
+    settings: &ProviderSettings,
+) -> Result<Vec<u8>> {
+    crate::schema_wire::serialize_body(&foreign_body(id, request, settings)?)
+        .map_err(|_| ProviderError::before(ErrorKind::InvalidRequirements))
+}
+
+#[derive(Clone, Copy)]
+enum WireProtocol {
+    Chat {
+        schema_in_prompt: bool,
+        require_parameters: bool,
+    },
+    Google,
+    Anthropic,
+}
+impl ProviderId {
+    fn wire_protocol(self) -> Result<WireProtocol> {
+        Ok(match self {
+            Self::Openrouter => WireProtocol::Chat {
+                schema_in_prompt: false,
+                require_parameters: true,
+            },
+            Self::Deepseek => WireProtocol::Chat {
+                schema_in_prompt: true,
+                require_parameters: false,
+            },
+            Self::Local => WireProtocol::Chat {
+                schema_in_prompt: false,
+                require_parameters: false,
+            },
+            Self::Google => WireProtocol::Google,
+            Self::Anthropic => WireProtocol::Anthropic,
+            Self::Openai => return Err(ProviderError::before(ErrorKind::InvalidSettings)),
+        })
+    }
+}
 pub(crate) fn foreign_body(
     id: ProviderId,
     request: &RequestContent<'_>,
-    s: &ProviderSettings,
+    settings: &ProviderSettings,
 ) -> Result<Value> {
-    if matches!(
-        id,
-        ProviderId::Openrouter | ProviderId::Deepseek | ProviderId::Local
-    ) {
-        if request.web_search {
-            return Err(ProviderError::before(ErrorKind::InvalidRequirements));
-        }
-        let content: Vec<_> = request
-            .parts
-            .iter()
-            .map(|part| {
-                Ok(match part {
-                    RequestPart::Document { text, .. } => json!({"type":"text","text":text}),
-                    RequestPart::Text(text) => json!({"type":"text","text":text}),
-                    RequestPart::Image { uri, detail } => {
-                        if !uri
-                            .strip_prefix("data:")
-                            .is_some_and(|uri| uri.contains(";base64,"))
-                        {
-                            return Err(ProviderError::before(ErrorKind::InvalidRequirements));
-                        }
-                        json!({"type":"image_url","image_url":{"url":uri,"detail":detail}})
-                    }
-                })
-            })
-            .collect::<Result<_>>()?;
-        // DeepSeek's chat API accepts only "text" and "json_object" response formats, so its
-        // schema travels in the system message instead of response_format and the caller's local
-        // validation is what enforces it.
-        let deepseek = id == ProviderId::Deepseek;
-        let system = if deepseek {
-            format!(
-                "{}\n\nReply with one JSON object only that conforms to the JSON Schema below. Do not wrap it in prose or a code fence.\n{}",
-                request.instructions,
-                serde_json::to_string(&request.schema)
-                    .map_err(|_| ProviderError::before(ErrorKind::InvalidRequirements))?
-            )
-        } else {
-            request.instructions.to_owned()
-        };
-        let response_format = if deepseek {
-            json!({"type":"json_object"})
-        } else {
-            json!({"type":"json_schema","json_schema":{"name":request.schema_name,"schema":request.schema,"strict":true}})
-        };
-        let mut body = json!({
-            "model":s.model,"stream":true,"stream_options":{"include_usage":true},
-            "max_tokens":s.max_output_tokens,
-            "messages":[{"role":"system","content":system},{"role":"user","content":content}],
-            "response_format":response_format
-        });
-        if s.reasoning_effort.as_str() != "none" {
-            body["reasoning_effort"] = json!(if id == ProviderId::Deepseek {
-                deepseek_reasoning_effort(&s.reasoning_effort)
-            } else {
-                s.reasoning_effort.as_str()
-            });
-        }
-        if id == ProviderId::Openrouter {
-            body["provider"] = json!({"require_parameters":true,"allow_fallbacks":false});
-        }
-        return Ok(body);
+    match id.wire_protocol()? {
+        WireProtocol::Chat {
+            schema_in_prompt,
+            require_parameters,
+        } => chat_body(request, settings, schema_in_prompt, require_parameters),
+        WireProtocol::Google => google_body(request, settings),
+        WireProtocol::Anthropic => anthropic_body(request, settings),
     }
-    let schema = &request.schema;
-    let google = id == ProviderId::Google;
-    let text_part = |text: &str| {
-        if google {
-            json!({"text":text})
-        } else {
-            json!({"type":"text","text":text})
-        }
-    };
-    let mut parts = Vec::new();
-    for part in &request.parts {
-        parts.push(match part {
-            RequestPart::Document { text, .. } => text_part(text),
-            RequestPart::Text(text) => text_part(text),
-            RequestPart::Image { uri, .. } => {
-                let (mime, data) = uri
-                    .strip_prefix("data:")
-                    .and_then(|uri| uri.split_once(";base64,"))
-                    .ok_or_else(|| ProviderError::before(ErrorKind::InvalidRequirements))?;
-                if google {
-                    json!({"inlineData":{"mimeType":mime,"data":data}})
-                } else {
-                    json!({"type":"image","source":{"type":"base64","media_type":mime,"data":data}})
+}
+fn chat_body(
+    request: &RequestContent<'_>,
+    s: &ProviderSettings,
+    schema_in_prompt: bool,
+    require_parameters: bool,
+) -> Result<Value> {
+    if request.web_search {
+        return Err(ProviderError::before(ErrorKind::InvalidRequirements));
+    }
+    let content = request
+        .parts
+        .iter()
+        .map(|part| {
+            Ok(match part {
+                RequestPart::Document { text, .. } => json!({"type":"text","text":text}),
+                RequestPart::Text(text) => json!({"type":"text","text":text}),
+                RequestPart::Image { uri, detail } => {
+                    image_data(uri)?;
+                    json!({"type":"image_url","image_url":{"url":uri,"detail":detail}})
                 }
-            }
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    // DeepSeek only accepts json_object: local validation enforces the schema in the prompt.
+    let system = if schema_in_prompt {
+        format!(
+            "{}\n\nReply with one JSON object only that conforms to the JSON Schema below. Do not wrap it in prose or a code fence.\n{}",
+            request.instructions, request.schema
+        )
+    } else {
+        request.instructions.to_owned()
+    };
+    let response_format = if schema_in_prompt {
+        json!({"type":"json_object"})
+    } else {
+        json!({"type":"json_schema","json_schema":{"name":request.schema_name,"schema":request.schema,"strict":true}})
+    };
+    let mut body = json!({"model":s.model,"stream":true,"stream_options":{"include_usage":true},"max_tokens":s.max_output_tokens,
+        "messages":[{"role":"system","content":system},{"role":"user","content":content}],"response_format":response_format});
+    if s.reasoning_effort.as_str() != "none" {
+        body["reasoning_effort"] = json!(if schema_in_prompt {
+            deepseek_reasoning_effort(&s.reasoning_effort)
+        } else {
+            s.reasoning_effort.as_str()
         });
     }
-    let search = request.web_search;
-    if id == ProviderId::Google {
-        let mut body = json!({"systemInstruction":{"parts":[{"text":request.instructions}]},"contents":[{"role":"user","parts":parts}],"generationConfig":{"maxOutputTokens":s.max_output_tokens,"thinkingConfig":{"thinkingLevel":s.reasoning_effort.as_str().to_ascii_uppercase()},"responseFormat":{"text":{"mimeType":"APPLICATION_JSON","schema":schema}}}});
-        if s.reasoning_effort.as_str() == "none" {
-            body["generationConfig"]
-                .as_object_mut()
-                .unwrap()
-                .remove("thinkingConfig");
-        }
-        if search {
-            body["tools"] = json!([{"googleSearch":{}}]);
-        }
-        Ok(body)
-    } else {
-        let (schema, strict) = anthropic_schema(schema);
-        let mut tools = vec![
-            json!({"name":"submit_result","description":"Return the complete requested structured result exactly once. Do not execute this tool; its input is the final answer.","input_schema":schema,"strict":strict}),
-        ];
-        if search {
-            tools.push(json!({"type":"web_search_20250305","name":"web_search","max_uses":5}));
-        }
-        let mut body = json!({"model":s.model,"max_tokens":s.max_output_tokens,"stream":true,"output_config":{"effort":s.reasoning_effort},"system":format!("{}\nAfter any research, submit the final candidate using submit_result exactly once. Its input must match the schema. Do not call any other client tool.",request.instructions),"messages":[{"role":"user","content":parts}],"tools":tools,"tool_choice":{"type":"auto","disable_parallel_tool_use":true}});
-        if s.reasoning_effort.as_str() == "none" {
-            body.as_object_mut().unwrap().remove("output_config");
-        } else if id.catalogue().iter().any(|model| model.id == s.model) {
+    if require_parameters {
+        body["provider"] = json!({"require_parameters":true,"allow_fallbacks":false});
+    }
+    Ok(body)
+}
+fn image_data(uri: &str) -> Result<(&str, &str)> {
+    uri.strip_prefix("data:")
+        .and_then(|uri| uri.split_once(";base64,"))
+        .ok_or_else(|| ProviderError::before(ErrorKind::InvalidRequirements))
+}
+fn content_parts(
+    request: &RequestContent<'_>,
+    text: impl Fn(&str) -> Value,
+    image: impl Fn(&str, &str) -> Value,
+) -> Result<Vec<Value>> {
+    request
+        .parts
+        .iter()
+        .map(|part| {
+            Ok(match part {
+                RequestPart::Document { text: value, .. } => text(value),
+                RequestPart::Text(value) => text(value),
+                RequestPart::Image { uri, .. } => {
+                    let (mime, data) = image_data(uri)?;
+                    image(mime, data)
+                }
+            })
+        })
+        .collect()
+}
+fn google_body(request: &RequestContent<'_>, s: &ProviderSettings) -> Result<Value> {
+    let parts = content_parts(
+        request,
+        |text| json!({"text":text}),
+        |mime, data| json!({"inlineData":{"mimeType":mime,"data":data}}),
+    )?;
+    let mut body = json!({"systemInstruction":{"parts":[{"text":request.instructions}]},"contents":[{"role":"user","parts":parts}],"generationConfig":{"maxOutputTokens":s.max_output_tokens,"responseFormat":{"text":{"mimeType":"APPLICATION_JSON","schema":request.schema}}}});
+    if s.reasoning_effort.as_str() != "none" {
+        body["generationConfig"]["thinkingConfig"] =
+            json!({"thinkingLevel":s.reasoning_effort.as_str().to_ascii_uppercase()});
+    }
+    if request.web_search {
+        body["tools"] = json!([{"googleSearch":{}}]);
+    }
+    Ok(body)
+}
+fn anthropic_body(request: &RequestContent<'_>, s: &ProviderSettings) -> Result<Value> {
+    let parts = content_parts(
+        request,
+        |text| json!({"type":"text","text":text}),
+        |mime, data| json!({"type":"image","source":{"type":"base64","media_type":mime,"data":data}}),
+    )?;
+    let (schema, strict) = anthropic_schema(&request.schema);
+    let mut tools = vec![
+        json!({"name":"submit_result","description":"Return the complete requested structured result exactly once. Do not execute this tool; its input is the final answer.","input_schema":schema,"strict":strict}),
+    ];
+    if request.web_search {
+        tools.push(json!({"type":"web_search_20250305","name":"web_search","max_uses":5}));
+    }
+    let mut body = json!({"model":s.model,"max_tokens":s.max_output_tokens,"stream":true,"system":format!("{}\nAfter any research, submit the final candidate using submit_result exactly once. Its input must match the schema. Do not call any other client tool.",request.instructions),"messages":[{"role":"user","content":parts}],"tools":tools,"tool_choice":{"type":"auto","disable_parallel_tool_use":true}});
+    if s.reasoning_effort.as_str() != "none" {
+        body["output_config"] = json!({"effort":s.reasoning_effort});
+        if ProviderId::Anthropic
+            .catalogue()
+            .iter()
+            .any(|model| model.id == s.model)
+        {
             body["thinking"] = json!({"type":"between_tools"});
         }
-        Ok(body)
     }
+    Ok(body)
 }
 
 /// DeepSeek names three effort levels; Desegnos's finer levels map onto the nearest.
@@ -1174,11 +1304,8 @@ impl ForeignStream {
         Ok(())
     }
     fn accept(&mut self, data: &str) -> Result<()> {
-        if matches!(
-            self.provider,
-            ProviderId::Openrouter | ProviderId::Deepseek | ProviderId::Local
-        ) && data.trim() == "[DONE]"
-        {
+        let protocol = self.provider.wire_protocol()?;
+        if matches!(protocol, WireProtocol::Chat { .. }) && data.trim() == "[DONE]" {
             if self.state != StreamState::Stopped {
                 return Err(self.error(ErrorKind::Truncated));
             }
@@ -1192,14 +1319,10 @@ impl ForeignStream {
         if self.state == StreamState::Terminal {
             return Err(self.error(ErrorKind::Malformed));
         }
-        if self.provider == ProviderId::Google {
-            return self.google(v);
-        }
-        if matches!(
-            self.provider,
-            ProviderId::Openrouter | ProviderId::Deepseek | ProviderId::Local
-        ) {
-            return self.chat(v);
+        match protocol {
+            WireProtocol::Google => return self.google(v),
+            WireProtocol::Chat { .. } => return self.chat(v),
+            WireProtocol::Anthropic => {}
         }
         match v["type"].as_str() {
             Some("ping") => {}
@@ -1479,10 +1602,9 @@ impl ForeignStream {
     fn finish(self) -> Result<ProviderResponse> {
         // Google ends its stream with the finish reason; every other provider also sends a
         // separate terminal marker.
-        let complete = if self.provider == ProviderId::Google {
-            self.state.stopped()
-        } else {
-            self.state == StreamState::Terminal
+        let complete = match self.provider.wire_protocol()? {
+            WireProtocol::Google => self.state.stopped(),
+            _ => self.state == StreamState::Terminal,
         };
         if !complete {
             return Err(self.error(ErrorKind::Truncated));
@@ -1748,7 +1870,7 @@ mod tests {
                 detail: "low",
             });
             let response = adapter
-                .submit(sent, &settings, &key, &CancellationToken::new(), &|_| {})
+                .submit(sent, 0, &settings, &key, &CancellationToken::new(), &|_| {})
                 .await
                 .unwrap();
             assert_eq!(response.text, "{}");
@@ -2058,6 +2180,7 @@ mod tests {
             let error = adapter
                 .submit(
                     common(),
+                    0,
                     &id.defaults(),
                     &key,
                     &CancellationToken::new(),
@@ -2280,8 +2403,7 @@ mod tests {
             let (remote, server) = fixture(id, events, false).await;
             let client = ProviderClient {
                 id,
-                openai: OpenAiClient::new().unwrap(),
-                remote: Some(remote),
+                adapter: std::sync::Arc::new(remote),
             };
             let model = format!("future-{}", uuid::Uuid::new_v4());
             let settings = ProviderSettings {
@@ -2402,6 +2524,7 @@ mod tests {
             let result = adapter
                 .submit(
                     common(),
+                    0,
                     &id.defaults(),
                     &key,
                     &CancellationToken::new(),
@@ -2428,7 +2551,7 @@ mod tests {
             });
             assert_eq!(
                 adapter
-                    .submit(common(), &id.defaults(), &key, &token, &|_| {})
+                    .submit(common(), 0, &id.defaults(), &key, &token, &|_| {})
                     .await
                     .unwrap_err()
                     .kind,
@@ -2449,6 +2572,7 @@ mod tests {
                 adapter
                     .submit(
                         common(),
+                        0,
                         &id.defaults(),
                         &key,
                         &CancellationToken::new(),
@@ -2543,6 +2667,7 @@ mod retry_tests {
         let response = adapter
             .submit(
                 common,
+                0,
                 &settings,
                 &ApiKey::new("test-retry-key".into()).unwrap(),
                 &CancellationToken::new(),

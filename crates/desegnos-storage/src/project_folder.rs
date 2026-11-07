@@ -42,8 +42,7 @@ pub fn sanitize_project_name(name: &str) -> String {
 }
 
 /// Reserve with create_dir, so simultaneous creates and case-insensitive collisions converge.
-pub fn create_project_folder(parent: &Path, name: &str, project_id: Uuid) -> Result<PathBuf> {
-    let _ = project_id;
+pub fn create_project_folder(parent: &Path, name: &str) -> Result<PathBuf> {
     if !parent.is_absolute() || parent.components().any(|c| c == Component::ParentDir) {
         return Err(CoreError("Choose an absolute project location.".into()));
     }

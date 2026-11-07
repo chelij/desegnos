@@ -9,14 +9,13 @@ use serde_json::{Value, json};
 pub const VERIFIED_AT: &str = "2026-10-31";
 pub const MODEL_ID: &str = "gpt-6.1-sol";
 pub const MODEL_MAX_OUTPUT_TOKENS: u32 = 128_000;
-/// The API-key ceiling: a request may climb to the selected model's own limit, never past this.
 pub const MAX_OUTPUT_TOKENS: u32 = MODEL_MAX_OUTPUT_TOKENS;
 /// Provider defaults stay at 32,768 so a first estimate stays inside the default budget.
 pub const DEFAULT_MAX_OUTPUT_TOKENS: u32 = 32_768;
 /// ChatGPT plans ignore `max_output_tokens`, so only their reply text keeps this allowance.
 pub const CHATGPT_MAX_OUTPUT_TOKENS: u32 = 32_768;
-pub const MAX_REQUIREMENTS_BYTES: usize = 8 * 1024 * 1024;
-pub const MAX_OUTPUT_BYTES: usize = 8 * 1024 * 1024;
+pub use desegnos_core::MAX_GENERATION_BYTES as MAX_OUTPUT_BYTES;
+pub use desegnos_core::MAX_REQUIREMENTS_BYTES;
 pub const MAX_REQUEST_BYTES: usize = 16 * 1024 * 1024;
 pub const CONTEXT_WINDOW_TOKENS: u64 = 1_050_000;
 /// A context window is metered in tokens, and a wire byte is not a token: JSON, schema text and

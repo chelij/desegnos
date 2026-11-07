@@ -165,22 +165,9 @@ pub(super) struct AuthHttp {
 }
 impl AuthHttp {
     pub fn new(endpoints: Endpoints) -> ChatgptResult<Self> {
-        let client = Client::builder()
-            .tls_backend_rustls()
-            .https_only(!endpoints.test)
-            .no_proxy()
-            .retry(reqwest::retry::never())
-            .redirect(reqwest::redirect::Policy::none())
-            .referer(false)
-            .connection_verbose(false)
-            .tls_sslkeylogfile(false)
-            .no_gzip()
-            .no_brotli()
-            .no_deflate()
-            .no_zstd()
+        let client = crate::net::hardened_client(!endpoints.test)
             .connect_timeout(Duration::from_secs(15))
             .timeout(Duration::from_secs(30))
-            .user_agent(concat!("Desegnos/", env!("CARGO_PKG_VERSION")))
             .build()
             .map_err(|_| Kind::Transport)?;
         Ok(Self {
@@ -456,23 +443,18 @@ async fn bounded_json<T: DeserializeOwned>(
     mut response: Response,
     cancellation: &CancellationToken,
 ) -> ChatgptResult<T> {
-    const MAX: usize = 512 * 1024;
-    if response
-        .content_length()
-        .is_some_and(|length| length > MAX as u64)
-    {
-        return Err(Kind::InvalidToken.into());
-    }
-    let mut bytes = zeroize::Zeroizing::new(Vec::new());
-    loop {
-        let chunk = tokio::select! { biased; _ = cancellation.cancelled() => return Err(Kind::Cancelled.into()), value = response.chunk() => value.map_err(|_| Kind::Transport)? };
-        let Some(chunk) = chunk else {
-            break;
-        };
-        if bytes.len().saturating_add(chunk.len()) > MAX {
-            return Err(Kind::InvalidToken.into());
-        }
-        bytes.extend_from_slice(&chunk);
-    }
+    let bytes = crate::net::bounded_body(
+        &mut response,
+        512 * 1024,
+        cancellation,
+        tokio::time::Instant::now() + Duration::from_secs(30),
+    )
+    .await
+    .map_err(|error| match error.kind {
+        crate::ErrorKind::Cancelled => Kind::Cancelled,
+        crate::ErrorKind::Deadline => Kind::Deadline,
+        crate::ErrorKind::OutputLimit => Kind::InvalidToken,
+        _ => Kind::Transport,
+    })?;
     serde_json::from_slice(&bytes).map_err(|_| Kind::InvalidToken.into())
 }

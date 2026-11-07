@@ -1546,13 +1546,16 @@ pub async fn fetch_identity_source(
     url: String,
 ) -> NativeResult<IdentitySourceManifest> {
     trusted(&window)?;
+    let fetcher = desegnos_ai::WebsiteFetcher::new();
     #[cfg(feature = "native-tests")]
-    let fixture = std::env::var("DESEGNOS_NATIVE_TEST_WEBSITE_ORIGIN")
-        .ok()
-        .and_then(|value| desegnos_ai::WebUrl::parse(&value).ok());
-    #[cfg(not(feature = "native-tests"))]
-    let fixture: Option<desegnos_ai::WebUrl> = None;
-    let site = desegnos_ai::fetch_website(&url, fixture.as_ref()).await?;
+    let fetcher = match std::env::var("DESEGNOS_NATIVE_TEST_WEBSITE_ORIGIN") {
+        Ok(origin) => desegnos_ai::WebsiteFetcher::for_fixture(
+            &desegnos_ai::WebUrl::parse(&origin).map_err(|error| error.to_string())?,
+        )?,
+        Err(std::env::VarError::NotPresent) => fetcher,
+        Err(error) => return Err(error.to_string()),
+    };
+    let site = fetcher.fetch_website(&url).await?;
     let files = site.files.clone().into_iter().collect();
     let source = tauri::async_runtime::spawn_blocking(move || {
         desegnos_storage::identity_source_from_files_attributed(

@@ -1,9 +1,9 @@
 //! Bounded Image API fulfilment, gated by frozen account capabilities.
-use crate::{ApiKey, CancellationToken, OpenAiClient};
-use base64::{Engine, engine::general_purpose::STANDARD};
-use desegnos_core::{
-    ImageGenerationRequest, MAX_DOWNLOADED_IMAGE_BYTES,
+use crate::{
+    ApiKey, CancellationToken, ErrorKind, OpenAiClient, ProviderError, Result, SubmissionOutcome,
 };
+use base64::{Engine, engine::general_purpose::STANDARD};
+use desegnos_core::{ImageGenerationRequest, MAX_DOWNLOADED_IMAGE_BYTES};
 use image::{ImageFormat, ImageReader, Limits};
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, io::Cursor, time::Duration};
@@ -19,65 +19,23 @@ fn image_body(request: &ImageGenerationRequest, edit: bool) -> Value {
         "background": if request.transparent { "transparent" } else { "opaque" }})
 }
 
-// Only fixed field names and native-resolved data URIs enter this multipart body.
-#[cfg(test)]
-fn edit_body(
-    request: &ImageGenerationRequest,
-    reference: &str,
-    mask: Option<&str>,
-) -> Option<(String, Vec<u8>)> {
-    let boundary = format!("desegnos-{}", uuid::Uuid::new_v4());
-    let mut bytes = Vec::new();
-    for (name, value) in image_body(request, true).as_object()? {
-        let value = value
-            .as_str()
-            .map(str::to_owned)
-            .unwrap_or_else(|| value.to_string());
-        bytes.extend_from_slice(
-            format!(
-                "--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{value}\r\n"
-            )
-            .as_bytes(),
-        );
-    }
-    for (name, uri) in [("image", Some(reference)), ("mask", mask)] {
-        let Some(uri) = uri else { continue };
-        let (header, encoded) = uri.split_once(',')?;
-        let (mime, extension) = match header {
-            "data:image/png;base64" => ("image/png", "png"),
-            "data:image/jpeg;base64" if name == "image" => ("image/jpeg", "jpg"),
-            "data:image/webp;base64" if name == "image" => ("image/webp", "webp"),
-            _ => return None,
-        };
-        if encoded.len() > crate::MAX_REQUEST_BYTES {
-            return None;
-        }
-        let data = STANDARD.decode(encoded).ok()?;
-        bytes.extend_from_slice(format!("--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"; filename=\"{name}.{extension}\"\r\nContent-Type: {mime}\r\n\r\n").as_bytes());
-        bytes.extend_from_slice(&data);
-        bytes.extend_from_slice(b"\r\n");
-        if bytes.len() > crate::MAX_REQUEST_BYTES {
-            return None;
-        }
-    }
-    bytes.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
-    (bytes.len() <= crate::MAX_REQUEST_BYTES)
-        .then(|| (format!("multipart/form-data; boundary={boundary}"), bytes))
+/// Decode with allocation/dimension limits, then keep a bounded PNG with its alpha channel.
+fn invalid_image() -> ProviderError {
+    ProviderError::new(ErrorKind::Malformed, SubmissionOutcome::Unknown)
 }
 
-/// Decode with allocation/dimension limits, then keep a bounded PNG with its alpha channel.
-fn generated_png(response: &Value) -> Option<String> {
-    let data = response["data"].as_array()?;
+fn generated_png(response: &Value) -> Result<String> {
+    let data = response["data"].as_array().ok_or_else(invalid_image)?;
     if data.len() != 1 {
-        return None;
+        return Err(invalid_image());
     }
-    let encoded = data[0]["b64_json"].as_str()?;
+    let encoded = data[0]["b64_json"].as_str().ok_or_else(invalid_image)?;
     if encoded.len() > MAX_IMAGE_REPLY {
-        return None;
+        return Err(invalid_image());
     }
-    let bytes = STANDARD.decode(encoded).ok()?;
-    if image::guess_format(&bytes).ok()? != ImageFormat::Png {
-        return None;
+    let bytes = STANDARD.decode(encoded).map_err(|_| invalid_image())?;
+    if image::guess_format(&bytes).map_err(|_| invalid_image())? != ImageFormat::Png {
+        return Err(invalid_image());
     }
     let mut reader = ImageReader::with_format(Cursor::new(&bytes), ImageFormat::Png);
     let mut limits = Limits::default();
@@ -85,21 +43,23 @@ fn generated_png(response: &Value) -> Option<String> {
     limits.max_image_height = Some(1024);
     limits.max_alloc = Some(32 * 1024 * 1024);
     reader.limits(limits);
-    let mut picture = reader.decode().ok()?;
+    let mut picture = reader.decode().map_err(|_| invalid_image())?;
     if picture.width() != 1024 || picture.height() != 1024 {
-        return None;
+        return Err(invalid_image());
     }
     loop {
         let mut png = Cursor::new(Vec::new());
-        picture.write_to(&mut png, ImageFormat::Png).ok()?;
+        picture
+            .write_to(&mut png, ImageFormat::Png)
+            .map_err(|_| invalid_image())?;
         if png.get_ref().len() <= MAX_DOWNLOADED_IMAGE_BYTES {
-            return Some(format!(
+            return Ok(format!(
                 "data:image/png;base64,{}",
                 STANDARD.encode(png.get_ref())
             ));
         }
         if picture.width() <= 128 {
-            return None;
+            return Err(invalid_image());
         }
         let edge = picture.width() * 3 / 4;
         picture = picture.resize(edge, edge, image::imageops::FilterType::Lanczos3);
@@ -108,18 +68,14 @@ fn generated_png(response: &Value) -> Option<String> {
 
 impl OpenAiClient {
     /// Generate one bounded PNG per requested picture, keyed by the caller's image key.
-    /// Failures are skipped so the apply step can place a Box placeholder instead.
     pub async fn generate_requested_images(
         &self,
         requests: &[(String, String)],
         key: &ApiKey,
         cancellation: &CancellationToken,
-    ) -> BTreeMap<String, String> {
+    ) -> BTreeMap<String, Result<String>> {
         let mut generated = BTreeMap::new();
         for (key_name, prompt) in requests {
-            if cancellation.is_cancelled() {
-                break;
-            }
             let request = ImageGenerationRequest {
                 prompt: prompt.clone(),
                 source: None,
@@ -127,34 +83,25 @@ impl OpenAiClient {
                 size: "1024x1024".into(),
                 transparent: false,
             };
-            let body = image_body(&request, false);
-            let Ok(bytes) = serde_json::to_vec(&body) else {
-                continue;
-            };
-            let Ok(request_builder) =
-                self.image_api_request("images/generations", key, "application/json", bytes)
-            else {
-                continue;
-            };
-            let response = tokio::select! {
-                biased;
-                _ = cancellation.cancelled() => break,
-                _ = tokio::time::sleep(Duration::from_secs(180)) => continue,
-                result = request_builder.send() => result,
-            };
-            let Ok(mut response) = response else {
-                continue;
-            };
-            if !response.status().is_success() {
-                continue;
-            }
-            let Some(value) = crate::image_access::bounded_json(&mut response, MAX_IMAGE_REPLY).await
-            else {
-                continue;
-            };
-            if let Some(uri) = generated_png(&value) {
-                generated.insert(key_name.to_lowercase(), uri);
-            }
+            let result = async {
+                if cancellation.is_cancelled() { return Err(ProviderError::before(ErrorKind::Cancelled)); }
+                let bytes = serde_json::to_vec(&image_body(&request, false)).map_err(|_| ProviderError::before(ErrorKind::InvalidRequirements))?;
+                let request_builder = self.image_api_request("images/generations", key, "application/json", bytes)?;
+                let deadline = tokio::time::Instant::now() + Duration::from_secs(180);
+                let mut response = tokio::select! {
+                    biased;
+                    _ = cancellation.cancelled() => return Err(ProviderError::before(ErrorKind::Cancelled)),
+                    _ = tokio::time::sleep_until(deadline) => return Err(ProviderError::new(ErrorKind::Deadline, SubmissionOutcome::Unknown)),
+                    result = request_builder.send() => result.map_err(|_| ProviderError::new(ErrorKind::Transport, SubmissionOutcome::Unknown))?,
+                };
+                if !response.status().is_success() {
+                    return Err(crate::providers::http_error(response.status().as_u16()));
+                }
+                let bytes = crate::net::bounded_body(&mut response, MAX_IMAGE_REPLY, cancellation, deadline).await?;
+                let value = serde_json::from_slice(&bytes).map_err(|_| invalid_image())?;
+                generated_png(&value)
+            }.await;
+            generated.insert(key_name.to_lowercase(), result);
         }
         generated
     }
@@ -163,6 +110,52 @@ impl OpenAiClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Only fixed field names and native-resolved data URIs enter this multipart body.
+    #[cfg(test)]
+    fn edit_body(
+        request: &ImageGenerationRequest,
+        reference: &str,
+        mask: Option<&str>,
+    ) -> Option<(String, Vec<u8>)> {
+        let boundary = format!("desegnos-{}", uuid::Uuid::new_v4());
+        let mut bytes = Vec::new();
+        for (name, value) in image_body(request, true).as_object()? {
+            let value = value
+                .as_str()
+                .map(str::to_owned)
+                .unwrap_or_else(|| value.to_string());
+            bytes.extend_from_slice(
+            format!(
+                "--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{value}\r\n"
+            )
+            .as_bytes(),
+        );
+        }
+        for (name, uri) in [("image", Some(reference)), ("mask", mask)] {
+            let Some(uri) = uri else { continue };
+            let (header, encoded) = uri.split_once(',')?;
+            let (mime, extension) = match header {
+                "data:image/png;base64" => ("image/png", "png"),
+                "data:image/jpeg;base64" if name == "image" => ("image/jpeg", "jpg"),
+                "data:image/webp;base64" if name == "image" => ("image/webp", "webp"),
+                _ => return None,
+            };
+            if encoded.len() > crate::MAX_REQUEST_BYTES {
+                return None;
+            }
+            let data = STANDARD.decode(encoded).ok()?;
+            bytes.extend_from_slice(format!("--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"; filename=\"{name}.{extension}\"\r\nContent-Type: {mime}\r\n\r\n").as_bytes());
+            bytes.extend_from_slice(&data);
+            bytes.extend_from_slice(b"\r\n");
+            if bytes.len() > crate::MAX_REQUEST_BYTES {
+                return None;
+            }
+        }
+        bytes.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+        (bytes.len() <= crate::MAX_REQUEST_BYTES)
+            .then(|| (format!("multipart/form-data; boundary={boundary}"), bytes))
+    }
+
     #[test]
     fn generation_and_multipart_edits_choose_models_and_preserve_reference_and_mask() {
         let request = ImageGenerationRequest {
@@ -199,7 +192,7 @@ mod tests {
     }
     #[test]
     fn image_reply_requires_completed_bounded_png_and_preserves_alpha() {
-        assert!(generated_png(&json!({"status":"failed"})).is_none());
+        assert!(generated_png(&json!({"status":"failed"})).is_err());
         let mut png = Cursor::new(Vec::new());
         image::DynamicImage::new_rgba8(1024, 1024)
             .write_to(&mut png, ImageFormat::Png)
@@ -216,6 +209,6 @@ mod tests {
         );
         let mut invalid = value;
         invalid["data"][0]["b64_json"] = json!(STANDARD.encode(b"<svg/>"));
-        assert!(generated_png(&invalid).is_none());
+        assert!(generated_png(&invalid).is_err());
     }
 }

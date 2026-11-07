@@ -1252,7 +1252,6 @@ async fn sign_out_cancels_a_delayed_reconnect_before_it_can_reactivate() {
     fixture.browser(&authorization).await;
     let signed_out = manager.sign_out(id).await.unwrap();
     assert!(!signed_out.accounts[0].connected);
-    tokio::time::sleep(Duration::from_millis(700)).await;
     let after = manager.view().await;
     assert!(!after.accounts[0].connected);
     assert_eq!(after.sign_in.status, ChatgptSignInStatus::Cancelled);
@@ -1313,7 +1312,6 @@ async fn cancellation_closes_literal_loopback_and_does_not_replace_existing_acco
     let cancelled = manager.cancel_sign_in().await;
     assert_eq!(cancelled.sign_in.status, ChatgptSignInStatus::Cancelled);
     assert_eq!(cancelled.active_account_id, id);
-    tokio::time::sleep(Duration::from_millis(20)).await;
     assert!(
         reqwest::Client::new()
             .get(&query["redirect_uri"])
@@ -1383,10 +1381,14 @@ async fn file_lock_wait_is_cancellable_and_keeps_explicit_account_binding() {
     let cancellation = CancellationToken::new();
     let copy = cancellation.clone();
     let other = manager.clone();
-    let task = tokio::spawn(async move { other.bearer(id, &copy).await });
-    tokio::time::sleep(Duration::from_millis(30)).await;
+    let mut task = Box::pin(other.bearer(id, &copy));
+    std::future::poll_fn(|cx| {
+        assert!(std::future::Future::poll(task.as_mut(), cx).is_pending());
+        std::task::Poll::Ready(())
+    })
+    .await;
     cancellation.cancel();
-    assert_eq!(task.await.unwrap().unwrap_err().kind, Kind::Cancelled);
+    assert_eq!(task.await.unwrap_err().kind, Kind::Cancelled);
     drop(file);
     assert_eq!(
         manager

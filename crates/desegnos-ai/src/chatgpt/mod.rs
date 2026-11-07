@@ -5,7 +5,10 @@ mod types;
 
 #[cfg(any(test, feature = "test-support"))]
 pub use storage::ChatgptTestVault;
-pub use types::*;
+pub use types::{
+    ChatgptAccount, ChatgptAuthorization, ChatgptError, ChatgptErrorKind, ChatgptResult,
+    ChatgptSignIn, ChatgptSignInStatus, ChatgptView,
+};
 
 use crate::{
     ApiKey, CancellationToken, ChatgptModel, CredentialLocation, CredentialStorage, OpenAiClient,
@@ -30,6 +33,7 @@ enum SignIn {
         id: Uuid,
         account_id: Option<Uuid>,
         cancellation: CancellationToken,
+        completion: CancellationToken,
     },
     Complete,
     Cancelled {
@@ -58,11 +62,18 @@ impl SignIn {
         ChatgptSignIn { status, message }
     }
 
-    fn start(&mut self, id: Uuid, account_id: Option<Uuid>, cancellation: CancellationToken) {
+    fn start(
+        &mut self,
+        id: Uuid,
+        account_id: Option<Uuid>,
+        cancellation: CancellationToken,
+        completion: CancellationToken,
+    ) {
         *self = Self::SigningIn {
             id,
             account_id,
             cancellation,
+            completion,
         };
     }
 
@@ -70,12 +81,21 @@ impl SignIn {
         matches!(self, Self::SigningIn { id, .. } if *id == attempt_id)
     }
 
-    fn cancel(&mut self, message: &str) {
-        if let Self::SigningIn { cancellation, .. } = self {
+    fn cancel(&mut self, message: &str) -> Option<CancellationToken> {
+        if let Self::SigningIn {
+            cancellation,
+            completion,
+            ..
+        } = self
+        {
             cancellation.cancel();
+            let completion = completion.clone();
             *self = Self::Cancelled {
                 message: message.into(),
             };
+            Some(completion)
+        } else {
+            None
         }
     }
 
@@ -388,7 +408,10 @@ impl ChatgptManager {
         let id = Uuid::new_v4();
         let cancellation = CancellationToken::new();
         state.metadata = metadata;
-        state.sign_in.start(id, account_id, cancellation.clone());
+        let completion = CancellationToken::new();
+        state
+            .sign_in
+            .start(id, account_id, cancellation.clone(), completion.clone());
         let attempt = Attempt {
             id,
             registration,
@@ -408,16 +431,20 @@ impl ChatgptManager {
             .await
             .unwrap_or_else(|_| Err(Kind::Deadline.into()));
             manager.finish_attempt(attempt.id, result).await;
+            completion.cancel();
         });
         Ok(ChatgptAuthorization { url: url.into() })
     }
 
     pub async fn cancel_sign_in(&self) -> ChatgptView {
         let mut state = self.inner.state.lock().await;
-        state
+        let completion = state
             .sign_in
             .cancel(ChatgptError::from(Kind::Cancelled).message());
         drop(state);
+        if let Some(completion) = completion {
+            completion.cancelled().await;
+        }
         self.view().await
     }
 
@@ -917,7 +944,7 @@ impl ChatgptManager {
     }
 
     pub async fn sign_out(&self, account_id: Uuid) -> ChatgptResult<ChatgptView> {
-        {
+        let completion = {
             let mut state = self.inner.state.lock().await;
             if matches!(
                 &state.sign_in,
@@ -926,8 +953,13 @@ impl ChatgptManager {
             ) {
                 state.sign_in.cancel(
                     "Pending reconnect was cancelled when you signed out of this registration.",
-                );
+                )
+            } else {
+                None
             }
+        };
+        if let Some(completion) = completion {
+            completion.cancelled().await;
         }
         let _gate = self.inner.gate.lock().await;
         let cancellation = CancellationToken::new();

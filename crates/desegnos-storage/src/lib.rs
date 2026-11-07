@@ -4,36 +4,37 @@ pub mod project_db;
 pub mod project_folder;
 pub mod project_parts;
 pub mod request_zip;
+mod source_files;
 pub mod system_tools;
 pub mod website_export;
 pub mod website_snapshot;
-use desegnos_core::{Error, Error as CoreError, Project, Result};
-use std::{
-    fs::{self, File, OpenOptions},
-    io::Write,
-    path::Path,
-};
+use desegnos_core::{Error, Error as CoreError, Result};
 pub use identity_source::{
     IdentitySource, IdentitySourceAsset, IdentitySourceFile, collect_identity_source,
     identity_source_from_files, identity_source_from_files_attributed,
 };
 pub use project_db::{
     AUTOSAVE_BRANCH, AutosaveProject, BranchSummary, CompactReport, DEFAULT_BRANCH, FileStamp,
-    LoadedProject, ProjectDatabase, ProjectHistoryView, SaveFailure, SaveFailureKind, VersionSummary,
-    read_autosave,
+    LoadedProject, ProjectDatabase, ProjectHistoryView, SaveFailure, SaveFailureKind,
+    VersionSummary, load_project, read_autosave,
 };
 pub use project_folder::{
     create_project_folder, is_project_folder, manage_project_folder, project_in_folder,
     sanitize_project_name,
 };
 pub use project_parts::{PartData, join_project, split_project};
+use std::{
+    fs::{self, File, OpenOptions},
+    io::Write,
+    path::Path,
+};
+pub use website_export::{
+    WrittenWebsiteExport, export_folder_name, read_export_file, write_export_at, write_export_into,
+    write_export_named, write_website_export,
+};
 pub use website_snapshot::{
     WebsitePage, WebsiteSnapshot, collect_website_snapshot, new_import_folder,
     write_website_snapshot,
-};
-pub use website_export::{
-    WrittenWebsiteExport, export_folder_name, read_export_file, write_export_at,
-    write_export_into, write_export_named, write_website_export,
 };
 
 pub const PROJECT_FILE_EXTENSIONS: [&str; 1] = ["desegnos"];
@@ -48,11 +49,6 @@ pub(crate) fn ensure(condition: bool, message: impl Into<String>) -> Result<()> 
     } else {
         Err(Error(message.into()))
     }
-}
-
-/// Read a project without taking the writing lock, e.g. while it is open in another window.
-pub fn load_project(path: &Path) -> Result<Project> {
-    project_db::load_project(path)
 }
 
 pub fn write_markdown(path: &Path, markdown: &str) -> Result<()> {
@@ -101,10 +97,19 @@ fn atomic_write_unsynced(
         }
         fs::rename(&temporary, path).map_err(io)
     })();
-    if operation.is_err() {
-        let _ = fs::remove_file(&temporary);
+    match operation {
+        Err(error) => {
+            if let Err(cleanup) = fs::remove_file(&temporary) {
+                if cleanup.kind() != std::io::ErrorKind::NotFound {
+                    return Err(Error(format!(
+                        "{error}; temporary file cleanup failed: {cleanup}"
+                    )));
+                }
+            }
+            Err(error)
+        }
+        result => result,
     }
-    operation
 }
 
 fn backup_file(path: &Path) -> Result<()> {
@@ -135,6 +140,7 @@ fn sync_parent(path: &Path) -> Result<()> {
 fn sync_directory(directory: &Path) -> Result<()> {
     #[cfg(unix)]
     File::open(directory).map_err(io)?.sync_all().map_err(io)?;
+    // Portable Rust has no directory flush operation on Windows.
     #[cfg(not(unix))]
     let _ = directory;
     Ok(())
