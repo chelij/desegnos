@@ -139,6 +139,13 @@ impl ElementUpdate {
     deny_unknown_fields
 )]
 pub enum ElementOperation {
+    /// Edit a scoped boundary; null leaves a property unchanged.
+    SetPage {
+        page_id: Uuid,
+        name: Option<String>,
+        path: Option<String>,
+        background: Option<String>,
+    },
     /// Replace the requested layer's children with a new element tree.
     ReplaceChildren { children: Vec<ElementDraft> },
     /// Plain-language behaviour compiled to JavaScript at export; null targets the request boundary.
@@ -301,17 +308,51 @@ pub struct GenerationCandidate {
 
 impl GenerationCandidate {
     pub fn from_json(source: &str) -> Result<Self> {
+        Self::from_json_expected(source, None, None)
+    }
+
+    /// Restore omitted host echoes while rejecting any supplied stale or foreign identity.
+    pub fn from_json_for_job(source: &str, job_id: Uuid, sha256: &str) -> Result<Self> {
+        Self::from_json_expected(source, Some((job_id, sha256)), None)
+    }
+
+    /// Repair page-targeted layer patches before typed style parsing, which otherwise requires
+    /// a complete layer style even when the model supplied only a page background fill.
+    pub fn from_json_for_project(
+        source: &str,
+        snapshot: &RequirementsSnapshot,
+        project: &Project,
+        events: &mut Vec<ValidationEvent>,
+    ) -> Result<Self> {
+        Self::from_json_expected(
+            source,
+            Some((snapshot.job_id, &snapshot.sha256)),
+            Some((project, events)),
+        )
+    }
+
+    fn from_json_expected(
+        source: &str,
+        expected: Option<(Uuid, &str)>,
+        repair: Option<(&Project, &mut Vec<ValidationEvent>)>,
+    ) -> Result<Self> {
         ensure(
             source.len() <= MAX_GENERATION_BYTES,
             "The generation result exceeds the 8 MiB response limit.",
         )?;
         let mut value: serde_json::Value = crate::parse_provider_json(source)
             .map_err(|error| Error(format!("The generation result is invalid: {error}")))?;
-        drop_null_optional_draft_fields(&mut value);
+        if let Some((job_id, sha256)) = expected {
+            crate::fill_reply_echoes(&mut value, job_id, sha256)?;
+        }
+        if let Some((project, events)) = repair {
+            normalize_raw_page_patches(&mut value, project, events);
+        }
         conform_to_candidate_schema(&mut value);
+        drop_null_optional_draft_fields(&mut value);
         let candidate: Self = serde_json::from_value(value)
             .map_err(|error| Error(format!("The generation result is invalid: {error}")))?;
-        candidate.validate_bounds()?;
+        candidate.validate_reply_bounds()?;
         Ok(candidate)
     }
 
@@ -349,23 +390,12 @@ impl GenerationCandidate {
                 .into_iter()
                 .map(|operation| match operation {
                     ElementOperation::Insert {
-                        parent_id,
-                        element,
-                        ..
-                    } if boundary_pages.contains(&parent_id) => ElementOperation::InsertInBoundary {
-                        page_id: parent_id,
-                        size_id: None,
-                        element,
-                    },
-                    // The same echo in a behaviour: null is how it targets the request boundary,
-                    // and a page id is not a layer, so it means the same boundary behaviour.
-                    ElementOperation::SetBehaviour {
-                        element_id,
-                        behaviour,
-                    } if element_id.is_some_and(|id| boundary_pages.contains(&id)) => {
-                        ElementOperation::SetBehaviour {
-                            element_id: None,
-                            behaviour,
+                        parent_id, element, ..
+                    } if boundary_pages.contains(&parent_id) => {
+                        ElementOperation::InsertInBoundary {
+                            page_id: parent_id,
+                            size_id: None,
+                            element,
                         }
                     }
                     other => other,
@@ -375,6 +405,19 @@ impl GenerationCandidate {
     }
 
     pub(crate) fn validate_bounds(&self) -> Result<()> {
+        self.validate_reply_bounds()?;
+        let image_keys = self
+            .images
+            .iter()
+            .map(|image| image.key.to_lowercase())
+            .collect();
+        for request in &self.requests {
+            validate_operations(&request.operations, &image_keys)?;
+        }
+        Ok(())
+    }
+
+    fn validate_reply_bounds(&self) -> Result<()> {
         ensure(
             !self.job_id.is_nil(),
             "The generation job identifier is required.",
@@ -387,7 +430,7 @@ impl GenerationCandidate {
                     .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)),
             "The requirements digest must be a SHA-256 hexadecimal digest.",
         )?;
-        validate_text(&self.summary, "Generation summary", 16_384, true)?;
+        validate_text(&self.summary, "Generation summary", 16_384, false)?;
         ensure(
             !self.requests.is_empty() && self.requests.len() <= MAX_GENERATION_REQUESTS,
             "A generation result must account for between 1 and 512 requests.",
@@ -427,13 +470,12 @@ impl GenerationCandidate {
                 &request.explanation,
                 "Request outcome explanation",
                 MAX_EXPLANATION_CHARS,
-                true,
+                false,
             )?;
             ensure(
                 request.operations.len() <= 2048,
                 "A request supports at most 2,048 operations.",
             )?;
-            validate_operations(&request.operations, &image_keys)?;
         }
         for classification in &self.pointer_classifications {
             validate_text(&classification.comment, "Pointer comment", 16_384, false)?;
@@ -469,6 +511,194 @@ impl GenerationCandidate {
                 <= MAX_GENERATION_BYTES,
             "The generation result exceeds the 8 MiB response limit.",
         )
+    }
+
+    fn normalize_page_patches(&mut self, project: &Project, events: &mut Vec<ValidationEvent>) {
+        for outcome in &mut self.requests {
+            let pending = pending_for(project, outcome);
+            let scope = scope_for(project, pending, None);
+            let mut operations = Vec::new();
+            for operation in std::mem::take(&mut outcome.operations) {
+                if let ElementOperation::Update { patches } = operation {
+                    let mut layers = Vec::new();
+                    for patch in patches {
+                        if !scope.boundary_pages.contains(&patch.element_id) {
+                            layers.push(patch);
+                            continue;
+                        }
+                        let background = patch
+                            .style
+                            .as_ref()
+                            .and_then(|style| style.fill.clone())
+                            .filter(|fill| crate::model::valid_swatch(fill));
+                        let recovered = background.is_some();
+                        if recovered {
+                            operations.push(ElementOperation::SetPage {
+                                page_id: patch.element_id,
+                                name: None,
+                                path: None,
+                                background,
+                            });
+                        }
+                        events.push(page_patch_event(project, patch.element_id, recovered));
+                    }
+                    if !layers.is_empty() {
+                        operations.push(ElementOperation::Update { patches: layers });
+                    }
+                } else {
+                    operations.push(operation);
+                }
+            }
+            outcome.operations = operations;
+        }
+    }
+
+    /// Validate page edits first, then keep other valid operations in order, rolling back each
+    /// failed operation atomically. Links resolve against the accepted page routes.
+    /// Strict validate/apply still protect all callers from unfiltered candidates.
+    pub fn retain_valid_operations(
+        &mut self,
+        snapshot: &RequirementsSnapshot,
+        project: &Project,
+        events: &mut Vec<ValidationEvent>,
+    ) -> Result<()> {
+        self.validate_reply_bounds()?;
+        let initial_events = events.len();
+        self.normalize_boundary_anchors(project);
+        self.normalize_page_patches(project, events);
+        let source: Vec<_> = self
+            .requests
+            .iter()
+            .map(|outcome| outcome.operations.clone())
+            .collect();
+        let mut accepted = vec![Vec::new(); self.requests.len()];
+        let mut envelope = self.clone();
+        for outcome in &mut envelope.requests {
+            outcome.operations.clear();
+        }
+        envelope.validate(snapshot, project)?;
+        let image_keys = self
+            .images
+            .iter()
+            .map(|image| image.key.to_lowercase())
+            .collect();
+        let mut copy = project.clone();
+        copy.store_request_pictures(&snapshot.request_ids()?)?;
+        let mut retained_count = 0;
+        let fulfilled: BTreeSet<_> = self
+            .requests
+            .iter()
+            .filter(|outcome| outcome.status == RequestStatus::Implemented)
+            .filter_map(|outcome| pending_for(project, outcome).map(|pending| pending.id))
+            .collect();
+        for page_phase in [true, false] {
+            for index in 0..self.requests.len() {
+                let outcome = &self.requests[index];
+                if outcome.status != RequestStatus::Implemented {
+                    continue;
+                }
+                let pending = pending_for(project, outcome);
+                let anchor_page = outcome
+                    .element_id
+                    .and_then(|id| project.element(id).map(|(page, _)| page.id));
+                let scope = scope_for(project, pending, anchor_page);
+                let mut sources = Vec::new();
+                for (ordinal, operation) in
+                    source[index].iter().enumerate().filter(|(_, operation)| {
+                        matches!(operation, ElementOperation::SetPage { .. }) == page_phase
+                    })
+                {
+                    let mut trial = copy.clone();
+                    let mut trial_sources = sources.clone();
+                    let mut element_id = None;
+                    let result = validate_operations(std::slice::from_ref(operation), &image_keys)
+                        .and_then(|()| {
+                            apply_operations_with_sources(
+                                &mut trial,
+                                &scope,
+                                outcome.element_id,
+                                std::slice::from_ref(operation),
+                                self,
+                                &BTreeMap::new(),
+                                &mut element_id,
+                                &mut trial_sources,
+                            )
+                        })
+                        .and_then(|_| {
+                            // Applying the candidate consumes these requests. Their old targets must
+                            // not make an otherwise valid remove look like a broken project.
+                            let requests = std::mem::take(&mut trial.requests);
+                            trial.requests = requests
+                                .iter()
+                                .filter(|request| !fulfilled.contains(&request.id))
+                                .cloned()
+                                .collect();
+                            let pointers = trial.pointers.clone();
+                            let result = apply_pointer_classifications(
+                                &mut trial,
+                                &self.pointer_classifications,
+                            )
+                            .and_then(|()| trial.validate());
+                            trial.pointers = pointers;
+                            trial.requests = requests;
+                            result
+                        });
+                    match result {
+                        Ok(()) => {
+                            copy = trial;
+                            sources = trial_sources;
+                            accepted[index].push(operation.clone());
+                            retained_count += 1;
+                        }
+                        Err(error) => events.push(ValidationEvent {
+                            kind: "operation".into(),
+                            disposition: "dropped".into(),
+                            element_id,
+                            message: format!(
+                                "Request {} operation {} ({}) skipped: {error}",
+                                index + 1,
+                                ordinal + 1,
+                                operation_kind(operation)
+                            ),
+                        }),
+                    }
+                }
+            }
+        }
+        for (outcome, operations) in self.requests.iter_mut().zip(accepted) {
+            outcome.operations = operations;
+        }
+        ensure(
+            events.len() == initial_events
+                || retained_count > 0
+                || !self.pointer_classifications.is_empty()
+                || !self.decision_proposals.is_empty(),
+            format!(
+                "No valid operations remain. {}",
+                events
+                    .iter()
+                    .map(|event| event.message.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            ),
+        )?;
+        self.validate(snapshot, project)?;
+        for outcome in &self.requests {
+            if outcome.status == RequestStatus::Implemented
+                && let Some(pending) = pending_for(project, outcome)
+            {
+                let untouched = untouched_boundaries(project, pending, outcome);
+                if !untouched.is_empty() {
+                    events.push(ValidationEvent {
+                        kind: "boundaryCoverage".into(),
+                        disposition: "warning".into(),
+                        element_id: None,
+                        message: boundary_coverage_message(project, pending, &untouched),
+                    });
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Check the reply against the frozen request: identity, coverage, operation scope,
@@ -628,6 +858,7 @@ impl GenerationCandidate {
         let mut copy = project.clone();
         copy.store_request_pictures(&request_ids)?;
         let generated = BTreeMap::new();
+        apply_page_operations(&mut copy, project, self)?;
         for outcome in &self.requests {
             if outcome.status == RequestStatus::Implemented {
                 let page_id = outcome
@@ -642,9 +873,12 @@ impl GenerationCandidate {
                                 .map(|(page, _)| *page)
                         })
                     });
-                apply_request(&mut copy, page_id, outcome, self, &generated, rejected)?;
+                apply_request(
+                    &mut copy, project, page_id, outcome, self, &generated, rejected,
+                )?;
             }
         }
+        apply_pointer_classifications(&mut copy, &self.pointer_classifications)?;
         copy.validate()?;
         Ok(())
     }
@@ -715,6 +949,30 @@ fn validate_operations(
     let mut new_ids = BTreeSet::new();
     for operation in operations {
         match operation {
+            ElementOperation::SetPage {
+                page_id,
+                name,
+                path,
+                background,
+            } => {
+                ensure(!page_id.is_nil(), "A page edit needs an existing boundary.")?;
+                ensure(
+                    name.is_some() || path.is_some() || background.is_some(),
+                    "A page edit needs at least one property.",
+                )?;
+                if let Some(name) = name {
+                    validate_text(name.trim(), "Page name", 120, true)?;
+                }
+                if let Some(path) = path {
+                    crate::model::validate_path(path)?;
+                }
+                if let Some(background) = background {
+                    ensure(
+                        crate::model::valid_swatch(background),
+                        "Boundary background must be a hex colour.",
+                    )?;
+                }
+            }
             ElementOperation::ReplaceChildren { children } => {
                 for child in children {
                     validate_draft(child, image_keys, &mut new_ids)?;
@@ -987,6 +1245,8 @@ fn reject(rejected: &mut Option<Uuid>, element: Option<Uuid>, message: String) -
 /// change pointers grant; a boundary target grants every layer inside it; a change pointer target
 /// grants what that pointer points at. Reference pointers grant reads only.
 struct RequestScope {
+    original_routes: Vec<(Uuid, String, String)>,
+    request_text: String,
     behaviour_page: Option<Uuid>,
     allowed: BTreeSet<Uuid>,
     boundary_pages: BTreeSet<Uuid>,
@@ -1058,6 +1318,14 @@ fn scope_for(
         request_pages.extend(anchor_page);
     }
     RequestScope {
+        original_routes: project
+            .pages
+            .iter()
+            .map(|page| (page.id, page.name.clone(), page.path.clone()))
+            .collect(),
+        request_text: request
+            .map(|request| request.text.clone())
+            .unwrap_or_default(),
         behaviour_page: if request_pages.len() == 1 {
             request_pages.first().copied()
         } else {
@@ -1156,16 +1424,84 @@ fn apply_operations(
     generated: &BTreeMap<String, Uuid>,
     rejected: &mut Option<Uuid>,
 ) -> Result<BTreeSet<Uuid>> {
+    apply_operations_with_sources(
+        project,
+        scope,
+        anchor,
+        operations,
+        candidate,
+        generated,
+        rejected,
+        &mut Vec::new(),
+    )
+}
+
+fn apply_operations_with_sources(
+    project: &mut Project,
+    scope: &RequestScope,
+    anchor: Option<Uuid>,
+    operations: &[ElementOperation],
+    candidate: &GenerationCandidate,
+    generated: &BTreeMap<String, Uuid>,
+    rejected: &mut Option<Uuid>,
+    behaviour_sources: &mut Vec<crate::PointerSource>,
+) -> Result<BTreeSet<Uuid>> {
     let images: BTreeMap<String, String> = candidate
         .images
         .iter()
         .map(|image| (image.key.to_lowercase(), image.prompt.clone()))
         .collect();
     let mut touched = BTreeSet::new();
-    // Behaviours this reply already wrote; later ones on the same source add to them.
-    let mut behaviour_sources: Vec<crate::PointerSource> = Vec::new();
     for operation in operations {
-        match operation {
+        let mut operation = operation.clone();
+        resolve_operation_links(&mut operation, project, scope);
+        match &operation {
+            ElementOperation::SetPage {
+                page_id,
+                name,
+                path,
+                background,
+            } => {
+                ensure(
+                    scope.boundary_pages.contains(page_id),
+                    "The generation result changed a boundary outside its request.",
+                )?;
+                let page = project.page(*page_id)?;
+                if let Some(path) = path {
+                    crate::model::validate_path(path)?;
+                    ensure(
+                        !project.pages.iter().any(|page| {
+                            page.id != *page_id && page.path.eq_ignore_ascii_case(path)
+                        }),
+                        "Two pages cannot use the same public path.",
+                    )?;
+                    if *page_id == project.home_page_id && page.path == "/" && path != "/" {
+                        let text = scope.request_text.to_lowercase();
+                        ensure(
+                            text.contains(&path.to_lowercase())
+                                && ["route", "path", "url"]
+                                    .iter()
+                                    .any(|word| text.contains(word)),
+                            "The home page keeps / unless the request explicitly names its new route, path or URL.",
+                        )?;
+                    }
+                }
+                let page = project.page_mut(*page_id)?;
+                if let Some(name) = name {
+                    validate_text(name.trim(), "Page name", 120, true)?;
+                    page.name = name.trim().into();
+                }
+                if let Some(path) = path {
+                    page.path = path.clone();
+                }
+                if let Some(background) = background {
+                    ensure(
+                        crate::model::valid_swatch(background),
+                        "Boundary background must be a hex colour.",
+                    )?;
+                    page.background = crate::model::normalized_swatch(background);
+                }
+            }
             ElementOperation::ReplaceChildren { children } => {
                 let target = anchor
                     .filter(|id| scope.allowed.contains(id))
@@ -1180,7 +1516,7 @@ fn apply_operations(
                 let parent_rect = project
                     .element(target)
                     .map(|(_, element)| element.rect)
-                    .expect("the anchor exists");
+                    .ok_or_else(|| Error("This layer no longer exists.".into()))?;
                 for element in &built {
                     if !fits(&parent_rect, &element.rect) {
                         return Err(reject(
@@ -1208,7 +1544,24 @@ fn apply_operations(
                 element_id,
                 behaviour,
             } => {
-                let (from, to) = if let Some(id) = element_id {
+                let boundary = match element_id {
+                    Some(id) if scope.boundary_pages.contains(id) => Some(*id),
+                    None => scope.behaviour_page,
+                    _ => None,
+                };
+                let (from, to) = if let Some(page_id) = boundary {
+                    project.page(page_id)?;
+                    (
+                        crate::PointerSource::Boundary {
+                            page_id,
+                            size_id: None,
+                        },
+                        crate::PointerTarget::Boundary {
+                            page_id,
+                            size_id: None,
+                        },
+                    )
+                } else if let Some(id) = element_id {
                     ensure(
                         scope.allowed.contains(id),
                         "The generation result changed a layer outside its request.",
@@ -1230,19 +1583,9 @@ fn apply_operations(
                         },
                     )
                 } else {
-                    let page_id = scope.behaviour_page.ok_or_else(|| {
-                        Error("A boundary behaviour needs a request in one boundary.".into())
-                    })?;
-                    (
-                        crate::PointerSource::Boundary {
-                            page_id,
-                            size_id: None,
-                        },
-                        crate::PointerTarget::Boundary {
-                            page_id,
-                            size_id: None,
-                        },
-                    )
+                    return Err(Error(
+                        "A boundary behaviour needs a request in one boundary.".into(),
+                    ));
                 };
                 let existing = project
                     .pointers
@@ -1515,14 +1858,337 @@ fn record_request_history(
             prompt: request.text.clone(),
             attachments: request.attachments.clone(),
             created_at: request.requested_at.clone(),
-            outcome: Some(outcome.to_string()),
+            outcome: Some(outcome.chars().take(MAX_EXPLANATION_CHARS).collect()),
             job_id: Some(job_id.to_string()),
         });
     }
 }
 
+fn pending_for<'a>(
+    project: &'a Project,
+    outcome: &RequestOutcome,
+) -> Option<&'a crate::PendingRequest> {
+    outcome
+        .request_id
+        .and_then(|id| project.requests.iter().find(|item| item.id == id))
+        .or_else(|| {
+            outcome.element_id.and_then(|id| {
+                project.requests.iter().find(|item| {
+                    item.targets.iter().any(|target| {
+                        matches!(target,
+                crate::RequestTarget::Element { id: target_id, .. } if *target_id == id)
+                    })
+                })
+            })
+        })
+}
+
+fn operation_kind(operation: &ElementOperation) -> &'static str {
+    match operation {
+        ElementOperation::SetPage { .. } => "setPage",
+        ElementOperation::ReplaceChildren { .. } => "replaceChildren",
+        ElementOperation::SetBehaviour { .. } => "setBehaviour",
+        ElementOperation::Update { .. } => "update",
+        ElementOperation::Insert { .. } => "insert",
+        ElementOperation::Remove { .. } => "remove",
+        ElementOperation::InsertInBoundary { .. } => "insertInBoundary",
+        ElementOperation::AddReference { .. } => "addReference",
+    }
+}
+
+fn untouched_boundaries(
+    project: &Project,
+    pending: &crate::PendingRequest,
+    outcome: &RequestOutcome,
+) -> Vec<Uuid> {
+    let scope = scope_for(project, Some(pending), None);
+    let owner = |id| project.element(id).map(|(page, _)| page.id);
+    let mut received = BTreeSet::new();
+    for operation in &outcome.operations {
+        match operation {
+            ElementOperation::SetPage { page_id, .. }
+            | ElementOperation::InsertInBoundary { page_id, .. } => {
+                received.insert(*page_id);
+            }
+            ElementOperation::SetBehaviour { element_id, .. } => {
+                received.extend(
+                    element_id
+                        .and_then(|id| {
+                            if scope.boundary_pages.contains(&id) {
+                                Some(id)
+                            } else {
+                                owner(id)
+                            }
+                        })
+                        .or_else(|| {
+                            element_id
+                                .is_none()
+                                .then_some(scope.behaviour_page)
+                                .flatten()
+                        }),
+                );
+            }
+            ElementOperation::ReplaceChildren { .. } => {
+                received.extend(outcome.element_id.and_then(owner));
+            }
+            ElementOperation::Update { patches } => {
+                received.extend(patches.iter().filter_map(|patch| owner(patch.element_id)));
+            }
+            ElementOperation::Insert { parent_id, .. } => {
+                received.extend(owner(*parent_id));
+            }
+            ElementOperation::Remove { element_id } => {
+                received.extend(owner(*element_id));
+            }
+            ElementOperation::AddReference { .. } => {}
+        }
+    }
+    pending
+        .targets
+        .iter()
+        .filter_map(|target| match target {
+            crate::RequestTarget::Boundary { page, .. }
+                if !received.contains(page)
+                    && project
+                        .page(*page)
+                        .is_ok_and(|page| page.elements.is_empty()) =>
+            {
+                Some(*page)
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+fn boundary_coverage_message(
+    project: &Project,
+    pending: &crate::PendingRequest,
+    untouched: &[Uuid],
+) -> String {
+    let names = untouched
+        .iter()
+        .filter_map(|id| project.page(*id).ok())
+        .map(|page| page.name.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    if pending.boundary_retry_order.is_empty() {
+        format!(
+            "No operations received for {names}. Kept a request for only these boundaries; Generate again to fill them."
+        )
+    } else {
+        format!(
+            "No operations received again for {names}. Stopped retrying these boundaries; the request was not completed."
+        )
+    }
+}
+
+fn normalize_raw_page_patches(
+    value: &mut serde_json::Value,
+    project: &Project,
+    events: &mut Vec<ValidationEvent>,
+) {
+    use serde_json::{Value, json};
+    let Some(outcomes) = value.get_mut("requests").and_then(Value::as_array_mut) else {
+        return;
+    };
+    for outcome in outcomes {
+        let id = |key| {
+            outcome
+                .get(key)
+                .and_then(Value::as_str)
+                .and_then(|value| Uuid::parse_str(value).ok())
+        };
+        let request_id = id("requestId");
+        let anchor = id("elementId");
+        let pending = project.requests.iter().find(|request| Some(request.id) == request_id)
+            .or_else(|| anchor.and_then(|id| project.requests.iter().find(|request| request.targets.iter()
+                .any(|target| matches!(target, crate::RequestTarget::Element { id: target, .. } if *target == id)))));
+        let scope = scope_for(
+            project,
+            pending,
+            anchor.and_then(|id| project.element(id).map(|(page, _)| page.id)),
+        );
+        let Some(operations) = outcome.get_mut("operations").and_then(Value::as_array_mut) else {
+            continue;
+        };
+        let mut repaired = Vec::new();
+        for mut operation in std::mem::take(operations) {
+            if operation.get("kind").and_then(Value::as_str) != Some("update") {
+                repaired.push(operation);
+                continue;
+            }
+            let Some(patches) = operation.get_mut("patches").and_then(Value::as_array_mut) else {
+                repaired.push(operation);
+                continue;
+            };
+            let had_patches = !patches.is_empty();
+            let mut layers = Vec::new();
+            for patch in std::mem::take(patches) {
+                let page_id = patch
+                    .get("elementId")
+                    .and_then(Value::as_str)
+                    .and_then(|id| Uuid::parse_str(id).ok());
+                let Some(page_id) = page_id.filter(|id| project.page(*id).is_ok()) else {
+                    layers.push(patch);
+                    continue;
+                };
+                let background = patch
+                    .get("style")
+                    .and_then(|style| style.get("fill"))
+                    .and_then(Value::as_str)
+                    .filter(|fill| crate::model::valid_swatch(fill));
+                let recovered = background.is_some();
+                repaired.push(json!({"kind":"setPage","pageId":page_id,"name":null,"path":null,"background":background}));
+                if scope.boundary_pages.contains(&page_id) && recovered {
+                    events.push(page_patch_event(project, page_id, true));
+                }
+            }
+            *patches = layers;
+            if !patches.is_empty() || !had_patches {
+                repaired.push(operation);
+            }
+        }
+        *operations = repaired;
+    }
+}
+
+fn page_patch_event(project: &Project, page_id: Uuid, recovered: bool) -> ValidationEvent {
+    ValidationEvent {
+        kind: "pagePatch".into(),
+        disposition: if recovered { "warning" } else { "dropped" }.into(),
+        element_id: None,
+        message: format!(
+            "{} {}. Other layer patch fields were ignored; use setPage for boundary properties.",
+            if recovered {
+                "Recovered the page background for"
+            } else {
+                "Skipped a layer patch on boundary"
+            },
+            project
+                .page(page_id)
+                .map(|page| page.name.as_str())
+                .unwrap_or("page")
+        ),
+    }
+}
+
+fn apply_page_operations(
+    project: &mut Project,
+    original: &Project,
+    candidate: &GenerationCandidate,
+) -> Result<()> {
+    for outcome in &candidate.requests {
+        if outcome.status != RequestStatus::Implemented {
+            continue;
+        }
+        let pending = pending_for(original, outcome);
+        let anchor_page = outcome
+            .element_id
+            .and_then(|id| original.element(id).map(|(page, _)| page.id));
+        let scope = scope_for(original, pending, anchor_page);
+        let operations: Vec<_> = outcome
+            .operations
+            .iter()
+            .filter(|operation| matches!(operation, ElementOperation::SetPage { .. }))
+            .cloned()
+            .collect();
+        apply_operations(
+            project,
+            &scope,
+            outcome.element_id,
+            &operations,
+            candidate,
+            &BTreeMap::new(),
+            &mut None,
+        )?;
+    }
+    Ok(())
+}
+
+fn resolve_operation_links(
+    operation: &mut ElementOperation,
+    project: &Project,
+    scope: &RequestScope,
+) {
+    fn resolve(url: &mut Option<String>, project: &Project, scope: &RequestScope) {
+        let Some(value) = url.as_deref().map(str::trim) else {
+            return;
+        };
+        if value.is_empty() || value.contains(":") || value.starts_with("//") {
+            return;
+        }
+        let key = value.trim_end_matches('/');
+        let unique = |ids: Vec<Uuid>| {
+            let ids: BTreeSet<_> = ids.into_iter().collect();
+            if ids.len() == 1 {
+                ids.first().copied()
+            } else {
+                None
+            }
+        };
+        let current_path = unique(
+            project
+                .pages
+                .iter()
+                .filter(|page| page.path.trim_end_matches('/').eq_ignore_ascii_case(key))
+                .map(|page| page.id)
+                .collect(),
+        );
+        let names: Vec<_> = project
+            .pages
+            .iter()
+            .filter(|page| page.name.eq_ignore_ascii_case(key.trim_start_matches('/')))
+            .map(|page| page.id)
+            .collect();
+        if current_path.is_none() && names.len() > 1 {
+            return;
+        }
+        let current_name = unique(names);
+        let original = unique(
+            scope
+                .original_routes
+                .iter()
+                .filter(|(_, name, path)| {
+                    path.trim_end_matches('/').eq_ignore_ascii_case(key)
+                        || name.eq_ignore_ascii_case(key.trim_start_matches('/'))
+                })
+                .map(|(id, _, _)| *id)
+                .collect(),
+        );
+        if let Some(page) = current_path
+            .or(current_name)
+            .or(original)
+            .and_then(|id| project.page(id).ok())
+        {
+            *url = Some(page.path.clone());
+        }
+    }
+    fn draft(element: &mut ElementDraft, project: &Project, scope: &RequestScope) {
+        resolve(&mut element.url, project, scope);
+        for child in &mut element.children {
+            draft(child, project, scope);
+        }
+    }
+    match operation {
+        ElementOperation::ReplaceChildren { children } => {
+            for child in children {
+                draft(child, project, scope);
+            }
+        }
+        ElementOperation::Insert { element, .. }
+        | ElementOperation::InsertInBoundary { element, .. } => draft(element, project, scope),
+        ElementOperation::Update { patches } => {
+            for patch in patches {
+                resolve(&mut patch.url, project, scope);
+            }
+        }
+        _ => {}
+    }
+}
+
 fn apply_request(
     project: &mut Project,
+    original: &Project,
     page_id: Option<Uuid>,
     request: &RequestOutcome,
     candidate: &GenerationCandidate,
@@ -1534,31 +2200,28 @@ fn apply_request(
     }
     // The reply may name the pending request; older replies name one layer. Either way the
     // request is read before it is changed so its text can become layer history.
-    let pending = request
-        .request_id
-        .and_then(|id| project.requests.iter().find(|item| item.id == id))
-        .or_else(|| {
-            request.element_id.and_then(|id| {
-                project.requests.iter().find(|item| {
-                    item.targets.iter().any(|target| match target {
-                        crate::RequestTarget::Element { id: target_id, .. } => *target_id == id,
-                        _ => false,
-                    })
-                })
-            })
-        })
-        .cloned();
+    let pending = pending_for(original, request).cloned();
+    let untouched = pending
+        .as_ref()
+        .map(|pending| untouched_boundaries(original, pending, request))
+        .unwrap_or_default();
     let anchor_page = page_id.or_else(|| {
         request
             .element_id
             .and_then(|id| project.element(id).map(|(page, _)| page.id))
     });
-    let scope = scope_for(project, pending.as_ref(), anchor_page);
+    let scope = scope_for(original, pending.as_ref(), anchor_page);
+    let operations: Vec<_> = request
+        .operations
+        .iter()
+        .filter(|operation| !matches!(operation, ElementOperation::SetPage { .. }))
+        .cloned()
+        .collect();
     let touched = apply_operations(
         project,
         &scope,
         request.element_id,
-        &request.operations,
+        &operations,
         candidate,
         generated,
         rejected,
@@ -1569,9 +2232,57 @@ fn apply_request(
         } else {
             request.explanation.clone()
         };
+        let outcome = if untouched.is_empty() {
+            outcome
+        } else {
+            format!(
+                "{} {outcome}",
+                boundary_coverage_message(project, pending, &untouched)
+            )
+        };
         record_request_history(project, &touched, pending, &outcome, candidate.job_id);
-        // A pending request is fulfilled once its reply is applied.
         project.requests.retain(|item| item.id != pending.id);
+        if !untouched.is_empty() && pending.boundary_retry_order.is_empty() {
+            let mut remaining = pending.clone();
+            remaining.boundary_retry_order = pending
+                .targets
+                .iter()
+                .filter_map(|target| match target {
+                    crate::RequestTarget::Boundary { page, .. } => Some(*page),
+                    _ => None,
+                })
+                .collect();
+            remaining.targets.retain(|target| {
+                matches!(target,
+                crate::RequestTarget::Boundary { page, .. } if untouched.contains(page))
+            });
+            // The narrowed targets define the follow-up; an old area must not grant more scope.
+            remaining.area = None;
+            project.requests.push(remaining);
+        }
+    }
+    Ok(())
+}
+
+fn apply_pointer_classifications(
+    project: &mut Project,
+    classifications: &[PointerClassification],
+) -> Result<()> {
+    for classification in classifications {
+        let pointer = project
+            .pointers
+            .iter_mut()
+            .find(|pointer| pointer.id == classification.pointer_id)
+            .ok_or_else(|| Error("This pointer no longer exists.".into()))?;
+        if !crate::pointer_needs_classifying(pointer) {
+            continue;
+        }
+        ensure(
+            pointer.comment == classification.comment,
+            "A pointer comment changed before this result was applied.",
+        )?;
+        pointer.play = classification.action.play_action();
+        pointer.play_comment = classification.comment.clone();
     }
     Ok(())
 }
@@ -1607,6 +2318,7 @@ pub fn apply_generation_output(
         generated.insert(image.key.to_lowercase(), picture);
     }
     let targets = snapshot.target_ids()?;
+    apply_page_operations(&mut next, project, candidate)?;
     for request in &candidate.requests {
         if request.status != RequestStatus::Implemented {
             continue;
@@ -1621,26 +2333,11 @@ pub fn apply_generation_output(
                     .and_then(|id| next.element(id).map(|(page, _)| page.id))
             });
         apply_request(
-            &mut next, page_id, request, candidate, &generated, &mut None,
+            &mut next, project, page_id, request, candidate, &generated, &mut None,
         )?;
     }
     let _ = targets;
-    for classification in &candidate.pointer_classifications {
-        let pointer = next
-            .pointers
-            .iter_mut()
-            .find(|pointer| pointer.id == classification.pointer_id)
-            .ok_or_else(|| Error("This pointer no longer exists.".into()))?;
-        if !crate::pointer_needs_classifying(pointer) {
-            continue;
-        }
-        ensure(
-            pointer.comment == classification.comment,
-            "A pointer comment changed before this result was applied.",
-        )?;
-        pointer.play = classification.action.play_action();
-        pointer.play_comment = classification.comment.clone();
-    }
+    apply_pointer_classifications(&mut next, &candidate.pointer_classifications)?;
     for index in accepted_decision_indices {
         let proposal = candidate
             .decision_proposals
@@ -1758,14 +2455,15 @@ fn drop_null_optional_draft_fields(value: &mut serde_json::Value) {
     }
 }
 
-/// Repair the small, different drift a provider without an enforced schema introduces, guided by
-/// the same schema the request carried. The pass only removes what the schema forbids and reads a
-/// null as empty where the schema requires a string and allows one; it never invents a field,
-/// never coerces another type, and leaves a value that already conforms untouched. Whatever it
-/// cannot repair stays as it is, for deserialisation and validation to report.
 fn conform_to_candidate_schema(value: &mut serde_json::Value) {
-    let schema = candidate_schema();
-    conform_value(value, &schema, &schema);
+    conform_to_schema(value, &candidate_schema());
+}
+
+/// Repair provider drift using the request schema: drop forbidden extra properties, replace
+/// null strings where empty is allowed, and fill missing required properties only with an
+/// allowed empty value. Other values remain for deserialisation and validation to reject.
+pub fn conform_to_schema(value: &mut serde_json::Value, schema: &serde_json::Value) {
+    conform_value(value, schema, schema);
 }
 
 fn conform_value(
@@ -1807,6 +2505,17 @@ fn conform_value(
             {
                 object.retain(|key, _| properties.contains_key(key));
             }
+            if let Some(required) = schema.get("required").and_then(serde_json::Value::as_array) {
+                for key in required.iter().filter_map(serde_json::Value::as_str) {
+                    if !object.contains_key(key)
+                        && let Some(property) =
+                            properties.and_then(|properties| properties.get(key))
+                        && let Some(empty) = empty_schema_value(property, root)
+                    {
+                        object.insert(key.into(), empty);
+                    }
+                }
+            }
             for (key, member) in object.iter_mut() {
                 if let Some(property) = properties.and_then(|properties| properties.get(key)) {
                     conform_value(member, property, root);
@@ -1822,6 +2531,67 @@ fn conform_value(
         }
         _ => {}
     }
+}
+
+/// No objects, numbers, booleans or nonempty enum members can be inferred from omission.
+fn empty_schema_value(
+    schema: &serde_json::Value,
+    root: &serde_json::Value,
+) -> Option<serde_json::Value> {
+    use serde_json::{Value, json};
+    let schema = dereference(schema, root);
+    // Prefer null for nullable properties, including nullable enums and union branches.
+    let null = Value::Null;
+    if schema_allows_empty(&null, schema, root) {
+        return Some(null);
+    }
+    [json!([]), json!("")]
+        .into_iter()
+        .find(|empty| schema_allows_empty(empty, schema, root))
+}
+
+fn schema_allows_empty(
+    value: &serde_json::Value,
+    schema: &serde_json::Value,
+    root: &serde_json::Value,
+) -> bool {
+    let schema = dereference(schema, root);
+    if let Some(branches) = union_branches(schema) {
+        let matches = branches
+            .iter()
+            .filter(|branch| schema_allows_empty(value, branch, root))
+            .count();
+        return if schema.get("oneOf").is_some() {
+            matches == 1
+        } else {
+            matches > 0
+        };
+    }
+    if schema
+        .get("const")
+        .is_some_and(|constant| constant != value)
+        || schema
+            .get("enum")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|values| !values.contains(value))
+    {
+        return false;
+    }
+    // An explicit type or literal constraint must establish that the value is safe.
+    if (schema.get("type").is_none() && schema.get("enum").is_none() && schema.get("const").is_none())
+        || !value_fits_type(value, schema)
+    {
+        return false;
+    }
+    if value.is_array() {
+        return schema
+            .get("minItems")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0)
+            == 0;
+    }
+    value.is_null()
+        || (value.is_string() && empty_string_is_allowed(schema) && schema.get("format").is_none())
 }
 
 fn dereference<'a>(
@@ -1935,11 +2705,13 @@ fn value_fits_type(value: &serde_json::Value, schema: &serde_json::Value) -> boo
 /// An empty string is only substituted where the schema does not rule it out: a const, an enum
 /// without `""`, a positive minimum length or any pattern can all forbid it.
 fn empty_string_is_allowed(schema: &serde_json::Value) -> bool {
-    if let Some(constant) = schema.get("const") {
-        return constant.as_str() == Some("");
+    if schema.get("const").is_some_and(|value| value.as_str() != Some("")) {
+        return false;
     }
-    if let Some(values) = schema.get("enum").and_then(serde_json::Value::as_array) {
-        return values.iter().any(|value| value.as_str() == Some(""));
+    if let Some(values) = schema.get("enum").and_then(serde_json::Value::as_array)
+        && !values.iter().any(|value| value.as_str() == Some(""))
+    {
+        return false;
     }
     if schema.get("minLength").and_then(serde_json::Value::as_u64) > Some(0) {
         return false;
@@ -2065,6 +2837,7 @@ pub fn candidate_schema() -> serde_json::Value {
         object(json!({"kind":{"type":"string","enum":["remove"]},"elementId":uuid.clone()})),
         object(json!({"kind":{"type":"string","enum":["setBehaviour"]},"elementId":nullable(uuid.clone()),"behaviour":text(crate::MAX_PROMPT_CHARS)})),
         object(json!({"kind":{"type":"string","enum":["insertInBoundary"]},"pageId":uuid.clone(),"sizeId":nullable(uuid.clone()),"element":{"$ref":"#/$defs/element"}})),
+        object(json!({"kind":{"type":"string","enum":["setPage"]},"pageId":uuid.clone(),"name":nullable(json!({"type":"string","minLength":1,"maxLength":120})),"path":nullable(json!({"type":"string","minLength":1,"maxLength":1024})),"background":nullable(json!({"type":"string","pattern":"^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$"}))})),
         object(json!({"kind":{"type":"string","enum":["addReference"]},"item":object(json!({"rect":rect,"kind":reference_kind}))}))
     ]});
     let action = json!({"anyOf":[
@@ -2192,6 +2965,25 @@ mod conformance_tests {
     }
 
     #[test]
+    fn missing_properties_only_receive_schema_allowed_empty_values() {
+        let schema = json!({
+            "type":"object", "required":["array","nullable","text","number","id","choice","nonempty"],
+            "properties":{
+                "array":{"type":"array"},
+                "nullable":{"enum":["known",null]},
+                "text":{"type":"string"},
+                "number":{"type":"number"},
+                "id":uuid_schema(),
+                "choice":{"type":"string","enum":["known"]},
+                "nonempty":{"type":"array","minItems":1}
+            }
+        });
+        let mut value = json!({});
+        conform_to_schema(&mut value, &schema);
+        assert_eq!(value, json!({"array":[],"nullable":null,"text":""}));
+    }
+
+    #[test]
     fn unknown_keys_are_dropped_at_depth() {
         let mut operation = json!({
             "kind": "insert",
@@ -2250,7 +3042,7 @@ mod conformance_tests {
     }
 
     #[test]
-    fn a_conforming_candidate_is_byte_for_byte_unchanged() {
+    fn schema_repair_is_idempotent() {
         let mut drafted = element();
         drafted["style"] = json!({"opacity": 1.0, "textStyle": {"size": 32.0, "align": "center"}});
         drafted["children"] = json!([]);
@@ -2258,6 +3050,7 @@ mod conformance_tests {
             {"kind": "insertInBoundary", "pageId": PAGE, "sizeId": null, "element": drafted},
             {"kind": "remove", "elementId": PAGE}
         ]));
+        let value = conformed(value);
         let before = serde_json::to_string(&value).unwrap();
         let after = conformed(value);
         assert_eq!(serde_json::to_string(&after).unwrap(), before);

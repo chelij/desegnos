@@ -4,7 +4,7 @@ import { compileModules } from './typescript.mjs';
 
 const modules = await compileModules(['src/generationProblems.ts']);
 try {
-  const { areaProblems, placeCallouts, areaOutcome, jobOutcome, resolutionAction, replyCutOff, replyCutOffMessage, staleResult, staleResultMessage } = await modules.load('generationProblems.js');
+  const { areaProblems, placeCallouts, areaOutcome, generationWarnings, jobOutcome, resolutionAction, replyCutOff, replyCutOffMessage, staleResult, staleResultMessage } = await modules.load('generationProblems.js');
   const rect = { x: 100, y: 200, width: 200, height: 80 };
   const other = { x: 110, y: 50, width: 200, height: 80 };
   const intersects = (a, b) => a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y;
@@ -122,6 +122,18 @@ try {
     assert.equal(jobOutcome(applied).retryAll, false);
     assert.equal(jobOutcome({ ...applied, validationEvents: [{ kind: 'element', disposition: 'repaired', message: 'Fixed' }] }).reason, '');
     assert.equal(jobOutcome({ ...applied, validationEvents: [], message: 'Applied with warnings: dropped invalid operation' }).reason, 'Some changes were skipped. The rest was applied.');
+  });
+  await test('operation warnings share one partial-success path across job and batch snapshots', () => {
+    const dropped = { elementId: null, kind: 'operation', disposition: 'dropped', message: 'Request 1 operation 2 (update) skipped: invalid target' };
+    const recovered = { elementId: null, kind: 'pagePatch', disposition: 'warning', message: 'Recovered the page background. Other layer patch fields were ignored.' };
+    const partial = { jobId: 'partial', status: 'applied', areas: [], candidate: null,
+      validationEvents: [dropped], batches: [{ status: 'applied', validationEvents: [dropped, recovered] }] };
+    assert.deepEqual(generationWarnings(partial), [dropped.message, recovered.message]);
+    assert.equal(jobOutcome(partial).reason, 'Some layer changes and page changes were skipped. The rest was applied.');
+    assert.equal(jobOutcome(partial).retryAll, false);
+    assert.deepEqual(generationWarnings({ ...partial, validationEvents: [], batches: [{ status: 'applied', validationEvents: [dropped] }] }), [dropped.message]);
+    assert.deepEqual(generationWarnings({ validationEvents: [{ ...dropped, kind: 'replyStructure', disposition: 'conflicted' }] }), []);
+    assert.deepEqual(generationWarnings({ validationEvents: [{ ...recovered, kind: 'telemetryStorage' }] }), []);
   });
   await test('a reply cut off at the output limit is named, not left unknown', () => {
     const settings = { model: 'deepseek-flash', maxOutputTokens: 128000, reasoningEffort: 'low', spendingLimitUsd: 2, imageGeneration: false };

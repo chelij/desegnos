@@ -1,4 +1,4 @@
-import type { Element, GenerationJobView, Page, Project, Rect } from './types';
+import type { Element, GenerationJobView, Page, Project, Rect, GenerationValidationEvent } from './types';
 import { generationError, outcomeReason, technicalReason, userError } from './userErrors.js';
 
 /// A specific place that can resolve an outcome the AI itself declared.
@@ -105,9 +105,9 @@ function jobReason(job: GenerationJobView): string {
   if (staleResult(job)) return staleResultMessage;
   const events = [...(job.validationEvents ?? []), ...(job.batches ?? []).flatMap(batch => batch.validationEvents ?? [])];
   if (job.status === 'applied') {
-    const skipped = events.filter(event => /^(?:dropped|skipped|conflicted|warning)$/.test(event.disposition) && event.kind !== 'telemetryStorage');
+    const skipped = warningEvents(job);
     const kinds = new Set(skipped.map(event => /image/i.test(event.kind) ? 'image changes'
-      : /pointer/i.test(event.kind) ? 'interaction changes' : /operation|element|layer/i.test(event.kind) ? 'layer changes' : 'changes'));
+      : /pointer/i.test(event.kind) ? 'interaction changes' : /page/i.test(event.kind) ? 'page changes' : /operation|element|layer/i.test(event.kind) ? 'layer changes' : 'changes'));
     if (kinds.size) return `Some ${[...kinds].join(' and ')} were skipped. The rest was applied.`;
     if (job.candidate?.requests.some(request => request.status === 'conflict')) return 'Some requests were skipped. The rest was applied.';
     if (/\b(?:skipped|dropped|warnings?)\b/i.test(job.message ?? '')) return 'Some changes were skipped. The rest was applied.';
@@ -127,7 +127,7 @@ function jobReason(job: GenerationJobView): string {
 export function jobOutcome(job: GenerationJobView | null, promptOf: (elementId: string) => string | undefined = () => undefined): JobOutcome {
   if (!job || !terminal.includes(job.status)) return { reason: '', retryable: [], blocked: [], retryAll: false, retryBatches: false };
   const ids = new Set<string>();
-  for (const area of job.areas) ids.add(area.elementId);
+  for (const area of job.areas ?? []) ids.add(area.elementId);
   for (const outcome of job.candidate?.requests ?? []) if (outcome.elementId) ids.add(outcome.elementId);
   const retryable: string[] = [];
   const blocked: JobOutcome['blocked'] = [];
@@ -192,4 +192,22 @@ export function placeCallouts(items: Callout[], areas: Rect[], origin: { x: numb
     placed.push(card);
   }
   return placed;
+}
+
+/// Job and batch snapshots can carry the same diagnostics; show each warning once.
+function warningEvents(job: GenerationJobView | null): GenerationValidationEvent[] {
+  const events = [...(job?.validationEvents ?? []), ...(job?.batches ?? []).flatMap(batch => batch.validationEvents ?? [])];
+  const seen = new Set<string>();
+  return events.filter(event => {
+    if (!/^(?:dropped|skipped|conflicted|warning)$/.test(event.disposition) || event.kind === 'telemetryStorage' || event.kind === 'replyStructure') return false;
+    const key = JSON.stringify([event.kind, event.disposition, event.elementId, event.message]);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+/// Recoverable model mistakes remain visible after the valid operations have applied.
+export function generationWarnings(job: GenerationJobView | null): string[] {
+  return warningEvents(job).map(event => event.message);
 }

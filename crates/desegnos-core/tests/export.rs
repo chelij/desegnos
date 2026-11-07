@@ -1317,3 +1317,56 @@ fn behaviour_is_requested_once_and_wrapped_in_export_javascript() {
         );
     }
 }
+
+#[test]
+fn export_fills_missing_echoes_summary_and_arrays_and_drops_extras() {
+    let project = project();
+    let plan = plan_export(&project, &[], Uuid::new_v4()).unwrap();
+    let parsed =
+        parse_export_reply(&plan, r#"{"shared":{"js":"", "extra":true}, "extra":42}"#).unwrap();
+    assert_eq!(parsed.job_id, plan.job_id);
+    assert_eq!(parsed.requirements_sha256, plan.sha256);
+    assert!(parsed.summary.is_empty());
+    assert!(parsed.pages.is_empty());
+    assert!(parsed.pointers.is_empty());
+    assert!(parsed.shared.css.is_empty());
+}
+
+#[test]
+fn export_and_comment_reject_wrong_supplied_echoes() {
+    let project = project();
+    let plan = plan_export(&project, &[], Uuid::new_v4()).unwrap();
+    for (key, value) in [
+        ("requirementsSha256", serde_json::json!("wrong")),
+        ("jobId", serde_json::json!(Uuid::new_v4())),
+        ("requirementsSha256", serde_json::Value::Null),
+    ] {
+        let mut reply = serde_json::json!({"shared":{"css":"","js":""},"comment":"Go home"});
+        reply[key] = value;
+        assert!(parse_export_reply(&plan, &reply.to_string()).is_err());
+        assert!(parse_comment_reply(&plan, &reply.to_string()).is_err());
+    }
+}
+
+#[test]
+fn comment_fills_missing_echoes_and_drops_extras() {
+    let project = project();
+    let plan = plan_export(&project, &[], Uuid::new_v4()).unwrap();
+    assert_eq!(
+        parse_comment_reply(&plan, r#"{"comment":"Go home", "extra":true}"#).unwrap(),
+        "Go home"
+    );
+    assert!(parse_comment_reply(&plan, "{}").is_err());
+}
+
+#[test]
+fn export_does_not_invent_required_enum_or_boolean_values() {
+    let project = project();
+    let plan = plan_export(&project, &[], Uuid::new_v4()).unwrap();
+    for reply in [
+        serde_json::json!({"pages":[{"pageId":plan.pages[0].page_id}]}),
+        serde_json::json!({"pointers":[{"pointerId":Uuid::new_v4()}]}),
+    ] {
+        assert!(parse_export_reply(&plan, &reply.to_string()).is_err());
+    }
+}

@@ -1752,6 +1752,7 @@ mod tests {
                 let system = body["messages"][0]["content"].as_str().unwrap();
                 assert!(system.starts_with(packet.instructions));
                 assert!(system.contains(&serde_json::to_string(&packet.schema).unwrap()));
+                assert!(system.contains("setPage"));
             } else {
                 assert_eq!(
                     body["response_format"]["json_schema"]["schema"],

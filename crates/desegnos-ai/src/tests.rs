@@ -4220,3 +4220,19 @@ fn large_export_behaviour_request_fits_a_million_token_context_window() {
         ErrorKind::InputLimit
     );
 }
+
+#[tokio::test]
+async fn stream_accepts_absent_host_echoes_but_rejects_present_nulls() {
+    let frozen = snapshot(GenerationMode::Strict);
+    let mut reply: Value = serde_json::from_str(&candidate(&frozen)).unwrap();
+    reply.as_object_mut().unwrap().remove("jobId");
+    reply.as_object_mut().unwrap().remove("requirementsSha256");
+    let server = Server::start(Reply::sse(frame(completed(&reply.to_string())))).await;
+    assert!(generate(&server, &frozen).await.is_ok());
+    for key in ["jobId", "requirementsSha256"] {
+        let mut invalid = reply.clone();
+        invalid[key] = Value::Null;
+        let server = Server::start(Reply::sse(frame(completed(&invalid.to_string())))).await;
+        assert!(generate(&server, &frozen).await.is_err());
+    }
+}

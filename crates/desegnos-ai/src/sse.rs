@@ -1091,12 +1091,18 @@ impl<'a> ResponseStream<'a> {
                 .reject(ResponseRejection::CandidateShape, outcome)
                 .with_diagnostic_reply(&text, self.key));
         }
-        if candidate.get("jobId").and_then(Value::as_str) != Some(&self.job_id) {
+        if candidate
+            .get("jobId")
+            .is_some_and(|value| value.as_str() != Some(&self.job_id))
+        {
             return Err(self
                 .reject(ResponseRejection::JobMismatch, outcome)
                 .with_diagnostic_reply(&text, self.key));
         }
-        if candidate.get("requirementsSha256").and_then(Value::as_str) != Some(self.digest) {
+        if candidate
+            .get("requirementsSha256")
+            .is_some_and(|value| value.as_str() != Some(self.digest))
+        {
             return Err(self
                 .reject(ResponseRejection::RequirementsMismatch, outcome)
                 .with_diagnostic_reply(&text, self.key));

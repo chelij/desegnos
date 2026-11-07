@@ -1,6 +1,6 @@
 import { ProblemBanner } from './ProblemBanner.js';
 import { userError, generationError } from './userErrors.js';
-import { areaOutcome, declaredConflict, fixLabel, jobOutcome, jsonBlocks, staleResult, staleResultMessage } from './generationProblems.js';
+import { areaOutcome, declaredConflict, fixLabel, generationWarnings, jobOutcome, jsonBlocks, staleResult, staleResultMessage } from './generationProblems.js';
 import { useEffect, useRef, useState } from 'react';
 import { WorkspaceSurface } from './WorkspaceSurface';
 import { Disclosure } from './Disclosure';
@@ -8,6 +8,7 @@ import type { AiSettingsView, Element, GenerationHistory, GenerationJobView, Pro
 import type { GenerationController } from './useGeneration';
 import { native } from './api';
 import { scopeLabel } from './Notes';
+import { summarizePageChanges } from './noticeSummary';
 
 const SERVICE = { openai: 'OpenAI', anthropic: 'Anthropic', google: 'Google', openrouter: 'OpenRouter', deepseek: 'DeepSeek', local: 'Local model' } as const;
 const kb = (bytes: number) => bytes < 1024 ? `${bytes} bytes` : `${(bytes / 1024).toFixed(1)} KB`;
@@ -81,6 +82,8 @@ export function GenerationLog({ job: currentJob, operation, error, project, cont
     finally { setReplySending(false); }
   }
   const candidate = job?.candidate;
+  const pageChanges = summarizePageChanges(candidate, project);
+  const warnings = generationWarnings(job);
   // A boundary-only request has no layer to list, so the frozen requirements own the count.
   const sentCount = job?.requirements.requestCount ?? requests.length;
   const label = (id: string) => {
@@ -112,6 +115,8 @@ export function GenerationLog({ job: currentJob, operation, error, project, cont
           {!working && !stale && (!review.blocked.length || job.status === 'applied') && review.reason && <p className="log-text">{review.reason}</p>}
           {!past && !working && !stale && (review.retryable.length > 0 || review.retryAll || review.retryBatches) && <button disabled={!!operation} onClick={() => { void (review.retryBatches ? controller.retry() : controller.prepare(review.retryable.length ? review.retryable : undefined)).catch(() => {}); }}>Try again</button>}
           {candidate && <p className="log-text">{candidate.summary}</p>}
+          {pageChanges && <p className="log-text">{pageChanges}</p>}
+          {warnings.length > 0 && <section aria-label="Generation warnings"><ul>{warnings.map((warning, index) => <li key={index}><p className="log-text">{warning}</p></li>)}</ul></section>}
           {candidate?.requests.flatMap((request, requestIndex) => request.operations.map((operation, operationIndex) => operation.kind === 'setBehaviour' ? <p className="log-text" key={`${requestIndex}-${operationIndex}`}>Behaviour: {operation.behaviour}</p> : null))}
           {candidate && candidate.criticism.length > 0 && <Disclosure className="generation-feedback" summary={`Design feedback (${candidate.criticism.length})`}><ul>{candidate.criticism.map((item, index) => <li key={index}><p className="log-text">{humanText(item.message)}</p><p className="log-meta">{humanText(item.suggestion)}</p></li>)}</ul></Disclosure>}
           {!past && review.blocked.length > 0 && <section className="log-needs-input" aria-label="Needs your input">

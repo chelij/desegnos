@@ -2063,12 +2063,20 @@ impl GenerationService {
                     &response.text,
                     std::env::var("DESEGNOS_GENERATION_BENCHMARK").as_deref() == Ok("1"),
                 )?;
-                let checked =
-                    GenerationCandidate::from_json(&response.text).map(|mut candidate| {
-                        candidate.normalize_boundary_anchors(original);
-                        let valid = candidate.validate(&record.view.requirements, original);
-                        (candidate, valid)
-                    });
+                let checked = GenerationCandidate::from_json_for_project(
+                    &response.text,
+                    &record.view.requirements,
+                    original,
+                    &mut record.view.validation_events,
+                )
+                .map(|mut candidate| {
+                    let valid = candidate.retain_valid_operations(
+                        &record.view.requirements,
+                        original,
+                        &mut record.view.validation_events,
+                    );
+                    (candidate, valid)
+                });
                 match checked {
                     Ok((candidate, Ok(()))) => {
                         let ready = candidate.can_apply(&record.view.requirements);
@@ -3409,7 +3417,18 @@ pub async fn apply_generation(
         )
         .map_err(message)?;
     let mut record = service.record(workspace.project()?, job_id)?;
-    record.view.message = "Layers updated.".into();
+    let warnings: Vec<_> = record
+        .view
+        .validation_events
+        .iter()
+        .filter(|event| matches!(event.disposition.as_str(), "dropped" | "warning"))
+        .map(|event| event.message.as_str())
+        .collect();
+    record.view.message = if warnings.is_empty() {
+        "Layers updated.".into()
+    } else {
+        format!("Layers updated with warnings. {}", warnings.join(" "))
+    };
     record.transition(JobStatus::Applied);
     record.view.accepted_decision_indices = accepted_decision_indices;
     service.persist(record)?;
@@ -3638,6 +3657,7 @@ mod unreadable_reply_retry_tests {
         let element_id = element.id;
         project.pages[0].elements.push(element);
         project.requests.push(PendingRequest {
+            boundary_retry_order: Vec::new(),
             id: Uuid::new_v4(),
             text: "Change the text.".into(),
             attachments: vec![],

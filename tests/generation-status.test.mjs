@@ -76,6 +76,26 @@ try {
     assert.equal(announcesStatus({ ...partial, validationEvents: [] }, { owns: true, stopped: false, working: false }), false);
     assert.equal(announcesStatus(partial, { owns: false, stopped: false, working: false }), false);
   });
+  await test('Details stays secondary and AI settings takes precedence over Try again', () => {
+    const needsInput = GenerationFeedback({ controller: controller(base), project, changeRequest() {}, openSettings() {}, details() {} });
+    assert.equal(needsInput.props.action.label, 'Change request');
+    assert.equal(needsInput.props.secondaryAction.label, 'Details');
+    const failed = { ...base, status: 'failed', candidate: null, message: 'API key is missing' };
+    const html = render(failed, { details() {} });
+    assert.match(html, />AI settings</);
+    assert.match(html, />Details</);
+    assert.doesNotMatch(html, />Try again</);
+  });
+  await test('batch operation warnings produce the same partial-success notice', () => {
+    const partial = { ...base, status: 'applied', areas: [], candidate: null,
+      batches: [{ status: 'applied', validationEvents: [{ elementId: null, kind: 'operation', disposition: 'dropped', message: 'invalid targetId' }] }] };
+    const html = render(partial, { details() {} });
+    assert.match(html, /Layers updated with warnings/);
+    assert.match(html, /Some layer changes were skipped/);
+    assert.match(html, /notice-warning/);
+    assert.doesNotMatch(html, /targetId|>Try again</);
+    assert.equal(announcesStatus(partial, { owns: true, working: false, stopped: false }), true);
+  });
   await test('a reply cut off at the output limit names the cause instead of guessing', () => {
     const settings = { model: 'deepseek-flash', maxOutputTokens: 128000, reasoningEffort: 'low', spendingLimitUsd: 2, imageGeneration: false };
     const cutOff = render({ ...base, status: 'unknown', candidate: null, failureKind: 'incomplete', usage: null, settings });

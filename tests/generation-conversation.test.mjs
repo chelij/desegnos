@@ -80,6 +80,19 @@ try {
     assert.match(html, /Built the page/);
   });
 
+  await test('page edits and dropped operations appear once alongside partial success', () => {
+    const warning = { elementId: null, kind: 'operation', disposition: 'dropped', message: 'Request 1 operation 2 skipped: invalid target' };
+    const partial = { ...job, status: 'applied', areas: [], validationEvents: [warning],
+      batches: [{ status: 'applied', validationEvents: [warning] }],
+      candidate: { ...job.candidate, requests: [{ requestId: 'request', elementId: null, status: 'implemented', explanation: '',
+        operations: [{ kind: 'setPage', pageId: 'page', name: 'Welcome', path: '/welcome', background: null }] }] } };
+    const html = render({ job: partial });
+    assert.match(html, /Updated Welcome: name and path \/welcome/);
+    assert.equal(html.split('Some layer changes were skipped. The rest was applied.').length - 1, 1);
+    const warnings = html.match(/<section aria-label="Generation warnings">(.*?)<\/section>/)[1];
+    assert.equal(warnings.split(warning.message).length - 1, 1);
+    assert.doesNotMatch(html, />Try again</);
+  });
   await test('request actions and past generations remain reachable', () => {
     const html = render();
     assert.match(html, />Change request</);

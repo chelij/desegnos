@@ -131,7 +131,7 @@ impl GenerationDossier {
                 "The generation notes have an invalid source digest.",
             )?;
         }
-        validate_text(&self.summary, "Generation summary", 16_384, true)?;
+        validate_text(&self.summary, "Generation summary", 16_384, false)?;
         ensure(
             !self.targets.is_empty() && self.targets.len() <= MAX_GENERATION_REQUESTS,
             "The generation notes must identify between 1 and 512 requested layers.",
