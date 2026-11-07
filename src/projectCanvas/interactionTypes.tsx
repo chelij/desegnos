@@ -90,7 +90,7 @@ export type DuplicateRepeat = { key: string; offset: Point };
 export type ProjectCanvasProps = {
   /** Direct project edits; each is one command. */
   edits: ProjectEdits;
-  editProject: (command: Command | ((project: Project) => Command | null)) => Promise<WorkspaceView>;
+  editProject: (command: Command | ((project: Project) => Command | null)) => Promise<WorkspaceView | null>;
   project: Project; openPage: (pageId: string) => void;
   createBoundary: (bounds: Rect, kind: BoundaryToolKind, sourceId?: string) => Promise<string | null>;
   /** Persists the camera as a numbered view, or as the next free one when slot is null. */

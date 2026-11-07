@@ -1,3 +1,4 @@
+import { usePoll } from './usePoll';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { native } from './api';
 import { ownsJob, type OwnedJob } from './generationSession.js';
@@ -5,7 +6,6 @@ import type { GenerationJobView, GenerationStatus, WorkspaceView } from './types
 
 export type GenerationCall = <T>(command: string, args?: Record<string, unknown>, signal?: AbortSignal) => Promise<T>;
 
-// Job statuses that mean the provider is still working on the job.
 const activeStatuses: readonly GenerationStatus[] = ['generating', 'applying'];
 // A restored job in one of these states can still finish on its own and be applied automatically.
 const resumeStatuses: readonly GenerationStatus[] = ['generating', 'ready', 'applying'];
@@ -26,7 +26,6 @@ export type GenerationPhase =
   // The explicit discard button. Dropping a stale job on the way to a new one is `preparing.discarding`.
   | { name: 'discarding' }
   | { name: 'preparing'; step: 'discarding' | 'reading' | 'starting' }
-  // Starting or retrying the job that is already loaded, outside a preparation.
   | { name: 'starting' }
   | { name: 'retrying' }
   | { name: 'applying' }
@@ -41,8 +40,7 @@ const labels = {
   starting: 'Starting generation…',
   retrying: 'Sending approved retry…',
   applying: 'Updating your canvas…',
-  stopping: 'Stopping…',
-} as const;
+  stopping: 'Stopping…' } as const;
 
 const operationLabel = (phase: GenerationPhase): string | null => phase.name === 'preparing' ? labels.preparing[phase.step] : labels[phase.name];
 
@@ -101,22 +99,13 @@ export function useGeneration(projectId: string | null, call: GenerationCall, ap
     }, error => { if (active && version === epoch.current) setError(describe(error)); });
     return () => { active = false; };
   }, [projectId]);
-  useEffect(() => {
-    if (!projectId || !activeGeneration(job) || flow.current?.controller.signal.aborted) return;
-    let active = true;
-    let timer: ReturnType<typeof setTimeout>;
-    const jobId = job!.jobId;
-    async function poll() {
+  usePoll(!!projectId && activeGeneration(job) && !flow.current?.controller.signal.aborted, `${projectId}:${job?.jobId}:${job?.status}`, 700,
+    async active => {
       const version = epoch.current;
-      try {
-        const value = await native<GenerationJobView | null>('get_generation', { projectId });
-        if (active && context.current === projectId && version === epoch.current && value?.jobId === jobId) { setJob(value); setError(''); }
-      } catch (error) { if (active && context.current === projectId && version === epoch.current) setError(`Progress could not be refreshed: ${describe(error)}`); }
-      finally { if (active) timer = setTimeout(() => { void poll(); }, 700); }
-    }
-    timer = setTimeout(() => { void poll(); }, 700);
-    return () => { active = false; clearTimeout(timer); };
-  }, [projectId, job?.jobId, job?.status]);
+      const jobId = job?.jobId;
+      const value = await native<GenerationJobView | null>('get_generation', { projectId });
+      if (active() && context.current === projectId && version === epoch.current && value?.jobId === jobId) { setJob(value); setError(''); }
+    }, error => setError(`Progress could not be refreshed: ${describe(error)}`));
   const refresh = useCallback(async () => {
     if (!projectId) return;
     const version = ++epoch.current;
@@ -149,7 +138,7 @@ export function useGeneration(projectId: string | null, call: GenerationCall, ap
       automatic.current = prepared.jobId;
       const started = await perform('start_generation', preparing('starting'), { jobId: prepared.jobId }, signal);
       current.jobId = started.jobId; automatic.current = started.jobId;
-    } finally {
+    } catch (error) { if (!signal.aborted && context.current === projectId) setError(describe(error)); } finally {
       finish();
     }
   }
@@ -184,6 +173,7 @@ export function useGeneration(projectId: string | null, call: GenerationCall, ap
       current.jobId = submitted.jobId; automatic.current = submitted.jobId;
       return submitted;
     }
+    catch (error) { if (!current.controller.signal.aborted && context.current === projectId) setError(describe(error)); }
     finally { finish(); }
   }
   const args = () => ({ jobId: job!.jobId });
@@ -200,7 +190,6 @@ export function useGeneration(projectId: string | null, call: GenerationCall, ap
         await refresh();
         if (context.current === id) setError(describe(error));
       }
-      throw error;
     }
     finally { if (context.current === id && token === action.current) setPhase(idle); }
   }
@@ -210,15 +199,14 @@ export function useGeneration(projectId: string | null, call: GenerationCall, ap
     const key = `${job.jobId}:${job.attempts.length}`;
     if (appliedAttempts.current.has(key)) return;
     appliedAttempts.current.add(key);
-    void apply([]).catch(() => {});
+    void apply([]);
   }, [job?.jobId, job?.status, job?.attempts.length, phase]);
   const owns = ownsJob(projectId, job, owned);
   return { owns, job, phase, visible, operation, error, elapsedSeconds, stopped: phase.name === 'stopped', canStop, open: () => setVisible(true), close: () => setVisible(false), refresh, prepare, apply,
     start: () => launch('start_generation', { name: 'starting' }),
     cancel,
-    discard: () => perform('discard_generation', { name: 'discarding' }, args()),
-    retry: () => launch('retry_generation', { name: 'retrying' }),
-  };
+    discard: () => perform('discard_generation', { name: 'discarding' }, args()).catch(error => { setError(describe(error)); }),
+    retry: () => launch('retry_generation', { name: 'retrying' }) };
 }
 
 export type GenerationController = ReturnType<typeof useGeneration>;

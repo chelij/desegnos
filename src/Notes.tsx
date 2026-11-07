@@ -1,6 +1,7 @@
+import type { ProjectEdits } from './session/projectEdits';
 import { useId, useState, type FormEvent } from 'react';
 import { DraftText } from './DraftText';
-import type { Brief, Command, Decision, Project, Scope } from './types';
+import type { Brief, Decision, Project, Scope } from './types';
 import { Icon } from './icons';
 
 export function scopeLabel(project: Project, scope: Scope) {
@@ -38,8 +39,8 @@ function ScopeSelect({ project, value, change, disabled = false }: { project: Pr
 
 export type DossierSection = 'overview' | 'brief' | 'decisions' | 'exceptions';
 
-export function Notes({ project, initialSection = 'overview', apply, changeBrief, reviewGeneration }: {
-  project: Project; initialSection?: DossierSection; reviewGeneration?: () => void; apply: (command: Command) => Promise<void>; changeBrief: (patch: Partial<Brief>) => Promise<Brief>;
+export function Notes({ project, initialSection = 'overview', edits, changeBrief, reviewGeneration }: {
+  project: Project; initialSection?: DossierSection; reviewGeneration?: () => void; edits: Pick<ProjectEdits, 'setDecision' | 'removeDecision' | 'addException' | 'removeException'>; changeBrief: (patch: Partial<Brief>) => Promise<Brief>;
 }) {
   const [tab, setTab] = useState<DossierSection>(initialSection);
   const tabId = useId();
@@ -62,14 +63,12 @@ export function Notes({ project, initialSection = 'overview', apply, changeBrief
   }
   async function saveDecision(event: FormEvent) {
     event.preventDefault(); setBusy(true);
-    try { await apply({ type: 'set_decision', topic: topic.trim(), value: value.trim(), scope, protected: protectedDecision }); resetDecision(); }
-    catch {}
+    try { if (await edits.setDecision({ topic: topic.trim(), value: value.trim(), scope, protected: protectedDecision }) !== null) resetDecision(); }
     finally { setBusy(false); }
   }
   async function saveException(event: FormEvent) {
     event.preventDefault(); setBusy(true);
-    try { await apply({ type: 'add_exception', rule: rule.trim(), reason: reason.trim(), scope: exceptionScope }); setRule(''); setReason(''); }
-    catch {}
+    try { if (await edits.addException({ rule: rule.trim(), reason: reason.trim(), scope: exceptionScope }) !== null) { setRule(''); setReason(''); } }
     finally { setBusy(false); }
   }
   return <div className="notes">
@@ -101,7 +100,7 @@ export function Notes({ project, initialSection = 'overview', apply, changeBrief
       <div className="record-list">{project.decisions.length === 0 ? <p className="empty-message">No rules yet.</p> : project.decisions.map(decision => <article className="note-record" key={decision.id}>
         <div className="record-heading"><h3>{decision.topic}</h3>{decision.protected && <span className="badge">Fixed</span>}</div>
         <p className="preserve-text">{decision.value}</p><p className="small muted">{scopeLabel(project, decision.scope)}</p>
-        <div className="inline-actions">{editing?.id !== decision.id && <button onClick={() => editDecision(decision)}>Edit rule</button>}<button className="subtle danger" onClick={() => { void apply({ type: 'remove_decision', decision_id: decision.id }).catch(() => {}); if (editing?.id === decision.id) resetDecision(); }}>Remove rule</button></div>
+        <div className="inline-actions">{editing?.id !== decision.id && <button onClick={() => editDecision(decision)}>Edit rule</button>}<button className="subtle danger" onClick={() => { void edits.removeDecision(decision.id); if (editing?.id === decision.id) resetDecision(); }}>Remove rule</button></div>
       </article>)}</div>
       <form className="notes-entry" onSubmit={saveDecision}><h3>{editing ? 'Edit choice' : 'Add a choice'}</h3>
         <label>Topic<input required maxLength={120} value={topic} onChange={event => setTopic(event.target.value)} disabled={!!editing} /></label>
@@ -114,7 +113,7 @@ export function Notes({ project, initialSection = 'overview', apply, changeBrief
     {tab === 'exceptions' && <div className="notes-section">
       <div className="record-list">{project.exceptions.length === 0 ? <p className="empty-message">No exceptions yet.</p> : project.exceptions.map(exception => <article className="note-record" key={exception.id}>
         <h3>{exception.rule}</h3><p className="preserve-text">{exception.reason}</p><p className="small muted">{scopeLabel(project, exception.scope)}</p>
-        <button className="subtle danger" onClick={() => { void apply({ type: 'remove_exception', exception_id: exception.id }).catch(() => {}); }}>Remove exception</button>
+        <button className="subtle danger" onClick={() => { void edits.removeException(exception.id); }}>Remove exception</button>
       </article>)}</div>
       <form className="notes-entry" onSubmit={saveException}><h3>Add an exception</h3>
         <label>Which rule?<input required maxLength={120} value={rule} onChange={event => setRule(event.target.value)} /></label>

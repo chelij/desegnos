@@ -1,3 +1,4 @@
+import { usePoll } from './usePoll';
 import { needsAiSettings, ProblemBanner, Notice } from './ProblemBanner.js';
 import { userError } from './userErrors.js';
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
@@ -49,7 +50,6 @@ type Step =
   | ({ kind: 'unread'; analysis: IdentityAnalysis } & Picked)
   | ({ kind: 'review'; brand: Brand } & Picked)
   | ({ kind: 'kept'; brand: Brand } & Picked);
-/** Besides the page import, the brand review is optional and on until the user says otherwise. */
 type BrandChoice = 'default' | 'included' | 'skipped';
 /** The brand an earlier session left behind is read in the background, apart from the import step. */
 type PreviousBrand =
@@ -82,7 +82,6 @@ function editChoice(step: Step, update: (choice: Choice) => Choice): Step {
 function editBrand(step: Step, update: (brand: Brand) => Brand): Step {
   return step.kind === 'review' || step.kind === 'kept' ? { ...step, brand: update(step.brand) } : step;
 }
-/** Apply a read analysis: still running, unusable, or a finished brand to review. */
 function accepted(step: Step, analysis: IdentityAnalysis): Step {
   if (step.kind === 'source') return step;
   const picked = { source: step.source, choice: step.choice };
@@ -99,9 +98,7 @@ function accepted(step: Step, analysis: IdentityAnalysis): Step {
       logos: candidate.logoAssetIds,
       photos: (analysis.source.photos ?? []).map(photo => photo.id),
       items: (candidate.content ?? []).map((_, index) => index),
-      pages: groupIdentityPages(analysis.source, candidate.content).map(group => group.page.path),
-    },
-  };
+      pages: groupIdentityPages(analysis.source, candidate.content).map(group => group.page.path) } };
 }
 function reduce(step: Step, change: Change): Step {
   switch (change.type) {
@@ -217,7 +214,7 @@ export function ImportContext({ busy, settings, openSettings, importInto, onPage
       try {
         const bytes = Uint8Array.from(atob(asset.dataUri.slice(asset.dataUri.indexOf(',') + 1)), char => char.charCodeAt(0));
         const face = new FontFace(family, bytes);
-        void face.load().then(font => { if (!stopped) { document.fonts.add(font); loaded.push(font); } }).catch(() => {});
+        void face.load().then(font => { if (!stopped) { document.fonts.add(font); loaded.push(font); } }).catch(error => console.warn('Could not load imported font; using CSS fallback', error));
       } catch { /* Invalid font data keeps the CSS family fallback. */ }
     }
     return () => { stopped = true; loaded.forEach(font => document.fonts.delete(font)); };
@@ -248,23 +245,13 @@ export function ImportContext({ busy, settings, openSettings, importInto, onPage
     return () => {
       mounted.current = false;
       previousRead.current += 1;
-      if (live.current.kind === 'reading') void native('cancel_identity_analysis', { jobId: live.current.jobId }).catch(() => {});
+      if (live.current.kind === 'reading') void native('cancel_identity_analysis', { jobId: live.current.jobId }).catch(error => console.warn('Could not cancel identity analysis on unmount', error));
     };
   }, [readPrevious]);
-  useEffect(() => {
-    if (!jobId) return;
-    let stopped = false;
-    let timer: ReturnType<typeof setTimeout>;
-    async function poll() {
-      try {
-        const value = await native<IdentityAnalysis | null>('get_identity_analysis');
-        if (!stopped && value?.jobId === jobId) { change({ type: 'accepted', analysis: value }); setError(''); }
-      } catch (error) { if (!stopped) setError(message(error)); }
-      if (!stopped) timer = setTimeout(() => { void poll(); }, 900);
-    }
-    timer = setTimeout(() => { void poll(); }, 500);
-    return () => { stopped = true; clearTimeout(timer); };
-  }, [jobId]);
+  usePoll(!!jobId, jobId ?? '', 900, async active => {
+    const value = await native<IdentityAnalysis | null>('get_identity_analysis');
+    if (active() && value?.jobId === jobId) { change({ type: 'accepted', analysis: value }); setError(''); }
+  }, error => setError(message(error)), 900, 500);
   async function run(operation: () => Promise<void>) {
     setWorking(true); setError('');
     try { await operation(); } catch (error) { if (mounted.current) setError(message(error)); }

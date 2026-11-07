@@ -21,7 +21,7 @@ function message(error: unknown, limit: number) {
   return text ? Array.from(text).slice(0, limit).join('') : undefined;
 }
 
-export function recordUsage(event: Omit<UsageEvent, 't'>) {
+function recordUsage(event: Omit<UsageEvent, 't'>) {
   if (!isTauri()) return;
   queue.push({ t: Date.now(), ...event });
   if (queue.length >= 200) flush();
@@ -31,7 +31,7 @@ function flush() {
   finishTyping();
   if (!queue.length || !isTauri()) return;
   const events = queue.splice(0, queue.length);
-  void invoke('record_usage', { events }).catch(() => {});
+  void invoke('record_usage', { events }).catch(error => console.warn('Could not record editor activity', error));
 }
 
 function area(element: Element) {

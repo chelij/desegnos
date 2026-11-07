@@ -7,18 +7,18 @@ import type { Command, Project, WorkspaceView } from '../types';
 export function useProjectSession(initialView: WorkspaceView | undefined, setError: (message: string) => void) {
   const [view, setView] = useState<WorkspaceView | null>(initialView ?? null);
   const current = useRef<WorkspaceView | null>(initialView ?? null);
-  const pendingNudge = useRef<{ key: string; command: Extract<Command, { type: 'nudge_elements' }>; promise: Promise<WorkspaceView> } | null>(null);
+  const pendingNudge = useRef<{ key: string; command: Extract<Command, { type: 'nudge_elements' }>; promise: Promise<WorkspaceView | null> } | null>(null);
   const tail = useRef<Promise<void>>(Promise.resolve());
   const [pending, setPending] = useState(0);
   const accept = useCallback((next: WorkspaceView) => { current.current = next; setView(next); }, []);
-  const queue = useCallback(<T,>(operation: (workspace: WorkspaceView | null) => Promise<T>, reportErrors = true, quiet = false): Promise<T> => {
+  const queue = useCallback(<T,>(operation: (workspace: WorkspaceView | null) => Promise<T>, reportErrors = true): Promise<T> => {
     pendingNudge.current = null;
-    if (!quiet) setPending(count => count + 1);
+    setPending(count => count + 1);
     const result = tail.current.then(() => operation(current.current));
     tail.current = result.then(() => undefined, () => undefined);
-    return result.catch(error => { if (reportErrors) setError(errorMessage(error)); throw error; }).finally(() => { if (!quiet) setPending(count => count - 1); });
+    return result.catch(error => { if (reportErrors) setError(errorMessage(error)); throw error; }).finally(() => { setPending(count => count - 1); });
   }, []);
-  const mutate = useCallback((command: Command | ((project: Project) => Command | null), quiet = false) => {
+  const mutate = useCallback((command: Command | ((project: Project) => Command | null)) => {
     const projectId = current.current?.project?.id;
     const nudge = typeof command !== 'function' && command.type === 'nudge_elements' ? command : null;
     const key = nudge ? JSON.stringify([projectId, nudge.moves.map(move => [move.id, move.size_id, move.all_sizes]).sort()]) : null;
@@ -35,7 +35,7 @@ export function useProjectSession(initialView: WorkspaceView | undefined, setErr
       if (!resolved) return workspace!;
       const next = await edit(project.revision, resolved);
       accept(next); return next;
-    }, true, quiet);
+    }, false).catch(error => { setError(errorMessage(error)); return null; });
     if (nudge && key) pendingNudge.current = { key, command: nudge, promise };
     return promise;
   }, [queue, accept]);

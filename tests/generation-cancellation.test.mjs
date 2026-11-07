@@ -8,6 +8,7 @@ try {
   // Drive the hook's async actions without a browser. Effects (polling and automatic
   // apply) are deliberately excluded; apply is invoked explicitly at the ready boundary.
   await modules.rewrite('useGeneration.js', source => source
+    .replace(/^import .* from '\.\/usePoll\.js';$/m, 'const usePoll = () => {};')
     .replace(/^import .* from 'react';$/m, 'const { useCallback, useEffect, useRef, useState } = globalThis.__generationCancellation.hooks;')
     .replace(/^import .* from '\.\/api\.js';$/m, 'const native = (...args) => globalThis.__generationCancellation.native(...args);'));
   let slots = [], cursor = 0, nativeCalls = [];
@@ -68,7 +69,7 @@ try {
     const stopped = render().cancel();
     assert.equal(render().operation, 'Stopping…');
     gate.resolve();
-    await assert.rejects(preparation, { name: 'AbortError' }); await stopped;
+    await preparation; await stopped;
     assert.deepEqual(calls, []); assert.deepEqual(nativeCalls, []);
     assert.equal(render().stopped, true); assert.equal(render().canStop, false);
   });
@@ -79,7 +80,7 @@ try {
     const preparation = render().prepare();
     const stopped = render().cancel();
     gate.resolve();
-    await assert.rejects(preparation, { name: 'AbortError' }); await stopped;
+    await preparation; await stopped;
     assert.deepEqual(calls, ['prepare_generation']);
     assert.deepEqual(nativeCalls, [{ command: 'cancel_generation', args: { jobId: 'job' } }]);
     assert.equal(render().job.status, 'cancelled'); assert.equal(render().operation, null);
@@ -94,7 +95,7 @@ try {
     const preparation = render().prepare(); await starting.promise;
     await render().cancel();
     assert.equal(nativeCalls[0].command, 'cancel_generation');
-    gate.resolve(); await assert.rejects(preparation, { name: 'AbortError' });
+    gate.resolve(); await preparation;
     assert.deepEqual(calls, ['prepare_generation']);
     assert.equal(render().job.status, 'cancelled'); assert.equal(render().canStop, false);
   });
@@ -108,7 +109,7 @@ try {
     await render().prepare();
     const application = render().apply([]);
     await render().cancel();
-    gate.resolve(); await assert.rejects(application, { name: 'AbortError' });
+    gate.resolve(); await application;
     assert.deepEqual(applied, []); assert.equal(render().job.status, 'cancelled');
   });
 } finally {

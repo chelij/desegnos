@@ -8,7 +8,7 @@ function allElements(elements: Element[]): Element[] {
   return elements.flatMap(element => [element, ...allElements(element.children)]);
 }
 
-export function projectElement(project: Project, id: string): Element | null {
+function projectElement(project: Project, id: string): Element | null {
   for (const page of project.pages) {
     const found = allElements(page.elements).find(element => element.id === id);
     if (found) return found;
@@ -32,8 +32,8 @@ export function GenerationFeedback({ controller, action, openSettings, openImpor
   const needsInput = review.blocked.length > 0 && review.retryable.length === 0 && !review.retryAll;
   const retry = review.retryable.length > 0 || review.retryAll || review.retryBatches || (job?.retryable !== false && controller.stopped && !review.blocked.length);
   const retryRequests = () => {
-    if (review.retryBatches) void controller.retry().catch(() => {});
-    else void controller.prepare(review.retryable.length ? review.retryable : undefined).catch(() => {});
+    if (review.retryBatches) void controller.retry();
+    else void controller.prepare(review.retryable.length ? review.retryable : undefined);
   };
   const blocked = review.blocked[0];
   // Live progress from the stream: the page being written now, and how many have started.
@@ -44,7 +44,7 @@ export function GenerationFeedback({ controller, action, openSettings, openImpor
   const headings = { prepared: 'Getting ready…', generating: buildingPage ? `Building ${buildingPage.name}…` : minutes >= 60 ? 'Still building your layers…' : 'Building your layers…',
     ready: 'Updating your layers…', blocked: staleResult(job) ? 'Design changed — not applied' : needsInput ? 'Needs your input' : 'Needs attention', failed: cutOff ? 'Reply cut off' : 'Couldn’t build the layers', unknown: cutOff ? 'Reply cut off' : 'Not sure the layers were built',
     cancelled: 'Stopped', discarded: 'Result discarded', applying: 'Updating your layers…', applied: partial ? 'Layers updated with warnings' : 'Layers updated' };
-  const providerMessage = job && !cutOff && ['failed', 'unknown'].includes(job.status) ? providerFailureMessage(job.providerError, job.provider) : null;
+  const providerMessage = job && !cutOff && ['failed', 'unknown'].includes(job.status) ? providerFailureMessage(job.providerError, job.provider, job.message) : null;
   const heading = phase.name === 'stopping' ? 'Stopping…' : controller.stopped ? 'Stopped' : operation ? 'Getting ready…' : providerMessage && job?.providerError?.httpStatus && job.providerError.httpStatus >= 400 ? 'Couldn’t build the layers' : job ? headings[job.status] : 'Couldn’t start';
   const fix = blocked?.fix ? () => {
     const open = blocked.fix === 'aiSettings' ? openSettings : blocked.fix === 'import' ? openImport : openBrief;

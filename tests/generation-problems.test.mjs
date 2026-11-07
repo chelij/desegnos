@@ -29,11 +29,11 @@ try {
     assert.equal(placeCallouts([{ ...item, key: 'job-two:area' }], [rect], { x: 0, y: 0 }, 1, [item.key]).length, 1);
   });
 
-  const element = (id, prompt, elementRect) => ({ id, kind: 'box', name: null, rect: elementRect, rotation: 0, visible: true, locked: false,
-    style: {}, text: '', image: null, url: null, layout: { kind: 'free' }, children: [], meta: { requests: [], context: [], pending: { prompt, attachments: [], requestedAt: 'now' } } });
-  const page = { id: 'page', name: 'Home', path: '/', included: true, output: 'webpage', sizes: [], elements: [element('a', 'Add scrolling chat', rect), element('b', 'Keep heading', other)] };
+  const element = (id, elementRect) => ({ id, kind: 'box', name: null, rect: elementRect, rotation: 0, visible: true, locked: false,
+    style: {}, text: '', image: null, url: null, layout: { kind: 'free' }, children: [], meta: { requests: [], context: [] } });
+  const page = { id: 'page', name: 'Home', path: '/', included: true, output: 'webpage', sizes: [], elements: [element('a', rect), element('b', other)] };
   const frozen = (requests) => '```json\n' + JSON.stringify({ pages: [{ pageId: 'page' }], requests }) + '\n```';
-  const requirement = (elementId, request) => ({ elementId, request, sizeId: null });
+  const requirement = (elementId, request) => ({ text: request, targets: [{ kind: 'element', elementId, pageId: 'page', sizeId: null }] });
   const job = { jobId: 'job', status: 'blocked', areas: [{ pageId: 'page', elementId: 'a' }], requirements: { markdown: frozen([requirement('a', 'Add scrolling chat')]) },
     candidate: { summary: 'Chat needs a service', requests: [{ elementId: 'a', status: 'conflict', explanation: 'Which chat service should this use?' }] } };
 

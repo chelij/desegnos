@@ -21,7 +21,7 @@ export type NoticeProps = {
   undo?: ProblemAction;
 };
 type Entry = NoticeProps & { dismiss: () => void };
-export function noticePriority(notice: NoticeProps): number {
+function noticePriority(notice: NoticeProps): number {
   return notice.variant === 'error' ? 4 : notice.variant === 'warning' ? 3 : notice.priority === 'result' ? 2 : 1;
 }
 export function firstNotice<T extends NoticeProps>(entries: T[]): T | undefined {
@@ -41,7 +41,6 @@ export function NoticeHost() {
   useLayoutEffect(() => {
     if (focus) host.current?.querySelector<HTMLButtonElement>(focus === 'primary' ? '.primary' : '.notice-dismiss')?.focus({ preventScroll: true });
   }, [focus, focusKey]);
-  // A toast closes itself; anything that waits for a choice stays in the middle of the canvas.
   return <div className={`notice-host${stack?.toast ? ' toast' : ''}`} ref={host}>{stack?.rows}</div>;
 }
 const Notices = createContext<{ update: (id: string, entry: Entry | null) => void } | null>(null);
@@ -119,7 +118,7 @@ const TOAST_LIFETIME = 4000;
 const TOAST_FADE = 200;
 
 /** A toast disappears on its own; pointing at it, or tabbing to its Undo, holds it open. */
-export function ToastRow({ variant = 'info', title, message, undo, dismiss, className = '' }: NoticeProps) {
+function ToastRow({ variant = 'info', title, message, undo, dismiss, className = '' }: NoticeProps) {
   // showing counts down to the deadline, held pauses it, leaving fades out for good.
   const [phase, setPhase] = useState<'showing' | 'held' | 'leaving'>('showing');
   const close = useRef(dismiss); close.current = dismiss;

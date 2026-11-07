@@ -3,7 +3,6 @@ import { native } from './api';
 import { Notice } from './ProblemBanner.js';
 import { EXTRACTOR_SCRIPT } from './websiteImportExtract';
 import type { WebCapture, WebsiteImportPageView, WebsiteImportResultView, WebsiteImportSourceView } from './types';
-import './shell.css';
 
 type Progress = { done: number; total: number; label: string };
 
@@ -65,7 +64,7 @@ export function useWebsiteImport(busy: boolean, onImported: (result: WebsiteImpo
       window.clearTimeout(current.capture.timer);
       current.capture.reject(new Error('The import was stopped.'));
     }
-    if (current.kind !== 'applying') void native('cancel_website_import').catch(() => {});
+    if (current.kind !== 'applying') void native('cancel_website_import').catch(error => setError(messageOf(error)));
   }, []);
 
   async function read(operation: () => Promise<WebsiteImportSourceView | null>) {
@@ -163,7 +162,7 @@ export function useWebsiteImport(busy: boolean, onImported: (result: WebsiteImpo
     serial.current += 1;
     stopped.current = true;
     if (current.kind === 'rendering' && current.capture) finishCapture(current.capture.id, 'The import was stopped.');
-    await native('cancel_website_import').catch(() => {});
+    await native('cancel_website_import').catch(error => setError(messageOf(error)));
     setSource(null); setPhase({ kind: 'idle' });
   }
 

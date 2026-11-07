@@ -1,3 +1,4 @@
+import { readJsonPreference, writePreference } from '../preferences';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { defaultExportFolder } from './exportFolder';
 import { native } from '../api';
@@ -14,14 +15,14 @@ type Context = {
   openPanel: (panel: Exclude<import('../session/useEditor').EditorPanel, { kind: 'closed' }>) => void;
   closePanel: (kind: import('../session/useEditor').EditorPanel['kind']) => void;
   current: import("react").RefObject<WorkspaceView | null>;
-  panels: import("../EditorDock").PanelState;
-  panelActions: import("../EditorDock").PanelActions;
+  panels: import("../dock/panelState").PanelState;
+  panelActions: import("../dock/panelState").PanelActions;
   accept: (next: WorkspaceView) => void;
   setNotice: (message: string, undo?: () => void) => void;
   settle: () => Promise<void>;
   setError: import("react").Dispatch<import("react").SetStateAction<string>>;
   setOpenFailure: import("react").Dispatch<import("react").SetStateAction<{ message: string; url: string; } | null>>;
-  mutate: (command: Command | ((project: Project) => Command | null), quiet?: boolean) => Promise<WorkspaceView>;
+  mutate: (command: Command | ((project: Project) => Command | null)) => Promise<WorkspaceView | null>;
   canvasFocus: string | null;
   selectedElementPageId: string | null;
   play: PlayState;
@@ -33,17 +34,16 @@ type Context = {
 
 const EXPORT_FOLDERS_KEY = 'desegnos.export-folders';
 
-/** Folders are remembered per project, so switching tabs keeps each project's own choice. */
 function readExportFolders(): Record<string, string> {
   try {
-    const raw: unknown = JSON.parse(localStorage.getItem(EXPORT_FOLDERS_KEY) ?? '{}');
+    const raw: unknown = readJsonPreference(EXPORT_FOLDERS_KEY, {});
     if (!raw || typeof raw !== 'object') return {};
     return Object.fromEntries(Object.entries(raw).filter((entry): entry is [string, string] => typeof entry[1] === 'string'));
   } catch { return {}; }
 }
 
-export function useExportJobs(input: Pick<Context, 'current' | 'view' | 'panel' | 'play' | 'setPlay' | 'openPanel' | 'closePanel'>, context: () => Context) {
-  const { current, view, panel, play, setPlay, openPanel, closePanel } = input;
+export function useExportJobs(context: Context) {
+  const { current, view, panel, play, setPlay, openPanel, closePanel } = context;
   const [exportFolders, setExportFolders] = useState<Record<string, string>>(readExportFolders);
   const projectId = view?.project?.id ?? null;
   const exportDestination = projectId ? exportFolders[projectId] ?? null : null;
@@ -55,18 +55,16 @@ export function useExportJobs(input: Pick<Context, 'current' | 'view' | 'panel' 
   const [previewResult, setPreview] = useState<(Omit<PreviewState, 'stale'> & { revision: number | null }) | null>(null);
   const preview = useMemo<PreviewState | null>(() => previewResult ? {
     pageId: previewResult.pageId, url: previewResult.url,
-    stale: previewResult.revision !== null && view?.project?.revision !== undefined && previewResult.revision !== view.project.revision,
-  } : null, [previewResult, view?.project?.revision]);
+    stale: previewResult.revision !== null && view?.project?.revision !== undefined && previewResult.revision !== view.project.revision } : null, [previewResult, view?.project?.revision]);
   const checkTimer = useRef<number | null>(null);
 
-  // Clash check: fingerprints are recomputed from the last export folder on open and on focus.
   const recheckExport = useCallback(async () => {
     const project = current.current?.project;
     if (!project) { setCheckedStates(null); setCheckedProject(null); return; }
     try {
       const check = await native<ExportCheck>('recheck_export', { projectId: project.id });
       setCheckedStates(check.states); setCheckedProject(project.id);
-    } catch { /* A missing folder simply reports the project's own states. */ }
+    } catch (error) { setCheckedStates(null); setCheckedProject(null); setExportError(errorMessage(error)); }
   }, []);
   const scheduleExportCheck = useCallback(() => {
     if (checkTimer.current !== null) window.clearTimeout(checkTimer.current);
@@ -83,15 +81,15 @@ export function useExportJobs(input: Pick<Context, 'current' | 'view' | 'panel' 
   // An error about a boundary that was added or removed no longer describes the current export.
   const pageIds = view?.project?.pages.map(page => page.id).join() ?? '';
   useEffect(() => { setExportError(''); }, [pageIds]);
-  useEffect(() => { try { localStorage.setItem(EXPORT_FOLDERS_KEY, JSON.stringify(exportFolders)); } catch { /* Preferences can be unavailable. */ } }, [exportFolders]);
+  useEffect(() => { writePreference(EXPORT_FOLDERS_KEY, JSON.stringify(exportFolders)); }, [exportFolders]);
   // A new export creates one project folder inside Documents/Desegnos.
   useEffect(() => {
     const project = view?.project;
     if (!project) return;
     let live = true;
-    void defaultExportFolder(project.name, exportFolders[project.id]).then(path => {
+    void defaultExportFolder(exportFolders[project.id]).then(path => {
       if (live) setExportFolders(current => current[project.id] === exportFolders[project.id] ? { ...current, [project.id]: path } : current);
-    }).catch(() => { /* Without a Documents folder, Choose folder… still works. */ });
+    }).catch(error => { if (live) setExportError(errorMessage(error)); });
     return () => { live = false; };
   }, [view?.project?.id, view?.project?.name]);
   useEffect(() => {
@@ -108,18 +106,18 @@ export function useExportJobs(input: Pick<Context, 'current' | 'view' | 'panel' 
   }, [preview, play]);
 
   function openExportPanel(restore = true) {
-    const { current, panels, panelActions } = context();
+    const { current, panels, panelActions } = context;
     const project = current.current?.project;
     if (!project) return;
     openPanel({ kind: 'export' });
-    if (restore && !exportJob) void native<ExportJobView | null>('get_export_job', { projectId: project.id }).then(job => { if (job) setExportJob(job); }).catch(() => {});
+    if (restore && !exportJob) void native<ExportJobView | null>('get_export_job', { projectId: project.id }).then(job => { if (job) setExportJob(job); }).catch(error => setExportError(errorMessage(error)));
     if (panels.hidden) panelActions.toggleHidden();
     if (panels.collapsed) panelActions.setCollapsed(false);
   }
 
   async function ensureExportDestination(project: Project): Promise<string | null> {
     const saved = exportFolders[project.id];
-    const path = await defaultExportFolder(project.name, saved).catch(() => saved ?? null);
+    const path = await defaultExportFolder(saved).catch(error => { setExportError(errorMessage(error)); return saved ?? null; });
     if (!path) return null;
     setExportFolders(current => current[project.id] === saved ? { ...current, [project.id]: path } : current);
     return path;
@@ -146,12 +144,12 @@ export function useExportJobs(input: Pick<Context, 'current' | 'view' | 'panel' 
   }
 
   async function refreshWorkspace() {
-    const { accept } = context();
-    try { accept(await native<WorkspaceView>('get_workspace')); } catch { /* The next edit reports its own error. */ }
+    const { accept } = context;
+    try { accept(await native<WorkspaceView>('get_workspace')); } catch (error) { setExportError(errorMessage(error)); }
   }
 
   function showJobResult(job: ExportJobView, previewPageId?: string | null) {
-    const { current, setNotice } = context();
+    const { current, setNotice } = context;
     if (job.status === 'ready') void refreshWorkspace();
     if (job.result?.previewUrl) {
       const pageId = previewPageId ?? job.pages[0]?.pageId ?? null;
@@ -161,7 +159,7 @@ export function useExportJobs(input: Pick<Context, 'current' | 'view' | 'panel' 
   }
 
   async function runExport(previewPageId: string | null = null) {
-    const { settle, current, aiConnected, spendingLimitUsd } = context();
+    const { settle, current, aiConnected, spendingLimitUsd } = context;
     await settle();
     const project = current.current?.project;
     if (!project) return;
@@ -175,8 +173,7 @@ export function useExportJobs(input: Pick<Context, 'current' | 'view' | 'panel' 
         pageIds: previewPageId ? [previewPageId] : null,
         preview: !!previewPageId,
         // A preview asks the AI only for behaviours it cannot otherwise show, and still waits for Send.
-        buildBehaviours: !!previewPageId && aiConnected,
-      });
+        buildBehaviours: !!previewPageId && aiConnected });
       setExportJob(job);
       showJobResult(job, previewPageId);
       // Pressing Preview is the go-ahead: start the behaviour code straight away when it fits
@@ -208,14 +205,14 @@ export function useExportJobs(input: Pick<Context, 'current' | 'view' | 'panel' 
   }
 
   function openExportFolder(path: string) {
-    const { current, setError } = context();
+    const { current, setError } = context;
     const project = current.current?.project;
     if (!project) return;
     void native('open_export_folder', { projectId: project.id, path }).catch(error => setError(errorMessage(error)));
   }
 
   async function openInBrowser() {
-    const { current, setError, setOpenFailure } = context();
+    const { current, setError, setOpenFailure } = context;
     const project = current.current?.project;
     if (!project) return;
     try { await native<string>('open_in_browser', { projectId: project.id }); }
@@ -228,7 +225,7 @@ export function useExportJobs(input: Pick<Context, 'current' | 'view' | 'panel' 
   }
 
   async function keepPointerCode(pointerId: string) {
-    const { current, setError } = context();
+    const { current, setError } = context;
     const project = current.current?.project;
     if (!project) return;
     try {
@@ -238,12 +235,12 @@ export function useExportJobs(input: Pick<Context, 'current' | 'view' | 'panel' 
   }
 
   function forgetExportPointer(pointerId: string) {
-    const { mutate } = context();
-    void mutate({ type: 'forget_export_pointer', pointer_id: pointerId }).catch(() => {});
+    const { mutate } = context;
+    void mutate({ type: 'forget_export_pointer', pointer_id: pointerId });
   }
 
   function previewSelectedBoundary(preferredPageId?: string | null) {
-    const { canvasFocus, selectedElementPageId, current, play, setPlay } = context();
+    const { canvasFocus, selectedElementPageId, current, play, setPlay } = context;
     const project = current.current?.project;
     if (!project || !projectHasPreviewPages(project)) return;
     const previewable = (pageId: string | null | undefined) => project.pages.find(page =>
@@ -258,7 +255,7 @@ export function useExportJobs(input: Pick<Context, 'current' | 'view' | 'panel' 
   function closePreview() {
 
     setPreview(null);
-    void native('close_preview').catch(() => {});
+    void native('close_preview').catch(error => setExportError(errorMessage(error)));
   }
 
   function refreshPreview() {
@@ -276,8 +273,7 @@ export function useExportJobs(input: Pick<Context, 'current' | 'view' | 'panel' 
     /** Exports the included boundaries, or previews one page when given its id. */
     run: runExport, send: sendExport, cancel: cancelExport,
     openFolder: openExportFolder, openInBrowser, keepPointerCode, forgetPointer: forgetExportPointer,
-    previewBoundary: previewSelectedBoundary, closePreview, refreshPreview,
-  };
+    previewBoundary: previewSelectedBoundary, closePreview, refreshPreview };
 }
 
 /** Export and Preview: the job, its folder and every action on it. */

@@ -21,9 +21,9 @@ try {
   const element = {
     id, kind: 'box', name: null, rect: { x: 0, y: 0, width: 100, height: 60 }, rotation: 0, visible: true, locked: false,
     style: {}, text: '', image: null, url: null, layout: { kind: 'free' }, children: [],
-    meta: { requests: [], context: [], pending: { prompt: 'Add a booking form', attachments: [], requestedAt: 'now' } },
+    meta: { requests: [], context: [] },
   };
-  const project = { id: 'project', name: 'Site', pages: [{ id: 'page', name: 'Home', path: '/', included: true, output: 'webpage', sizes: [], elements: [element] }] };
+  const project = { requests: [{ id: 'request', text: 'Add a booking form', attachments: [], requestedAt: 'now', area: null, targets: [{ kind: 'element', page: 'page', size: null, id }] }], id: 'project', name: 'Site', pages: [{ id: 'page', name: 'Home', path: '/', included: true, output: 'webpage', sizes: [], elements: [element] }] };
   const job = {
     jobId: 'job', status: 'blocked', provider: 'openai', settings: { model: 'model' }, generationMode: 'fuzzy',
     requirements: { markdown: '' }, areas: [{ pageId: 'page', elementId: id }], usage: { inputTokens: 10, outputTokens: 20 },

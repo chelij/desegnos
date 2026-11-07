@@ -8,15 +8,12 @@
 .ai-account-copy { display: grid; gap: var(--space-2); flex: 1; min-width: 0; }
 .ai-account-identity { overflow-wrap: anywhere; font-size: var(--text-md); font-weight: var(--weight-semibold); }
 .ai-settings .connection-status { display: flex; align-items: center; gap: var(--space-3); color: var(--muted); font-size: var(--text-xs); }
-.ai-status-dot.connected { background: var(--success); }
 .ai-account-switcher { width: auto; min-width: 0; max-width: 40%; font-size: var(--text-sm); }
 .ai-account-options > button { width: var(--control-sm); height: var(--control-sm); min-height: var(--control-sm); padding: 0; border-color: transparent; background: transparent; color: var(--muted); }
 .ai-account-options > button:hover:not(:disabled) { color: var(--text); background: var(--surface-muted); }
 .editor-menu[aria-label="Account options"] button[aria-label="Sign out"], .editor-menu[aria-label="Account options"] button[aria-label="Remove key"] { color: var(--danger); }
 .ai-key-form { display: flex; align-items: end; gap: var(--space-4); flex-wrap: wrap; }
 .ai-key-form > label { flex: 1; min-width: 160px; }
-.ai-model-row { display: flex; align-items: center; gap: var(--space-4); }
-.ai-model-row > label { flex: 1; min-width: 0; }
 .ai-model-actions { display: flex; align-items: center; gap: var(--space-3); }
 .ai-settings .ai-model-row .ai-inline-field { grid-template-columns: 80px minmax(0, 1fr); }
 .ai-settings .ai-usage-link { display: inline-flex; align-items: center; gap: var(--space-2); height: var(--control-sm); border: 0; background: transparent; color: var(--accent-ink); padding: 0 var(--space-2); white-space: nowrap; font-size: var(--text-sm); }
@@ -40,7 +37,6 @@
 .ai-advanced > summary { cursor: pointer; font-weight: var(--weight-semibold); }
 .ai-advanced .advanced-settings { margin-top: var(--space-6); display: grid; min-width: 0; }
 .ai-save-actions { justify-content: flex-end; align-items: center; gap: var(--space-4); padding-top: var(--space-5); border-top: 1px solid var(--border-soft); }
-.ai-save-actions .operation-status { margin: 0 auto 0 0; font-size: var(--text-sm); color: var(--muted); }
 @media (max-width: 440px) {
   .ai-account-card { flex-wrap: wrap; padding: var(--space-3); }
   .ai-account-switcher { order: 1; width: 100%; max-width: 100%; }
@@ -48,8 +44,6 @@
   .ai-settings .ai-budget { grid-template-columns: minmax(0, 1fr) 80px; }
   .ai-save-actions { flex-wrap: wrap; }
 }
-
-/* Style guide */
 .conversation-link { display: inline-flex; align-items: center; gap: var(--space-2); }
 .style-guide section { margin-top: var(--space-6); }
 .style-guide h3 { margin: 0 0 var(--space-4); font-size: var(--text-md); }
@@ -74,17 +68,13 @@
 .sg-font { display: grid; gap: var(--space-3); }
 .sg-font-sample { padding: var(--space-4) var(--space-5); border: 1px dashed var(--border-soft); border-radius: var(--radius-md); font-weight: var(--weight-regular); font-size: 16px; }
 .sg-samples { display: block; width: 100%; height: 300px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--site-light); }
-
-/* Stacked fields leave the whole panel width available to labels and model names. */
 .workspace-surface .ai-settings .ai-model-row .ai-inline-field,
 .workspace-surface .ai-settings .ai-budget { display: flex; flex-direction: column; align-items: stretch; gap: var(--space-3); }
-.ai-model-row { flex-wrap: wrap; min-width: 0; }
-.ai-model-row > label { flex-basis: 100%; }
+.ai-model-row { display: flex; align-items: center; gap: var(--space-4); flex-wrap: wrap; min-width: 0; }
+.ai-model-row > label { flex: 1; min-width: 0; flex-basis: 100%; }
 .ai-model-row .ai-usage-link { margin-left: auto; }
 .ai-settings .ai-account-card { align-items: flex-start; }
 .ai-account-options { align-self: flex-start; }
-
-/* Blocking questions and account settings; canvas editing stays in panels. */
 .modal-dialog { width: min(420px, calc(100vw - 32px)); padding: var(--space-6); border: 1px solid var(--border); border-radius: var(--radius-lg); color: var(--text); background: var(--surface-raised); box-shadow: var(--shadow-3); }
 .modal-dialog::backdrop { background: rgb(0 0 0 / 0.45); }
 .modal-dialog .modal-title { margin: 0 0 var(--space-3); font-size: var(--text-lg); font-weight: var(--weight-semibold); }
