@@ -16,7 +16,7 @@ pub use identity_source::{
 pub use project_db::{
     AUTOSAVE_BRANCH, AutosaveProject, BranchSummary, CompactReport, DEFAULT_BRANCH, FileStamp,
     LoadedProject, ProjectDatabase, ProjectHistoryView, SaveFailure, SaveFailureKind,
-    VersionSummary, load_project, read_autosave,
+    VersionSummary, load_project, read_autosave, remove_project_files,
 };
 pub use project_folder::{
     create_project_folder, is_project_folder, manage_project_folder, project_in_folder,
@@ -29,7 +29,7 @@ use std::{
     path::Path,
 };
 pub use website_export::{
-    WrittenWebsiteExport, export_folder_name, read_export_file, write_export_at, write_export_into,
+    WrittenWebsiteExport, export_folder_name, read_export_file, read_export_folder, write_export_at, write_export_into,
     write_export_named, write_website_export,
 };
 pub use website_snapshot::{

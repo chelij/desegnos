@@ -974,7 +974,7 @@ fn behaviour_blocks(js: &str) -> Result<BTreeMap<Uuid, String>> {
             start >= end && js[end..start].trim().is_empty(),
             "Behaviour JavaScript must be inside pointer markers.",
         )?;
-        let close = format!("/* /desegnos-pointer:{id} */");
+        let close = close_marker(id);
         let offset = js[after..]
             .find(&close)
             .ok_or_else(|| Error("A behaviour marker was not closed.".into()))?;
@@ -1279,7 +1279,7 @@ fn normalize_fragment(fragment: &str) -> String {
 fn marked_fragments(text: &str) -> Vec<(Uuid, String)> {
     let mut rows = Vec::new();
     for (_, id, after_open) in find_markers(text) {
-        let close = format!("/* /desegnos-pointer:{id} */");
+        let close = close_marker(id);
         if let Some(end) = text[after_open..].find(&close) {
             let fragment = &text[after_open..after_open + end];
             rows.push((id, normalize_fragment(fragment)));
@@ -1305,6 +1305,41 @@ fn find_markers(text: &str) -> Vec<(usize, Uuid, usize)> {
         search = after + end + 2;
     }
     rows
+}
+
+fn close_marker(id: impl std::fmt::Display) -> String {
+    format!("/* /desegnos-pointer:{id} */")
+}
+
+/// The code of one pointer found in an export folder's files, each fragment headed by its
+/// path. A marked block wins; an HTML element carrying the attribute starts at its tag.
+pub fn marked_pointer_code(files: &BTreeMap<String, Vec<u8>>, pointer_id: Uuid) -> String {
+    let needle = pointer_id.to_string();
+    let close = close_marker(pointer_id);
+    let mut code = String::new();
+    for (path, bytes) in files {
+        let Ok(text) = std::str::from_utf8(bytes) else {
+            continue;
+        };
+        let mut search = 0;
+        while let Some(found) = text[search..].find(&needle) {
+            let at = search + found;
+            let start = text[..at]
+                .rfind("/* desegnos-pointer:")
+                .or_else(|| text[..at].rfind('<'))
+                .unwrap_or(at);
+            let end = match text[at..].find(&close) {
+                Some(offset) => at + offset + close.len(),
+                None => text[at..]
+                    .find('>')
+                    .map(|offset| at + offset + 1)
+                    .unwrap_or(text.len().min(at + 4000)),
+            };
+            code.push_str(&format!("/* {path} */\n{}\n\n", &text[start..end]));
+            search = end.max(at + needle.len());
+        }
+    }
+    code
 }
 
 /// Elements carrying `data-desegnos-pointer`, with their whole subtree.

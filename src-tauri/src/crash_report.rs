@@ -122,8 +122,11 @@ pub fn install_hook() {
 /// Remembers the data folder and starts the unclean-exit marker. Called once startup has
 /// proven the folder writable.
 pub fn start(folder: &Path) {
+    // Already set means a second start in this process; the first folder stays.
     let _ = DATA.set(folder.to_owned());
-    let _ = begin_session_with(folder, process_alive);
+    if let Err(error) = begin_session_with(folder, process_alive) {
+        eprintln!("Could not record the start of this session for crash detection: {error}");
+    }
 }
 
 /// Removes this run's marker after a normal exit. A marker owned by another running
@@ -929,24 +932,16 @@ pub fn dismiss_crash_report(app: tauri::AppHandle) -> Result<(), String> {
 #[tauri::command]
 pub fn open_crash_report(
     app: tauri::AppHandle,
-    window: tauri::WebviewWindow,
 ) -> Result<(), OpenFailure> {
-    if window.label() != "editor" {
-        return Err(OpenFailure::plain("Only the editor can report a crash."));
-    }
     open_at(&crate::data_location::directory(&app))
 }
 
 #[tauri::command]
 pub fn record_frontend_crash(
     app: tauri::AppHandle,
-    window: tauri::WebviewWindow,
     message: String,
     stack: String,
 ) -> Result<(), String> {
-    if window.label() != "editor" {
-        return Err("Only the editor can record its own failure.".to_owned());
-    }
     record_frontend_at(
         &crate::data_location::directory(&app),
         &capped(&message, MAX_MESSAGE_BYTES),

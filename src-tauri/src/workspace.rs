@@ -4,21 +4,21 @@ use desegnos_core::{
 };
 use desegnos_storage::{
     AutosaveProject, FileStamp, LoadedProject, ProjectDatabase, ProjectHistoryView, SaveFailure,
-    SaveFailureKind, write_markdown,
+    SaveFailureKind, remove_project_files, write_markdown,
 };
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
-    fs::{self, File, OpenOptions},
+    fs::{self, File},
     path::{Path, PathBuf},
     sync::Mutex,
     time::{Duration, Instant, SystemTime},
 };
+use crate::native_files::{NativeResult, message, open_lock_file};
 use tauri::{AppHandle, Manager, State};
 use tauri_plugin_dialog::DialogExt;
 use uuid::Uuid;
 
-type NativeResult<T> = Result<T, String>;
 type WorkspaceState<'a> = State<'a, Mutex<Workspace>>;
 
 /// Unsaved edits reach the autosave branch at most this often while the project is dirty.
@@ -61,10 +61,6 @@ impl From<ProjectOpenError> for String {
 }
 
 type OpenResult<T> = Result<T, ProjectOpenError>;
-
-fn message(error: impl std::fmt::Display) -> String {
-    error.to_string()
-}
 
 fn lowest_unused_name(base: &str, names: impl IntoIterator<Item = String>) -> String {
     let used: BTreeSet<String> = names.into_iter().collect();
@@ -196,6 +192,8 @@ pub struct Workspace {
     active: Option<OpenProject>,
     recoveries: Vec<RecoveryCandidate>,
     recovery_error: Option<String>,
+    /// The last autosave failed, so edits since are not being kept for recovery.
+    autosave_error: Option<String>,
     recent_error: Option<String>,
     /// Other open projects, each with its own undo history, file and autosave.
     parked: Vec<OpenProject>,
@@ -253,6 +251,18 @@ impl Workspace {
     fn session_mut(&mut self) -> Option<&mut Session> {
         self.active.as_mut().map(|open| &mut open.session)
     }
+    /// Run a change on the open project, then keep its unsaved work for recovery.
+    fn with_session<T>(
+        &mut self,
+        change: impl FnOnce(&mut Session) -> desegnos_core::Result<T>,
+    ) -> NativeResult<T> {
+        let session = self
+            .session_mut()
+            .ok_or("Create or open a project first.")?;
+        let result = change(session).map_err(message)?;
+        self.autosave_if_due();
+        Ok(result)
+    }
     fn file(&self) -> Option<&ProjectDatabase> {
         self.active.as_ref().and_then(|open| open.file.as_ref())
     }
@@ -289,26 +299,17 @@ impl Workspace {
         &mut self,
         record: desegnos_core::ExportRecord,
     ) -> NativeResult<()> {
-        let session = self
-            .session_mut()
-            .ok_or("Create or open a project first.")?;
-        session.record_export(record, |_| Ok(())).map_err(message)?;
-        self.autosave_if_due();
-        Ok(())
+        self.with_session(|session| session.record_export(record, |_| Ok(())))
     }
 
-    /// Add a rendered website as one undo step and return the updated workspace.
     pub(super) fn import_website(
         &mut self,
         imported: desegnos_core::ImportedWebsite,
         pictures: BTreeMap<Uuid, String>,
     ) -> NativeResult<WorkspaceView> {
-        let session = self
-            .session_mut()
-            .ok_or("Create or open a project first.")?;
-        let revision = session.project().revision;
-        session
-            .execute(
+        self.with_session(|session| {
+            let revision = session.project().revision;
+            session.execute(
                 revision,
                 Command::ImportWebsite {
                     pages: imported.pages,
@@ -318,8 +319,7 @@ impl Workspace {
                 },
                 |_| Ok(()),
             )
-            .map_err(message)?;
-        self.autosave_if_due();
+        })?;
         Ok(self.view())
     }
 
@@ -330,16 +330,13 @@ impl Workspace {
         comment: &str,
         fingerprint: &str,
     ) -> NativeResult<()> {
-        let session = self
-            .session_mut()
-            .ok_or("Create or open a project first.")?;
-        let revision = session.project().revision;
         let wiring = desegnos_core::PointerWiring {
             fingerprint: fingerprint.to_owned(),
             generated_comment: comment.to_owned(),
         };
-        session
-            .execute(
+        self.with_session(|session| {
+            let revision = session.project().revision;
+            session.execute(
                 revision,
                 Command::SetPointerWiring {
                     pointer_id,
@@ -348,9 +345,7 @@ impl Workspace {
                 },
                 |_| Ok(()),
             )
-            .map_err(message)?;
-        self.autosave_if_due();
-        Ok(())
+        })
     }
 
     pub(super) fn record_generated(
@@ -359,12 +354,9 @@ impl Workspace {
         candidate: &GenerationCandidate,
         attempt_ordinal: usize,
     ) -> NativeResult<()> {
-        self.session_mut()
-            .ok_or("Create or open a project first.")?
-            .record_generation(snapshot, candidate, attempt_ordinal, |_| Ok(()))
-            .map_err(message)?;
-        self.autosave_if_due();
-        Ok(())
+        self.with_session(|session| {
+            session.record_generation(snapshot, candidate, attempt_ordinal, |_| Ok(()))
+        })
     }
 
     /// Apply one validated reply and its generated pictures as one undo step.
@@ -375,18 +367,15 @@ impl Workspace {
         accepted_decision_indices: &[usize],
         generated_pictures: &std::collections::BTreeMap<String, String>,
     ) -> NativeResult<()> {
-        self.session_mut()
-            .ok_or("Create or open a project first.")?
-            .apply_generation(
+        self.with_session(|session| {
+            session.apply_generation(
                 snapshot,
                 candidate,
                 accepted_decision_indices,
                 generated_pictures,
                 |_| Ok(()),
             )
-            .map_err(message)?;
-        self.autosave_if_due();
-        Ok(())
+        })
     }
 
     pub fn initialize(
@@ -411,6 +400,7 @@ impl Workspace {
             active: None,
             recoveries: vec![],
             recovery_error: None,
+            autosave_error: None,
             recent_error: None,
             parked: vec![],
             order: vec![],
@@ -425,14 +415,7 @@ impl Workspace {
 
     fn acquire_ownership(&self, project_id: Uuid) -> NativeResult<Option<File>> {
         let path = self.directory.join(format!("{project_id}.session.lock"));
-        let mut options = OpenOptions::new();
-        options.create(true).truncate(false).read(true).write(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600);
-        }
-        let file = options.open(path).map_err(message)?;
+        let file = open_lock_file(&path).map_err(message)?;
         match file.try_lock() {
             Ok(()) => Ok(Some(file)),
             Err(std::fs::TryLockError::WouldBlock) => Ok(None),
@@ -467,20 +450,10 @@ impl Workspace {
             .join(format!("{project_id}.desegnos"))
     }
 
-    /// Delete the recovery database an untitled project kept in the app data folder.
     fn remove_untitled_database(&self, project_id: Uuid) {
-        let path = self.untitled_path(project_id);
-        let _ = fs::remove_file(&path);
-        for suffix in ["-wal", "-shm"] {
-            let _ = fs::remove_file(path.with_file_name(format!(
-                "{}{suffix}",
-                path.file_name().map(|name| name.to_string_lossy()).unwrap_or_default()
-            )));
+        if let Err(error) = remove_project_files(&self.untitled_path(project_id)) {
+            eprintln!("Could not remove the untitled recovery database: {error}");
         }
-        let _ = fs::remove_file(path.with_file_name(format!(
-            "{}.lock",
-            path.file_name().map(|name| name.to_string_lossy()).unwrap_or_default()
-        )));
     }
 
     fn remove_pointer(&self, project_id: Uuid) {
@@ -629,7 +602,10 @@ impl Workspace {
                 .iter()
                 .map(|candidate| candidate.info.clone())
                 .collect(),
-            recovery_error: self.recovery_error.clone(),
+            recovery_error: self
+                .autosave_error
+                .clone()
+                .or_else(|| self.recovery_error.clone()),
             open_projects: self.open_projects(),
             any_dirty: self.parked.iter().any(OpenProject::dirty) || self.active_dirty(),
         }
@@ -1054,9 +1030,12 @@ impl Workspace {
             desegnos_storage::project_db::now_millis(),
         ) {
             Ok(()) => {
-                self.active.as_mut().expect("active project").last_autosave = Some(Instant::now())
+                self.active.as_mut().expect("active project").last_autosave = Some(Instant::now());
+                self.autosave_error = None;
             }
-            Err(error) => eprintln!("Could not keep unsaved work: {error}"),
+            Err(error) => {
+                self.autosave_error = Some(format!("Could not keep unsaved work: {error}"));
+            }
         }
     }
 
@@ -1536,8 +1515,7 @@ impl Workspace {
         Ok(())
     }
 
-    fn recover(&mut self, project_id: Option<Uuid>, discard: bool) -> NativeResult<()> {
-        let _ = discard; // Recovery opens in its own tab group; the active project stays open.
+    fn recover(&mut self, project_id: Option<Uuid>) -> NativeResult<()> {
         self.open_tab(|state| state.recover_inner(project_id))
     }
 
@@ -1567,7 +1545,7 @@ impl Workspace {
             .read_recovery(project_id)?
             .ok_or("There are no unsaved changes to recover for this project.")?;
         let file = ProjectDatabase::open(&path).map_err(message)?;
-        let saved_revision = file.load().map(|loaded| loaded.project.revision).ok();
+        let saved_revision = Some(file.load().map_err(message)?.project.revision);
         self.activate(
             work.project,
             Some(file),
@@ -1624,17 +1602,15 @@ pub fn save_untitled_project(
     let current = state.project()?.clone();
     if current.name != name {
         let revision = current.revision;
-        state
-            .session_mut()
-            .ok_or("Create or open a project first.")?
-            .execute(
+        state.with_session(|session| {
+            session.execute(
                 revision,
                 Command::RenameProject {
                     name: name.to_owned(),
                 },
                 |_| Ok(()),
             )
-            .map_err(message)?;
+        })?;
     }
     if let Some(session) = state.session_mut() {
         session.end_history_step();
@@ -1761,13 +1737,8 @@ pub fn import_context(
         )?;
     context.attach_matching_pages = attach_matching_pages.unwrap_or(true);
     let mut state = state.lock().map_err(message)?;
-    state
-        .session_mut()
-        .ok_or("Create or open a project first.")?
-        .import_context(revision, context, |_| Ok(()))
-        .map_err(message)?;
+    state.with_session(|session| session.import_context(revision, context, |_| Ok(())))?;
     state.active.as_mut().expect("active project").prepared = None;
-    state.autosave_if_due();
     Ok(state.view())
 }
 
@@ -1857,21 +1828,13 @@ pub fn edit_project(
     command: Command,
 ) -> NativeResult<WorkspaceView> {
     let mut state = state.lock().map_err(message)?;
-    state
-        .session_mut()
-        .ok_or("Create or open a project first.")?
-        .execute(revision, command, |_| Ok(()))
-        .map_err(message)?;
-    state.autosave_if_due();
+    state.with_session(|session| session.execute(revision, command, |_| Ok(())))?;
     Ok(state.view())
 }
 
 /// A web link the user clicked in a preview, opened in their browser after they confirm it.
 #[tauri::command]
-pub fn open_preview_link(window: tauri::WebviewWindow, url: String) -> NativeResult<()> {
-    if window.label() != "editor" {
-        return Err("Only the editor can open links.".into());
-    }
+pub fn open_preview_link(url: String) -> NativeResult<()> {
     let parsed = preview_link(&url)?;
     crate::system_open::open(parsed.as_str())
         .map_err(|_| "Couldn't open a browser. Copy the link and open it manually.".into())
@@ -1894,28 +1857,17 @@ fn preview_link(url: &str) -> NativeResult<desegnos_ai::WebUrl> {
 #[tauri::command(async)]
 pub fn undo_project(state: WorkspaceState<'_>) -> NativeResult<WorkspaceView> {
     let mut state = state.lock().map_err(message)?;
-    state
-        .session_mut()
-        .ok_or("Create or open a project first.")?
-        .undo(|_| Ok(()))
-        .map_err(message)?;
-    state.autosave_if_due();
+    state.with_session(|session| session.undo(|_| Ok(())))?;
     Ok(state.view())
 }
 
 #[tauri::command(async)]
 pub fn redo_project(state: WorkspaceState<'_>) -> NativeResult<WorkspaceView> {
     let mut state = state.lock().map_err(message)?;
-    state
-        .session_mut()
-        .ok_or("Create or open a project first.")?
-        .redo(|_| Ok(()))
-        .map_err(message)?;
-    state.autosave_if_due();
+    state.with_session(|session| session.redo(|_| Ok(())))?;
     Ok(state.view())
 }
 
-/// End the history step in progress, so the next edit starts a new one.
 #[tauri::command(async)]
 pub fn end_history_step(state: WorkspaceState<'_>) -> NativeResult<()> {
     let mut state = state.lock().map_err(message)?;
@@ -1925,28 +1877,19 @@ pub fn end_history_step(state: WorkspaceState<'_>) -> NativeResult<()> {
     Ok(())
 }
 
-#[derive(Serialize)]
-#[serde(untagged)]
-pub enum OpenProjectResult {
-    Workspace(Box<WorkspaceView>),
-}
 #[tauri::command]
 pub async fn open_project(
     app: AppHandle,
     state: WorkspaceState<'_>,
     generation: State<'_, Mutex<crate::generation::GenerationService>>,
-    discard: bool,
     folder: Option<bool>,
     path: Option<PathBuf>,
     discard_recovery: Option<bool>,
-) -> OpenResult<Option<OpenProjectResult>> {
+) -> OpenResult<Option<WorkspaceView>> {
     generation
         .lock()
         .map_err(message)?
         .ensure_switch_allowed()?;
-    // Opening adds a tab group and leaves the active project as it is, so edits made while
-    // the dialog is open don't conflict with it.
-    let _ = discard;
     let path = if let Some(path) = path {
         path
     } else {
@@ -1978,7 +1921,7 @@ pub async fn open_project(
         .map_err(message)?
         .ensure_switch_allowed()?;
     state.open_file_tab(&path, discard_recovery.unwrap_or(false))?;
-    Ok(Some(OpenProjectResult::Workspace(Box::new(state.view()))))
+    Ok(Some(state.view()))
 }
 
 #[tauri::command]
@@ -2252,14 +2195,13 @@ pub fn recover_project(
     state: WorkspaceState<'_>,
     generation: State<'_, Mutex<crate::generation::GenerationService>>,
     project_id: Option<Uuid>,
-    discard: Option<bool>,
 ) -> NativeResult<WorkspaceView> {
     generation
         .lock()
         .map_err(message)?
         .ensure_switch_allowed()?;
     let mut state = state.lock().map_err(message)?;
-    state.recover(project_id, discard.unwrap_or(false))?;
+    state.recover(project_id)?;
     Ok(state.view())
 }
 
@@ -2284,12 +2226,8 @@ pub struct RecentProjectsView {
 
 #[tauri::command]
 pub fn get_recent_projects(
-    window: tauri::WebviewWindow,
     state: WorkspaceState<'_>,
 ) -> NativeResult<RecentProjectsView> {
-    if window.label() != "editor" {
-        return Err("Only the editor can read recent projects.".into());
-    }
     let state = state.lock().map_err(message)?;
     match crate::recent::read(&state.directory) {
         Ok(projects) => Ok(RecentProjectsView {
@@ -2326,55 +2264,55 @@ impl From<String> for RecentProjectOpenError {
 
 #[tauri::command(async)]
 pub fn open_recent_project(
-    window: tauri::WebviewWindow,
     state: WorkspaceState<'_>,
     generation: State<'_, Mutex<crate::generation::GenerationService>>,
     path: PathBuf,
-    discard: bool,
     discard_recovery: Option<bool>,
 ) -> OpenResult<WorkspaceView> {
-    (|| -> OpenResult<WorkspaceView> {
-        if window.label() != "editor" {
-            return Err("Only the editor can open recent projects."
-                .to_owned()
-                .into());
+    open_recent(&state, &generation, &path, discard_recovery.unwrap_or(false)).map_err(|error| {
+        match error {
+            ProjectOpenError::Message(message) => RecentProjectOpenError::from(message).into(),
+            error => error,
         }
-        generation
-            .lock()
-            .map_err(message)?
-            .ensure_switch_allowed()?;
-        let _ = discard; // Opening adds a tab group; the active project stays open.
-        let mut state = state.lock().map_err(message)?;
-        if !crate::recent::read(&state.directory)?
-            .iter()
-            .any(|entry| entry.path == path)
-        {
-            return Err(
-                "This project is not in your recent list. Use Open project to choose it."
-                    .to_owned()
-                    .into(),
-            );
-        }
-        if let Err(error) = fs::metadata(&path) {
-            return Err(RecentProjectOpenError {
-                missing: matches!(
-                    error.kind(),
-                    std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
-                ),
-                message: format!(
-                    "Could not open this recent project ({}): {error}",
-                    path.display()
-                ),
-            }
-            .into());
-        }
-        state.open_file_tab(&path, discard_recovery.unwrap_or(false))?;
-        Ok(state.view())
-    })()
-    .map_err(|error| match error {
-        ProjectOpenError::Message(message) => RecentProjectOpenError::from(message).into(),
-        error => error,
     })
+}
+
+fn open_recent(
+    state: &WorkspaceState<'_>,
+    generation: &State<'_, Mutex<crate::generation::GenerationService>>,
+    path: &Path,
+    discard_recovery: bool,
+) -> OpenResult<WorkspaceView> {
+    generation
+        .lock()
+        .map_err(message)?
+        .ensure_switch_allowed()?;
+    let mut state = state.lock().map_err(message)?;
+    if !crate::recent::read(&state.directory)?
+        .iter()
+        .any(|entry| entry.path == path)
+    {
+        return Err(
+            "This project is not in your recent list. Use Open project to choose it."
+                .to_owned()
+                .into(),
+        );
+    }
+    if let Err(error) = fs::metadata(path) {
+        return Err(RecentProjectOpenError {
+            missing: matches!(
+                error.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+            ),
+            message: format!(
+                "Could not open this recent project ({}): {error}",
+                path.display()
+            ),
+        }
+        .into());
+    }
+    state.open_file_tab(path, discard_recovery)?;
+    Ok(state.view())
 }
 
 /// Write unsaved in-memory edits to the hidden autosave branch, at most every few seconds.
@@ -2403,7 +2341,6 @@ pub fn restore_version(state: WorkspaceState<'_>, version: i64) -> NativeResult<
     Ok(state.view())
 }
 
-/// Switch alternatives. The current alternative is saved first.
 #[tauri::command(async)]
 pub fn switch_alternative(
     state: WorkspaceState<'_>,
@@ -2414,7 +2351,6 @@ pub fn switch_alternative(
     Ok(state.view())
 }
 
-/// Start an alternative at the current version and make it the one being edited.
 #[tauri::command(async)]
 pub fn create_alternative(state: WorkspaceState<'_>, name: String) -> NativeResult<WorkspaceView> {
     let mut state = state.lock().map_err(message)?;
@@ -2440,7 +2376,6 @@ pub fn delete_alternative(state: WorkspaceState<'_>, name: String) -> NativeResu
     Ok(state.view())
 }
 
-/// Save a copy of the project without its history: one version on one branch.
 #[tauri::command(async)]
 pub async fn save_project_copy(
     app: AppHandle,
