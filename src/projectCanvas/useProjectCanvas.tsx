@@ -8,7 +8,7 @@ import { createKeyboardActions, type Painter, type PainterEvent } from './keyboa
 import { createCanvasInteraction } from './interaction';
 import {
   ElementEntry, ClipboardEntry, PasteChoice, LinkDecision, Drag, NIL_UUID, DragInput, ProjectCanvasHandle,
-  DuplicateRepeat, ProjectCanvasProps, isElementTarget, elementAt, targetKey,
+  DuplicateRepeat, type CanvasHookProps, isElementTarget, elementAt, targetKey,
 } from './interactionTypes';
 import { canvasView } from './canvasView';
 import { useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
@@ -51,7 +51,7 @@ export function useProjectCanvas({
   insertElements, updateElements, moveElements, groupElements, ungroupElements, linkElements, unlinkElements, pasteLinked,
   addPointer, updatePointer, pointerStates, tool, insertKind, onTool, boundaryKind, requestShape, focusedSize, widthPreview = null, onZoom, onLayout,
   play, onPlayElement, onPlayExit, preview, previewClose, previewRefresh, focusBehaviour, generate,
-}: ProjectCanvasProps, ref: ForwardedRef<ProjectCanvasHandle>) {
+}: CanvasHookProps, ref: ForwardedRef<ProjectCanvasHandle>) {
 
   const {
     requestTargetAt, requestEditorScreen, closeRequestArea, startRequestOnSelection,

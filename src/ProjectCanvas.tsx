@@ -21,11 +21,9 @@ import { playIsActive } from './projectCanvas/play';
 // A click with the Boundary tool places its default boundary instead of doing nothing.
 
 export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>(function ProjectCanvas({
-  editProject, project, openPage, createBoundary, savePlacements, saveView, selection, focused, selectBoundary, selectReference, selectPointer, selectElement, clearSelection,
-  removeSelection, removeElements, deleteBoundary, addReference, updateReference, elementToReference, referenceToElement, attachToRequest,
-  addRequest, selectRequest,
-  insertElements, updateElements, moveElements, groupElements, ungroupElements, linkElements, unlinkElements, pasteLinked,
-  addPointer, updatePointer, focusBehaviour, pointerStates, tool, insertKind, onTool, boundaryKind, requestShape, focusedSize, widthPreview, onZoom, onLayout,
+  edits, editProject, project, openPage, createBoundary, saveView, selection, focused, selectBoundary, selectReference, selectPointer, selectElement, clearSelection,
+  removeSelection, removeElements, deleteBoundary, elementToReference, referenceToElement, attachToRequest,
+  selectRequest, groupElements, ungroupElements, focusBehaviour, pointerStates, tool, insertKind, onTool, boundaryKind, requestShape, focusedSize, widthPreview, onZoom, onLayout,
   play, onPlayBoundary, onPlayElement, onPlayExit, preview, previewClose, previewRefresh, generate,
 }, ref) {
   const [pointerFocus, setPointerFocus] = useState(false);
@@ -43,7 +41,7 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
     cancelRequestDraft, selectedItem, selectedItemScreen, createdItem, startReferenceResize, pasteChoice,
     setPasteChoice, confirmPaste, linkChoice, linkCopies, setLinkChoice, dropNotice,
     setDropNotice,
-  } = useProjectCanvas({ editProject, project, openPage, createBoundary, savePlacements, saveView, selection, focused, selectBoundary, selectReference, selectPointer, selectElement, clearSelection, removeSelection, removeElements, deleteBoundary, addReference, updateReference, elementToReference, referenceToElement, attachToRequest, addRequest, selectRequest, insertElements, updateElements, moveElements, groupElements, ungroupElements, linkElements, unlinkElements, pasteLinked, addPointer, updatePointer, focusBehaviour, pointerStates, tool, insertKind, onTool, boundaryKind, requestShape, focusedSize, widthPreview, onZoom, onLayout, play, onPlayBoundary, onPlayElement, onPlayExit, preview, previewClose, previewRefresh, generate }, ref);
+  } = useProjectCanvas({ ...edits, editProject, project, openPage, createBoundary, saveView, selection, focused, selectBoundary, selectReference, selectPointer, selectElement, clearSelection, removeSelection, removeElements, deleteBoundary, elementToReference, referenceToElement, attachToRequest, selectRequest, groupElements, ungroupElements, focusBehaviour, pointerStates, tool, insertKind, onTool, boundaryKind, requestShape, focusedSize, widthPreview, onZoom, onLayout, play, onPlayBoundary, onPlayElement, onPlayExit, preview, previewClose, previewRefresh, generate }, ref);
   const presenting = playIsActive(play) && project.pages.length > 0 && project.pages.every(page => page.output === 'slide');
   const draftRequest = requestDraft ? singleTargetRequest(project, requestDraft.targets) : null;
   const slides = project.pages;
@@ -101,8 +99,8 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
         selected={selectedPointerIds} pointerStates={pointerStates} enabled={tool === 'select'} onSelect={choosePointer} />
     </div>
     <PointerComments entries={entries} camera={camera} selected={selectedPointerIds} pointerStates={pointerStates} interactive={tool === 'select'} onSelect={choosePointer}
-      change={(pointerId, comment) => updatePointer(pointerId, { comment })}
-      changeKind={(pointerId, kind) => updatePointer(pointerId, { kind })}
+      change={(pointerId, comment) => edits.updatePointer(pointerId, { comment })}
+      changeKind={(pointerId, kind) => edits.updatePointer(pointerId, { kind })}
       autoFocusId={createdPointer.current} close={() => { createdPointer.current = null; surface.current?.focus({ preventScroll: true }); }} />
     <BehaviourBadges entries={behaviours} camera={camera} viewport={viewport} pointerStates={pointerStates} enabled={tool === 'select'}
       onSelect={pointer => focusBehaviour(pointer.from)} />
@@ -125,7 +123,7 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
       ask={requestDraft.targets.some(target => target.kind === 'element') ? text => askRequestDraft(text, draftRequest) : undefined} close={cancelRequestDraft} />}
     {selectedItem && selectedItemScreen && selectedItem.kind.kind === 'note' && <ReferenceNoteEditor key={selectedItem.id} item={selectedItem}
       kind={selectedItem.kind} screen={selectedItemScreen} autoFocus={createdItem.current === selectedItem.id}
-      change={text => updateReference(selectedItem.id, { text })} close={() => { createdItem.current = null; surface.current?.focus({ preventScroll: true }); }} />}
+      change={text => edits.updateReference(selectedItem.id, { text })} close={() => { createdItem.current = null; surface.current?.focus({ preventScroll: true }); }} />}
     {selectedItem && selectedItemScreen && <>
       {CORNERS.map(corner => <button key={corner} type="button" data-reference-corner={corner} className={`canvas-grip reference-grip ${corner}`} aria-label={`Resize reference item ${corner}`} title="Drag to resize"
         style={{ left: selectedItemScreen.left + (corner === 'ne' || corner === 'se' ? selectedItemScreen.width : 0) - 5, top: selectedItemScreen.top + (corner === 'sw' || corner === 'se' ? selectedItemScreen.height : 0) - 5 }}

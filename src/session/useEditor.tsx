@@ -13,7 +13,8 @@ import { readRequestAttachments } from '../requestAttachments';
 import { elementTree, elementTreeIds } from '../projectCanvas/elementGeometry';
 import { needsAiSettings } from '../ProblemBanner.js';
 import { updateSummary, type UpdateCheck, type UpdateSummary } from '../updateCheck';
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { projectEdits } from './projectEdits';
 import { isTauri } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { native, edit } from '../api';
@@ -26,8 +27,8 @@ import { type DossierSection } from '../Notes';
 import { type MenuItem } from '../Menus';
 import { KEYMAP, shortcutFor, shortcutLabel, viewNameForSlot } from '../shortcuts';
 import {
-  BOUNDARY_GAP, unionBounds, referenceMoves, pushApartReference, boundaryMoves, pushApartBoundaries, toggleCanvasTarget, selectedReference, type BoundaryMove,
-  type CanvasCamera, type CanvasTarget, type ReferenceMove,
+  BOUNDARY_GAP, unionBounds, referenceMoves, pushApartReference, boundaryMoves, pushApartBoundaries, toggleCanvasTarget, selectedReference, 
+  type CanvasCamera, type CanvasTarget, 
 } from '../projectCanvasGeometry';
 import { findPageElement } from '../projectCanvas/elementGeometry';
 import { elementPath, findElementIn } from '../projectCanvas/elementGeometry';
@@ -35,7 +36,7 @@ import { usePanelState } from '../EditorDock';
 import { announcesStatus } from '../generationSession.js';
 import { type PaletteCommand } from '../CommandPalette';
 import { activeGeneration, useGeneration } from '../useGeneration';
-import type { AiSettingsView, AppSettingsView, BoundaryKind, Brief, Element, ElementKind, ElementMove, ElementPatch, GenerationJobView, GenerationMode, GridSettings, LinkedPasteInstance, NamedView, PageSize, PendingRequest, Pointer, PointerSource, PointerStateView, PointerTarget, Project, Rect, ReferenceItem, RequestAttachment, SizePreset, WorkspaceView, RecentProjectsView, RecentProject } from '../types';
+import type { AiSettingsView, AppSettingsView, BoundaryKind, Brief, Element, ElementKind, GenerationJobView, GenerationMode, GridSettings, NamedView, PageSize, PendingRequest, Pointer, PointerSource, PointerStateView, Project, Rect, RequestAttachment, SizePreset, WorkspaceView, RecentProjectsView, RecentProject } from '../types';
 import { baseSizeId, resolveForSize } from '../projectCanvas/sizes';
 import { coveredTargets } from '../projectCanvas/requests';
 import { idlePlay, playClick, playIsActive, type PlayState } from '../projectCanvas/play';
@@ -85,6 +86,7 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
   const [loading, setLoading] = useState(!initialView);
   const [error, setError] = useState('');
   const { view, current, pending, accept, queue, mutate, settle } = useProjectSession(initialView, setError);
+  const edits = useMemo(() => projectEdits(mutate), [mutate]);
   const [openFailure, setOpenFailure] = useState<{ message: string; url: string } | null>(null);
   const [updateState, setUpdateState] = useState<UpdateState>({ kind: 'idle' });
   function dismissUpdate() { setUpdateState({ kind: 'idle' }); }
@@ -266,14 +268,6 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
     selectCanvasBoundary(id);
     if (id) requestAnimationFrame(() => canvasRef.current?.focusBoundary(id));
   }
-  const saveCanvasPlacements = useCallback(async (placements: BoundaryMove[], reference: ReferenceMove[]) => {
-    if (!placements.length && !reference.length) return;
-    await mutate({
-      type: 'set_canvas_layout',
-      placements: placements.map(({ pageId, sizeId, x, y, kind }) => ({ page_id: pageId, size_id: sizeId, x, y, kind })),
-      reference: reference.map(({ itemId, x, y }) => ({ item_id: itemId, x, y })),
-    });
-  }, [mutate]);
   const selectCanvasBoundary = useCallback((pageId: string | null, sizeId?: string | null, additive = false) => {
     setCanvasFocus(pageId);
     setCanvasFocusSize(sizeId ?? null);
@@ -299,33 +293,6 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
     setCanvasSelection(current => toggleCanvasTarget(current, { kind: 'request', requestId }, additive));
   }, []);
   const clearCanvasSelection = useCallback(() => setCanvasSelection([]), []);
-  const addCanvasReference = useCallback(async (item: ReferenceItem, pictureDataUri?: string) => {
-    await mutate(pictureDataUri === undefined
-      ? { type: 'add_reference_item', item }
-      : { type: 'add_reference_item', item, picture_data_uri: pictureDataUri });
-  }, [mutate]);
-  const updateCanvasReference = useCallback((itemId: string, patch: { rect?: Rect; text?: string; url?: string; title?: string; color?: string }) => {
-    void mutate({ type: 'update_reference_item', item_id: itemId, ...patch }).catch(() => {});
-  }, [mutate]);
-  const addCanvasPointer = useCallback(async (pointer: Pointer) => {
-    await mutate({ type: 'add_pointer', pointer });
-  }, [mutate]);
-  const updateCanvasPointer = useCallback((pointerId: string, patch: { from?: PointerSource; to?: PointerTarget; comment?: string }) => {
-    return mutate({ type: 'update_pointer', pointer_id: pointerId, ...patch });
-  }, [mutate]);
-  const insertCanvasElements = useCallback(async (pageId: string, parentId: string | null, index: number, elements: Element[], pictureDataUri?: string, sizeId?: string | null) => {
-    await mutate({ type: 'insert_elements', page_id: pageId, parent_id: parentId, index, elements,
-      ...(pictureDataUri === undefined ? {} : { picture_data_uri: pictureDataUri }),
-      ...(sizeId ? { size_id: sizeId } : {}) });
-  }, [mutate]);
-  const updateCanvasElements = useCallback(async (pageId: string, patches: ElementPatch[]) => {
-    if (!patches.length) return;
-    try { await mutate({ type: 'update_elements', page_id: pageId, patches }); } catch { /* App surfaces the failed command. */ }
-  }, [mutate]);
-  const moveCanvasElements = useCallback(async (moves: ElementMove[]) => {
-    if (!moves.length) return;
-    try { await mutate({ type: 'move_elements', moves }); } catch { /* App surfaces the failed command. */ }
-  }, [mutate]);
   const groupCanvasElements = useCallback(async (pageId: string, ids: string[]) => {
     const before = new Set(elementTreeIds(current.current?.project?.pages.find(page => page.id === pageId)?.elements ?? []));
     const next = await mutate({ type: 'group_elements', page_id: pageId, ids });
@@ -337,15 +304,6 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
     const children = group?.kind === 'group' ? group.children.map(child => child.id) : [];
     await mutate({ type: 'ungroup_elements', page_id: pageId, id });
     return children;
-  }, [mutate]);
-  const linkCanvasElements = useCallback((ids: string[], sourceId: string | null) => {
-    return mutate({ type: 'link_elements', ids, source_id: sourceId }).then(() => undefined);
-  }, [mutate]);
-  const unlinkCanvasElements = useCallback((ids: string[]) => {
-    return mutate({ type: 'unlink_elements', ids }).then(() => undefined);
-  }, [mutate]);
-  const pasteLinkedInstances = useCallback((items: LinkedPasteInstance[]) => {
-    return mutate({ type: 'paste_linked_instances', items }).then(() => undefined);
   }, [mutate]);
   const removeLinkedDefinition = useCallback((id: string) => {
     const name = current.current?.project?.linked?.[id]?.name ?? 'this linked element';
@@ -362,12 +320,6 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
       accept(next); return next;
     }, false, true).then(() => undefined);
   }, [queue, accept]);
-  const addCanvasRequest = useCallback(async (request: PendingRequest) => {
-    await mutate({ type: 'add_request', request });
-  }, [mutate]);
-  const updateCanvasRequest = useCallback(async (request: PendingRequest) => {
-    await mutate({ type: 'update_request', request });
-  }, [mutate]);
   const removeCanvasRequests = useCallback((ids: string[]) => {
     if (!ids.length) return;
     setCanvasSelection(current => current.filter(target => target.kind !== 'request' || !ids.includes(target.requestId)));
@@ -388,9 +340,9 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
       ? { ...existing, text: data.text, attachments: data.attachments }
       : { id: crypto.randomUUID(), text: data.text, attachments: data.attachments, requestedAt: new Date().toISOString(),
         targets: [{ kind: 'element', page: page?.id ?? '', size: page && page.sizes.length > 1 ? baseSizeId(page) : null, id: elementId }], area: null };
-    if (existing) void updateCanvasRequest(request).catch(() => {});
-    else void addCanvasRequest(request).catch(() => {});
-  }, [addCanvasRequest, updateCanvasRequest, removeCanvasRequests]);
+    if (existing) void edits.updateRequest(request).catch(() => {});
+    else void edits.addRequest(request).catch(() => {});
+  }, [edits, removeCanvasRequests]);
   const keepPointerComment = useCallback((pointerId: string) => {
     void mutate({ type: 'set_pointer_wiring', pointer_id: pointerId, wiring: null }).catch(() => {});
   }, [mutate]);
@@ -906,7 +858,7 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
     const over = element.overrides?.[sizeId];
     const shown = over?.rect ?? element.rect;
     const rect = { x: origin.x - parentOrigin.x, y: origin.y - parentOrigin.y, width: shown.width, height: shown.height };
-    void moveCanvasElements([{ id: elementId, to_page_id: pageId, to_parent_id: parentId, index, rect, size_id: sizeId }]);
+    void edits.moveElements([{ id: elementId, to_page_id: pageId, to_parent_id: parentId, index, rect, size_id: sizeId }]);
   }
   function armInsert(kind: ElementKind) {
     changeCanvasTool(kind === 'image' || kind === 'text' ? kind : 'insert', kind);
@@ -936,6 +888,7 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
   ];
 
   return {
+    edits,
     panel, openPanel, closePanel, togglePanel, saving, updateState, dismissUpdate, changeCanvasTool,
     showPalette, paletteCommands, setShowPalette, closeRequest, setCloseRequest, onStartPage, project, view,
     run, switchProjectTab, closeProjectTab, menuItems, resolvedTheme, setTheme, compactHistory,
@@ -947,14 +900,10 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
     loading, load, pending, newUntitled, open, appSettings, changeShowStartPage, recentProjects, openRecent,
     forgetRecent, pinRecent, recover, dismissRecoveries, canvasTool, chooseTool, canvasZoom, canvasRef,
     boundaryKind, setBoundaryKind, requestToolShape, setRequestToolShape, armInsert, insertSignal,
-    selectCanvasBoundary, createCanvasBoundary, addProjectBoundary, saveCanvasPlacements, addNamedViewAt, saveCurrentView,
+    selectCanvasBoundary, createCanvasBoundary, addProjectBoundary, addNamedViewAt, saveCurrentView,
     canvasSelection, canvasFocus, canvasFocusSize, widthPreview, setWidthPreview, selectCanvasReference, selectCanvasPointer,
-    selectCanvasRequest, clearCanvasSelection, removeCanvasSelection, addCanvasReference,
-    updateCanvasReference, elementToReference, referenceToElement, attachToRequest, addCanvasRequest,
-    updateCanvasRequest, deleteBoundary, addCanvasPointer, updateCanvasPointer, pointerStateMap,
-    reportCanvasZoom, selectCanvasElement, insertCanvasElements,
-    updateCanvasElements, moveCanvasElements, groupCanvasElements, ungroupCanvasElements, linkCanvasElements,
-    unlinkCanvasElements, pasteLinkedInstances, playElement, setPlay, preview, closePreview, refreshPreview,
+    selectCanvasRequest, clearCanvasSelection, removeCanvasSelection, elementToReference, referenceToElement, attachToRequest, deleteBoundary, pointerStateMap,
+    reportCanvasZoom, selectCanvasElement, groupCanvasElements, ungroupCanvasElements, playElement, setPlay, preview, closePreview, refreshPreview,
     showGenerationStatus, openImportDialog, editGenerationRequest,
     openGeneration, aiSettings, manageChatgptUsage, replyToGeneration, exportDestination,
     exportJob, exportSending, exportError, chooseExportDestination, setExportDestination, runExport, sendExport, cancelExport,

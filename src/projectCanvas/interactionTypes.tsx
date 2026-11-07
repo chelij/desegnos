@@ -1,10 +1,11 @@
 import { type BoundaryToolKind } from './boundaryDefaults';
+import type { ProjectEdits } from '../session/projectEdits';
 import {
   drawnBoundaryRect, MIN_BOUNDARY_DRAW_HEIGHT, MIN_BOUNDARY_WIDTH, snapToBoundaryGrid, type Boundary,
-  type BoundaryMove, type CanvasCamera, type CanvasTarget, type ElementTarget, type FrameCorner, type Point,
-  type ReferenceMove, type RequestBox,
+  type CanvasCamera, type CanvasTarget, type ElementTarget, type FrameCorner, type Point,
+  type RequestBox,
 } from '../projectCanvasGeometry';
-import type { Command, WorkspaceView, Element, ElementKind, ElementMove, ElementPatch, LinkedPasteInstance, NamedView, PendingRequest, Pointer, PointerSource, PointerStateView, PointerTarget, Project, Rect, ReferenceItem } from '../types';
+import type { Command, WorkspaceView, Element, ElementKind, NamedView, PointerSource, PointerStateView, PointerTarget, Project, Rect } from '../types';
 import type { ProjectTool, RequestToolShape } from '../EditorTools';
 import { type ScreenRect } from './surface';
 import { type LinkCopy } from './linkedChoices';
@@ -87,10 +88,11 @@ export type ProjectCanvasHandle = { focusCanvas: () => void; fit: () => void; fi
 export type DuplicateRepeat = { key: string; offset: Point };
 
 export type ProjectCanvasProps = {
+  /** Direct project edits; each is one command. */
+  edits: ProjectEdits;
   editProject: (command: Command | ((project: Project) => Command | null)) => Promise<WorkspaceView>;
   project: Project; openPage: (pageId: string) => void;
   createBoundary: (bounds: Rect, kind: BoundaryToolKind, sourceId?: string) => Promise<string | null>;
-  savePlacements: (placements: BoundaryMove[], reference: ReferenceMove[]) => Promise<void>;
   /** Persists the camera as a numbered view, or as the next free one when slot is null. */
   saveView: (slot: number | null, camera: CanvasCamera) => void;
   selection: CanvasTarget[]; focused: string | null;
@@ -99,25 +101,14 @@ export type ProjectCanvasProps = {
   removeSelection: (referenceIds: string[], pointerIds: string[], requestIds: string[], elementIds?: { pageId: string; elementId: string }[]) => void;
   removeElements: (elements: { pageId: string; elementId: string }[]) => void;
   deleteBoundary: (pageId: string, sizeId: string | null) => void;
-  addRequest: (request: PendingRequest) => Promise<void>;
   selectRequest: (requestId: string) => void;
-  addReference: (item: ReferenceItem, pictureDataUri?: string) => Promise<void>;
-  updateReference: (itemId: string, patch: { rect?: Rect; text?: string; url?: string; title?: string; color?: string }) => void;
   elementToReference: (pageId: string, elementId: string, rect: Rect, sizeId?: string | null) => Promise<void>;
   referenceToElement: (itemId: string, pageId: string, rect: Rect, sizeId?: string | null) => Promise<void>;
   attachToRequest: (requestId: string, files: File[], links: string[]) => void;
-  insertElements: (pageId: string, parentId: string | null, index: number, elements: Element[], pictureDataUri?: string, sizeId?: string | null) => Promise<void>;
-  updateElements: (pageId: string, patches: ElementPatch[]) => Promise<unknown> | void;
-  moveElements: (moves: ElementMove[]) => Promise<unknown> | void;
   groupElements: (pageId: string, ids: string[]) => Promise<string | null>;
   ungroupElements: (pageId: string, id: string) => Promise<string[]>;
-  linkElements: (ids: string[], sourceId: string | null) => Promise<unknown>;
-  unlinkElements: (ids: string[]) => Promise<unknown>;
-  pasteLinked: (items: LinkedPasteInstance[]) => Promise<unknown>;
-  addPointer: (pointer: Pointer) => Promise<void>;
   /** Selects the layer or boundary behind a behaviour and puts the caret in its Behaviour field. */
   focusBehaviour: (source: PointerSource) => void;
-  updatePointer: (pointerId: string, patch: { from?: PointerSource; to?: PointerTarget; comment?: string; kind?: Pointer['kind'] }) => Promise<unknown>;
   pointerStates: Record<string, PointerStateView>;
   tool: ProjectTool; insertKind: ElementKind | null; onTool: (tool: ProjectTool) => void;
   boundaryKind: BoundaryToolKind; requestShape: RequestToolShape; focusedSize: string | null;
@@ -129,6 +120,9 @@ export type ProjectCanvasProps = {
   /** Generates for the given layers, as a canvas request does. */
   generate: (elementIds: string[]) => void;
 };
+
+/** What the canvas hook works with: the props, with the edits spread out by name. */
+export type CanvasHookProps = Omit<ProjectCanvasProps, 'edits'> & ProjectEdits;
 
 export const isElementTarget = (target: CanvasTarget): target is ElementTarget => target.kind === 'element';
 

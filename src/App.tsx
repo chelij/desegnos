@@ -49,6 +49,7 @@ export default function App({ initialView }: { initialView?: WorkspaceView } = {
 
 function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
   const {
+    edits,
     panel, openPanel, closePanel, togglePanel, saving, updateState, dismissUpdate, changeCanvasTool,
     showPalette, paletteCommands, setShowPalette, closeRequest, setCloseRequest, onStartPage, project, view,
     run, switchProjectTab, closeProjectTab, menuItems, resolvedTheme, setTheme,
@@ -60,14 +61,10 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
     loading, load, pending, newUntitled, open, appSettings, changeShowStartPage, recentProjects, openRecent,
     forgetRecent, pinRecent, recover, dismissRecoveries, canvasTool, chooseTool, canvasZoom, canvasRef,
     boundaryKind, setBoundaryKind, requestToolShape, setRequestToolShape, armInsert, insertSignal,
-    selectCanvasBoundary, createCanvasBoundary, addProjectBoundary, saveCanvasPlacements, addNamedViewAt, saveCurrentView,
+    selectCanvasBoundary, createCanvasBoundary, addProjectBoundary, addNamedViewAt, saveCurrentView,
     canvasSelection, canvasFocus, canvasFocusSize, widthPreview, setWidthPreview, selectCanvasReference, selectCanvasPointer,
-    selectCanvasRequest, clearCanvasSelection, removeCanvasSelection, addCanvasReference,
-    updateCanvasReference, elementToReference, referenceToElement, attachToRequest, addCanvasRequest,
-    updateCanvasRequest, deleteBoundary, addCanvasPointer, updateCanvasPointer, pointerStateMap,
-    reportCanvasZoom, selectCanvasElement, insertCanvasElements,
-    updateCanvasElements, moveCanvasElements, groupCanvasElements, ungroupCanvasElements, linkCanvasElements,
-    unlinkCanvasElements, pasteLinkedInstances, playElement, setPlay, preview, closePreview, refreshPreview,
+    selectCanvasRequest, clearCanvasSelection, removeCanvasSelection, elementToReference, referenceToElement, attachToRequest, deleteBoundary, pointerStateMap,
+    reportCanvasZoom, selectCanvasElement, groupCanvasElements, ungroupCanvasElements, playElement, setPlay, preview, closePreview, refreshPreview,
     showGenerationStatus, openImportDialog, editGenerationRequest,
     openGeneration, aiSettings, manageChatgptUsage, replyToGeneration, exportDestination,
     exportJob, exportSending, exportError, chooseExportDestination, setExportDestination, runExport, sendExport, cancelExport,
@@ -192,10 +189,10 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
       <SurfaceHost place="canvas" />
       <NoticeHost />
       {playIsActive(play) && !presenting && playingLabel && <div className="play-pill" role="status"><span className="play-pill-label">Playing {playingLabel}</span><button type="button" onClick={() => setPlay(idlePlay)}>Stop</button></div>}
-      <ProjectCanvas ref={canvasRef} editProject={mutate} project={project} openPage={id => selectCanvasBoundary(id)} createBoundary={createCanvasBoundary} savePlacements={saveCanvasPlacements} saveView={(slot, camera) => slot === null ? addNamedViewAt(camera) : saveCurrentView(slot, camera)} selection={canvasSelection} focused={canvasFocus} focusedSize={canvasFocusSize} widthPreview={widthPreview} selectBoundary={selectCanvasBoundary} selectReference={selectCanvasReference} selectPointer={selectCanvasPointer} selectRequest={id => selectCanvasRequest(id)} clearSelection={clearCanvasSelection} removeSelection={removeCanvasSelection} addReference={addCanvasReference} updateReference={updateCanvasReference} elementToReference={elementToReference} referenceToElement={referenceToElement} attachToRequest={(requestId, files, links) => run(() => attachToRequest(requestId, files, links))} addRequest={addCanvasRequest} deleteBoundary={deleteBoundary} addPointer={addCanvasPointer} updatePointer={updateCanvasPointer} focusBehaviour={focusCanvasBehaviour} pointerStates={pointerStateMap} tool={canvasTool.kind} insertKind={canvasTool.kind === 'insert' ? canvasTool.insertKind : null} onTool={changeCanvasTool} boundaryKind={boundaryKind} requestShape={requestToolShape} onZoom={reportCanvasZoom} onLayout={ignoreCanvasLayout}
-        selectElement={selectCanvasElement} removeElements={items => removeCanvasSelection([], [], [], items)} insertElements={insertCanvasElements} updateElements={updateCanvasElements} moveElements={moveCanvasElements}
+      <ProjectCanvas ref={canvasRef} edits={edits} editProject={mutate} project={project} openPage={id => selectCanvasBoundary(id)} createBoundary={createCanvasBoundary} saveView={(slot, camera) => slot === null ? addNamedViewAt(camera) : saveCurrentView(slot, camera)} selection={canvasSelection} focused={canvasFocus} focusedSize={canvasFocusSize} widthPreview={widthPreview} selectBoundary={selectCanvasBoundary} selectReference={selectCanvasReference} selectPointer={selectCanvasPointer} selectRequest={id => selectCanvasRequest(id)} clearSelection={clearCanvasSelection} removeSelection={removeCanvasSelection} elementToReference={elementToReference} referenceToElement={referenceToElement} attachToRequest={(requestId, files, links) => run(() => attachToRequest(requestId, files, links))} deleteBoundary={deleteBoundary} focusBehaviour={focusCanvasBehaviour} pointerStates={pointerStateMap} tool={canvasTool.kind} insertKind={canvasTool.kind === 'insert' ? canvasTool.insertKind : null} onTool={changeCanvasTool} boundaryKind={boundaryKind} requestShape={requestToolShape} onZoom={reportCanvasZoom} onLayout={ignoreCanvasLayout}
+        selectElement={selectCanvasElement} removeElements={items => removeCanvasSelection([], [], [], items)}
         groupElements={groupCanvasElements} ungroupElements={ungroupCanvasElements}
-        linkElements={linkCanvasElements} unlinkElements={unlinkCanvasElements} pasteLinked={pasteLinkedInstances}
+       
         play={play} onPlayBoundary={id => setPlay(current => ({ ...current, boundary: id }))} onPlayElement={playElement} onPlayExit={() => setPlay(idlePlay)}
         preview={preview} previewClose={closePreview} previewRefresh={refreshPreview} generate={ids => generate(ids)} />
       {showGenerationStatus ? <GenerationFeedback controller={generation} project={project} openSettings={() => setShowAiSettings(true)} openImport={openImportDialog} openBrief={() => openPanel({ kind: 'notes', section: 'decisions' })} changeRequest={editGenerationRequest} details={showsOpener({ available: true, open: panel.kind === 'log' }) ? openGeneration : undefined} /> : null}
@@ -222,15 +219,15 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
           {selectedPointer
           ? <PointerProperties pointer={selectedPointer} project={project} state={selectedPointerState} busy={pending > 0}
               aiConnected={aiConnected}
-              change={comment => updateCanvasPointer(selectedPointer.id, { comment })}
+              change={comment => edits.updatePointer(selectedPointer.id, { comment })}
               actions={clashActions(selectedPointer, selectedPointerState)} />
           : selectedReferenceItem
-          ? <ReferenceProperties item={selectedReferenceItem} busy={pending > 0} update={patch => updateCanvasReference(selectedReferenceItem.id, patch)} remove={() => removeCanvasSelection([selectedReferenceItem.id])} />
+          ? <ReferenceProperties item={selectedReferenceItem} busy={pending > 0} update={patch => edits.updateReference(selectedReferenceItem.id, patch)} remove={() => removeCanvasSelection([selectedReferenceItem.id])} />
           : selectedRequest
-          ? <RequestProperties request={selectedRequest} project={project} busy={pending > 0} update={updateCanvasRequest} remove={() => removeCanvasSelection([], [], [selectedRequest.id])} attach={attachReferenceContext} />
+          ? <RequestProperties request={selectedRequest} project={project} busy={pending > 0} update={edits.updateRequest} remove={() => removeCanvasSelection([], [], [selectedRequest.id])} attach={attachReferenceContext} />
           : selectedElements.length && selectedElementPageId
             ? <ElementProperties styleCommand={mutate} project={project} page={project.pages.find(page => page.id === selectedElementPageId)!} sizeId={selectedElementTargets[0].sizeId} elements={selectedElements} busy={pending > 0}
-                update={patches => void updateCanvasElements(selectedElementPageId, patches)}
+                update={patches => void edits.updateElements(selectedElementPageId, patches)}
                 rename={name => renameCanvasElement(selectedElementPageId, selectedElements[0].id, name)}
                 link={() => canvasRef.current?.linkSelection()} unlink={() => canvasRef.current?.unlinkSelection()}
                 canLink={selectedElementTargets.length >= 2}
@@ -254,7 +251,7 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
                 save={view?.untitled ? () => run(() => save()) : undefined} />}
         </>}
         layers={<CanvasLayers styleCommand={mutate} project={project} boundaries={canvasBoundaries} selection={canvasSelection} focused={canvasFocus} selectBoundary={selectCanvasBoundary} selectReference={selectCanvasReference} selectPointer={selectCanvasPointer}
-          selectRequest={id => selectCanvasRequest(id)} selectElement={selectCanvasElement} updateElements={(pageId, sizeId, patches) => void updateCanvasElements(pageId, patches.map(patch => ({ ...patch, size_id: sizeId })))}
+          selectRequest={id => selectCanvasRequest(id)} selectElement={selectCanvasElement} updateElements={(pageId, sizeId, patches) => void edits.updateElements(pageId, patches.map(patch => ({ ...patch, size_id: sizeId })))}
           moveElement={moveCanvasElementTo} removeLinked={removeLinkedDefinition}
           removeElements={ids => {
             const elementIds = ids.flatMap(id => { const page = project.pages.find(item => !!findElementIn(item.elements, id)); return page ? [{ pageId: page.id, elementId: id }] : []; });
