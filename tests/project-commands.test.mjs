@@ -34,7 +34,7 @@ try {
       if (!state.result) throw pending;
       return state.result;
     });
-    commands = createProjectCommands(() => env);
+    commands = createProjectCommands(env);
     return { state, env, ...commands };
   }
   for (const source of ['dialog', 'recent']) {

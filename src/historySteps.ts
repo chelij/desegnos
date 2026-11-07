@@ -10,6 +10,6 @@ function isTextSurface(element: Element | null) {
 
 export function installHistorySteps() {
   document.addEventListener('focusout', event => {
-    if (isTextSurface(event.target as Element | null)) void invoke('end_history_step').catch(() => {});
+    if (isTextSurface(event.target as Element | null)) void invoke('end_history_step').catch(error => console.warn('Could not record editor activity', error));
   }, true);
 }

@@ -9,16 +9,7 @@ export type AreaProblem = { key: string; elementId: string; message: string; sta
 
 export function requestText(project: Project | null, elementId: string): string {
   const request = (project?.requests ?? []).find(item => item.targets.some(target => target.kind === 'element' && target.id === elementId));
-  if (request) return request.text;
-  // Read a legacy per-layer request still present in an in-memory fixture.
-  const pending = (element: Element): string | null => {
-    const legacy = (element.meta as { pending?: { prompt?: string } }).pending;
-    if (legacy?.prompt) return legacy.prompt;
-    for (const child of element.children) { const found = pending(child); if (found) return found; }
-    return null;
-  };
-  for (const page of project?.pages ?? []) for (const element of page.elements) { const found = pending(element); if (found) return found; }
-  return '';
+  return request?.text ?? '';
 }
 
 export const fixLabel = (fix: OutcomeFix) => fix === 'aiSettings' ? 'AI settings' : fix === 'import' ? 'Import…' : 'Project brief';
@@ -55,11 +46,7 @@ export function jsonBlocks(markdown: string): any[] {
 function sentPrompts(job: GenerationJobView): Map<string, string> {
   const prompts = new Map<string, string>();
   for (const block of jsonBlocks(job.requirements?.markdown ?? '')) {
-    // The current requirements packet wraps requests in one object; older saved jobs carried
-    // one object per request. Read both so a restored job still detects an edited prompt.
-    if (typeof block?.elementId === 'string' && typeof block.request === 'string') prompts.set(block.elementId, block.request);
     for (const request of Array.isArray(block?.requests) ? block.requests : []) {
-      if (typeof request?.elementId === 'string' && typeof request.request === 'string') prompts.set(request.elementId, request.request);
       // The current request packet names each request and lists its layer targets.
       if (typeof request?.text === 'string' && Array.isArray(request.targets)) {
         for (const target of request.targets) {
@@ -72,7 +59,7 @@ function sentPrompts(job: GenerationJobView): Map<string, string> {
 }
 
 /// The request text was changed after this job sent its frozen requirements.
-export function requestEdited(job: GenerationJobView | null, elementId: string, prompt?: string): boolean {
+function requestEdited(job: GenerationJobView | null, elementId: string, prompt?: string): boolean {
   const sent = job && sentPrompts(job).get(elementId);
   return typeof sent === 'string' && typeof prompt === 'string' && sent.trim() !== prompt.trim();
 }
@@ -114,7 +101,7 @@ function jobReason(job: GenerationJobView): string {
     return '';
   }
   if (!['blocked', 'failed', 'unknown'].includes(job.status)) return '';
-  const provider = providerFailureMessage(job.providerError, job.provider);
+  const provider = providerFailureMessage(job.providerError, job.provider, job.message);
   if (provider) return provider;
   const reply = events.find(event => event.elementId == null && event.kind === 'replyStructure');
   const message = (job.message?.trim() || reply?.message || '').replace(/^Desegnos rejected the candidate:\s*/i, '');
@@ -174,7 +161,7 @@ export function areaProblems(job: GenerationJobView | null, page: Page, project:
   });
 }
 
-export type Callout = { key: string; rect: Rect };
+type Callout = { key: string; rect: Rect };
 const overlaps = (a: Rect, b: Rect) => a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y;
 // Coordinates are in painted canvas pixels; cards keep readable type at every zoom.
 export function placeCallouts(items: Callout[], areas: Rect[], origin: { x: number; y: number }, zoom: number, dismissed: readonly string[] = []) {

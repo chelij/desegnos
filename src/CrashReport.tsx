@@ -11,7 +11,7 @@ function recordEditorCrash(error: unknown, componentStack = '') {
   reported = true;
   const message = error instanceof Error ? error.message : String(error ?? 'The editor failed to render.');
   const stack = [error instanceof Error ? error.stack ?? '' : '', componentStack].filter(Boolean).join('\n');
-  void native('record_frontend_crash', { message: message.slice(0, 2000), stack: stack.slice(0, 8000) }).catch(() => {});
+  void native('record_frontend_crash', { message: message.slice(0, 2000), stack: stack.slice(0, 8000) }).catch(error => console.warn('Could not record editor crash', error));
 }
 
 // Render failures are the only frontend crashes worth a report. Ordinary unhandled
@@ -45,12 +45,12 @@ export function CrashReportNotice() {
     let live = true;
     native<PendingCrash | null>('pending_crash_report')
       .then(value => { if (live) setReport(value); })
-      .catch(() => {});
+      .catch(error => { if (live) setFailure(crashOpenFailure(error)); });
     return () => { live = false; };
   }, []);
   const dismiss = () => {
     setReport(null); setFailure(null);
-    void native('dismiss_crash_report').catch(() => {});
+    void native('dismiss_crash_report').catch(error => setFailure(crashOpenFailure(error)));
   };
   const open = async () => {
     setBusy(true);
@@ -59,7 +59,7 @@ export function CrashReportNotice() {
     finally { setBusy(false); }
   };
   const copy = () => {
-    void native('copy_text', { text: failure?.url }).then(() => setCopied(true)).catch(() => {});
+    void native('copy_text', { text: failure?.url }).then(() => setCopied(true)).catch(error => setFailure(crashOpenFailure(error)));
   };
   const url = failure?.url;
   return <>

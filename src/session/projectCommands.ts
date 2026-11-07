@@ -23,10 +23,10 @@ type Context = {
   saveState: import("react").RefObject<SaveState>;
   transitionSave: (state: SaveState) => void;
   current: import("react").RefObject<WorkspaceView | null>;
-  panels: import("../EditorDock").PanelState;
-  panelActions: import("../EditorDock").PanelActions;
+  panels: import("../dock/panelState").PanelState;
+  panelActions: import("../dock/panelState").PanelActions;
   settle: () => Promise<void>;
-  queue: <T>(operation: (workspace: WorkspaceView | null) => Promise<T>, reportErrors?: boolean, quiet?: boolean) => Promise<T>;
+  queue: <T>(operation: (workspace: WorkspaceView | null) => Promise<T>, reportErrors?: boolean) => Promise<T>;
   accept: (next: WorkspaceView) => void;
   setNotice: (message: string, undo?: () => void) => void;
   refreshRecent: () => Promise<void>;
@@ -41,9 +41,9 @@ type Context = {
   setHistoryEpoch: import("react").Dispatch<import("react").SetStateAction<number>>;
 };
 
-export function createProjectCommands(context: () => Context) {
+export function createProjectCommands(context: Context) {
   async function requestProjectOpen<T>(operation: () => Promise<T>): Promise<T | null> {
-    const { setPendingRecovery, setError } = context();
+    const { setPendingRecovery, setError } = context;
     setPendingRecovery(null);
     try { return await operation(); }
     catch (error) {
@@ -54,7 +54,7 @@ export function createProjectCommands(context: () => Context) {
   }
 
   function chooseSaveConflict(choice: SaveChoice) {
-    const { saveState, transitionSave } = context();
+    const { saveState, transitionSave } = context;
     const state = saveState.current;
     if (state.kind !== 'conflict') return;
     transitionSave({ kind: 'saving', promise: state.promise, untitled: state.untitled });
@@ -62,7 +62,7 @@ export function createProjectCommands(context: () => Context) {
   }
 
   function closeUntitledSave(workspace: WorkspaceView | null) {
-    const { saveState, transitionSave } = context();
+    const { saveState, transitionSave } = context;
     const state = saveState.current;
     if (state.kind === 'idle' || !state.untitled) return;
     // Closing the name dialog must not discard a pending conflict choice.
@@ -71,7 +71,7 @@ export function createProjectCommands(context: () => Context) {
   }
 
   function requestUntitledSave(): Promise<WorkspaceView | null> {
-    const { saveState, current, panels, panelActions, transitionSave } = context();
+    const { saveState, current, panels, panelActions, transitionSave } = context;
     if (saveState.current.kind !== 'idle') return saveState.current.promise;
     const project = current.current?.project;
     if (!project) return Promise.resolve(null);
@@ -79,12 +79,12 @@ export function createProjectCommands(context: () => Context) {
     if (panels.collapsed) panelActions.setCollapsed(false);
     let resolve!: UntitledSave['resolve'];
     const promise = new Promise<WorkspaceView | null>(done => { resolve = done; });
-    transitionSave({ kind: 'naming', promise, untitled: { name: project.name === 'Untitled project' ? '' : project.name, resolve } });
+    transitionSave({ kind: 'naming', promise, untitled: { name: project.name, resolve } });
     return promise;
   }
 
   async function resolveSaveOutcome(outcome: SaveOutcome, flight: SaveFlight) {
-    const { queue, saveState, transitionSave } = context();
+    const { queue, saveState, transitionSave } = context;
     while (outcome.status === 'conflict') {
       const conflict = outcome.conflict;
       const choice = await new Promise<SaveChoice>(choose => {
@@ -98,7 +98,7 @@ export function createProjectCommands(context: () => Context) {
   }
 
   async function saveUntitledProject(name: string, path: string | null) {
-    const { saveState, transitionSave, settle, queue, accept, setNotice, refreshRecent } = context();
+    const { saveState, transitionSave, settle, queue, accept, setNotice, refreshRecent } = context;
     const state = saveState.current;
     if (state.kind !== 'naming') return;
     transitionSave({ kind: 'saving', promise: state.promise, untitled: state.untitled });
@@ -106,7 +106,7 @@ export function createProjectCommands(context: () => Context) {
       await settle();
       const outcome = await resolveSaveOutcome(await queue(() => native<SaveOutcome>('save_untitled_project', { name, path, label: null })), state);
       if (outcome.status === 'cancelled') throw new Error('Save cancelled.');
-      accept(outcome.workspace); setNotice('Project saved.'); void refreshRecent().catch(() => {});
+      accept(outcome.workspace); setNotice('Project saved.'); void refreshRecent();
       if (saveState.current.kind !== 'idle' && saveState.current.promise === state.promise) {
         transitionSave({ kind: 'idle' });
       }
@@ -121,7 +121,7 @@ export function createProjectCommands(context: () => Context) {
   }
 
   function save(saveAs = false): Promise<WorkspaceView | null> {
-    const { current, saveState, transitionSave, settle, queue, accept, setNotice, refreshRecent } = context();
+    const { current, saveState, transitionSave, settle, queue, accept, setNotice, refreshRecent } = context;
     if (saveState.current.kind !== 'idle') return saveState.current.promise;
     if (current.current?.untitled) return requestUntitledSave();
     // Install the flight before work starts, so every concurrent caller receives the same promise.
@@ -129,7 +129,7 @@ export function createProjectCommands(context: () => Context) {
       await settle();
       const outcome = await resolveSaveOutcome(await queue(() => native<SaveOutcome>('save_project_checked', { saveAs, label: null })), { promise, untitled: null });
       if (outcome.status === 'cancelled') return null;
-      accept(outcome.workspace); setNotice('Project saved.'); void refreshRecent().catch(() => {});
+      accept(outcome.workspace); setNotice('Project saved.'); void refreshRecent();
       return outcome.workspace;
     }).finally(() => {
       if (saveState.current.kind !== 'idle' && saveState.current.promise === promise) transitionSave({ kind: 'idle' });
@@ -139,14 +139,14 @@ export function createProjectCommands(context: () => Context) {
   }
 
   async function replace(label: string, run: Replacement['run']) {
-    const { settle, current, setReplacement } = context();
+    const { settle, current, setReplacement } = context;
     await settle();
     if (current.current?.dirty) setReplacement({ label, run });
     else await run(false);
   }
 
   async function closeProject() {
-    const { queue, accept, setCanvasSelection, setCanvasFocus, setNotice, setShowStartPage } = context();
+    const { queue, accept, setCanvasSelection, setCanvasFocus, setNotice, setShowStartPage } = context;
     await replace('close this project', async discard => {
       await queue(async () => {
         const next = await native<WorkspaceView>('close_project', { discard });
@@ -157,17 +157,17 @@ export function createProjectCommands(context: () => Context) {
   }
 
   async function switchProjectTab(projectId: string) {
-    const { current, settle, queue, accept, setShowStartPage, setCanvasSelection, setCanvasFocus, setNotice } = context();
+    const { current, settle, queue, accept, setShowStartPage, setCanvasSelection, setCanvasFocus, setNotice } = context;
     if (projectId === current.current?.project?.id) return;
     await settle();
     await queue(async () => {
       accept(await native<WorkspaceView>('switch_project', { projectId }));
       setShowStartPage(false); setCanvasSelection([]); setCanvasFocus(null); setNotice('Switched project.');
-    }).catch(() => {});
+    });
   }
 
   async function closeProjectTab(projectId: string) {
-    const { current, setConfirmation, queue, accept, setNotice } = context();
+    const { current, setConfirmation, queue, accept, setNotice } = context;
     const entry = current.current?.openProjects?.find(item => item.id === projectId);
     if (!entry) return;
     if (projectId === current.current?.project?.id) {
@@ -186,36 +186,36 @@ export function createProjectCommands(context: () => Context) {
     await queue(async () => {
       accept(await native<WorkspaceView>('close_project', { projectId, discard: false }));
       setNotice('Project closed.');
-    }).catch(() => {});
+    });
   }
 
-  async function openAlongside(run: Replacement['run']) {
-    const { settle } = context(); await settle(); await run(false); }
+  async function openAlongside(run: () => Promise<void>) {
+    const { settle } = context; await settle(); await run(); }
 
   async function open(folder = false, path?: string, discardRecovery = false) {
-    const { queue, accept, setShowStartPage, refreshRecent } = context();
-    await openAlongside(async discard => {
+    const { queue, accept, setShowStartPage, refreshRecent } = context;
+    await openAlongside(async () => {
       await queue(async () => {
-        const opened = await requestProjectOpen(() => native<WorkspaceView | null>('open_project', { discard, folder, path: path ?? null, discardRecovery }));
-        if (opened) { accept(opened); setShowStartPage(false); void refreshRecent().catch(() => {}); }
+        const opened = await requestProjectOpen(() => native<WorkspaceView | null>('open_project', { discard: false, folder, path: path ?? null, discardRecovery }));
+        if (opened) { accept(opened); setShowStartPage(false); void refreshRecent(); }
       });
     });
   }
 
   async function openRecent(path: string) {
-    const { queue, accept, setShowStartPage, refreshRecent } = context();
-    await openAlongside(async discard => {
+    const { queue, accept, setShowStartPage, refreshRecent } = context;
+    await openAlongside(async () => {
       await queue(async () => {
-        const opened = await requestProjectOpen(() => native<WorkspaceView>('open_recent_project', { path, discard }));
+        const opened = await requestProjectOpen(() => native<WorkspaceView>('open_recent_project', { path, discard: false }));
         if (!opened) return;
         accept(opened); setShowStartPage(false);
-        void refreshRecent().catch(() => {});
+        void refreshRecent();
       }, false);
     });
   }
 
   async function newUntitled(template: CanvasTemplate = 'blank') {
-    const { settle, queue, resolvedTheme, accept, setShowStartPage, setCanvasSelection, setCanvasFocus, canvasRef } = context();
+    const { settle, queue, resolvedTheme, accept, setShowStartPage, setCanvasSelection, setCanvasFocus, canvasRef } = context;
     await settle();
     await queue(async () => {
       const next = await native<WorkspaceView>('new_untitled_project', { appearance: resolvedTheme, template });
@@ -226,10 +226,10 @@ export function createProjectCommands(context: () => Context) {
   }
 
   async function recover(projectId: string) {
-    const { queue, accept, setShowStartPage, closePanel, setPendingRecovery, setNotice } = context();
-    await openAlongside(async discard => {
+    const { queue, accept, setShowStartPage, closePanel, setPendingRecovery, setNotice } = context;
+    await openAlongside(async () => {
       await queue(async () => {
-        const recovered = await native<WorkspaceView>('recover_project', { projectId, discard });
+        const recovered = await native<WorkspaceView>('recover_project', { projectId, discard: false });
         accept(recovered);
         setShowStartPage(false); closePanel('recovery'); setPendingRecovery(null);
         setNotice('Project recovered.');
@@ -238,7 +238,7 @@ export function createProjectCommands(context: () => Context) {
   }
 
   async function dismissRecoveries(projectIds: string[]) {
-    const { queue, current, accept } = context();
+    const { queue, current, accept } = context;
     await queue(async () => {
       for (const projectId of projectIds) {
         if (!current.current?.recoveries.some(item => item.projectId === projectId)) continue;
@@ -248,7 +248,7 @@ export function createProjectCommands(context: () => Context) {
   }
 
   async function travel(command: 'undo_project' | 'redo_project') {
-    const { queue, accept, setNotice, current } = context();
+    const { queue, accept, setNotice, current } = context;
     const projectId = current.current?.project?.id;
     await queue(async workspace => {
       if (workspace?.project?.id !== projectId || !(command === 'undo_project' ? workspace?.canUndo : workspace?.canRedo)) return;
@@ -258,13 +258,13 @@ export function createProjectCommands(context: () => Context) {
   }
 
   async function saveCopy() {
-    const { queue, setNotice } = context();
+    const { queue, setNotice } = context;
     const result = await queue(() => native<WorkspaceView | null>('save_project_copy'));
     if (result) setNotice('Saved a copy without history.');
   }
 
   async function compactHistory() {
-    const { queue, setHistoryEpoch, setNotice } = context();
+    const { queue, setHistoryEpoch, setNotice } = context;
     const report = await queue(() => native<CompactReport>('compact_history'));
     setHistoryEpoch(value => value + 1);
     setNotice(report.removedVersions === 0 && report.removedBlobs === 0
@@ -275,6 +275,5 @@ export function createProjectCommands(context: () => Context) {
   return {
     chooseSaveConflict, closeUntitledSave, saveUntitledProject, save,
     closeProject, switchProjectTab, closeProjectTab, open, openRecent, newUntitled,
-    recover, dismissRecoveries, travel, saveCopy, compactHistory,
-  };
+    recover, dismissRecoveries, travel, saveCopy, compactHistory };
 }

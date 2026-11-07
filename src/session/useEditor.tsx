@@ -1,14 +1,15 @@
-import { type BoundaryToolKind, boundaryDefaults, layoutKind, outputKind, pageKind, projectKind, nextBoundaryName } from '../projectCanvas/boundaryDefaults';
+import { useBoundaryCommands } from './useBoundaryCommands';
+import { propertySelection } from '../dock/selection';
+import { useAiSettings } from './useAiSettings';
+import { useEditorTheme } from './useEditorTheme';
+import { useNamedViews } from './useNamedViews';
+import { type BoundaryToolKind, projectKind } from '../projectCanvas/boundaryDefaults';
 import { canvasView } from '../projectCanvas/canvasView';
 import { useProjectSession } from './useProjectSession';
 import { type SaveState, createProjectCommands } from './projectCommands';
 import { useExportJobs } from '../exportJobs/useExportJobs';
 import { createEditorShortcuts } from '../editorShortcuts';
-import {
-  Theme, Replacement, Confirmation, errorMessage, sizeName, sizeBoundaries,
-  readTheme, ownerPageId, selectionBounds, menuPaletteCommands,
-  suggestedPagePath,
-} from '../editorShared';
+import { Theme, Replacement, Confirmation, errorMessage, ownerPageId, selectionBounds, menuPaletteCommands } from '../editorShared';
 import { readRequestAttachments } from '../requestAttachments';
 import { elementTree, elementTreeIds } from '../projectCanvas/elementGeometry';
 import { needsAiSettings } from '../ProblemBanner.js';
@@ -17,7 +18,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { projectEdits } from './projectEdits';
 import { isTauri } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { native, edit } from '../api';
+import { native } from '../api';
 import { type EditorTool, type ProjectTool, type RequestToolShape } from '../EditorTools';
 import { isTextField } from '../WorkspaceSurface';
 import { type ProjectCanvasHandle } from '../ProjectCanvas';
@@ -25,18 +26,15 @@ import { type PendingRecovery, type RecoveryChoices } from '../RecoveryBanner';
 import type { ProjectLocationView, RequestArea } from '../types';
 import { type DossierSection } from '../Notes';
 import { type MenuItem } from '../Menus';
-import { KEYMAP, shortcutFor, shortcutLabel, viewNameForSlot } from '../shortcuts';
-import {
-  BOUNDARY_GAP, unionBounds, referenceMoves, pushApartReference, boundaryMoves, pushApartBoundaries, toggleCanvasTarget, selectedReference, 
-  type CanvasCamera, type CanvasTarget, 
-} from '../projectCanvasGeometry';
-import { findPageElement } from '../projectCanvas/elementGeometry';
+import { KEYMAP, shortcutFor, shortcutLabel } from '../shortcuts';
+import { toggleCanvasTarget, selectedReference, type CanvasTarget } from '../projectCanvasGeometry';
+
 import { elementPath, findElementIn } from '../projectCanvas/elementGeometry';
-import { usePanelState } from '../EditorDock';
+import { usePanelState } from '../dock/panelState';
 import { announcesStatus } from '../generationSession.js';
 import { type PaletteCommand } from '../CommandPalette';
 import { activeGeneration, useGeneration } from '../useGeneration';
-import type { AiSettingsView, AppSettingsView, BoundaryKind, Brief, Element, ElementKind, GenerationJobView, GenerationMode, GridSettings, NamedView, PageSize, PendingRequest, Pointer, PointerSource, PointerStateView, Project, Rect, RequestAttachment, SizePreset, WorkspaceView, RecentProjectsView, RecentProject } from '../types';
+import type { AppSettingsView, Brief, ElementKind, GenerationJobView, GenerationMode, GridSettings, PendingRequest, Pointer, PointerSource, PointerStateView, Project, Rect, RequestAttachment, WorkspaceView, RecentProjectsView, RecentProject } from '../types';
 import { baseSizeId, resolveForSize } from '../projectCanvas/sizes';
 import { coveredTargets } from '../projectCanvas/requests';
 import { idlePlay, playClick, playIsActive, type PlayState } from '../projectCanvas/play';
@@ -60,15 +58,6 @@ type UpdateState =
 
 export function useEditor({ initialView }: { initialView?: WorkspaceView } = {}) {
 
-  const {
-    chooseSaveConflict, closeUntitledSave, saveUntitledProject, save,
-    closeProject, switchProjectTab, closeProjectTab, open, openRecent, newUntitled,
-    recover, dismissRecoveries, travel, saveCopy, compactHistory,
-  } = createProjectCommands(() => ({
-    setPendingRecovery, setError, saveState, transitionSave, current, panels, panelActions, settle, queue, accept, setNotice, refreshRecent,
-    setReplacement, setCanvasSelection, setCanvasFocus, setShowStartPage,
-    setConfirmation, resolvedTheme, canvasRef, closePanel, setHistoryEpoch,
-  }));
   const {
     performAction,
   } = createEditorShortcuts(() => ({
@@ -109,7 +98,6 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
   }, [historyKey]);
   const [showPalette, setShowPalette] = useState(false);
   const [dismissedRecovery, setDismissedRecovery] = useState<string[]>([]);
-  const [theme, setTheme] = useState<Theme>(readTheme);
   const [canvasTool, setCanvasTool] = useState<CanvasToolState>({ kind: 'select' });
   function changeCanvasTool(kind: ProjectTool, insertKind?: ElementKind | null) {
     setCanvasTool(previous => kind === 'insert'
@@ -149,15 +137,9 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
   function togglePanel(next: Exclude<EditorPanel, { kind: 'closed' }>) {
     setPanel(previous => previous.kind === next.kind ? { kind: 'closed' } : next);
   }
-  const [resolvedTheme, setResolvedTheme] = useState<'light' | 'dark'>('light');
+  const { theme, setTheme, resolvedTheme } = useEditorTheme();
+  const { settleAiSettings, showAiSettings, setShowAiSettings, aiSettings, aiCurrent, aiPollingError, refreshAiSettings, updateAiSettings, manageChatgptUsage } = useAiSettings();
   const [historyEpoch, setHistoryEpoch] = useState(0);
-  const [showAiSettings, setShowAiSettings] = useState(false);
-  const [aiSettings, setAiSettings] = useState<AiSettingsView | null>(null);
-  const aiCurrent = useRef<AiSettingsView | null>(null);
-  const aiEpoch = useRef(0);
-  const aiRead = useRef(0);
-  const aiTail = useRef<Promise<void>>(Promise.resolve());
-  const [aiPollingError, setAiPollingError] = useState('');
   const [replacement, setReplacement] = useState<Replacement | null>(null);
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
   const closing = useRef(false);
@@ -167,45 +149,20 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
   const generationRef = useRef<GenerationJobView | null>(null);
   const generationOwns = useRef(false);
   const briefGenerateFlight = useRef(false);
-  const exports = useExportJobs({ current, view, panel, play, setPlay, openPanel, closePanel }, () => ({ current, panels, panelActions, accept, setNotice, settle, setError, setOpenFailure, openPanel, closePanel, mutate, canvasFocus, selectedElementPageId, play, setPlay, view, panel, aiConnected, spendingLimitUsd: aiCurrent.current?.settings.spendingLimitUsd ?? null }));
+  const project = view?.project ?? null;
+  const selectedElementPageId = propertySelection(project, canvasSelection, canvasFocus, {}).selectedElementPageId;
+  const exportAccount = aiSettings?.chatgpt.accounts.find(account => account.id === aiSettings.chatgpt.activeAccountId);
+  const exportConnected = !!aiSettings && !aiSettings.configurationError && (aiSettings.authentication === 'chatgpt'
+    ? !!exportAccount?.connected && exportAccount.planEnabled && !exportAccount.storageRepairRequired : aiSettings.credential.configured);
+  const exports = useExportJobs({ current, panels, panelActions, accept, setNotice, settle, setError, setOpenFailure, openPanel, closePanel, mutate, canvasFocus, selectedElementPageId, play, setPlay, view, panel, aiConnected: exportConnected, spendingLimitUsd: aiSettings?.settings.spendingLimitUsd ?? null });
   const { openPanel: openExportPanel, run: runExport, previewBoundary: previewSelectedBoundary, closePreview, checkedStates, checkedProject, preview } = exports;
 
-  const storeAiSettings = useCallback((value: AiSettingsView) => { aiCurrent.current = value; setAiSettings(value); setAiPollingError(''); }, []);
-  const refreshAiSettings = useCallback(async (refreshModels = false) => {
-    const epoch = aiEpoch.current; const read = ++aiRead.current;
-    const value = await native<AiSettingsView>('get_ai_settings', { refreshModels });
-    if (epoch === aiEpoch.current && read === aiRead.current) { storeAiSettings(value); return value; }
-    return aiCurrent.current ?? value;
-  }, [storeAiSettings]);
-  const updateAiSettings = useCallback((command: string, args?: Record<string, unknown>) => {
-    const result = aiTail.current.then(async () => {
-      aiEpoch.current += 1; aiRead.current += 1;
-      const value = await native<AiSettingsView>(command, args);
-      storeAiSettings(value); return value;
-    });
-    aiTail.current = result.then(() => undefined, () => undefined);
-    return result;
-  }, [storeAiSettings]);
-  const manageChatgptUsage = useCallback(() => native<void>('open_chatgpt_usage'), []);
-  useEffect(() => { void refreshAiSettings().catch(() => {}); }, [refreshAiSettings]);
-  useEffect(() => {
-    if (aiSettings?.chatgpt.signIn.status !== 'awaitingBrowser') return;
-    let active = true;
-    let timer: ReturnType<typeof setTimeout>;
-    async function poll() {
-      let next = 900;
-      try { await refreshAiSettings(); }
-      catch (error) { if (active) setAiPollingError(`ChatGPT sign-in status could not be refreshed: ${errorMessage(error)}`); next = 3000; }
-      if (active) timer = setTimeout(() => { void poll(); }, next);
-    }
-    timer = setTimeout(() => { void poll(); }, 900);
-    return () => { active = false; clearTimeout(timer); };
-  }, [aiSettings?.chatgpt.signIn.status, refreshAiSettings]);
-
   const refreshRecent = useCallback(async () => {
-    const value = await native<RecentProjectsView>('get_recent_projects');
-    setRecentProjects(value.projects);
-    if (value.error) setError(`Recent projects: ${value.error}`);
+    try {
+      const value = await native<RecentProjectsView>('get_recent_projects');
+      setRecentProjects(value.projects);
+      if (value.error) setError(`Recent projects: ${value.error}`);
+    } catch (error) { setError(errorMessage(error)); }
   }, []);
   useEffect(() => { void refreshRecent().catch(error => setError(errorMessage(error))); }, [refreshRecent]);
   useEffect(() => { void native<ProjectLocationView>('get_project_location').then(setProjectLocation).catch(error => setError(errorMessage(error))); }, []);
@@ -217,63 +174,23 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
     setProjectLocation(await native<ProjectLocationView>('set_project_location', { path }));
   }
 
+  const {
+    chooseSaveConflict, closeUntitledSave, saveUntitledProject, save,
+    closeProject, switchProjectTab, closeProjectTab, open, openRecent, newUntitled,
+    recover, dismissRecoveries, travel, saveCopy, compactHistory } = createProjectCommands({
+    setPendingRecovery, setError, saveState, transitionSave, current, panels, panelActions, settle, queue, accept, setNotice, refreshRecent,
+    setReplacement, setCanvasSelection, setCanvasFocus, setShowStartPage,
+    setConfirmation, resolvedTheme, canvasRef, closePanel, setHistoryEpoch });
   useEffect(() => {
     if (view?.project) setBoundaryKind(projectKind(view.project));
   }, [view?.project?.id]);
 
-  const createCanvasBoundary = useCallback(async (bounds: Rect, kind: BoundaryToolKind, sourceId?: string) => {
-    let createdId: string | null = null;
-    await mutate(project => {
-      const source = project.pages.find(page => page.id === sourceId);
-      const first = project.pages.find(page => pageKind(page) === kind);
-      const template = source ?? (kind === 'page' && (first?.sizes.length ?? 0) > 1 ? first : null);
-      const name = nextBoundaryName(project, kind);
-      const size: PageSize = { id: crypto.randomUUID(), label: sizeName(bounds.width), width: Math.round(bounds.width), height: Math.round(bounds.height), kind: layoutKind(kind, project), x: bounds.x, y: bounds.y };
-      let nextX = bounds.x;
-      const sizes = template ? template.sizes.map((old, index) => {
-        const next = { ...old, id: index === 0 ? size.id : crypto.randomUUID(),
-          x: source ? bounds.x + old.x - template.sizes[0].x : nextX,
-          y: source ? bounds.y + old.y - template.sizes[0].y : bounds.y,
-          ...(index === 0 ? { width: size.width, height: size.height } : {}) };
-        nextX = next.x + next.width + BOUNDARY_GAP;
-        return next;
-      }) : [size];
-      const sizeIds = new Map(template?.sizes.map((old, index) => [old.id, sizes[index].id]));
-      const copy = (element: Element): Element => ({ ...structuredClone(element), id: crypto.randomUUID(), children: element.children.map(copy), overrides: Object.fromEntries(Object.entries(element.overrides ?? {}).flatMap(([id, value]) => sizeIds.has(id) ? [[sizeIds.get(id)!, value]] : [])) });
-      createdId = crypto.randomUUID();
-      const page = { id: createdId, name, path: project.pages.length ? suggestedPagePath(name, project.pages.map(page => page.path)) : '/', included: true, output: outputKind(kind), background: source?.background ?? '#ffffff', sizes, elements: source?.elements.map(copy) ?? [] };
-      const before = sizeBoundaries(project);
-      const additions = sizes.map(item => ({ pageId: page.id, sizeId: item.id, label: item.label, rect: { x: item.x, y: item.y, width: item.width, height: item.height }, kind: item.kind }));
-      // Keep the whole linked-size row fixed while making room around it.
-      const anchor = { ...additions[0], rect: unionBounds(additions.map(item => item.rect)) };
-      const rowWidth = anchor.rect.width + BOUNDARY_GAP;
-      const prepared = source ? before.map(item => item.rect.x >= anchor.rect.x
-        && item.rect.y < anchor.rect.y + anchor.rect.height && item.rect.y + item.rect.height > anchor.rect.y
-        ? { ...item, rect: { ...item.rect, x: item.rect.x + rowWidth } } : item) : before;
-      const pushed = pushApartBoundaries([...prepared, anchor], anchor.sizeId, BOUNDARY_GAP).filter(item => item.sizeId !== anchor.sizeId);
-      const placed = [...pushed, ...additions];
-      const boxes = project.reference.map(item => ({ itemId: item.id, rect: item.rect }));
-      const reference = referenceMoves(pushApartReference(boxes, placed), boxes);
-      return { type: 'create_boundary' as const, page, after_page_id: sourceId,
-        moves: boundaryMoves(placed, [...before, ...additions]).map(({ pageId, sizeId, x, y, kind }) => ({ page_id: pageId, size_id: sizeId, x, y, kind })),
-        reference: reference.map(({ itemId, x, y }) => ({ item_id: itemId, x, y })),
-      };
-    });
-    return createdId;
-  }, [mutate]);
-  async function addProjectBoundary() {
-    const project = current.current?.project;
-    if (!project) return;
-    const kind = projectKind(project);
-    const id = await createCanvasBoundary(boundaryDefaults(project, kind), kind);
-    selectCanvasBoundary(id);
-    if (id) requestAnimationFrame(() => canvasRef.current?.focusBoundary(id));
-  }
   const selectCanvasBoundary = useCallback((pageId: string | null, sizeId?: string | null, additive = false) => {
     setCanvasFocus(pageId);
     setCanvasFocusSize(sizeId ?? null);
     if (!additive || !pageId) setCanvasSelection([]);
   }, []);
+  const { createCanvasBoundary, addProjectBoundary, updateCanvasPage, updateCanvasPageSize, addCanvasPageSize } = useBoundaryCommands(current, mutate, canvasRef, selectCanvasBoundary);
   const selectCanvasReference = useCallback((itemId: string, additive = false) => {
     setCanvasSelection(current => toggleCanvasTarget(current, { kind: 'reference', itemId }, additive));
   }, []);
@@ -297,34 +214,30 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
   const groupCanvasElements = useCallback(async (pageId: string, ids: string[]) => {
     const before = new Set(elementTreeIds(current.current?.project?.pages.find(page => page.id === pageId)?.elements ?? []));
     const next = await mutate({ type: 'group_elements', page_id: pageId, ids });
-    const page = next.project?.pages.find(page => page.id === pageId);
+    const page = next?.project?.pages.find(page => page.id === pageId);
     return page ? elementTree(page.elements).find(element => element.kind === 'group' && !before.has(element.id))?.id ?? null : null;
   }, [mutate]);
   const ungroupCanvasElements = useCallback(async (pageId: string, id: string) => {
     const group = findElementIn(current.current?.project?.pages.find(page => page.id === pageId)?.elements ?? [], id);
     const children = group?.kind === 'group' ? group.children.map(child => child.id) : [];
-    await mutate({ type: 'ungroup_elements', page_id: pageId, id });
-    return children;
+    const next = await mutate({ type: 'ungroup_elements', page_id: pageId, id });
+    return next ? children : [];
   }, [mutate]);
+  const removedWithUndo = useCallback((message: string) => {
+    requestAnimationFrame(() => { if (!document.querySelector('.workspace-surface:focus-within')) canvasRef.current?.focusCanvas(); });
+    setNotice(message, () => { run(() => travel('undo_project')); });
+  }, [setNotice, travel]);
   const removeLinkedDefinition = useCallback((id: string) => {
     const name = current.current?.project?.linked?.[id]?.name ?? 'this linked element';
     void mutate({ type: 'delete_items', linked_ids: [id] })
-      .then(() => setNotice(`Removed ${name}.`, () => { void travel('undo_project').catch(() => {}); }))
-      .catch(() => {});
+      .then(next => { if (next) removedWithUndo(`Removed ${name}.`); })
+      ;
   }, [mutate, setNotice]);
-  // An inline field reports its own error, so a rejected name never leaves the panel.
-  const renameCanvasElement = useCallback((pageId: string, elementId: string, name: string | null) => {
-    return queue(async workspace => {
-      const project = workspace?.project;
-      if (!project) throw new Error('Create or open a project first.');
-      const next = await edit(project.revision, { type: 'update_elements', page_id: pageId, patches: [{ id: elementId, name }] });
-      accept(next); return next;
-    }, false, true).then(() => undefined);
-  }, [queue, accept]);
+  const renameCanvasElement = useCallback((pageId: string, elementId: string, name: string | null) => mutate({ type: 'update_elements', page_id: pageId, patches: [{ id: elementId, name }] }).then(() => undefined), [mutate]);
   const removeCanvasRequests = useCallback((ids: string[]) => {
     if (!ids.length) return;
     setCanvasSelection(current => current.filter(target => target.kind !== 'request' || !ids.includes(target.requestId)));
-    void mutate({ type: 'remove_requests', ids }).catch(() => {});
+    void mutate({ type: 'remove_requests', ids });
   }, [mutate]);
   // The layer's request box in Properties edits the one request that targets only that layer.
   const setCanvasElementRequest = useCallback((elementId: string, data: { text: string; attachments: RequestAttachment[] } | null) => {
@@ -341,25 +254,25 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
       ? { ...existing, text: data.text, attachments: data.attachments }
       : { id: crypto.randomUUID(), text: data.text, attachments: data.attachments, requestedAt: new Date().toISOString(),
         targets: [{ kind: 'element', page: page?.id ?? '', size: page && page.sizes.length > 1 ? baseSizeId(page) : null, id: elementId }], area: null };
-    if (existing) void edits.updateRequest(request).catch(() => {});
-    else void edits.addRequest(request).catch(() => {});
+    if (existing) void edits.updateRequest(request);
+    else void edits.addRequest(request);
   }, [edits, removeCanvasRequests]);
   const keepPointerComment = useCallback((pointerId: string) => {
-    void mutate({ type: 'set_pointer_wiring', pointer_id: pointerId, wiring: null }).catch(() => {});
+    void mutate({ type: 'set_pointer_wiring', pointer_id: pointerId, wiring: null });
   }, [mutate]);
   const keepPointerThis = useCallback((pointerId: string, otherId: string) => {
-    void mutate({ type: 'resolve_pointer_clash', keep: pointerId, drop: [otherId] }).catch(() => {});
+    void mutate({ type: 'resolve_pointer_clash', keep: pointerId, drop: [otherId] });
   }, [mutate]);
   const mergePointerClash = useCallback((pointer: Pointer, other: Pointer) => {
     const comment = [pointer.comment.trim(), other.comment.trim()].filter(Boolean).join('\n\n');
-    void mutate({ type: 'resolve_pointer_clash', keep: pointer.id, drop: [other.id], merged_comment: comment }).catch(() => {});
+    void mutate({ type: 'resolve_pointer_clash', keep: pointer.id, drop: [other.id], merged_comment: comment });
   }, [mutate]);
   const elementToReference = useCallback(async (pageId: string, elementId: string, rect: Rect, sizeId?: string | null) => {
-    setCanvasSelection([]);
-    await mutate({ type: 'element_to_reference', page_id: pageId, element_id: elementId, rect, size_id: sizeId });
+    if (await mutate({ type: 'element_to_reference', page_id: pageId, element_id: elementId, rect, size_id: sizeId })) setCanvasSelection([]);
   }, [mutate]);
   const referenceToElement = useCallback(async (itemId: string, pageId: string, rect: Rect, sizeId?: string | null) => {
     const next = await mutate({ type: 'reference_to_element', item_id: itemId, page_id: pageId, rect, size_id: sizeId });
+    if (!next) return;
     const added = next.project?.pages.find(page => page.id === pageId)?.elements.at(-1);
     setCanvasFocus(pageId);
     setCanvasSelection(added ? [{ kind: 'element', pageId, elementId: added.id, sizeId: sizeId ?? null }] : []);
@@ -369,74 +282,16 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
     await mutate({ type: 'attach_reference_context', request_ids: requestIds, item_ids: itemIds });
   }, [mutate]);
   const reportCanvasZoom = useCallback((zoom: number) => setCanvasZoom(zoom), []);
-  const updateCanvasPage = useCallback((pageId: string, patch: { name?: string; path?: string; background?: string; included?: boolean }) => {
-    void mutate(project => {
-      const page = project.pages.find(item => item.id === pageId);
-      if (!page) return null;
-      const name = patch.name ?? page.name, path = patch.path ?? page.path, background = patch.background ?? page.background;
-      const included = patch.included ?? page.included;
-      if (name === page.name && path === page.path && background === page.background && included === page.included) return null;
-      return { type: 'update_page', page_id: pageId, name, path, background, included };
-    }).catch(() => {});
-  }, [mutate]);
-  const updateCanvasPageSize = useCallback((pageId: string, sizeId: string, patch: { label?: string; width?: number; height?: number; kind?: BoundaryKind }) => {
-    void mutate(project => {
-      const page = project.pages.find(item => item.id === pageId);
-      const size = page?.sizes.find(item => item.id === sizeId);
-      if (!page || !size) return null;
-      const before = sizeBoundaries(project);
-      const resized = before.map(item => item.sizeId === sizeId
-        ? { ...item, rect: { ...item.rect, width: patch.width ?? item.rect.width, height: patch.height ?? item.rect.height } }
-        : item);
-      const pushed = pushApartBoundaries(resized, sizeId);
-      return {
-        type: 'update_page_size' as const, page_id: pageId, size_id: sizeId, ...patch,
-        moves: boundaryMoves(pushed, before).map(({ pageId: movePageId, sizeId: movedId, x, y, kind }) => ({ page_id: movePageId, size_id: movedId, x, y, kind })),
-        reference: [],
-      };
-    }).catch(() => {});
-  }, [mutate]);
-  /** Adding a linked size is one undo step, including the boundaries it pushes aside. */
-  const addCanvasPageSize = useCallback((pageId: string, preset: SizePreset, width = 0, height = 0) => {
-    const sizeId = crypto.randomUUID();
-    let focusedSizeId: string = sizeId;
-    void mutate(project => {
-      const page = project.pages.find(item => item.id === pageId);
-      if (!page) return null;
-      const last = page.sizes.at(-1)!;
-      const dimensions = preset === 'phone' ? { label: 'Phone', width: 390, height: 844 }
-        : preset === 'tablet' ? { label: 'Tablet', width: 820, height: 1180 }
-          : preset === 'desktop' ? { label: 'Desktop', width: 1440, height: 900 }
-            : { label: sizeName(Math.round(width)), width: Math.round(width), height: Math.round(height) };
-      // A linked size of the same width already covers this preset: focus it instead of adding a
-      // duplicate. The base size is never a match; a small base can still gain a phone size.
-      const existing = preset !== 'custom' && page.sizes.slice(1).find(size => size.width === dimensions.width);
-      if (existing) { focusedSizeId = existing.id; return null; }
-      const size: PageSize = { id: sizeId, ...dimensions, kind: last.kind, x: last.x + last.width + 160, y: last.y };
-      const anchor = sizeBoundaries(project);
-      const pushed = pushApartBoundaries([...anchor, { pageId, sizeId: size.id, label: size.label, rect: { x: size.x, y: size.y, width: size.width, height: size.height }, kind: size.kind }], size.id);
-      const placed = pushed.find(item => item.sizeId === size.id)!;
-      return {
-        type: 'add_page_size' as const, page_id: pageId,
-        size: { ...size, x: placed.rect.x, y: placed.rect.y },
-        moves: boundaryMoves(pushed.filter(item => item.sizeId !== size.id), anchor)
-          .map(({ pageId: movePageId, sizeId, x, y, kind }) => ({ page_id: movePageId, size_id: sizeId, x, y, kind })),
-        reference: [],
-      };
-    }).then(next => {
-      if (next.project?.pages.find(page => page.id === pageId)?.sizes.some(size => size.id === focusedSizeId)) selectCanvasBoundary(pageId, focusedSizeId);
-    }).catch(() => {});
-  }, [mutate, selectCanvasBoundary]);
-  const renameProject = useCallback((name: string) => { void mutate({ type: 'rename_project', name }).catch(() => {}); }, [mutate]);
-  const showDotGrid = useCallback((enabled: boolean) => { void mutate({ type: 'set_grid', enabled }).catch(() => {}); }, [mutate]);
+  const renameProject = useCallback((name: string) => { void mutate({ type: 'rename_project', name }); }, [mutate]);
+  const showDotGrid = useCallback((enabled: boolean) => { void mutate({ type: 'set_grid', enabled }); }, [mutate]);
   const changeGridFlags = useCallback((patch: Partial<Pick<GridSettings, 'snap'>>) => {
-    void mutate(project => ({ type: 'set_grid_settings', settings: { ...project.gridSettings, ...patch } })).catch(() => {});
+    void mutate(project => ({ type: 'set_grid_settings', settings: { ...project.gridSettings, ...patch } }));
   }, [mutate]);
   const load = useCallback(async () => {
     setLoading(true); setError('');
     try {
       // The start-page choice decides whether launch opens a canvas or waits on the start page.
-      const settings = await native<AppSettingsView>('get_app_settings').catch(() => ({ showStartPage: true }));
+      const settings = await native<AppSettingsView>('get_app_settings');
       setAppSettings(settings);
       let loaded = await native<WorkspaceView>('get_workspace');
       if (!loaded.project && !settings.showStartPage) loaded = await native<WorkspaceView>('new_untitled_project', {});
@@ -449,19 +304,11 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
   }, [accept]);
   useEffect(() => { void load(); }, [load]);
   useEffect(() => {
-    // Keep unsaved edits in the project file while the project stays dirty and still.
     const active = view?.project;
     if (!view?.dirty || !active) return;
-    const timer = window.setInterval(() => { void native('autosave_project').catch(() => {}); }, 3000);
+    const timer = window.setInterval(() => { void native('autosave_project').catch(error => setError(errorMessage(error))); }, 3000);
     return () => window.clearInterval(timer);
   }, [view?.dirty, view?.project?.id]);
-  useEffect(() => {
-    const media = window.matchMedia('(prefers-color-scheme: dark)');
-    const update = () => { const value = theme === 'system' ? (media.matches ? 'dark' : 'light') : theme; document.documentElement.dataset.theme = value; setResolvedTheme(value); };
-    update(); media.addEventListener('change', update);
-    try { localStorage.setItem('desegnos.editor-theme', theme); } catch {}
-    return () => media.removeEventListener('change', update);
-  }, [theme]);
   useEffect(() => {
     if (!isTauri()) return;
     let disposed = false;
@@ -472,7 +319,7 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
       closing.current = true;
       try {
         await settle();
-        const identity = await native<import('../types').IdentityAnalysis | null>('get_identity_analysis').catch(() => null);
+        const identity = await native<import('../types').IdentityAnalysis | null>('get_identity_analysis');
         const generating = generationRef.current?.status === 'generating' || identity?.status === 'analyzing';
         const plan = identity?.status === 'analyzing' ? (identity.authentication ?? aiCurrent.current?.authentication) === 'chatgpt' : generationRef.current?.authentication === 'chatgpt';
         if ((current.current?.anyDirty || current.current?.dirty || generating) && !await new Promise<boolean>(resolve => setCloseRequest({ resolve, message: `${generating ? `Generation is still running. Closing may interrupt the request, and ${plan ? 'submitted work may still use your ChatGPT plan or credits' : 'OpenAI may still charge for submitted work'}. Its outcome will be shown as uncertain when you return. ` : ''}${current.current?.dirty ? 'This project has changes that have not been saved to its file. ' : ''}Close Desegnos?` }))) return;
@@ -517,9 +364,7 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
     try { await native('open_preview_link', { url }); }
     catch { setOpenFailure({ message: url, url }); }
   }
-  // Export: destination, included boundaries and the paid-send decision live in the dock.
 
-  // Play and Preview export.
   function togglePlay(pageId?: string | null) {
     const projectNow = current.current?.project;
     const target = pageId ?? canvasFocus ?? selectedElementPageId ?? projectNow?.pages[0]?.id ?? null;
@@ -546,11 +391,11 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
   }
 
   useEffect(() => { if (!view?.recoveries.length) closePanel('recovery'); }, [view?.recoveries.length]);
-  const changeBrief = useCallback((patch: Partial<Brief>) => mutate(project => ({ type: 'set_brief', brief: { ...project.brief, ...patch } }))
-    .then(workspace => workspace.project!.brief), [mutate]);
-
-  // One callable path per keymap action the canvas does not own; its keyboard listener and the
-  // command palette both use it.
+  const changeBrief = useCallback(async (patch: Partial<Brief>) => {
+    const before = current.current?.project?.brief ?? { purpose: '', audience: '', brandName: '', tone: '' };
+    const workspace = await mutate(project => ({ type: 'set_brief', brief: { ...project.brief, ...patch } }));
+    return workspace?.project?.brief ?? before;
+  }, [mutate]);
 
   useEffect(() => {
     const listener = (event: KeyboardEvent) => {
@@ -567,7 +412,6 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
     return () => window.removeEventListener('keydown', listener);
   });
 
-  const project = view?.project ?? null;
   const canvasBoundaries = project ? canvasView(project).boundaries : [];
   const onStartPage = !project || showStartPage;
   const pointerStates = view?.pointerStates ?? [];
@@ -580,7 +424,7 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
     signal?.throwIfAborted();
     if (!activeProjectId || workspace?.project?.id !== activeProjectId) throw new Error('Return to the project that owns this generation request.');
     if (command === 'prepare_generation') {
-      await aiTail.current;
+      await settleAiSettings();
       const settings = await refreshAiSettings();
       if (settings.authentication === 'chatgpt') {
         const account = settings.chatgpt.accounts.find(account => account.id === settings.chatgpt.activeAccountId);
@@ -593,12 +437,12 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
     const result = await native<T>(command, args);
     if (command === 'apply_generation' && !signal?.aborted) accept(result as WorkspaceView);
     return result;
-  })), [queue, activeProjectId, accept, refreshAiSettings]);
+  }, false)), [queue, activeProjectId, accept, refreshAiSettings, settleAiSettings]);
   const generationApplied = useCallback((workspace: WorkspaceView) => { if (workspace.project?.latestGeneration) setNotice('Generated result applied.'); }, []);
   const generationRecorded = useCallback(() => queue(async () => {
     const refreshed = await native<WorkspaceView>('get_workspace');
     if (refreshed.project?.id === activeProjectId) accept(refreshed);
-  }), [queue, accept, activeProjectId]);
+  }, false), [queue, accept, activeProjectId]);
   const generation = useGeneration(activeProjectId, generationCall, generationApplied, generationRecorded);
   generationRef.current = generation.job;
   generationOwns.current = generation.owns;
@@ -629,7 +473,7 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
   function openGeneration() {
     openPanel({ kind: 'log', focus: panel.kind === 'log' ? panel.focus + 1 : 1 });
     void generation.refresh();
-    void refreshAiSettings().catch(() => {});
+    void refreshAiSettings().catch(error => setError(errorMessage(error)));
   }
   function editGenerationRequest(id: string) {
     const owner = project?.pages.find(item => !!findElementIn(item.elements, id));
@@ -657,7 +501,7 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
     const boundary = page && canvasBoundaries.find(item => item.pageId === page.id && item.sizeId === baseSizeId(page));
     const fromBrief = !!project && !!page && !!boundary && !page.elements.length && !!project.brief.purpose.trim()
       && !(project.requests ?? []).some(request => request.text.trim());
-    if (!fromBrief) { await generation.prepare(elementIds, contextItems).catch(() => {}); return; }
+    if (!fromBrief) { await generation.prepare(elementIds, contextItems); return; }
     // The request is added before the job is prepared, so a second click must not add another.
     if (briefGenerateFlight.current) return;
     briefGenerateFlight.current = true;
@@ -665,12 +509,10 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
       const area: RequestArea = { page: page.id, size: page.sizes.length > 1 ? baseSizeId(page) : null, shape: { kind: 'rect', rect: boundary.rect } };
       const request: PendingRequest = {
         id: crypto.randomUUID(), text: 'Build this page from the project brief.', attachments: [],
-        targets: coveredTargets(project, canvasBoundaries, area), area, requestedAt: new Date().toISOString(),
-      };
-      await mutate({ type: 'add_request', request });
-      await generation.prepare(elementIds, contextItems).catch(() => {});
-    } catch { /* mutate already reported the failure */ }
-    finally { briefGenerateFlight.current = false; }
+        targets: coveredTargets(project, canvasBoundaries, area), area, requestedAt: new Date().toISOString() };
+      if (!await mutate({ type: 'add_request', request })) return;
+      await generation.prepare(elementIds, contextItems);
+    } finally { briefGenerateFlight.current = false; }
   }
   function requestTargetingElement(project: Project, elementId: string): PendingRequest | null {
     return (project.requests ?? []).find(request => request.targets.some(target => target.kind === 'element' && target.id === elementId)) ?? null;
@@ -692,7 +534,7 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
     const request = (current.current?.project?.requests ?? []).find(item => item.id === requestId);
     if (!request) return;
     const { attachments, errors: problems } = await readRequestAttachments(request.attachments, files, links);
-    await mutate({ type: 'update_request', request: { ...request, attachments } });
+    if (!await mutate({ type: 'update_request', request: { ...request, attachments } })) return;
     if (problems.length) setError(problems.join(' ')); else setNotice('Attached to the request.');
   }, [mutate]);
   // One undoable step covers a whole canvas selection, so removing never interrupts the work.
@@ -700,16 +542,14 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
     const count = referenceIds.length + pointerIds.length + requestIds.length + elementIds.length;
     if (!count) return;
     run(async () => {
-      await mutate({
+      if (!await mutate({
         type: 'delete_items',
         elements: elementIds.map(item => [item.pageId, item.elementId]) as [string, string][],
         reference_ids: referenceIds,
         pointer_ids: pointerIds,
-        request_ids: requestIds,
-      });
+        request_ids: requestIds })) return;
       setCanvasSelection([]);
-      requestAnimationFrame(() => { if (!document.querySelector('.workspace-surface:focus-within')) document.querySelector<HTMLElement>('.project-canvas')?.focus(); });
-      setNotice(`${count} ${count === 1 ? 'item' : 'items'} deleted.`, () => { void travel('undo_project').catch(() => {}); });
+      removedWithUndo(`${count} ${count === 1 ? 'item' : 'items'} deleted.`);
     });
   }
   // A boundary is deleted as a whole page, or as the selected linked size. The base size
@@ -721,48 +561,16 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
     const removeSize = !!size && size.id !== page.sizes[0].id;
     const name = removeSize ? `${page.name} · ${size.label}` : page.name;
     run(async () => {
-      await mutate(removeSize ? { type: 'delete_items', size_ids: [[pageId, size!.id]] } : { type: 'delete_items', page_ids: [pageId] });
+      if (!await mutate(removeSize ? { type: 'delete_items', size_ids: [[pageId, size!.id]] } : { type: 'delete_items', page_ids: [pageId] })) return;
       setCanvasFocus(null); setCanvasFocusSize(null);
       setCanvasSelection([]);
-      requestAnimationFrame(() => { if (!document.querySelector('.workspace-surface:focus-within')) document.querySelector<HTMLElement>('.project-canvas')?.focus(); });
-      setNotice(`Removed ${name}.`, () => { void travel('undo_project').catch(() => {}); });
+      removedWithUndo(`Removed ${name}.`);
     });
   }
-  const run = (operation: () => Promise<unknown>) => { void operation().catch(() => {}); };
+  const run = (operation: () => Promise<unknown>) => { void operation().catch(error => setError(errorMessage(error))); };
   const canEditProject = !!project && !onStartPage;
-  const views = project?.views ?? [];
 
-  // Named views live in the project file. Ctrl/Cmd+Alt+N saves into the view named "View N",
-  // matching the names the '+' button creates, so numbered slots survive deletions and reordering.
-  function viewForSlot(slot: number) {
-    return views.find(view => view.name === viewNameForSlot(slot)) ?? null;
-  }
-  function nextViewName() {
-    const names = new Set(views.map(view => view.name));
-    let index = 1;
-    while (names.has(viewNameForSlot(index))) index += 1;
-    return viewNameForSlot(index);
-  }
-  function saveCurrentView(slot: number, camera: CanvasCamera) {
-    if (!project) return;
-    const existing = viewForSlot(slot);
-    run(() => mutate(existing
-      ? { type: 'update_named_view', view_id: existing.id, x: camera.x, y: camera.y, zoom: camera.zoom }
-      : { type: 'add_named_view', name: viewNameForSlot(slot), x: camera.x, y: camera.y, zoom: camera.zoom }));
-  }
-  function addNamedViewAt(camera: CanvasCamera) {
-    run(() => mutate({ type: 'add_named_view', name: nextViewName(), x: camera.x, y: camera.y, zoom: camera.zoom }));
-  }
-  function addNamedView() {
-    const camera = canvasRef.current?.currentCamera();
-    if (camera) addNamedViewAt(camera);
-  }
-  function renameNamedView(view: NamedView, name: string) {
-    run(() => mutate({ type: 'update_named_view', view_id: view.id, name }));
-  }
-  function removeNamedView(view: NamedView) {
-    run(() => mutate({ type: 'remove_named_view', view_id: view.id }));
-  }
+  const { views, saveCurrentView, addNamedViewAt, addNamedView, renameNamedView, removeNamedView } = useNamedViews(project, mutate, canvasRef, run);
 
   const menuItems: MenuItem[] = [
     ...(!onStartPage ? [{ id: 'home', label: 'Home', action: () => setShowStartPage(true) }] : []),
@@ -807,38 +615,13 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
     path: pendingRecovery.path, busy: pending > 0,
     recover: () => run(() => recover(pendingRecovery.projectId)),
     openSaved: () => run(() => open(false, pendingRecovery.path, true)),
-    dismiss: () => setPendingRecovery(null),
-  } : null;
-  const selectedBoundary = canvasFocus ? project?.pages.find(item => item.id === canvasFocus) ?? null : null;
+    dismiss: () => setPendingRecovery(null) } : null;
   useEffect(() => setWidthPreview(null), [project?.id, project?.revision, canvasFocus, canvasFocusSize, canvasSelection]);
-  const selectedReferenceItem = canvasSelection.length === 1 && canvasSelection[0].kind === 'reference'
-    ? project?.reference.find(item => item.id === (canvasSelection[0] as { kind: 'reference'; itemId: string }).itemId) ?? null
-    : null;
-  const selectedPointer = canvasSelection.length === 1 && canvasSelection[0].kind === 'pointer'
-    ? (project?.pointers ?? []).find(item => item.id === (canvasSelection[0] as { kind: 'pointer'; pointerId: string }).pointerId) ?? null
-    : null;
-  const selectedRequest = canvasSelection.length === 1 && canvasSelection[0].kind === 'request'
-    ? (project?.requests ?? []).find(item => item.id === (canvasSelection[0] as { kind: 'request'; requestId: string }).requestId) ?? null
-    : null;
-  const selectedElementTargets = canvasSelection.flatMap(target => target.kind === 'element' ? [target] : []);
-  const selectedElementPageId = selectedElementTargets.length && selectedElementTargets.every(target => target.pageId === selectedElementTargets[0].pageId) ? selectedElementTargets[0].pageId : null;
-  const selectedElements = selectedElementPageId && project
-    ? selectedElementTargets.flatMap(target => {
-      const element = findPageElement(project, target.pageId, target.elementId);
-      return element ? [element] : [];
-    })
-    : [];
-  const selectedElementRequest = selectedElements.length === 1 && project
-    ? (project.requests ?? []).find(request => request.targets.length === 1 && request.targets[0].kind === 'element' && request.targets[0].id === selectedElements[0].id) ?? null
-    : null;
-  const selectedPointerState = selectedPointer ? pointerStateMap[selectedPointer.id] ?? null : null;
-  const selectedPointerOther = selectedPointerState?.clashWith.length
-    ? (project?.pointers ?? []).find(item => item.id === selectedPointerState.clashWith[0]) ?? null
-    : null;
   function selectNextPointerClash() {
     const ids = clashPointers.map(item => item.id);
     if (!ids.length) return;
-    const index = selectedPointer ? ids.indexOf(selectedPointer.id) : -1;
+    const selected = canvasSelection.length === 1 && canvasSelection[0].kind === 'pointer' ? canvasSelection[0].pointerId : null;
+    const index = selected ? ids.indexOf(selected) : -1;
     setCanvasSelection([{ kind: 'pointer', pointerId: ids[(index + 1) % ids.length] }]);
   }
   function chooseTool(next: EditorTool) {
@@ -867,16 +650,12 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
     changeCanvasTool(kind === 'image' || kind === 'text' ? kind : 'insert', kind);
     canvasRef.current?.focusCanvas();
   }
-  // Status readouts: what is selected and where it sits, then the canvas zoom. A boundary the
-  // user is working inside answers when no layer is selected.
   const focusedBoundary = project && canvasFocus
     ? canvasBoundaries.find(item => item.pageId === canvasFocus && (!canvasFocusSize || item.sizeId === canvasFocusSize))
       ?? canvasBoundaries.find(item => item.pageId === canvasFocus) ?? null
     : null;
   const selectedBounds = project ? selectionBounds(project, canvasSelection) ?? (canvasSelection.length ? null : focusedBoundary?.rect ?? null) : null;
   const zoomPercent = Math.round(canvasZoom * 100);
-  // The palette reaches canvas actions through the canvas's own dispatch, so a row runs exactly
-  // what its key runs. A row stands down only while the action has nothing to change.
   const paletteCommands: PaletteCommand[] = [
     ...KEYMAP.filter(binding => binding.action !== 'commandPalette').map(binding => {
       const canvasAnswer = canvasRef.current?.canRunCanvasAction(binding.action) ?? null;
@@ -884,14 +663,13 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
       return {
         id: `action:${binding.action}`, label: binding.label, keys: binding.display, group: binding.group,
         disabled: canvasAnswer === null ? missingProject : !canvasAnswer,
-        run: () => { if (!canvasRef.current?.runCanvasAction(binding.action)) performAction(binding.action); },
-      };
+        run: () => { if (!canvasRef.current?.runCanvasAction(binding.action)) performAction(binding.action); } };
     }),
     ...menuPaletteCommands(menuItems),
   ];
 
   return {
-    edits, exports,
+    edits, exports, removedWithUndo,
     panel, openPanel, closePanel, togglePanel, saving, updateState, dismissUpdate, changeCanvasTool,
     showPalette, paletteCommands, setShowPalette, closeRequest, setCloseRequest, onStartPage, project, view,
     run, switchProjectTab, closeProjectTab, menuItems, resolvedTheme, setTheme, compactHistory,
@@ -908,16 +686,14 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
     selectCanvasRequest, clearCanvasSelection, removeCanvasSelection, elementToReference, referenceToElement, attachToRequest, deleteBoundary, pointerStateMap,
     reportCanvasZoom, selectCanvasElement, groupCanvasElements, ungroupCanvasElements, playElement, setPlay, showGenerationStatus, openImportDialog, editGenerationRequest,
     openGeneration, aiSettings, manageChatgptUsage, replyToGeneration, historyEpoch, accept, projectLocation,
-    closeUntitledSave, saveUntitledProject, selectedPointer, selectedPointerState, keepPointerComment, selectedPointerOther, keepPointerThis, mergePointerClash,
-    selectedReferenceItem, selectedRequest, attachReferenceContext, selectedElements, selectedElementPageId,
-    selectedElementTargets, renameCanvasElement, selectedElementRequest, setCanvasElementRequest,
-    selectedBoundary, updateCanvasPage, mutate, updateCanvasPageSize,
+    closeUntitledSave, saveUntitledProject, keepPointerComment, keepPointerThis, mergePointerClash,
+    attachReferenceContext, renameCanvasElement, setCanvasElementRequest,
+    updateCanvasPage, mutate, updateCanvasPageSize,
     addCanvasPageSize, renameProject, showDotGrid, changeGridFlags, save, canvasBoundaries,
     moveCanvasElementTo, removeLinkedDefinition, views, addNamedView, renameNamedView, removeNamedView,
     selectedBounds, clashPointers, selectNextPointerClash, zoomPercent,
     recovery, changeProjectLocation, importContext,
     setCanvasSelection, setCanvasFocus, focusCanvasBehaviour, behaviourFocus, changeBrief,
     chooseSaveConflict, replacement, setReplacement, confirmation, setConfirmation,
-    refreshAiSettings, updateAiSettings, aiPollingError,
-  };
+    refreshAiSettings, updateAiSettings, aiPollingError };
 }

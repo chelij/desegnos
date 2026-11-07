@@ -135,16 +135,24 @@ test-results/                Local evidence from smoke, startup and vault runs (
 | [ProjectCanvas.tsx](../src/ProjectCanvas.tsx) | Canvas rendering and overlays; `useProjectCanvas.tsx` assembles camera, gestures, Request tools, selection, inline editing and drops. |
 | [projectCanvasGeometry.ts](../src/projectCanvasGeometry.ts) | Canvas geometry: boundary layout/push/snap, element/request/reference boxes and reference rects, pointer routes, selection targets, camera fit/zoom, dot grid. Its `FrameCorner`, `FRAME_SNAP`, `MIN_FRAME_SIZE`, `snapToFrameGrid`, `frameBox`, `drawnFrameRect` and `referenceFrameRect` names predate the Frame → Request rename. |
 | [canvasGeometry.ts](../src/canvasGeometry.ts) | Generic geometry: rect changes, snaps, ticks, zoom steps, workspace clipping and resize helpers. |
-| [EditorDock.tsx](../src/EditorDock.tsx) | Right dock host, named views, Layers/Requests tree and boundary, reference, request, project and pointer Properties; docking, widths, collapse and hidden states. |
+| [EditorDock.tsx](../src/EditorDock.tsx) | Dock host, panel weights, splitters and resize behavior. |
+| [dock/panelState.tsx](../src/dock/panelState.tsx), [dock/sections.tsx](../src/dock/sections.tsx) | Persisted dock width/visibility and shared section collapse state. |
+| [dock/controls.tsx](../src/dock/controls.tsx), [dock/properties.tsx](../src/dock/properties.tsx) | Reusable property fields and boundary/reference/request/project/pointer editors. |
+| [dock/layers.tsx](../src/dock/layers.tsx) | Layers, requests, pointers, styles and named-view tree. |
+| [PropertiesPanel.tsx](../src/PropertiesPanel.tsx), [dock/selection.ts](../src/dock/selection.ts) | Selection derivation and property-editor/behaviour wiring. |
 | [EditorTools.tsx](../src/EditorTools.tsx) | Left tool strip, Request area-shape flyout (Pick, Rectangle, Ellipse, Polygon, Freehand), insert flyout, zoom control, labels and shortcut tooltips. |
 | [shortcuts.ts](../src/shortcuts.ts) | The single keymap: actions, keys, display strings, matching and generated keyboard help. F starts a Request on the selection or picks the Request tool, Shift+F takes a selected shape's outline, and Delete/Backspace removes the selection. |
 | [CommandPalette.tsx](../src/CommandPalette.tsx), [palette.css](../src/palette.css) | Searchable quick actions, ranking, recent commands and keyboard navigation. |
 | [CompactField.tsx](../src/CompactField.tsx), [numberExpression.ts](../src/numberExpression.ts) | Compact draft fields, commit/cancel, number expressions, rounding and clamping. |
 | [ModalDialog.tsx](../src/ModalDialog.tsx) | Shared modal focus, Escape and focus-return handling for consequential choices such as unsaved work. |
-| [editorShared.tsx](../src/editorShared.tsx), [editorShortcuts.ts](../src/editorShortcuts.ts) | Shared editor types/helpers, selection geometry, preferences, menu-to-palette commands and shortcut action dispatch. |
+| [editorShared.tsx](../src/editorShared.tsx), [editorShortcuts.ts](../src/editorShortcuts.ts) | Shared editor types/helpers, selection geometry, menu-to-palette commands and shortcut action dispatch. |
 | [requestAttachments.ts](../src/requestAttachments.ts) | Shared attachment reading and UI limits for pictures, text and links; native validation remains authoritative. |
-| [session/useProjectSession.ts](../src/session/useProjectSession.ts) | Serialized mutation queue, current authoritative view, revision-based edits and settlement. |
-| [session/useEditor.tsx](../src/session/useEditor.tsx), [session/projectCommands.ts](../src/session/projectCommands.ts) | Editor state/actions and project open/new/save/close, recovery, replacement and confirmation flows. |
+| [session/useProjectSession.ts](../src/session/useProjectSession.ts) | Serialized mutation queue, current authoritative view, revision-based edits and settlement; edit failures are reported once and resolve to null. |
+| [session/useEditor.tsx](../src/session/useEditor.tsx), [session/projectCommands.ts](../src/session/projectCommands.ts) | Shell orchestration and project open/new/save/close, recovery, replacement and confirmation flows. |
+| [session/useAiSettings.ts](../src/session/useAiSettings.ts), [session/useEditorTheme.ts](../src/session/useEditorTheme.ts) | Serialized AI settings access, sign-in polling and persisted editor appearance. |
+| [session/useBoundaryCommands.ts](../src/session/useBoundaryCommands.ts), [session/useNamedViews.ts](../src/session/useNamedViews.ts) | Boundary creation/resizing/layout and named camera-view edits. |
+| [session/projectEdits.ts](../src/session/projectEdits.ts) | Feature editing API shared by canvas and property controls. |
+| [preferences.ts](../src/preferences.ts), [usePoll.ts](../src/usePoll.ts) | Optional browser preference storage and cancellable, non-overlapping native progress polling. |
 | [exportJobs/useExportJobs.ts](../src/exportJobs/useExportJobs.ts) | Export jobs, preview, Play coordination and debounced pointer-clash rechecks. |
 | [Menus.tsx](../src/Menus.tsx) | Accessible menu button, popover positioning and keyboard navigation. |
 | [WorkspaceSurface.tsx](../src/WorkspaceSurface.tsx) | Panel/banner/start/canvas surface host, stacking, focus return and `isTextField`. |
@@ -154,7 +162,7 @@ test-results/                Local evidence from smoke, startup and vault runs (
 | [HistoryPanel.tsx](../src/HistoryPanel.tsx), [historySteps.ts](../src/historySteps.ts) | Versions/alternatives in the dock, derived history labels, and ending the native history step when a text field loses focus. |
 | [Generation.tsx](../src/Generation.tsx), [GenerationLog.tsx](../src/GenerationLog.tsx) | Generation status and AI conversation: usage, retries, proposals, criticism and raw reply. |
 | [useGeneration.ts](../src/useGeneration.ts), [generationSession.ts](../src/generationSession.ts) | Job lifecycle/polling/submit/cancel/retry, owned-session notices and restored-job silence. |
-| [generationProblems.ts](../src/generationProblems.ts), [userErrors.ts](../src/userErrors.ts) | Per-area problem callouts/outcomes and user-facing translations of native/provider errors. |
+| [generationProblems.ts](../src/generationProblems.ts), [userErrors.ts](../src/userErrors.ts) | Per-area problem callouts/outcomes, fallback translation for untyped errors, and kind-based provider actions that retain native wording. |
 | [AiSettings.tsx](../src/AiSettings.tsx) | Provider/model/key, ChatGPT accounts, secure-storage status and access checks. |
 | [ImportContext.tsx](../src/ImportContext.tsx), [identityReview.ts](../src/identityReview.ts) | Brand evidence review/approval and parsing findings into colours, fonts, logos and sections. |
 | [WebsiteImport.tsx](../src/WebsiteImport.tsx), [websiteImportExtract.ts](../src/websiteImportExtract.ts) | Import dialog, hidden page rendering and the script-disabled extraction wrapper that posts a compact page tree. |

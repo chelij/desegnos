@@ -11,8 +11,6 @@ export type Theme = 'system' | 'light' | 'dark';
 
 export type Replacement = { label: string; run: (discard: boolean) => Promise<void> };
 
-export type UntitledSaveRequest = { name: string };
-
 export type Confirmation = { title: string; message: string; action: () => Promise<void>; confirmLabel?: string };
 
 export type ActionEvent = { preventDefault: () => void; key: string; code?: string; repeat?: boolean; target?: EventTarget | null };
@@ -30,15 +28,6 @@ export function sizeName(width: number): string {
 
 export function sizeBoundaries(project: Project): Boundary[] {
   return canvasView(project).boundaries;
-}
-
-
-export function readTheme(): Theme {
-  try {
-    const saved = localStorage.getItem('desegnos.editor-theme');
-    return saved === 'light' || saved === 'dark' ? saved : 'system';
-  }
-  catch { return 'system'; }
 }
 
 export function ownerPageId(project: Project, elementId: string): string | null {
@@ -86,7 +75,7 @@ export function editedAgo(editedAtMs: number) {
 
 export function RecoveryList({ items, busy, recover, dismiss }: { items: RecoveryInfo[]; busy: boolean; recover: (id: string) => void; dismiss: (ids: string[]) => Promise<void> }) {
   const [confirmIds, setConfirmIds] = useState<string[] | null>(null);
-  const submit = (ids: string[]) => { void dismiss(ids).then(() => setConfirmIds(null)).catch(() => {}); };
+  const submit = (ids: string[]) => { void dismiss(ids).then(() => setConfirmIds(null)); };
   const requestDismiss = (selected: RecoveryInfo[]) => {
     const ids = selected.map(item => item.projectId);
     if (selected.some(item => !item.savedPath)) setConfirmIds(ids);
@@ -111,7 +100,7 @@ export function RecoveryList({ items, busy, recover, dismiss }: { items: Recover
 export function RenameProject({ name, submit }: { name: string; submit: (value: string) => Promise<void> }) {
   const [value, setValue] = useState(name);
   const [busy, setBusy] = useState(false);
-  return <form className="dialog-body" onSubmit={event => { event.preventDefault(); setBusy(true); void submit(value.trim()).catch(() => {}).finally(() => setBusy(false)); }}><label>Project name<input autoFocus required maxLength={PROJECT_NAME_MAX_LENGTH} value={value} onChange={event => setValue(event.target.value)} /></label><div className="form-actions"><button className="primary" disabled={busy || !value.trim()}>Rename project</button></div></form>;
+  return <form className="dialog-body" onSubmit={event => { event.preventDefault(); setBusy(true); void submit(value.trim()).finally(() => setBusy(false)); }}><label>Project name<input autoFocus required maxLength={PROJECT_NAME_MAX_LENGTH} value={value} onChange={event => setValue(event.target.value)} /></label><div className="form-actions"><button className="primary" disabled={busy || !value.trim()}>Rename project</button></div></form>;
 }
 
 export function suggestedPagePath(name: string, paths: string[]) {
@@ -131,7 +120,7 @@ export function GridForm({ settings, showGrid, busy, submit }: { settings: GridS
   const max = draft.unit === 'percent' ? 100 : 512;
   const valid = Number.isFinite(draft.spacing) && draft.spacing >= min && draft.spacing <= max;
   return <form className="dialog-body grid-form" onSubmit={event => {
-    event.preventDefault(); if (!valid) return; setSaving(true); void submit(draft, visible).catch(() => {}).finally(() => setSaving(false));
+    event.preventDefault(); if (!valid) return; setSaving(true); void submit(draft, visible).finally(() => setSaving(false));
   }}>
     <label className="check-label"><input type="checkbox" checked={visible} onChange={event => setVisible(event.target.checked)} />Show grid</label>
     <div className="field-pair"><label>Grid spacing<input autoFocus type="number" required min={min} max={max} step="any" value={draft.spacing} onChange={event => setDraft({ ...draft, spacing: Number(event.target.value) })} /></label>

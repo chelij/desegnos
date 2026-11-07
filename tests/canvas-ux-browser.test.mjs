@@ -17,7 +17,7 @@ try {
   <script type="module">
   import React from 'react';
   import { createRoot } from 'react-dom/client';
-  import { BoundaryProperties } from '/src/EditorDock.tsx';
+  import { BoundaryProperties } from '/src/dock/properties.tsx';
   import { ElementView } from '/src/projectCanvas/elements.tsx';
   import { SIZE_PRESETS } from '/src/projectCanvas/sizes.ts';
   const check = (ok, message) => { if (!ok) throw Error(message); };

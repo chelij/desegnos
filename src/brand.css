@@ -1,18 +1,12 @@
-/* The supplied Desegnos identity is copied verbatim under branding/identity.
-   Desktop controls use one system UI stack; code and numeric readouts use the mono stack.
-   All font/logo assets are local. */
+/* The supplied Desegnos identity is copied verbatim under branding/identity. */
 @font-face { font-family: Archivo; src: url('./assets/brand/archivo-variable.woff2') format('woff2'); font-weight: 100 900; font-stretch: 62% 125%; font-display: swap; }
-
-/* ------------------------------------------------------------------ */
-/* Design tokens: one set for the light editor and one for the dark.   */
-/* Chrome greys keep equal red, green and blue channels.               */
-/* ------------------------------------------------------------------ */
 :root {
+  font-family: var(--font-ui);
+  font-size: var(--text-sm);
+  line-height: var(--leading-normal);
+  color-scheme: light;
   --font-ui: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --font-mono: ui-monospace, "Cascadia Code", "DejaVu Sans Mono", Menlo, Consolas, monospace;
-
-  /* One neutral scale for chrome: 12 steps from the canvas bed to white.
-     Page content keeps its own colours. */
   --grey-50: #f5f5f5;
   --grey-100: #f0f0f0;
   --grey-200: #e6e6e6;
@@ -26,8 +20,6 @@
   --grey-900: #2c2c2c;
   --grey-950: #1e1e1e;
   --white: #ffffff;
-
-  /* Light editor: white panels over a soft bed, like a design canvas. */
   --background: var(--grey-50);
   --surface: var(--white);
   --surface-raised: var(--white);
@@ -40,9 +32,6 @@
   --faint: var(--grey-500);
   --border: var(--grey-300);
   --border-soft: var(--grey-200);
-
-  /* One accent blue. #0d99ff draws selection, handles and focus rings; --accent-ink is the
-     same hue darkened until 12px text clears 4.5:1; --accent-strong fills primary buttons. */
   --accent: #0d99ff;
   --accent-ink: #0a65b6;
   --accent-strong: var(--accent-ink);
@@ -53,52 +42,32 @@
   --selected: var(--accent-tint);
   --control-track: var(--surface-muted);
   --focus: var(--accent);
-
-  /* Requests and pointers keep their own FigJam violet, so they never read as selection. */
   --annotation: #7a2fd6;
-
-  /* Status: a text value and a tint value each; text on its own tint clears 4.5:1. */
   --success: #166534;
   --success-tint: color-mix(in srgb, var(--success) 14%, var(--surface-raised));
   --warning: #8a5a00;
   --warning-tint: color-mix(in srgb, var(--warning) 16%, var(--surface-raised));
   --danger: #b3261e;
   --danger-tint: color-mix(in srgb, var(--danger) 12%, var(--surface-raised));
-
-  /* Notices reuse the status pairs for background, text and border. */
   --notice-error-bg: var(--danger-tint); --notice-error-fg: var(--danger); --notice-error-border: color-mix(in srgb, var(--danger) 40%, transparent);
   --notice-warning-bg: var(--warning-tint); --notice-warning-fg: var(--warning); --notice-warning-border: color-mix(in srgb, var(--warning) 40%, transparent);
   --notice-success-bg: var(--success-tint); --notice-success-fg: var(--success); --notice-success-border: color-mix(in srgb, var(--success) 40%, transparent);
-
-  /* Spacing: 4px base */
   --space-1: 2px; --space-2: 4px; --space-3: 6px; --space-4: 8px;
   --space-5: 12px; --space-6: 16px; --space-7: 24px; --space-8: 32px; --space-9: 48px;
-
-  /* Radii: 4px fields and buttons, 8px compact floating chrome, 10px large floating surfaces. */
   --radius-xs: 2px; --radius-sm: 4px; --radius-md: 4px;
   --radius-lg: 8px; --radius-xl: 10px; --radius-pill: 999px;
-
-  /* Elevation: control, floating surface, modal-weight surface. */
   --shadow-1: 0 1px 2px rgb(0 0 0 / 10%);
   --shadow-2: 0 4px 12px rgb(0 0 0 / 14%), 0 1px 2px rgb(0 0 0 / 8%);
   --shadow-3: 0 12px 32px rgb(0 0 0 / 22%), 0 2px 6px rgb(0 0 0 / 10%);
-
-  /* Type: 12px base, 11px labels, 13px panel titles. */
   --text-xs: 11px; --text-sm: 12px;
   --text-md: 13px; --text-lg: 15px;
   --weight-regular: 400; --weight-medium: 500; --weight-semibold: 600; --weight-bold: 700;
   --leading-tight: 1.25; --leading-normal: 1.45; --leading-control: 20px;
   --tracking-label: 0.04em;
-
-  /* Controls and icons */
   --control-sm: 24px; --control-md: 28px; --control-lg: 32px;
   --icon-sm: 14px; --icon-md: 16px; --icon-stroke: 1.5;
-
-  /* Motion: short feedback only. */
   --duration-fast: 100ms; --duration-base: 160ms;
   --ease-standard: cubic-bezier(0.2, 0, 0, 1);
-
-  /* Real page surfaces (the website keeps its own appearance) */
   --site-light: #ffffff; --site-dark: #17191c;
 }
 
@@ -146,15 +115,11 @@
 }
 
 h1, h2, h3 { font-family: var(--font-ui); font-weight: var(--weight-semibold); letter-spacing: -.015em; }
-.wordmark { display: flex; align-items: center; padding: var(--space-3); flex-shrink: 0; }
+.wordmark { font-size: var(--text-lg); font-weight: var(--weight-bold); letter-spacing: -0.35px; display: flex; align-items: center; padding: var(--space-3); flex-shrink: 0; }
 .wordmark img { display: block; width: auto; height: 22px; }
 .wordmark .brand-dark { display: none; }
 :root[data-theme='dark'] .wordmark .brand-light { display: none; }
 :root[data-theme='dark'] .wordmark .brand-dark { display: block; }
-
-/* Request text keeps its explicit authoring borders in both themes. */
-.free-workspace .annotation textarea { border: 2px dashed var(--annotation-border); border-radius: 0; }
-.free-workspace .annotation.selected textarea { border-color: var(--annotation); }
 
 @media (prefers-reduced-motion: reduce) {
   :root { --duration-fast: 0ms; --duration-base: 0ms; }

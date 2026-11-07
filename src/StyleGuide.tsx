@@ -1,7 +1,8 @@
+import type { ProjectEdits } from './session/projectEdits';
 import { ProblemBanner } from './ProblemBanner.js';
 import { userError } from './userErrors.js';
 import { useMemo, useState } from 'react';
-import type { Command, Project } from './types';
+import type { Project } from './types';
 import { Icon } from './icons';
 
 // A visual view of the brand: the colour and font rules the AI follows, values found on the canvas,
@@ -23,7 +24,7 @@ function normal(colour: string) {
 }
 
 // Most-used colours and fonts across the canvas elements.
-export function siteStyles(project: Project) {
+function siteStyles(project: Project) {
   const colours = new Map<string, number>(); const fonts = new Map<string, number>();
   const walk = (elements: import('./types').Element[]) => {
     for (const element of elements) {
@@ -53,7 +54,7 @@ h1,h2,h3{font-family:${heading}}button{padding:8px 14px;border-radius:8px;border
 <div class="sg-row"><button type="button">Button</button><a href="#">Text link</a></div></body></html>`;
 }
 
-export function StyleGuide({ project, apply, openBrief }: { project: Project; apply: (command: Command) => Promise<void>; openBrief: () => void }) {
+export function StyleGuide({ project, edits, openBrief }: { project: Project; edits: Pick<ProjectEdits, 'setDecision' | 'removeDecision'>; openBrief: () => void }) {
   const found = useMemo(() => siteStyles(project), [project]);
   const preview = useMemo(() => samples(found), [found]);
   const [busy, setBusy] = useState(false);
@@ -61,14 +62,14 @@ export function StyleGuide({ project, apply, openBrief }: { project: Project; ap
   const rule = (topic: string) => project.decisions.find(decision => decision.scope.kind === 'project' && decision.topic.toLowerCase() === topic.toLowerCase());
   async function save(topic: string, value: string) {
     setBusy(true); setError('');
-    try { await apply({ type: 'set_decision', topic, value, scope: { kind: 'project' }, protected: rule(topic)?.protected ?? false }); }
+    try { await edits.setDecision({ topic, value, scope: { kind: 'project' }, protected: rule(topic)?.protected ?? false }); }
     catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
     finally { setBusy(false); }
   }
   async function clear(topic: string) {
     const existing = rule(topic); if (!existing) return;
     setBusy(true); setError('');
-    try { await apply({ type: 'remove_decision', decision_id: existing.id }); }
+    try { await edits.removeDecision(existing.id); }
     catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
     finally { setBusy(false); }
   }

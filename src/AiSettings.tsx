@@ -89,7 +89,7 @@ export function AiSettings({ current, refresh, update, manageUsage, pollingError
     return perform(probesImages ? 'checkingImages' : 'saving', async () => {
       try { const value = await update(command, args); receive(value); return value; }
       catch (error) {
-        try { receive(await refresh()); } catch { /* Preserve the original operation error. */ }
+        try { receive(await refresh()); } catch (refreshError) { throw new Error(`${message(error)} Settings could not be refreshed: ${message(refreshError)}`); }
         throw error;
       }
     });
@@ -114,8 +114,7 @@ export function AiSettings({ current, refresh, update, manageUsage, pollingError
   function setPrice(field: 'inputUsdPerMillion' | 'outputUsdPerMillion' | 'requestUsd' | 'imageUsd', text: string) {
     setSettings(current => current ? { ...current, pricing: {
       model: current.model, inputUsdPerMillion: null, outputUsdPerMillion: null,
-      ...current.pricing, [field]: text === '' ? null : Number(text),
-    } } : current);
+      ...current.pricing, [field]: text === '' ? null : Number(text) } } : current);
   }
   async function saveKey(event: FormEvent) {
     event.preventDefault();
@@ -150,7 +149,7 @@ export function AiSettings({ current, refresh, update, manageUsage, pollingError
         }
         setFeedback({ kind: 'status', message: result.message ? 'Connection checked.' : 'Access checked.' });
       } catch (error) {
-        try { receive(await refresh()); } catch {}
+        try { receive(await refresh()); } catch (refreshError) { throw new Error(`${message(error)} Settings could not be refreshed: ${message(refreshError)}`); }
         throw error;
       }
     });
@@ -229,8 +228,7 @@ export function AiSettings({ current, refresh, update, manageUsage, pollingError
             { id: 'test', label: 'Test connection', disabled: busy || !canTest, action: () => { void testAccess(); } },
             { id: 'storage', label: `Where to keep the ${usesChatgpt ? 'sign-in' : 'key'}`, disabled: busy || pending, children: (['system', 'session'] as const).map(value => ({
               id: value, label: value === 'system' ? 'Save securely on this device' : 'Current session only', role: 'menuitemradio' as const, checked: (usesChatgpt ? chatgptStorage : storage) === value,
-              action: () => usesChatgpt ? setChatgptStorage(value) : setStorage(value),
-            })) },
+              action: () => usesChatgpt ? setChatgptStorage(value) : setStorage(value) })) },
             ...((usesChatgpt ? account && (account.connected || account.storage !== 'none') : hasKey || view.credential.vaultError) ? [
               { id: 'separator', label: '', separator: true },
               { id: 'remove', label: usesChatgpt ? 'Sign out' : 'Remove key', disabled: busy || pending, action: () => { if (usesChatgpt && account) void action('sign_out_chatgpt', { accountId: account.id }); else void removeKey(); } },

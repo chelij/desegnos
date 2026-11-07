@@ -1,43 +1,24 @@
 import type { ProviderError, ProviderId } from './types';
 
 export type ProviderProblem = { message: string; settings: boolean; action: 'AI settings' | 'Try again' };
-// Status and machine codes take precedence over diagnostic prose, including legacy transport kinds.
-export function providerProblem(error: ProviderError | null | undefined, provider?: ProviderId | null): ProviderProblem | null {
+const settingsKinds = new Set([
+  'authentication', 'invalidCredential', 'missingCredential', 'quota', 'modelUnavailable',
+  'invalidSettings', 'vaultUnavailable', 'spendingLimit', 'chatgptUsageLimit', 'chatgptPermission', 'chatgptInvalidUser',
+]);
+
+export function providerProblem(error: ProviderError | null | undefined, _provider?: ProviderId | null, message = ''): ProviderProblem | null {
   if (!error) return null;
-  const name = provider ? { openai: 'OpenAI', anthropic: 'Anthropic', google: 'Google', openrouter: 'OpenRouter', deepseek: 'DeepSeek', local: 'Your local AI server' }[provider] : 'The AI provider';
-  const status = error.httpStatus ?? 0;
-  const code = (error.code ?? '').toLowerCase().replace(/[ -]/g, '_');
-  const kind = error.kind;
-  const problem = (message: string, settings = false): ProviderProblem => ({ message, settings, action: settings ? 'AI settings' : 'Try again' });
-  if (kind === 'server' || status >= 500 || ['internal_error', 'server_error', 'overloaded', 'overloaded_error', 'service_unavailable', 'unavailable', 'internal'].includes(code)) return problem(`${name} had a server problem. Try again in a moment.`);
-  if (status === 402 || /(?:insufficient.*(?:balance|credit|quota|fund)|quota|billing|payment|credit_balance|out_of_credit)/.test(code) || kind === 'quota') return problem(`${name} account is out of credit.`, true);
-  if (status === 401 || status === 403 || ['invalid_api_key', 'invalid_key', 'authentication_error', 'unauthenticated', 'permission_denied'].includes(code) || ['authentication', 'invalidCredential', 'missingCredential'].includes(kind)) return problem(`${name} did not accept your key or its permissions. Check AI settings.`, true);
-  if (status === 429 || /rate_limit|too_many_requests|resource_exhausted/.test(code) || kind === 'rateLimited') return problem(`${name} is rate-limiting requests. Wait a moment and try again.`);
-  if (status >= 400) return problem(`${name} rejected the request. Try again.`);
-  if (['transport', 'deadline'].includes(kind)) return problem("Desegnos couldn't connect. Check your internet connection and try again.");
-  if (kind === 'modelUnavailable') return problem("This AI model isn't available. Choose another in AI settings.", true);
-  if (['invalidSettings', 'vaultUnavailable', 'spendingLimit', 'chatgptUsageLimit', 'chatgptPermission', 'chatgptInvalidUser'].includes(kind)) return problem('Your AI account or settings need attention. Check AI settings.', true);
-  return problem('The AI could not finish this request. Try again.');
+  const settings = settingsKinds.has(error.kind);
+  return { message, settings, action: settings ? 'AI settings' : 'Try again' };
 }
 
-export function providerFailureMessage(error: ProviderError | null | undefined, provider?: ProviderId | null): string | null {
-  const problem = providerProblem(error, provider);
-  return problem ? `${problem.message}${error?.httpStatus && error.httpStatus >= 400 ? ' Nothing was changed.' : ''}` : null;
+export function providerFailureMessage(error: ProviderError | null | undefined, _provider?: ProviderId | null, message = ''): string | null {
+  return error ? message || 'The AI could not finish this request.' : null;
 }
 
-// Presentation only: retain original errors in state, job records and AI requests.
 function diagnostic(error: unknown): string {
   if (error && typeof error === 'object' && 'message' in error) return String(error.message);
   return String(error ?? '');
-}
-
-export function runtimeError(error: string): string {
-  if (/\bnull\b|\bundefined\b.*(?:object|propert|evaluating)|(?:propert|evaluating).*\bundefined\b/i.test(error)) return "A script on this page looks for something that isn't there.";
-  if (/not a function|not callable|is not a constructor/i.test(error)) return "A script on this page tries to do something that isn't available.";
-  if (/ReferenceError|is not defined|can't find variable|cannot access .+ before initialization/i.test(error)) return "A script on this page uses a name it doesn't recognise.";
-  if (/SyntaxError|unexpected (?:token|identifier|end)|invalid or unexpected token|missing [)\]}]/i.test(error)) return 'A script on this page has a writing mistake.';
-  if (/failed to (?:load|fetch)|load failed|loading .+ failed|networkerror|network error|could not load|error loading|failed load/i.test(error)) return "Something this page needs couldn't load.";
-  return 'A script on this page stopped working.';
 }
 
 export function generationError(reason: string, request = '', affected?: string): string {
@@ -84,7 +65,6 @@ export function technicalReason(reason: string): boolean {
   return pagePrefix.test(raw) || camelCase.test(text) || modelJargon.test(text);
 }
 
-/// One plain sentence for an outcome the AI itself declared, falling back to translated diagnostics.
 export function outcomeReason(reason: string, request = 'this request', affected?: string): string {
   const value = reasonText(reason);
   if (!value) return generationError(reason, request, affected);
@@ -105,14 +85,14 @@ export function browserOpenUrl(error: unknown): string | null {
 export function userError(error: unknown): string {
   if (error && typeof error === 'object' && 'providerError' in error) {
     const structured = error as { providerError?: ProviderError; provider?: ProviderId };
-    const message = providerFailureMessage(structured.providerError, structured.provider);
+    const message = providerFailureMessage(structured.providerError, structured.provider, 'message' in error ? diagnostic(error) : '');
     if (message) return message;
   }
+  if (error && typeof error === 'object' && 'kind' in error) return diagnostic(error);
   const value = diagnostic(error).replace(/^Error:\s*/, '').trim();
   if (!value) return '';
   // A site-relative file name is the useful part of an oversized-preview message.
   if (/^[\w][\w .@+-]*(?:\/[\w .@+-]+)* is too large to preview \(\d+ MB\)\.$/.test(value) && !/\/\.\.?(?:\/| )/.test(value)) return value;
-  // Preserve short plain instructions; translate technical diagnostics below.
   const messages: [RegExp, string][] = [
     [/desktop portal/i, 'File dialogs need the desktop portal. Install xdg-desktop-portal and a backend such as xdg-desktop-portal-gtk, then try again.'],
     [/SyntaxError|unexpected (?:token|identifier|end)|unclosed|unterminated|missing closing/i, 'This code has a writing mistake. Check the highlighted line.'],
@@ -153,8 +133,4 @@ export function userError(error: unknown): string {
   if (isPlain(value)) return value;
   for (const [pattern, message] of messages) if (pattern.test(value)) return message;
   return 'Something went wrong. Try again.';
-}
-
-export function generationPageError(reason: string): string {
-  return reason ? userError(reason) : 'The AI could not finish this request.';
 }

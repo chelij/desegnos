@@ -42,7 +42,7 @@ try {
   const { default: App } = await modules.load('App.js');
 
   const { ExportPanel } = await modules.load('projectCanvas/exportPanel.js');
-  const { BoundaryProperties } = await modules.load('EditorDock.js');
+  const { BoundaryProperties } = await modules.load('dock/properties.js');
   const noop = () => {};
   const { pageKind, projectKind, boundaryDefaults, layoutKind, outputKind } = await modules.load('projectCanvas/boundaryDefaults.js');
   await test('Page creation keeps website and app template sizes and height modes', () => {

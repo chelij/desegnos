@@ -110,10 +110,10 @@ export function GenerationLog({ job: currentJob, operation, error, project, cont
           {working && !candidate && <p className="log-working"><span className="log-dots" aria-hidden="true"><i /><i /><i /></span>{job.receivedBytes ? `Writing… ${kb(job.receivedBytes)} received` : 'Thinking…'}</p>}
           {!past && !working && stale && <div className="log-stale">
             <p className="log-text">{staleResultMessage}</p>
-            {(review.retryable.length > 0 || review.retryAll) && <button className="primary" disabled={busy} onClick={() => { const ids = requests.filter(item => item.exists).map(item => item.key); void controller.prepare(ids.length ? ids : undefined).catch(() => {}); }}>Try again</button>}
+            {(review.retryable.length > 0 || review.retryAll) && <button className="primary" disabled={busy} onClick={() => { const ids = requests.filter(item => item.exists).map(item => item.key); void controller.prepare(ids.length ? ids : undefined); }}>Try again</button>}
           </div>}
           {!working && !stale && (!review.blocked.length || job.status === 'applied') && review.reason && <p className="log-text">{review.reason}</p>}
-          {!past && !working && !stale && (review.retryable.length > 0 || review.retryAll || review.retryBatches) && <button disabled={!!operation} onClick={() => { void (review.retryBatches ? controller.retry() : controller.prepare(review.retryable.length ? review.retryable : undefined)).catch(() => {}); }}>Try again</button>}
+          {!past && !working && !stale && (review.retryable.length > 0 || review.retryAll || review.retryBatches) && <button disabled={!!operation} onClick={() => { void (review.retryBatches ? controller.retry() : controller.prepare(review.retryable.length ? review.retryable : undefined)); }}>Try again</button>}
           {candidate && <p className="log-text">{candidate.summary}</p>}
           {pageChanges && <p className="log-text">{pageChanges}</p>}
           {warnings.length > 0 && <section aria-label="Generation warnings"><ul>{warnings.map((warning, index) => <li key={index}><p className="log-text">{warning}</p></li>)}</ul></section>}
@@ -125,7 +125,7 @@ export function GenerationLog({ job: currentJob, operation, error, project, cont
               <span className="log-meta">{label(item.elementId)}</span>
               <p className="log-text">{item.reason}</p>
               <div className="log-actions">
-                {declaredConflict(job, item.elementId) && <button type="button" className="primary" disabled={busy} onClick={() => { void controller.prepare([item.elementId]).catch(() => {}); }}>Resend this request</button>}
+                {declaredConflict(job, item.elementId) && <button type="button" className="primary" disabled={busy} onClick={() => { void controller.prepare([item.elementId]); }}>Resend this request</button>}
                 <button type="button" onClick={() => editRequest(item.elementId)}>Change request</button>
                 {item.fix && openFix(item.fix) && <button type="button" onClick={() => applyFix(item.fix!)}>{fixLabel(item.fix)}</button>}
               </div>

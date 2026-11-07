@@ -1,3 +1,4 @@
+import { PropertiesPanel } from './PropertiesPanel';
 import { useEditor } from './session/useEditor';
 import { PROJECT_COLOURS, errorMessage, zoomFromSlider, sliderFromZoom, RecoveryList, RenameProject, GridForm } from './editorShared';
 import { CrashReportNotice, EditorCrashBoundary } from './CrashReport';
@@ -20,13 +21,11 @@ import './shell.css';
 import { SHORTCUT_GROUPS, withShortcut } from './shortcuts';
 import { Icon } from './icons';
 import { StatusChip } from './StatusChip';
-import { isNestedLayer } from './projectCanvas/links';
-import { ElementProperties } from './projectCanvas/elementProperties';
+
 import { findElementIn } from './projectCanvas/elementGeometry';
-import {
-  BoundaryProperties, CanvasLayers, EditorDock, PointerProperties, ProjectProperties, ReferenceProperties,
-  RequestProperties, UntitledSaveForm,
-} from './EditorDock';
+import { EditorDock } from './EditorDock';
+import { UntitledSaveForm } from './dock/properties';
+import { CanvasLayers } from './dock/layers';
 import { AiSettings } from './AiSettings';
 import { GenerationFeedback } from './Generation';
 import { projectHasPreviewPages, showsOpener } from './visibleActions';
@@ -35,11 +34,10 @@ import { ImportContext } from './ImportContext';
 import { GenerationLog } from './GenerationLog';
 import { HistoryPanel } from './HistoryPanel';
 import { CommandPalette } from './CommandPalette';
-import type { Pointer, PointerSource, PointerStateView, WorkspaceView } from './types';
+import type { WorkspaceView } from './types';
 import { ExportPanel } from './projectCanvas/exportPanel';
 import { idlePlay, playIsActive } from './projectCanvas/play';
 import { sizeLabel } from './projectCanvas/sizes';
-import { behaviourCommand, behaviourFor, behaviourSourceKey } from './projectCanvas/behaviours';
 
 const ignoreCanvasLayout = () => {};
 
@@ -48,6 +46,7 @@ export default function App({ initialView }: { initialView?: WorkspaceView } = {
 }
 
 function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
+  const editor = useEditor({ initialView });
   const {
     edits, exports,
     panel, openPanel, closePanel, togglePanel, saving, updateState, dismissUpdate, changeCanvasTool,
@@ -62,55 +61,17 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
     forgetRecent, pinRecent, recover, dismissRecoveries, canvasTool, chooseTool, canvasZoom, canvasRef,
     boundaryKind, setBoundaryKind, requestToolShape, setRequestToolShape, armInsert, insertSignal,
     selectCanvasBoundary, createCanvasBoundary, addProjectBoundary, addNamedViewAt, saveCurrentView,
-    canvasSelection, canvasFocus, canvasFocusSize, widthPreview, setWidthPreview, selectCanvasReference, selectCanvasPointer,
+    canvasSelection, canvasFocus, canvasFocusSize, widthPreview, selectCanvasReference, selectCanvasPointer,
     selectCanvasRequest, clearCanvasSelection, removeCanvasSelection, elementToReference, referenceToElement, attachToRequest, deleteBoundary, pointerStateMap,
     reportCanvasZoom, selectCanvasElement, groupCanvasElements, ungroupCanvasElements, playElement, setPlay, showGenerationStatus, openImportDialog, editGenerationRequest,
     openGeneration, aiSettings, manageChatgptUsage, replyToGeneration, historyEpoch, accept, projectLocation,
-    closeUntitledSave, saveUntitledProject, selectedPointer, selectedPointerState, keepPointerComment, keepPointerThis, mergePointerClash,
-    selectedReferenceItem, selectedRequest, attachReferenceContext, selectedElements, selectedElementPageId,
-    selectedElementTargets, renameCanvasElement, selectedElementRequest, setCanvasElementRequest,
-    selectedBoundary, updateCanvasPage, mutate, updateCanvasPageSize,
-    addCanvasPageSize, renameProject, showDotGrid, changeGridFlags, save, canvasBoundaries,
+    closeUntitledSave, saveUntitledProject, updateCanvasPage, mutate, save, canvasBoundaries,
     moveCanvasElementTo, removeLinkedDefinition, views, addNamedView, renameNamedView, removeNamedView,
     selectedBounds, clashPointers, selectNextPointerClash, zoomPercent,
     recovery, changeProjectLocation, importContext,
-    setCanvasSelection, setCanvasFocus, focusCanvasBehaviour, behaviourFocus, changeBrief,
+    setCanvasSelection, setCanvasFocus, focusCanvasBehaviour, changeBrief,
     chooseSaveConflict, replacement, setReplacement, confirmation, setConfirmation,
-    refreshAiSettings, updateAiSettings, aiPollingError, compactHistory,
-  } = useEditor({ initialView });
-  // Behaviours are ordinary pointers on one layer or boundary; the dock edits their comment.
-  function clashActions(pointer: Pointer, state: PointerStateView | null) {
-    const other = state?.clashWith.length ? (project?.pointers ?? []).find(item => item.id === state.clashWith[0]) ?? null : null;
-    return {
-      keepComment: () => ["codeChanged", "needsExporting"].includes(state?.state ?? '') ? exports.forgetPointer(pointer.id) : keepPointerComment(pointer.id),
-      keepCode: () => run(() => exports.keepPointerCode(pointer.id)),
-      keepThis: () => { if (other) keepPointerThis(pointer.id, other.id); },
-      merge: () => { if (other) mergePointerClash(pointer, other); },
-      reattach: () => canvasRef.current?.armPointer(pointer.id),
-      remove: () => removeCanvasSelection([], [pointer.id]),
-    };
-  }
-  function behaviourProps(source: PointerSource) {
-    const pointer = project ? behaviourFor(project, source) : null;
-    const state = pointer ? pointerStateMap[pointer.id] ?? null : null;
-    const key = behaviourSourceKey(source);
-    return {
-      project: project!,
-      pointer, state,
-      commit: (comment: string) => {
-        const command = behaviourCommand(pointer, source, comment);
-        if (command) void mutate(command).catch(() => {});
-      },
-      focusToken: behaviourFocus?.source === key ? behaviourFocus.token : null,
-      busy: pending > 0, aiConnected,
-      actions: pointer ? clashActions(pointer, state) : undefined,
-    };
-  }
-  const elementBehaviourSource = project && selectedElementPageId && selectedElements.length === 1
-    ? { kind: 'element' as const, pageId: selectedElementPageId, elementId: selectedElements[0].id }
-    : null;
-  const boundaryBehaviourSource = project && selectedBoundary ? { kind: 'boundary' as const, pageId: selectedBoundary.id } : null;
-  // Presenting a deck gives the slide the whole window; Esc or Stop brings the editor back.
+    refreshAiSettings, updateAiSettings, aiPollingError, compactHistory } = editor;
   const presenting = !onStartPage && !!project && playIsActive(play) && project.pages.length > 0 && project.pages.every(page => page.output === 'slide');
   const playingPage = playIsActive(play) && project ? project.pages.find(page => page.id === play.boundary) ?? null : null;
   const playingSize = playingPage ? playingPage.sizes.find(size => size.id === canvasFocusSize) ?? playingPage.sizes[0] ?? null : null;
@@ -167,7 +128,7 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
         openProject={() => run(open)} showStartPageOnLaunch={appSettings.showStartPage} changeShowStartPage={value => run(() => changeShowStartPage(value))}
         recentProjects={recentProjects} openRecent={path => run(() => openRecent(path))}
         forgetRecent={path => run(() => forgetRecent(path))} pinRecent={(path, pinned) => run(() => pinRecent(path, pinned))}
-        recovery={view.recoveries.length ? <RecoveryList items={view.recoveries} busy={pending > 0} recover={id => { void recover(id).catch(() => {}); }} dismiss={dismissRecoveries} /> : null} />
+        recovery={view.recoveries.length ? <RecoveryList items={view.recoveries} busy={pending > 0} recover={id => { void recover(id).catch(error => setError(errorMessage(error))); }} dismiss={ids => dismissRecoveries(ids).catch(error => setError(errorMessage(error)))} /> : null} />
     </> : <>
       <div className="editor-body">
       {!panels.hidden && <ToolStrip tool={canvasTool.kind} onTool={chooseTool}
@@ -208,41 +169,7 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
           ? <HistoryPanel projectId={project.id} refreshKey={`${project.id}:${view?.dirty ? 'dirty' : 'saved'}:${view?.history?.version ?? 0}:${historyEpoch}`}
               apply={accept} notice={setNotice} error={setError} compact={() => run(compactHistory)} />
           : undefined}
-        properties={<>
-          {selectedPointer
-          ? <PointerProperties pointer={selectedPointer} project={project} state={selectedPointerState} busy={pending > 0}
-              aiConnected={aiConnected}
-              change={comment => edits.updatePointer(selectedPointer.id, { comment })}
-              actions={clashActions(selectedPointer, selectedPointerState)} />
-          : selectedReferenceItem
-          ? <ReferenceProperties item={selectedReferenceItem} busy={pending > 0} update={patch => edits.updateReference(selectedReferenceItem.id, patch)} remove={() => removeCanvasSelection([selectedReferenceItem.id])} />
-          : selectedRequest
-          ? <RequestProperties request={selectedRequest} project={project} busy={pending > 0} update={edits.updateRequest} remove={() => removeCanvasSelection([], [], [selectedRequest.id])} attach={attachReferenceContext} />
-          : selectedElements.length && selectedElementPageId
-            ? <ElementProperties styleCommand={mutate} project={project} page={project.pages.find(page => page.id === selectedElementPageId)!} sizeId={selectedElementTargets[0].sizeId} elements={selectedElements} busy={pending > 0}
-                update={patches => void edits.updateElements(selectedElementPageId, patches)}
-                rename={name => renameCanvasElement(selectedElementPageId, selectedElements[0].id, name)}
-                link={() => canvasRef.current?.linkSelection()} unlink={() => canvasRef.current?.unlinkSelection()}
-                canLink={selectedElementTargets.length >= 2}
-                canUnlink={selectedElementTargets.length === 1 && (!!selectedElements[0]?.link || isNestedLayer(project, selectedElements[0]?.id ?? ''))}
-                request={selectedElementRequest} setRequest={data => setCanvasElementRequest(selectedElements[0].id, data)}
-                error={setError}
-                behaviour={elementBehaviourSource ? behaviourProps(elementBehaviourSource) : undefined} />
-          : selectedBoundary
-            ? <BoundaryProperties selectSize={sizeId => selectCanvasBoundary(selectedBoundary.id, sizeId)} page={selectedBoundary} selectedSizeId={canvasFocusSize} widthPreview={widthPreview} previewWidth={setWidthPreview} busy={pending > 0} commit={patch => updateCanvasPage(selectedBoundary.id, patch)}
-                adaptSize={sizeId => { void mutate({ type: 'adapt_size', page_id: selectedBoundary.id, size_id: sizeId }).catch(() => {}); }}
-                updateSize={(sizeId, patch) => updateCanvasPageSize(selectedBoundary.id, sizeId, patch)}
-                addSize={(preset, width, height) => addCanvasPageSize(selectedBoundary.id, preset, width, height)}
-                removeSize={size => {
-                  void mutate({ type: 'remove_page_size', page_id: selectedBoundary.id, size_id: size.id })
-                    .then(() => setNotice(`Removed the ${size.label} size.`, () => { void travel('undo_project').catch(() => {}); }))
-                    .catch(() => {});
-                }}
-                remove={() => deleteBoundary(selectedBoundary.id, canvasFocusSize)}
-                behaviour={boundaryBehaviourSource ? behaviourProps(boundaryBehaviourSource) : undefined} />
-            : <ProjectProperties project={project} busy={pending > 0} rename={renameProject} setGrid={showDotGrid} setGridSettings={changeGridFlags}
-                save={view?.untitled ? () => run(() => save()) : undefined} />}
-        </>}
+        properties={<PropertiesPanel editor={editor} />}
         layers={<CanvasLayers styleCommand={mutate} project={project} boundaries={canvasBoundaries} selection={canvasSelection} focused={canvasFocus} selectBoundary={selectCanvasBoundary} selectReference={selectCanvasReference} selectPointer={selectCanvasPointer}
           selectRequest={id => selectCanvasRequest(id)} selectElement={selectCanvasElement} updateElements={(pageId, sizeId, patches) => void edits.updateElements(pageId, patches.map(patch => ({ ...patch, size_id: sizeId })))}
           moveElement={moveCanvasElementTo} removeLinked={removeLinkedDefinition}
@@ -260,21 +187,21 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
     {recovery && <WorkspaceSurface place="banner" title="Unsaved changes" close={recovery.dismiss}><RecoveryChoice {...recovery} /></WorkspaceSurface>}
     {panel.kind === 'projectLocation' && <WorkspaceSurface place={onStartPage ? 'start' : 'panel'} title="Project location" close={() => closePanel('projectLocation')}><div className="dialog-body"><ProjectLocationSettings location={projectLocation} change={changeProjectLocation} /></div></WorkspaceSurface>}
     {panel.kind === 'recovery' && view && <WorkspaceSurface place={onStartPage ? 'start' : 'panel'} title={project ? 'Recover unsaved projects' : 'Unsaved work'} close={() => closePanel('recovery')}>
-      <RecoveryList items={view.recoveries} busy={pending > 0} recover={id => { void recover(id).catch(() => {}); }} dismiss={dismissRecoveries} /></WorkspaceSurface>}
+      <RecoveryList items={view.recoveries} busy={pending > 0} recover={id => { void recover(id).catch(error => setError(errorMessage(error))); }} dismiss={ids => dismissRecoveries(ids).catch(error => setError(errorMessage(error)))} /></WorkspaceSurface>}
     {panel.kind === 'import' && <WorkspaceSurface place={onStartPage ? 'start' : 'panel'} title="Import" close={() => closePanel('import')}><ImportContext key={`${project?.id ?? 'new'}:${panel.source?.id ?? ''}`} initialSource={panel.source} busy={pending > 0} settings={aiSettings} openSettings={() => setShowAiSettings(true)} importInto={importContext} onPagesImported={result => { accept(result.workspace); setCanvasSelection([]); setCanvasFocus(null); setNotice(`Imported ${result.pages} ${result.pages === 1 ? 'page' : 'pages'} with ${result.layers} ${result.layers === 1 ? 'layer' : 'layers'}${result.warnings.length ? `; ${result.warnings.length} item${result.warnings.length === 1 ? '' : 's'} left out` : ''}.`); requestAnimationFrame(() => canvasRef.current?.fit()); }} close={() => closePanel('import')} /></WorkspaceSurface>}
-    {panel.kind === 'styleGuide' && project && <WorkspaceSurface place={onStartPage ? 'start' : 'panel'} title="Style guide" close={() => closePanel('styleGuide')}><StyleGuide project={project} apply={command => mutate(command).then(() => undefined)} openBrief={() => openPanel({ kind: 'notes', section: 'decisions' })} /></WorkspaceSurface>}
-    {panel.kind === 'notes' && project && <WorkspaceSurface place={onStartPage ? 'start' : 'panel'} title="Project brief" close={() => closePanel('notes')}><Notes project={project} initialSection={panel.section} reviewGeneration={project.latestGeneration?.jobId === generation.job?.jobId ? openGeneration : undefined} apply={command => mutate(command).then(() => undefined)} changeBrief={changeBrief} /></WorkspaceSurface>}
+    {panel.kind === 'styleGuide' && project && <WorkspaceSurface place={onStartPage ? 'start' : 'panel'} title="Style guide" close={() => closePanel('styleGuide')}><StyleGuide project={project} edits={edits} openBrief={() => openPanel({ kind: 'notes', section: 'decisions' })} /></WorkspaceSurface>}
+    {panel.kind === 'notes' && project && <WorkspaceSurface place={onStartPage ? 'start' : 'panel'} title="Project brief" close={() => closePanel('notes')}><Notes project={project} initialSection={panel.section} reviewGeneration={project.latestGeneration?.jobId === generation.job?.jobId ? openGeneration : undefined} edits={edits} changeBrief={changeBrief} /></WorkspaceSurface>}
     {panel.kind === 'gridSettings' && project && <WorkspaceSurface place={onStartPage ? 'start' : 'panel'} title="Grid settings" close={() => closePanel('gridSettings')}><GridForm settings={project.gridSettings} showGrid={project.showGrid} busy={pending > 0} submit={async (settings, visible) => {
-      if (visible !== project.showGrid) await mutate({ type: 'set_grid', enabled: visible });
-      await mutate({ type: 'set_grid_settings', settings }); closePanel('gridSettings');
+      if (visible !== project.showGrid) { if (!await mutate({ type: 'set_grid', enabled: visible })) return; }
+      if (await mutate({ type: 'set_grid_settings', settings })) closePanel('gridSettings');
     }} /></WorkspaceSurface>}
-    {panel.kind === 'rename' && project && <WorkspaceSurface place={onStartPage ? 'start' : 'panel'} title="Rename project" close={() => closePanel('rename')}><RenameProject name={project.name} submit={async name => { await mutate({ type: 'rename_project', name }); closePanel('rename'); }} /></WorkspaceSurface>}
+    {panel.kind === 'rename' && project && <WorkspaceSurface place={onStartPage ? 'start' : 'panel'} title="Rename project" close={() => closePanel('rename')}><RenameProject name={project.name} submit={async name => { if (await mutate({ type: 'rename_project', name })) closePanel('rename'); }} /></WorkspaceSurface>}
     {saving.kind === 'conflict' && <SaveConflictDialog conflict={saving.conflict} choose={chooseSaveConflict} />}
     {replacement && <ModalDialog title="Save your changes?" close={() => setReplacement(null)}><p>Save “{project?.name}” before you {replacement.label}?</p><div className="form-actions">
-      <button className="primary" disabled={pending > 0} onClick={() => { void (async () => { const saved = await save(); if (saved && !saved.dirty) { const run = replacement.run; setReplacement(null); await run(false); } })().catch(() => {}); }}>Save</button>
-      <button className="danger" disabled={pending > 0} onClick={() => { const run = replacement.run; setReplacement(null); void run(true).catch(() => {}); }}>Discard</button><button onClick={() => setReplacement(null)}>Keep editing</button>
+      <button className="primary" disabled={pending > 0} onClick={() => { void (async () => { const saved = await save(); if (saved && !saved.dirty) { const run = replacement.run; setReplacement(null); await run(false); } })().catch(error => setError(errorMessage(error))); }}>Save</button>
+      <button className="danger" disabled={pending > 0} onClick={() => { const run = replacement.run; setReplacement(null); void run(true).catch(error => setError(errorMessage(error))); }}>Discard</button><button onClick={() => setReplacement(null)}>Keep editing</button>
     </div></ModalDialog>}
-    {confirmation && <WorkspaceSurface place="banner" title={confirmation.title} showHeader={false} close={() => setConfirmation(null)}><div className="inline-notice"><span>{confirmation.message}</span><button className={confirmation.confirmLabel ? undefined : 'danger'} disabled={pending > 0} onClick={() => { void confirmation.action().then(() => setConfirmation(null)).catch(() => {}); }}>{confirmation.confirmLabel ?? 'Delete'}</button><button onClick={() => setConfirmation(null)}>Cancel</button></div></WorkspaceSurface>}
+    {confirmation && <WorkspaceSurface place="banner" title={confirmation.title} showHeader={false} close={() => setConfirmation(null)}><div className="inline-notice"><span>{confirmation.message}</span><button className={confirmation.confirmLabel ? undefined : 'danger'} disabled={pending > 0} onClick={() => { void confirmation.action().then(() => setConfirmation(null)).catch(error => setError(errorMessage(error))); }}>{confirmation.confirmLabel ?? 'Delete'}</button><button onClick={() => setConfirmation(null)}>Cancel</button></div></WorkspaceSurface>}
     {showAiSettings && <ModalDialog title="AI settings" className="ai-settings-dialog" showClose close={() => setShowAiSettings(false)}><AiSettings current={aiSettings} refresh={refreshAiSettings} update={updateAiSettings} manageUsage={manageChatgptUsage} pollingError={aiPollingError} /></ModalDialog>}
   </div>;
 }

@@ -234,6 +234,7 @@ export function createKeyboardActions(context: () => Context) {
       before = new Set(elementChildrenOf(project, pageId, elementParents(project, pageId, targets[0].elementId).at(-1) ?? null).map(element => element.id));
       return { type: 'stack_elements', page_id: pageId, ids: targets.map(target => target.elementId) };
     }).then(workspace => {
+      if (!workspace?.project) return;
       const parentId = elementParents(workspace.project!, pageId, targets[0].elementId).at(-1);
       const parent = parentId ? findPageElement(workspace.project!, pageId, parentId) : null;
       if (parent && !before.has(parent.id)) selectTargets([{ pageId, elementId: parent.id, sizeId: targets[0].sizeId }]);

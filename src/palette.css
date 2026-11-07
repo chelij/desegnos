@@ -1,18 +1,7 @@
-/* ------------------------------------------------------------------ */
-/* Command palette: quick actions anchored under the top bar.          */
-/* Also holds the status bar's zoom readout, the one piece of editor   */
-/* chrome that ships with the palette.                                 */
-/* ------------------------------------------------------------------ */
 .palette-layer {
   position: fixed; inset: 0; z-index: 60;
   display: flex; justify-content: center; align-items: flex-start;
   padding: calc(44px + var(--space-3)) var(--space-4) 0;
-}
-.command-palette {
-  display: flex; flex-direction: column; width: min(560px, 100%); max-height: min(60vh, 460px);
-  border: 1px solid var(--border); border-radius: var(--radius-xl);
-  background: var(--surface-raised); box-shadow: var(--shadow-2);
-  overflow: hidden;
 }
 .command-palette .palette-input {
   flex: none; height: var(--control-lg); min-height: var(--control-lg);
@@ -40,12 +29,12 @@
 .palette-empty { padding: var(--space-4); color: var(--muted); font-size: var(--text-sm); }
 
 @keyframes palette-in { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
-.command-palette { animation: palette-in var(--duration-fast) var(--ease-standard); }
+.command-palette {
+  display: flex; flex-direction: column; width: min(560px, 100%); max-height: min(60vh, 460px);
+  border: 1px solid var(--border); border-radius: var(--radius-xl);
+  background: var(--surface-raised); box-shadow: var(--shadow-2);
+  overflow: hidden; animation: palette-in var(--duration-fast) var(--ease-standard); }
 @media (prefers-reduced-motion: reduce) { .command-palette { animation: none; } }
-
-/* ------------------------------------------------------------------ */
-/* Status bar: selection readout and the log-scale zoom slider.        */
-/* ------------------------------------------------------------------ */
 .status-selection { display: flex; align-items: center; gap: var(--space-4); min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
 .status-selection > span { overflow: hidden; text-overflow: ellipsis; }
 .status-bounds { display: flex; align-items: baseline; gap: var(--space-4); color: var(--text); }

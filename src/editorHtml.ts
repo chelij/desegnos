@@ -77,11 +77,3 @@ export function restoreEditorHtml(projection: HtmlProjection): string {
   }
   return raw;
 }
-export function sourceOffset(text: string, line: number, column: number): number {
-  let at = 0;
-  for (let n = 1; n < line; n++) { const end = text.indexOf('\n', at); if (end < 0) return text.length; at = end + 1; }
-  return Math.min(text.length, at + column - 1);
-}
-export function sourcePosition(text: string, offset: number) {
-  const before = text.slice(0, offset); return { line: before.split('\n').length, column: offset - before.lastIndexOf('\n') };
-}
