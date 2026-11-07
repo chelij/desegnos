@@ -1,3 +1,4 @@
+import { sizeTarget } from '../projectCanvasGeometry';
 import { isTextField } from '../WorkspaceSurface';
 import { pageKind } from './boundaryDefaults';
 import type { ProjectCanvasProps } from './interactionTypes';
@@ -12,10 +13,12 @@ import { type SelectionAlign } from './selectionBar';
 import { type ScreenRect } from './surface';
 import { type LinkCopy } from './linkedChoices';
 import { copySummary, linkNeedsChoice, nestedLayerIds, sameStructure } from './links';
-import { viewNameForSlot, type ShortcutAction } from '../shortcuts';
+import { actionBinding, viewNameForSlot, type ShortcutAction } from '../shortcuts';
 import { playIsActive } from './play';
 import { elementChildrenOf, elementParents, findPageElement } from './elementGeometry';
 import { ElementEntry, ClipboardEntry, PasteTarget, LinkDecision, Drag, CanvasActionOptions, isElementTarget } from './interactionTypes';
+
+const OPACITIES: Partial<Record<ShortcutAction, number>> = { opacity10: .1, opacity20: .2, opacity30: .3, opacity40: .4, opacity50: .5, opacity60: .6, opacity70: .7, opacity80: .8, opacity90: .9, opacity100: 1 };
 
 export type Painter =
   | { kind: 'empty' }
@@ -45,9 +48,9 @@ type Context = {
   selectTargets: (targets: { pageId: string; elementId: string; sizeId?: string | null; }[]) => void;
   pageFor: (pageId: string, sizeId?: string | null) => Page | null;
   elementEntries: (targets: CanvasTarget[], project?: Project) => ElementEntry[];
-  moveElements: (moves: ElementMove[]) => Promise<unknown> | void;
+  moveElements: ProjectCanvasProps['edits']['moveElements'];
   painter: import("react").RefObject<Painter>;
-  updateElements: (pageId: string, patches: ElementPatch[]) => Promise<unknown> | void;
+  updateElements: ProjectCanvasProps['edits']['updateElements'];
   surface: import("react").RefObject<HTMLDivElement | null>;
   boundaryRect: (sizeId: string) => Rect | null;
   removeSelection: (referenceIds: string[], pointerIds: string[], requestIds: string[], elementIds?: { pageId: string; elementId: string; }[]) => void;
@@ -121,18 +124,16 @@ export function createKeyboardActions(context: () => Context) {
         const first = group[0];
         const siblings = elementChildrenOf(project, first.pageId, first.parentId);
         const order = arrangeSiblingOrder(siblings.map(element => element.id), group.map(entry => entry.id), operation);
-        // Native removes all moved layers before inserting them. Insert the selected
-        // layers at their final indices in ascending order; other siblings stay untouched.
         if (order.every((id, index) => id === siblings[index].id)) continue;
         for (const [index, id] of order.entries()) {
           const entry = group.find(entry => entry.id === id);
           if (!entry) continue;
           moves.push({ id, to_page_id: entry.pageId, to_parent_id: entry.parentId, index, rect: entry.rect,
-            size_id: entry.allSizes ? null : entry.sizeId, all_sizes: entry.allSizes });
+            ...sizeTarget(entry) });
         }
       }
       return moves.length ? { type: 'move_elements', moves } : null;
-    }).catch(() => {});
+    });
   }
 
   function copyStyle() {
@@ -148,10 +149,10 @@ export function createKeyboardActions(context: () => Context) {
     if (!style || !entries.length) return;
     const byPage = new Map<string, ElementPatch[]>();
     for (const entry of entries) {
-      const patch: ElementPatch = { id: entry.id, style: structuredClone(style), ...(entry.allSizes ? { all_sizes: true } : { size_id: entry.sizeId }) };
+      const patch: ElementPatch = { id: entry.id, style: structuredClone(style), ...sizeTarget(entry) };
       byPage.set(entry.pageId, [...(byPage.get(entry.pageId) ?? []), patch]);
     }
-    for (const [pageId, patches] of byPage) void Promise.resolve(updateElements(pageId, patches)).catch(() => {});
+    for (const [pageId, patches] of byPage) void updateElements(pageId, patches);
   }
 
   function paintFormat() {
@@ -166,8 +167,8 @@ export function createKeyboardActions(context: () => Context) {
     const { painter, updateElements, transitionPainter } = context();
     const style = painter.current.kind === 'empty' ? null : painter.current.style;
     if (!style) return;
-    const patch: ElementPatch = { id: target.elementId, style: structuredClone(style), ...(target.sizeId === null ? { all_sizes: true } : { size_id: target.sizeId }) };
-    void Promise.resolve(updateElements(target.pageId, [patch])).catch(() => {});
+    const patch: ElementPatch = { id: target.elementId, style: structuredClone(style), ...sizeTarget(target) };
+    void updateElements(target.pageId, [patch]);
     transitionPainter({ kind: 'disarm' });
   }
 
@@ -181,7 +182,7 @@ export function createKeyboardActions(context: () => Context) {
         return parent?.world ?? boundaryRect(entry.sizeId) ?? entry.world;
       });
       return moves.length ? { type: 'move_elements', moves } : null;
-    }).catch(() => {});
+    });
   }
 
   function distributeSelection(direction: SelectionDistribution) {
@@ -189,7 +190,7 @@ export function createKeyboardActions(context: () => Context) {
     void editProject(project => {
       const moves = distributeSelectionMoves(elementEntries(selection, project), direction);
       return moves.length ? { type: 'move_elements', moves } : null;
-    }).catch(() => {});
+    });
   }
 
   function selectionStyleAction(action: ShortcutAction) {
@@ -201,14 +202,14 @@ export function createKeyboardActions(context: () => Context) {
         for (const target of targets.filter(target => target.pageId === pageId)) {
           const element = findPageElement(project, pageId, target.elementId, target.sizeId);
           if (!element) continue;
-          const scope = target.sizeId === null ? { all_sizes: true } : { size_id: target.sizeId };
+          const scope = sizeTarget(target);
           if (action === 'toggleHidden') patches.push({ id: element.id, visible: !element.visible, ...scope });
           else if (action === 'toggleLocked') patches.push({ id: element.id, locked: !element.locked, ...scope });
           else {
             const style = structuredClone(element.style);
             if (action === 'flipHorizontal') style.flipX = !style.flipX;
             else if (action === 'flipVertical') style.flipY = !style.flipY;
-            else if (action.startsWith('opacity')) style.opacity = Number(action.slice(7)) / 100;
+            else if (OPACITIES[action] !== undefined) style.opacity = OPACITIES[action]!;
             else {
               if (element.kind !== 'text') continue;
               if (action === 'bold') style.textStyle.weight = style.textStyle.weight >= 700 ? 400 : 700;
@@ -220,7 +221,7 @@ export function createKeyboardActions(context: () => Context) {
           }
         }
         return patches.length ? { type: 'update_elements', page_id: pageId, patches } : null;
-      }).catch(() => {});
+      });
     }
   }
 
@@ -238,7 +239,7 @@ export function createKeyboardActions(context: () => Context) {
       const parentId = elementParents(workspace.project!, pageId, targets[0].elementId).at(-1);
       const parent = parentId ? findPageElement(workspace.project!, pageId, parentId) : null;
       if (parent && !before.has(parent.id)) selectTargets([{ pageId, elementId: parent.id, sizeId: targets[0].sizeId }]);
-    }).catch(() => {});
+    });
   }
 
   function setSelectionFill(value: string) {
@@ -252,7 +253,7 @@ export function createKeyboardActions(context: () => Context) {
       groups.set(target.pageId, list);
     }
     for (const [pageId, items] of groups) {
-      void Promise.resolve(updateElements(pageId, items.map(item => ({ id: item.id, style: { ...item.style, fill: value } })))).catch(() => {});
+      void updateElements(pageId, items.map(item => ({ id: item.id, style: { ...item.style, fill: value } })));
     }
   }
 
@@ -294,14 +295,14 @@ export function createKeyboardActions(context: () => Context) {
   function linkCopies(ids: string[], sourceId: string | null) {
     const { setLinkChoice, linkElements } = context();
     setLinkChoice(null);
-    void Promise.resolve(linkElements(ids, sourceId)).catch(() => {});
+    void linkElements(ids, sourceId);
   }
 
   function unlinkSelection() {
     const { selection, unlinkElements } = context();
     const ids = [...new Set(selection.filter(isElementTarget).map(target => target.elementId))];
     if (!ids.length) return;
-    void Promise.resolve(unlinkElements(ids)).catch(() => {});
+    void unlinkElements(ids);
   }
 
   function groupSelection() {
@@ -310,7 +311,7 @@ export function createKeyboardActions(context: () => Context) {
     if (targets.length < 2) return;
     const pageId = targets[0].pageId;
     if (!targets.every(target => target.pageId === pageId)) return;
-    void groupElements(pageId, targets.map(target => target.elementId)).then(id => { if (id) selectTargets([{ pageId, elementId: id }]); }).catch(() => {});
+    void groupElements(pageId, targets.map(target => target.elementId)).then(id => { if (id) selectTargets([{ pageId, elementId: id }]); });
   }
 
   function ungroupSelection() {
@@ -318,7 +319,7 @@ export function createKeyboardActions(context: () => Context) {
     const targets = selection.filter(isElementTarget);
     if (targets.length !== 1) return;
     const { pageId, elementId } = targets[0];
-    void ungroupElements(pageId, elementId).then(ids => { if (ids.length) selectTargets(ids.map(id => ({ pageId, elementId: id }))); }).catch(() => {});
+    void ungroupElements(pageId, elementId).then(ids => { if (ids.length) selectTargets(ids.map(id => ({ pageId, elementId: id }))); });
   }
 
   function nudgeElements(dx: number, dy: number) {
@@ -328,8 +329,8 @@ export function createKeyboardActions(context: () => Context) {
     rememberRepeatMove(entries, { x: dx, y: dy });
     void editProject({ type: 'nudge_elements', dx, dy, moves: entries.map(entry => ({
       id: entry.id, to_page_id: entry.pageId, to_parent_id: entry.parentId, index: entry.index, rect: entry.rect,
-      size_id: entry.allSizes ? null : entry.sizeId, all_sizes: entry.allSizes,
-    })) }).catch(() => {});
+      ...sizeTarget(entry),
+    })) });
   }
 
   function focusElement(direction: 'child' | 'parent') {
@@ -346,174 +347,84 @@ export function createKeyboardActions(context: () => Context) {
     else selectBoundary(target.pageId, target.sizeId);
   }
 
-  function canRunCanvasAction(action: ShortcutAction): boolean | null {
-    const { selection, project, focused, clipboard, pasteTarget, painter } = context();
-    const elements = selection.filter(isElementTarget);
-    const views = project.views ?? [];
-    if (action.startsWith('opacity') || action.startsWith('flip') || action.startsWith('align') || action === 'toggleHidden' || action === 'toggleLocked' || action === 'stack') return elements.length > 0;
-    if (action === 'distributeHorizontal' || action === 'distributeVertical') return elements.length >= 3;
-    if (action === 'bold' || action === 'italic') return !!context().editing;
-    if (action === 'fontSizeUp' || action === 'fontSizeDown') return !context().editing && elements.some(target => findPageElement(project, target.pageId, target.elementId)?.kind === 'text');
-    switch (action) {
-      case 'requestTool': case 'selectAll': case 'minimap': case 'saveView': return true;
-      case 'goToView': return views.length > 0;
-      case 'delete': return selection.length > 0 || !!focused;
-      case 'requestFromShape': return elements.length === 1;
-      case 'link': return elements.length >= 2;
-      case 'group': return elements.length >= 2;
-      case 'ungroup': {
-        const only = elements.length === 1 ? findPageElement(project, elements[0].pageId, elements[0].elementId) : null;
-        return only?.kind === 'group';
-      }
-      case 'selectChild': {
-        const first = elements[0];
-        return !!first && elementChildrenOf(project, first.pageId, first.elementId).length > 0;
-      }
-      case 'paste': case 'pasteChoice': return clipboard.current.length > 0 && pasteTarget() !== null;
-      case 'pasteStyle': return elements.length > 0 && painter.current.kind !== 'empty';
-      case 'paintFormat': return elements.length > 0 || painter.current.kind !== 'empty';
-      case 'duplicate': return elements.length > 0 || (!!focused && !selection.length);
-      case 'copy': case 'cut': case 'copyStyle': case 'unlink':
-      case 'forward': case 'backward': case 'front': case 'back':
-      case 'selectParent': case 'nudge': case 'nudgeFar':
-        return elements.length > 0;
-      default: return null;
-    }
-  }
+  type CanvasAction = { enabled: () => boolean; run: (options: CanvasActionOptions) => void };
+  const elements = () => context().selection.filter(isElementTarget);
+  const hasElements = () => elements().length > 0;
+  const samePage = () => hasElements() && elements().every(target => target.pageId === elements()[0].pageId);
+  const actions: Partial<Record<ShortcutAction, CanvasAction>> = {};
+  const add = (ids: ShortcutAction[], enabled: () => boolean, run: (action: ShortcutAction, options: CanvasActionOptions) => void) => {
+    for (const id of ids) actions[id] = { enabled, run: options => run(id, options) };
+  };
+  const alignments: Partial<Record<ShortcutAction, SelectionAlign>> = {
+    alignLeft: 'left', alignCentre: 'centre', alignRight: 'right', alignTop: 'top', alignMiddle: 'middle', alignBottom: 'bottom',
+  };
+  add(Object.keys(alignments) as ShortcutAction[], hasElements, action => alignSelection(alignments[action]!));
+  add(['distributeHorizontal', 'distributeVertical'], () => elements().length >= 3,
+    action => distributeSelection(action === 'distributeHorizontal' ? 'horizontal' : 'vertical'));
+  add(['flipHorizontal', 'flipVertical', 'toggleHidden', 'toggleLocked', ...Object.keys(OPACITIES) as ShortcutAction[]], hasElements, selectionStyleAction);
+  add(['bold', 'italic'], () => !!context().editing, selectionStyleAction);
+  add(['fontSizeUp', 'fontSizeDown'], () => !context().editing && elements().some(target => findPageElement(context().project, target.pageId, target.elementId)?.kind === 'text'), selectionStyleAction);
+  add(['stack'], samePage, stackSelection);
+  add(['delete'], () => context().selection.length > 0 || !!context().focused, () => {
+    const { selection, focused, focusedSize, deleteBoundary } = context();
+    if (selection.length) deleteSelectedLayers(); else if (focused) deleteBoundary(focused, focusedSize);
+  });
+  add(['requestTool'], () => true, () => { if (!context().startRequestOnSelection()) context().onTool('request'); });
+  add(['requestFromShape'], () => elements().length === 1, () => { context().startRequestFromShape(); });
+  add(['link'], hasElements, linkSelection);
+  add(['unlink'], hasElements, unlinkSelection);
+  add(['selectAll'], () => true, selectAllSiblings);
+  add(['copy'], hasElements, () => context().copyElements());
+  add(['cut'], hasElements, () => { context().copyElements(); deleteSelectedLayers(); });
+  add(['paste', 'pasteChoice'], () => context().clipboard.current.length > 0 && context().pasteTarget() !== null,
+    action => context().pasteElements(action === 'pasteChoice'));
+  add(['duplicate'], () => hasElements() || (!!context().focused && !context().selection.length), () => {
+    if (hasElements()) { context().duplicateElements(); return; }
+    const { project, focused, createBoundary, selectBoundary } = context();
+    const page = project.pages.find(page => page.id === focused);
+    if (!page) return;
+    const base = page.sizes[0];
+    const bounds = { x: Math.max(...page.sizes.map(size => size.x + size.width)) + BOUNDARY_GAP, y: base.y, width: base.width, height: base.height };
+    void createBoundary(bounds, pageKind(page), page.id).then(id => { if (id) selectBoundary(id); });
+  });
+  add(['copyStyle'], hasElements, copyStyle);
+  add(['pasteStyle'], () => hasElements() && context().painter.current.kind !== 'empty', pasteStyle);
+  add(['paintFormat'], () => hasElements() || context().painter.current.kind !== 'empty', paintFormat);
+  add(['group'], () => samePage() && elements().length >= 2, groupSelection);
+  add(['ungroup'], () => {
+    const targets = elements();
+    return targets.length === 1 && findPageElement(context().project, targets[0].pageId, targets[0].elementId)?.kind === 'group';
+  }, ungroupSelection);
+  add(['forward', 'front', 'backward', 'back'], hasElements, action => arrangeElements(action as ArrangeOperation));
+  add(['selectChild'], () => {
+    const target = elements()[0];
+    return !!target && elementChildrenOf(context().project, target.pageId, target.elementId).length > 0;
+  }, () => focusElement('child'));
+  add(['selectParent'], hasElements, () => focusElement('parent'));
+  add(['nudge', 'nudgeFar'], hasElements, (action, options) => {
+    const key = options.key ?? 'ArrowRight', step = action === 'nudgeFar' ? 10 : 1;
+    nudgeElements(key === 'ArrowLeft' ? -step : key === 'ArrowRight' ? step : 0, key === 'ArrowUp' ? -step : key === 'ArrowDown' ? step : 0);
+  });
+  add(['minimap'], () => true, () => context().setMinimapPreference(context().minimapVisible ? 'off' : 'on'));
+  add(['saveView'], () => true, (_, options) => context().saveView(options.slot ?? null, context().currentCamera()));
+  add(['goToView'], () => (context().project.views ?? []).length > 0, (_, options) => {
+    const views = context().project.views ?? [];
+    const view = options.slot ? views.find(item => item.name === viewNameForSlot(options.slot!)) : views[0];
+    if (view) context().goToView(view);
+  });
 
-  function runCanvasAction(action: ShortcutAction, options: CanvasActionOptions = {}): boolean {
-    const { selection, focused, deleteBoundary, focusedSize, removeSelection, startRequestOnSelection, onTool, startRequestFromShape, copyElements, clipboard, pasteElements, duplicateElements, painter, setMinimapPreference, minimapVisible, saveView, currentCamera, project, goToView } = context();
-    const elements = selection.filter(isElementTarget);
-    if (action.startsWith('align')) {
-      if (!elements.length) return false;
-      const edges: Record<string, SelectionAlign> = { alignLeft: 'left', alignCentre: 'centre', alignRight: 'right', alignTop: 'top', alignMiddle: 'middle', alignBottom: 'bottom' };
-      alignSelection(edges[action]); return true;
-    }
-    if (action === 'distributeHorizontal' || action === 'distributeVertical') {
-      if (elements.length < 3) return false;
-      distributeSelection(action === 'distributeHorizontal' ? 'horizontal' : 'vertical'); return true;
-    }
-    if (action.startsWith('opacity') || action.startsWith('flip') || ['toggleHidden', 'toggleLocked', 'bold', 'italic', 'fontSizeUp', 'fontSizeDown'].includes(action)) {
-      if (!canRunCanvasAction(action)) return false;
-      selectionStyleAction(action); return true;
-    }
-    if (action === 'stack') {
-      if (!elements.length) return false;
-      stackSelection(); return true;
-    }
-    switch (action) {
-      case 'delete': {
-        if (!selection.length) { if (focused) deleteBoundary(focused, focusedSize); return true; }
-        const elementIds = elements.map(target => ({ pageId: target.pageId, elementId: target.elementId }));
-        const requests = selection.flatMap(target => target.kind === 'request' ? [target.requestId] : []);
-        const items = selection.flatMap(target => target.kind === 'reference' ? [target.itemId] : []);
-        removeSelection(items, selectedPointers(selection), requests, elementIds);
+  function canvasAction(action: ShortcutAction) {
+    const handler = actions[action];
+    if (!handler) return undefined;
+    return {
+      ...actionBinding(action),
+      enabled: handler.enabled,
+      run(options: CanvasActionOptions = {}) {
+        if (!handler.enabled() || options.repeat && actionBinding(action).repeat === false) return false;
+        handler.run(options);
         return true;
-      }
-      case 'requestTool':
-        // With something selected F starts a request on it; otherwise it picks the Request tool.
-        if (!startRequestOnSelection()) onTool('request');
-        return true;
-      case 'requestFromShape':
-        if (elements.length !== 1) return false;
-        startRequestFromShape();
-        return true;
-      case 'link':
-        if (!elements.length) return false;
-        linkSelection();
-        return true;
-      case 'unlink':
-        if (!elements.length) return false;
-        unlinkSelection();
-        return true;
-      case 'selectAll': selectAllSiblings(); return true;
-      case 'copy':
-        if (!elements.length) return false;
-        copyElements();
-        return true;
-      case 'cut':
-        if (!elements.length) return false;
-        copyElements();
-        removeSelection([], [], [], elements.map(target => ({ pageId: target.pageId, elementId: target.elementId })));
-        return true;
-      // Plain paste belongs to the paste event, which can also carry content from other apps.
-      case 'paste':
-        if (!clipboard.current.length) return false;
-        pasteElements(false);
-        return true;
-      case 'pasteChoice':
-        if (!clipboard.current.length) return false;
-        pasteElements(true);
-        return true;
-      case 'duplicate':
-        if (!elements.length) {
-          const page = project.pages.find(page => page.id === focused);
-          if (!page || selection.length) return false;
-          const base = page.sizes[0];
-          const bounds = { x: Math.max(...page.sizes.map(size => size.x + size.width)) + BOUNDARY_GAP, y: base.y, width: base.width, height: base.height };
-          void context().createBoundary(bounds, pageKind(page), page.id).then(id => { if (id) context().selectBoundary(id); }).catch(() => {});
-          return true;
-        }
-        duplicateElements();
-        return true;
-      case 'copyStyle':
-        if (!elements.length) return false;
-        copyStyle();
-        return true;
-      case 'pasteStyle':
-        if (!elements.length || painter.current.kind === 'empty') return false;
-        pasteStyle();
-        return true;
-      case 'paintFormat':
-        if (!elements.length && painter.current.kind === 'empty') return false;
-        paintFormat();
-        return true;
-      case 'group':
-        if (!elements.length) return false;
-        groupSelection();
-        return true;
-      case 'ungroup':
-        if (!elements.length) return false;
-        ungroupSelection();
-        return true;
-      case 'forward': case 'front':
-        if (!elements.length) return false;
-        arrangeElements(action);
-        return true;
-      case 'backward': case 'back':
-        if (!elements.length) return false;
-        arrangeElements(action);
-        return true;
-      case 'selectChild':
-        if (!elements.length) return false;
-        focusElement('child');
-        return true;
-      case 'selectParent':
-        if (!elements.length) return false;
-        focusElement('parent');
-        return true;
-      case 'nudge': case 'nudgeFar': {
-        if (!elements.length) return false;
-        const key = options.key ?? 'ArrowRight';
-        const step = action === 'nudgeFar' ? 10 : 1;
-        nudgeElements(key === 'ArrowLeft' ? -step : key === 'ArrowRight' ? step : 0, key === 'ArrowUp' ? -step : key === 'ArrowDown' ? step : 0);
-        return true;
-      }
-      case 'minimap': setMinimapPreference(minimapVisible ? 'off' : 'on'); return true;
-      // A held key must not keep overwriting the same view.
-      case 'saveView':
-        if (options.repeat) return false;
-        saveView(options.slot ?? null, currentCamera());
-        return true;
-      case 'goToView': {
-        const views = project.views ?? [];
-        const view = options.slot ? views.find(item => item.name === viewNameForSlot(options.slot!)) ?? null : views[0] ?? null;
-        if (!view) return false;
-        goToView(view);
-        return true;
-      }
-      default: return false;
-    }
+      },
+    };
   }
 
   function keyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
@@ -527,7 +438,7 @@ export function createKeyboardActions(context: () => Context) {
   return {
     escapeCanvas, copyStyle, pasteStyle, paintFormat, applyPainterStyle,
     alignSelection, distributeSelection, setSelectionFill, deleteSelectedLayers, linkSelection, linkCopies, unlinkSelection,
-    canRunCanvasAction, runCanvasAction,
+    canvasAction,
     keyDown,
   };
 }

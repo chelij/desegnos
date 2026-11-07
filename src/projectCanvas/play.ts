@@ -24,8 +24,6 @@ export function playPointerAt(project: Project, pageId: string, elementId: strin
   return null;
 }
 
-export const playElementIdAt = (project: Project, pageId: string, elementId: string) => playPointerAt(project, pageId, elementId)?.id ?? null;
-
 /** The layer kinds a page URL turns into a hyperlink, matching the web export. */
 const LINK_KINDS: ElementKind[] = ['box', 'text', 'button', 'link'];
 

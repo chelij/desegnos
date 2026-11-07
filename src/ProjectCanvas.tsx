@@ -4,7 +4,7 @@ import { fitCamera } from './projectCanvasGeometry';
 import { useProjectCanvas } from './projectCanvas/useProjectCanvas';
 export type { ProjectCanvasHandle, ProjectCanvasProps, PreviewState } from './projectCanvas/interactionTypes';
 import { CORNERS, ProjectCanvasHandle, ProjectCanvasProps } from './projectCanvas/interactionTypes';
-import { forwardRef, useEffect, useState, type CSSProperties } from 'react';
+import { forwardRef, useState, type CSSProperties } from 'react';
 import { isTextField } from './WorkspaceSurface';
 import { BoundaryLabels } from './projectCanvas/boundaryLabels';
 import { SelectionBar } from './projectCanvas/selectionBar';
@@ -28,7 +28,7 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
 }, ref) {
   const [pointerFocus, setPointerFocus] = useState(false);
   const {
-    runCanvasAction, surface, panning, spaceHeld, zoomHeld, painterArmed, dropHover, dotStyle, pointerDown, keyDown,
+    surface, panning, spaceHeld, zoomHeld, painterArmed, dropHover, dotStyle, pointerDown, keyDown,
     doubleClick, paste, dropText, imagePicker, chooseImage, camera, scrubbed, moving, editing, movingElements,
     openPlaceholder, viewport, inverse, boundaries, requestDraft, draftArea, movingItems, draftNote, draft,
     draftElement, marquee, zoomRect, entries, autoLinks, behaviours, pointerDraft, selectedPointerIds, choosePointer,
@@ -47,19 +47,6 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
   const slides = project.pages;
   const slideIndex = Math.max(0, slides.findIndex(page => page.id === play.boundary));
   const advance = (delta: number) => onPlayBoundary(slides[Math.max(0, Math.min(slides.length - 1, slideIndex + delta))].id);
-  useEffect(() => {
-    if (!presenting) return;
-    const handle = (event: KeyboardEvent) => {
-      if (event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
-      const next = ['ArrowRight', 'ArrowDown', ' ', 'PageDown'].includes(event.key);
-      const previous = ['ArrowLeft', 'ArrowUp', 'PageUp'].includes(event.key);
-      if (!next && !previous && event.key !== 'Escape') return;
-      event.preventDefault(); event.stopImmediatePropagation();
-      if (event.key === 'Escape') onPlayExit(); else advance(next ? 1 : -1);
-    };
-    window.addEventListener('keydown', handle, true);
-    return () => window.removeEventListener('keydown', handle, true);
-  }, [presenting, slideIndex, project, onPlayBoundary, onPlayExit]);
   if (presenting) {
     const boundary = boundaries.find(boundary => boundary.pageId === slides[slideIndex].id)!;
     const size = slides[slideIndex].sizes[0];
@@ -115,7 +102,7 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
       version={scrubbed.boundaries.filter(boundary => boundaryVisible(moving?.sizeId === boundary.sizeId ? moving.rect : boundary.rect, viewport, 200 / camera.zoom)).map(boundary => boundary.sizeId).join(',') + '|'
         + Object.entries(movingElements).map(([id, rect]) => `${id}:${rect.x},${rect.y},${rect.width},${rect.height}`).join('|')} onResizeStart={startElementResize} />}
     {editing && editingElement && editingScreen && <ElementTextEditor key={`${editing.elementId}:${editing.created}`} element={editingElement} screen={editingScreen} zoom={camera.zoom}
-      autoWidth={editing.autoWidth} autoFocus onAction={runCanvasAction} onCommit={commitEditingText} />}
+      autoWidth={editing.autoWidth} autoFocus onCommit={commitEditingText} />}
     {placeholderChoice && <PlaceholderChoiceRow screen={placeholderChoice.screen}
       include={() => resolvePlaceholder(placeholderChoice, true)} dismiss={() => resolvePlaceholder(placeholderChoice, false)}
       close={() => { setPlaceholderChoice(null); surface.current?.focus({ preventScroll: true }); }} />}

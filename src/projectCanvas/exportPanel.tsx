@@ -28,13 +28,13 @@ export function ExportPanel({ project, exports, busy, selectBoundary, setInclude
 }) {
   const { destination, job, sending, error, setDestination, openFolder } = exports;
   // Every action reports its own failure in the panel; a rejection needs no further handling.
-  const act = (action: () => Promise<unknown>) => () => { void action().catch(() => {}); };
+  const act = (action: () => Promise<unknown>) => () => { void action(); };
   const chooseDestination = act(exports.chooseDestination);
   const runExport = act(() => exports.run());
   const sendExport = act(() => exports.send());
   const cancelExport = act(exports.cancel);
   const openInBrowser = act(exports.openInBrowser);
-  const previewExport = (pageId: string) => { void exports.run(pageId).catch(() => {}); };
+  const previewExport = (pageId: string) => { void exports.run(pageId); };
   const boundaries = project.pages;
   const prepared = job?.status === 'prepared';
   const running = job?.status === 'sending';

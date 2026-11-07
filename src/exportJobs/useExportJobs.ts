@@ -2,7 +2,6 @@ import { readJsonPreference, writePreference } from '../preferences';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { defaultExportFolder } from './exportFolder';
 import { native } from '../api';
-import { isTextField } from '../WorkspaceSurface';
 import type { Command, PointerStateView, Project, WorkspaceView, ExportCheck, ExportJobView } from '../types';
 import { idlePlay, playIsActive, type PlayState } from '../projectCanvas/play';
 import type { PreviewState } from '../ProjectCanvas';
@@ -43,7 +42,7 @@ function readExportFolders(): Record<string, string> {
 }
 
 export function useExportJobs(context: Context) {
-  const { current, view, panel, play, setPlay, openPanel, closePanel } = context;
+  const { current, view, panel, setPlay, openPanel, closePanel } = context;
   const [exportFolders, setExportFolders] = useState<Record<string, string>>(readExportFolders);
   const projectId = view?.project?.id ?? null;
   const exportDestination = projectId ? exportFolders[projectId] ?? null : null;
@@ -92,18 +91,6 @@ export function useExportJobs(context: Context) {
     }).catch(error => { if (live) setExportError(errorMessage(error)); });
     return () => { live = false; };
   }, [view?.project?.id, view?.project?.name]);
-  useEffect(() => {
-    if (!preview && !playIsActive(play)) return;
-    const escape = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape' || event.defaultPrevented) return;
-      if (isTextField(event.target)) return;
-      event.preventDefault();
-      if (preview) { closePreview(); return; }
-      setPlay(idlePlay);
-    };
-    window.addEventListener('keydown', escape);
-    return () => window.removeEventListener('keydown', escape);
-  }, [preview, play]);
 
   function openExportPanel(restore = true) {
     const { current, panels, panelActions } = context;

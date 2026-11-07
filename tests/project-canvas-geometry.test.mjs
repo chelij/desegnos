@@ -6,21 +6,18 @@ const modules = await compileModules(['src/projectCanvasGeometry.ts']);
 try {
   const geometry = await modules.load('projectCanvasGeometry.js');
   const {
-    boundaryHeight, layoutBoundaries, drawnBoundaryRect, snapToBoundaryGrid, canvasRectFromPage, pageRectFromCanvas,
-    pushApartBoundaries, boundaryMoves, boundariesByPosition, boundaryKey, dotGrid, unionBounds, sameBoundaries,
+    boundaryHeight, layoutBoundaries, drawnBoundaryRect, snapValue, canvasRectFromPage, pageRectFromCanvas,
+    pushApartBoundaries, boundaryMoves, boundariesByPosition, dotGrid, unionBounds, sameBoundaries,
     fitCamera, textEditingCamera, zoomCameraAt, panCamera, drawnFrameRect, referenceNoteRect, movedReferenceRect, resizedReferenceRect,
     convertedReferenceRects, referenceFrameRect, pushApartReference, referenceMoves, insideRect, boundaryAt, boundaryNear,
-    insideAnyBoundary, referenceItemAt, canvasTargetKey, selectedPointers, selectedReference, selectedElementIds,
+    insideAnyBoundary, canvasTargetKey, selectedPointers, selectedReference, selectedElementIds,
     selectedElementTargets, hasCanvasTarget, toggleCanvasTarget, sizeTarget, nearestEdgeAnchors, pointerEndpointKey,
     samePointerEndpoint, pointerEndpointRect, pointerRoute, pointerAt, pointSegmentDistance, pointerVisible,
     viewportWorldRect, screenPoint, pointerBroken, pointerLabel, pointerEndpointName, automaticLinks,
-    BOUNDARY_GAP, BOUNDARY_PUSH_GAP, BOUNDARY_SNAP, MIN_BOUNDARY_HEIGHT, MAX_BOUNDARY_HEIGHT, MIN_BOUNDARY_WIDTH,
-    MIN_BOUNDARY_DRAW_HEIGHT, MIN_FRAME_SIZE, FIT_PADDING, CANVAS_DOT_SPACING, CANVAS_DOT_MIN_SCREEN, FRAME_SNAP,
-    MIN_REFERENCE_WIDTH, MIN_REFERENCE_HEIGHT, MIN_REFERENCE_ITEM_SIZE, REFERENCE_NOTE_MIN_WIDTH,
-    REFERENCE_NOTE_MIN_HEIGHT, REFERENCE_ATTACHMENT_WIDTH, REFERENCE_ATTACHMENT_HEIGHT, REFERENCE_ATTACHMENT_GAP,
+    BOUNDARY_GAP, BOUNDARY_PUSH_GAP, GRID_SPACING, MIN_SIZE, MAX_BOUNDARY_HEIGHT, FIT_PADDING, CANVAS_DOT_MIN_SCREEN, REFERENCE_ATTACHMENT_WIDTH, REFERENCE_ATTACHMENT_HEIGHT, REFERENCE_ATTACHMENT_GAP,
     POINTER_HIT_PX,
   } = geometry;
-  const { MIN_ZOOM, ZOOM_LEVELS } = await modules.load('canvasGeometry.js');
+  const { MIN_ZOOM, ZOOM_LEVELS } = await modules.load('projectCanvasGeometry.js');
 
   const size = (id, x, y, width, height, kind = 'page') => ({ id, label: id, x, y, width, height, kind });
   const box = (x, y, width = 400, height = 300) => ({ x, y, width, height });
@@ -28,9 +25,9 @@ try {
 
   await test('boundary heights clamp to a sane range', () => {
     assert.equal(boundaryHeight(900), 900);
-    assert.equal(boundaryHeight(0), MIN_BOUNDARY_HEIGHT);
-    assert.equal(boundaryHeight(-40), MIN_BOUNDARY_HEIGHT);
-    assert.equal(boundaryHeight(Number.NaN), MIN_BOUNDARY_HEIGHT);
+    assert.equal(boundaryHeight(0), MIN_SIZE);
+    assert.equal(boundaryHeight(-40), MIN_SIZE);
+    assert.equal(boundaryHeight(Number.NaN), MIN_SIZE);
     assert.equal(boundaryHeight(12), 12);
     assert.equal(boundaryHeight(20000), MAX_BOUNDARY_HEIGHT);
   });
@@ -47,8 +44,8 @@ try {
     assert.equal(laid[1].kind, 'screen');
     // The default-sized second boundary follows the rightmost placed boundary.
     const right = Math.max(200 + 1440, 1800 + 390) + BOUNDARY_GAP;
-    assert.deepEqual(laid[2].rect, { x: right, y: 0, width: 800, height: MIN_BOUNDARY_HEIGHT });
-    assert.equal(boundaryKey(laid[0]), 'home');
+    assert.deepEqual(laid[2].rect, { x: right, y: 0, width: 800, height: MIN_SIZE });
+    assert.equal(laid[0].sizeId, 'home');
     assert.equal(BOUNDARY_GAP, 160);
   });
 
@@ -62,11 +59,11 @@ try {
   });
 
   await test('drawn boundaries snap to 8px with no minimum size', () => {
-    assert.equal(BOUNDARY_SNAP, 8);
-    assert.equal(MIN_BOUNDARY_WIDTH, 1);
-    assert.equal(MIN_BOUNDARY_DRAW_HEIGHT, 1);
-    assert.equal(snapToBoundaryGrid(13), 16);
-    assert.equal(snapToBoundaryGrid(Number.NaN), 0);
+    assert.equal(GRID_SPACING, 8);
+    assert.equal(MIN_SIZE, 1);
+    assert.equal(MIN_SIZE, 1);
+    assert.equal(snapValue(13), 16);
+    assert.equal(snapValue(Number.NaN), 0);
     assert.deepEqual(drawnBoundaryRect({ x: 3, y: 5 }, { x: 100, y: 60 }), { x: 0, y: 8, width: 104, height: 56 });
     const large = drawnBoundaryRect({ x: 0, y: 0 }, { x: 1000, y: 700 });
     assert.deepEqual(large, { x: 0, y: 0, width: 1000, height: 704 });
@@ -126,7 +123,7 @@ try {
   });
 
   await test('the dot grid keeps at least six screen pixels between dots and fades out', () => {
-    assert.equal(CANVAS_DOT_SPACING, 8);
+    assert.equal(GRID_SPACING, 8);
     assert.equal(CANVAS_DOT_MIN_SCREEN, 6);
     assert.equal(dotGrid({ x: 0, y: 0, zoom: 1 }, false), null);
     assert.equal(dotGrid({ x: 0, y: 0, zoom: 0 }, true), null);
@@ -219,8 +216,8 @@ try {
 
   await test('a frame drag snaps to 8px and clamps to its boundary', () => {
     const area = box(100, 100, 400, 300);
-    assert.equal(FRAME_SNAP, 8);
-    assert.equal(MIN_FRAME_SIZE, 1);
+    assert.equal(GRID_SPACING, 8);
+    assert.equal(MIN_SIZE, 1);
     assert.deepEqual(drawnFrameRect({ x: 120, y: 120 }, { x: 320, y: 280 }, area), box(120, 120, 200, 160));
     const reversed = drawnFrameRect({ x: 320, y: 280 }, { x: 120, y: 120 }, area);
     assert.deepEqual(reversed, box(120, 120, 200, 160));
@@ -233,17 +230,17 @@ try {
   });
 
   await test('a Frame drag outside boundaries draws a snapped note of any size', () => {
-    assert.equal(MIN_REFERENCE_WIDTH, 1);
-    assert.equal(MIN_REFERENCE_HEIGHT, 1);
-    assert.equal(REFERENCE_NOTE_MIN_WIDTH, 1);
-    assert.equal(REFERENCE_NOTE_MIN_HEIGHT, 1);
+    assert.equal(MIN_SIZE, 1);
+    assert.equal(MIN_SIZE, 1);
+    assert.equal(MIN_SIZE, 1);
+    assert.equal(MIN_SIZE, 1);
     assert.deepEqual(referenceNoteRect({ x: 2, y: 3 }, { x: 100, y: 60 }), { x: 0, y: 0, width: 104, height: 64 });
     assert.deepEqual(referenceNoteRect({ x: 400, y: 400 }, { x: 200, y: 200 }), { x: 200, y: 200, width: 200, height: 200 });
   });
 
   await test('reference items move and resize freely', () => {
     assert.deepEqual(movedReferenceRect(box(13, 21), { x: 5, y: 6 }), box(16, 24));
-    assert.equal(MIN_REFERENCE_ITEM_SIZE, 1);
+    assert.equal(MIN_SIZE, 1);
     assert.deepEqual(resizedReferenceRect(box(100, 100, 200, 150), 'se', { x: 400, y: 400 }), box(100, 100, 300, 300));
     assert.deepEqual(resizedReferenceRect(box(100, 100, 200, 150), 'nw', { x: 50, y: 50 }), box(48, 48, 252, 202));
     assert.deepEqual(resizedReferenceRect(box(100, 100, 200, 150), 'se', { x: 101, y: 101 }), box(100, 100, 4, 4));
@@ -298,7 +295,7 @@ try {
     assert.equal(boundaryAt(boundaries, { x: 10, y: 10 }).sizeId, 'below');
     assert.equal(boundaryAt(boundaries, { x: 400, y: 400 }), null);
     assert.equal(insideAnyBoundary(boundaries, { x: 60, y: 60 }), true);
-    assert.equal(referenceItemAt([{ itemId: 'note', rect: box(0, 0, 10, 10) }], { x: 5, y: 5 }).itemId, 'note');
+    assert.equal(boundaryAt([{ itemId: 'note', rect: box(0, 0, 10, 10) }], { x: 5, y: 5 }).itemId, 'note');
   });
 
   await test('canvas selection toggles elements, boundaries and pointers with Shift or Ctrl', () => {

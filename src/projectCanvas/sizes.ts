@@ -1,4 +1,4 @@
-import type { Element, ElementOverride, Page, PageSize, Project, SizePreset } from '../types';
+import type { Element, Page, PageSize, Project, SizePreset } from '../types';
 import { resolveElements } from './links';
 
 // Linked sizes: one element tree per page drawn as one boundary per size. The first size is the
@@ -11,29 +11,13 @@ export const SIZE_PRESETS: { preset: SizePreset; label: string; width: number; h
   { preset: 'desktop', label: 'Desktop', width: 1440, height: 900 },
 ];
 
-export const baseSize = (page: Page): PageSize => page.sizes[0];
-export const baseSizeId = (page: Page): string => baseSize(page).id;
+export const baseSizeId = (page: Page): string => page.sizes[0].id;
 export const hasManySizes = (page: Page): boolean => page.sizes.length > 1;
-export const findSize = (page: Page, sizeId: string | null | undefined): PageSize | null =>
-  page.sizes.find(size => size.id === sizeId) ?? null;
-export const isBaseSize = (page: Page, sizeId: string | null | undefined): boolean => !!sizeId && baseSizeId(page) === sizeId;
-
-export const presetLabel = (preset: SizePreset, width = 0, height = 0): string =>
-  preset === 'phone' ? 'Phone' : preset === 'tablet' ? 'Tablet' : preset === 'desktop' ? 'Desktop' : `${Math.round(width)} × ${Math.round(height)}`;
-
-const PRESET_NAMES: Record<SizePreset, string> = { phone: 'Phone', tablet: 'Tablet', desktop: 'Desktop', custom: 'Custom' };
-
-/**
- * A size only claims a preset name while its width still matches that preset; an edited width
- * reads as Custom, so a stored label can never describe a size the user no longer has.
- */
 export function sizeLabel(width: number): string {
-  const preset = SIZE_PRESETS.find(item => item.width === Math.round(width));
-  return preset ? PRESET_NAMES[preset.preset] : 'Custom';
+  return width >= 1024 ? 'Desktop' : width >= 700 ? 'Tablet' : 'Phone';
 }
 
-/** The name a boundary shows: a page with one size reads as the page, more sizes add the size. */
-export function boundaryName(page: Page, size: PageSize): string {
+export function boundaryLabel(page: Page, size: PageSize): string {
   return page.sizes.length > 1 ? `${page.name} · ${sizeLabel(size.width)}` : page.name;
 }
 
@@ -54,8 +38,6 @@ export function applyOverrides(elements: Element[], sizeId: string) {
 // views even when a caller deliberately reuses an object while loading a new revision.
 const resolvedTrees = new WeakMap<Project, { revision: number; pages: Map<Page, Map<string, Element[]>> }>();
 
-/** A freshly serialized native snapshot with the same id/revision has the same design.
- * Share its immutable size views without retaining the previous full project snapshot. */
 export function reuseResolvedTrees(source: Project, target: Project): void {
   const cache = resolvedTrees.get(source);
   if (!cache || cache.revision !== target.revision) return;
@@ -66,7 +48,6 @@ export function reuseResolvedTrees(source: Project, target: Project): void {
   })) });
 }
 
-/** The design one linked size shows: linked-element resolution first, then size overrides. */
 export function resolveForSize(project: Project, page: Page, sizeId: string): Element[] {
   let cache = resolvedTrees.get(project);
   if (!cache || cache.revision !== project.revision) {
@@ -85,7 +66,6 @@ export function resolveForSize(project: Project, page: Page, sizeId: string): El
   return elements;
 }
 
-/** The page-local top-left of a layer inside one resolved tree. */
 export function elementOrigin(elements: Element[], elementId: string): { x: number; y: number } | null {
   const walk = (children: Element[], base: { x: number; y: number }): { x: number; y: number } | null => {
     for (const child of children) {
@@ -99,18 +79,6 @@ export function elementOrigin(elements: Element[], elementId: string): { x: numb
   return walk(elements, { x: 0, y: 0 });
 }
 
-/** A layer hidden in this size that has not been dismissed draws a faint placeholder. */
-export const overrideFor = (element: Element, sizeId: string): ElementOverride | null => element.overrides?.[sizeId] ?? null;
-export const hiddenInSize = (element: Element, sizeId: string): boolean => !!element.overrides?.[sizeId]?.hidden;
-export const placeholderInSize = (element: Element, sizeId: string): boolean => {
-  const over = element.overrides?.[sizeId];
-  return !!over?.hidden && !over.dismissed;
-};
-
-export const sameSizeRect = (first: PageSize, second: PageSize): boolean =>
-  first.id === second.id && first.label === second.label && first.width === second.width && first.height === second.height && first.kind === second.kind;
-
-/** CSS min-width inheritance: the nearest smaller named size supplies overrides. */
 export function sizeAtWidth(page: Page, width: number): PageSize {
   const sizes = [...page.sizes].sort((a, b) => a.width - b.width || a.id.localeCompare(b.id));
   return sizes.filter(size => size.width <= width).at(-1) ?? sizes[0];

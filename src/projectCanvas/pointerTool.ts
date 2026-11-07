@@ -1,7 +1,7 @@
 import type { ProjectCanvasProps } from './interactionTypes';
 import { type PointerEvent as ReactPointerEvent } from 'react';
 import {
-  referenceItemAt, pointerRoute, type Boundary, type Point,
+  boundaryAt, pointerRoute, type Boundary, type Point,
   type RequestBox,
 } from '../projectCanvasGeometry';
 import type { PointerSource, PointerTarget, Project, Rect } from '../types';
@@ -39,7 +39,7 @@ export function createPointerTool(context: () => Context) {
     const { requestBoxes, project, movingItems, boundaryUnder } = context();
     const request = elementAt(requestBoxes(), point);
     if (request) return { endpoint: { kind: 'element', pageId: request.pageId, elementId: request.elementId, sizeId: request.sizeId }, rect: request.rect };
-    const item = referenceItemAt(project.reference.map(entry => ({ itemId: entry.id, rect: shownReference(entry, movingItems), kind: entry.kind })), point);
+    const item = boundaryAt(project.reference.map(entry => ({ itemId: entry.id, rect: shownReference(entry, movingItems), kind: entry.kind })), point);
     if (item) return { endpoint: item.kind.kind === 'link' ? { kind: 'url', url: item.kind.url } : { kind: 'reference', itemId: item.itemId }, rect: item.rect };
     const boundary = boundaryUnder(point);
     if (boundary) return { endpoint: { kind: 'boundary', pageId: boundary.pageId, sizeId: boundary.sizeId }, rect: boundary.rect };

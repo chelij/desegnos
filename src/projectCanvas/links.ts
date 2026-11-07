@@ -1,3 +1,4 @@
+import { findElementIn } from './elementFacts';
 import type { Element, LinkedDefinition, Project } from '../types';
 
 // Linked elements: one named definition every copy shares. A copy keeps its own id, position,
@@ -37,13 +38,14 @@ function assignNestedIds(root: string, element: Element, path: number[]) {
 }
 
 export function linkedDefinition(project: Project, element: Element | null | undefined): LinkedDefinition | null {
-  const id = element?.link;
+  if (!element) return null;
+  const id = element.link ?? project.pages.map(page => findElementIn(page.elements, element.id)?.link).find(Boolean);
   return id ? project.linked?.[id] ?? null : null;
 }
 
 /** A copy's concrete tree: its own id and position, the definition's content. */
 export function resolveElement(project: Project, element: Element): Element {
-  const definition = linkedDefinition(project, element);
+  const definition = element.link ? linkedDefinition(project, element) : null;
   if (!definition) {
     if (!element.children.length) return element;
     const children = element.children.map(child => resolveElement(project, child));
@@ -57,7 +59,7 @@ export function resolveElement(project: Project, element: Element): Element {
   concrete.meta = structuredClone(element.meta);
   // The copy's own size overrides apply after resolution, exactly like a plain layer's.
   concrete.overrides = element.overrides ? structuredClone(element.overrides) : {};
-  concrete.link = element.link ?? null;
+  concrete.link = null;
   // A copy keeps its own name; the definition names the linked group elsewhere.
   concrete.name = element.name ?? null;
   assignNestedIds(element.id, concrete, []);
@@ -87,7 +89,7 @@ export function nestedLayerIds(project: Project): Set<string> {
   };
   const visit = (elements: Element[]) => {
     for (const element of elements) {
-      const definition = linkedDefinition(project, element);
+      const definition = element.link ? linkedDefinition(project, element) : null;
       if (definition) walk(element.id, definition.master.children, []);
       visit(element.children);
     }
@@ -144,7 +146,7 @@ export function isNestedLayer(project: Project, id: string): boolean {
     return found;
   });
   const visit = (elements: Element[]): boolean => elements.some(element => {
-    const definition = linkedDefinition(project, element);
+    const definition = element.link ? linkedDefinition(project, element) : null;
     return (!!definition && walk(element.id, definition.master.children, [])) || visit(element.children);
   });
   return project.pages.some(page => visit(page.elements));

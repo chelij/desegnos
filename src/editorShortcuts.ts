@@ -1,10 +1,11 @@
 import { type EditorTool } from './EditorTools';
 import { type ProjectCanvasHandle } from './ProjectCanvas';
-import { viewSlot, type ShortcutAction } from './shortcuts';
+import { actionBinding, TOOL_ACTIONS, viewSlot, type ShortcutAction } from './shortcuts';
 import type { CanvasTemplate, WorkspaceView } from './types';
 import { ActionEvent, NO_ACTION_EVENT } from './editorShared';
 
 type Context = {
+  run: (action: () => Promise<unknown>) => void;
   showStartPage: boolean;
   current: import("react").RefObject<WorkspaceView | null>;
   openPanel: (panel: Exclude<import('./session/useEditor').EditorPanel, { kind: 'closed' }>) => void;
@@ -27,76 +28,67 @@ type Context = {
 };
 
 export function createEditorShortcuts(context: () => Context) {
-  function performAction(action: ShortcutAction, event: ActionEvent = NO_ACTION_EVENT) {
-    const { showStartPage, current, openPanel, setShowPalette, newUntitled, open, clearInsertKind, setInsertSignal, changeCanvasTool, panelActions, canvasRef, togglePlay, previewSelectedBoundary, adaptSelectedSize, openExportPanel, runExport, travel, save, closeProject } = context();
-    // The start page has no canvas: project commands wait until a canvas is open again.
-    if ((showStartPage || !current.current?.project) && !['new', 'open', 'help', 'commandPalette'].includes(action)) return;
-    const project = current.current?.project;
-    if (event.repeat && ['new', 'open', 'saveAs', 'help', 'hidePanels'].includes(action)) return;
-    switch (action) {
-      // These always act on the canvas selection, wherever focus sits in the editor.
-      // The canvas' own listener may have run first; its preventDefault keeps this a single run.
-      case 'copy': case 'cut': case 'pasteChoice': case 'duplicate':
-      case 'link': case 'unlink': case 'group': case 'ungroup': case 'forward': case 'backward': case 'front': case 'back':
-      case 'selectAll': case 'selectChild': case 'selectParent': case 'nudge': case 'nudgeFar': case 'delete':
-      case 'copyStyle': case 'pasteStyle': case 'paintFormat': case 'minimap': case 'saveView': case 'goToView': {
-        if (canvasRef.current?.runCanvasAction(action, { key: event.key, slot: viewSlot(event) ?? undefined, repeat: event.repeat })) event.preventDefault();
-        return;
-      }
-      // Plain paste stays with the paste event, which also carries content from other apps.
-      case 'paste':
-        return;
-      case 'help': event.preventDefault(); openPanel({ kind: 'shortcuts' }); return;
-      case 'commandPalette': event.preventDefault(); setShowPalette(true); return;
-      case 'new': event.preventDefault(); void newUntitled().catch(() => {}); return;
-      case 'open': event.preventDefault(); void open().catch(() => {}); return;
-      case 'renameLayer': {
-        const field = document.querySelector<HTMLInputElement>('[data-field="layer-name"]');
-        if (!field) return;
-        event.preventDefault(); field.focus({ preventScroll: true }); field.select(); return;
-      }
-      case 'insert': event.preventDefault(); clearInsertKind(); setInsertSignal(value => value + 1); return;
-      case 'imageTool': event.preventDefault(); changeCanvasTool('image'); return;
-      case 'selectTool': case 'boundaryTool': case 'pointerTool': case 'textTool': case 'panTool':
-      case 'rectTool': case 'ellipseTool': case 'lineTool': case 'noteTool': {
-        event.preventDefault();
-        changeCanvasTool(action === 'selectTool' ? 'select' : action === 'boundaryTool' ? 'boundary'
-          : action === 'pointerTool' ? 'pointer' : action === 'textTool' ? 'text' : action === 'panTool' ? 'pan'
-            : action === 'rectTool' ? 'rect' : action === 'ellipseTool' ? 'ellipse' : action === 'lineTool' ? 'line' : 'note');
-        return;
-      }
-      case 'requestTool': case 'requestFromShape':
-        // The canvas starts a request on the selection; with nothing selected F picks the tool.
-        return;
-      case 'askAI': event.preventDefault(); canvasRef.current?.startRequestOnSelection(); return;
-      case 'hidePanels':
-        if (!project) return;
-        if (event.target instanceof Element && event.target.closest('.workspace-surface, .editor-menu, .layers-popover')) return;
-        event.preventDefault(); panelActions.toggleHidden(); return;
-      case 'zoomIn': event.preventDefault(); canvasRef.current?.zoomStep(1); return;
-      case 'zoomOut': event.preventDefault(); canvasRef.current?.zoomStep(-1); return;
-      case 'zoomReset': event.preventDefault(); canvasRef.current?.zoomTo(1); return;
-      case 'fitAll': event.preventDefault(); canvasRef.current?.fit(); return;
-      case 'fitSelection': event.preventDefault(); canvasRef.current?.fitSelection(); return;
-      case 'play': if (!project) return; event.preventDefault(); togglePlay(); return;
-      case 'adaptLayout': event.preventDefault(); adaptSelectedSize(); return;
-      case 'preview': if (!project) return; event.preventDefault(); previewSelectedBoundary(); return;
-      case 'export':
-        if (!project) return;
-        event.preventDefault(); openExportPanel();
-        // runExport resolves the remembered or default folder, so this is one click.
-        void runExport();
-        return;
-      case 'undo': case 'redo':
-        if (!project) return;
-        event.preventDefault();
-        void travel(action === 'undo' ? 'undo_project' : 'redo_project').catch(() => {});
-        return;
-      case 'save': if (!project) return; event.preventDefault(); void save().catch(() => {}); return;
-      case 'saveAs': if (!project) return; event.preventDefault(); void save(true).catch(() => {}); return;
-      case 'closeProject': if (!project) return; event.preventDefault(); void closeProject().catch(() => {}); return;
-    }
+  const handlers: Partial<Record<ShortcutAction, () => void | Promise<unknown>>> = {
+    help: () => context().openPanel({ kind: 'shortcuts' }),
+    commandPalette: () => context().setShowPalette(true),
+    new: () => context().newUntitled(),
+    open: () => context().open(),
+    renameLayer: () => {
+      const field = document.querySelector<HTMLInputElement>('[data-field="layer-name"]');
+      field?.focus({ preventScroll: true }); field?.select();
+    },
+    insert: () => { context().clearInsertKind(); context().setInsertSignal(value => value + 1); },
+    askAI: () => { context().canvasRef.current?.startRequestOnSelection(); },
+    hidePanels: () => context().panelActions.toggleHidden(),
+    zoomIn: () => context().canvasRef.current?.zoomStep(1),
+    zoomOut: () => context().canvasRef.current?.zoomStep(-1),
+    zoomReset: () => context().canvasRef.current?.zoomTo(1),
+    fitAll: () => context().canvasRef.current?.fit(),
+    fitSelection: () => context().canvasRef.current?.fitSelection(),
+    play: () => context().togglePlay(),
+    adaptLayout: () => context().adaptSelectedSize(),
+    preview: () => context().previewSelectedBoundary(),
+    export: () => {
+      const { openExportPanel, runExport } = context();
+      openExportPanel();
+      return runExport();
+    },
+    undo: () => context().travel('undo_project'),
+    redo: () => context().travel('redo_project'),
+    save: () => context().save(),
+    saveAs: () => context().save(true),
+    closeProject: () => context().closeProject(),
+  };
+  for (const binding of TOOL_ACTIONS) {
+    if (binding.action === 'requestTool' || binding.action === 'insert') continue;
+    handlers[binding.action] = () => context().changeCanvasTool(binding.tool);
   }
 
-  return { performAction };
+  function canPerformAction(action: ShortcutAction): boolean {
+    const { showStartPage, current, canvasRef } = context();
+    if ((showStartPage || !current.current?.project) && !actionBinding(action).withoutProject) return false;
+    return canvasRef.current?.canvasAction(action)?.enabled() ?? !!handlers[action];
+  }
+
+  function performAction(action: ShortcutAction, event: ActionEvent = NO_ACTION_EVENT) {
+    if (!canPerformAction(action) || event.repeat && actionBinding(action).repeat === false) return;
+    if (action === 'paste' && event !== NO_ACTION_EVENT) return;
+    const { canvasRef, run } = context();
+    const canvas = canvasRef.current?.canvasAction(action);
+    if (canvas) {
+      if (canvas.run({ key: event.key, slot: viewSlot(event) ?? undefined, repeat: event.repeat })) event.preventDefault();
+      return;
+    }
+    const handler = handlers[action];
+    if (!handler) return;
+    event.preventDefault();
+    run(async () => handler());
+  }
+
+  function actionMenuItem(action: ShortcutAction, id: string = action): import('./Menus').MenuItem {
+    const binding = actionBinding(action);
+    return { id, label: binding.label, shortcut: binding.display, disabled: !canPerformAction(action), action: () => performAction(action) };
+  }
+
+  return { performAction, canPerformAction, actionMenuItem };
 }

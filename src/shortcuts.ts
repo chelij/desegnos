@@ -1,7 +1,3 @@
-import { isTextField } from './WorkspaceSurface';
-
-// One keymap for the canvas: tool strip tooltips, the menu and the keyboard help all read it,
-// so a binding can never be added in one place and forgotten in another.
 export type ShortcutAction =
   | 'selectTool' | 'requestTool' | 'requestFromShape' | 'boundaryTool' | 'pointerTool' | 'textTool' | 'panTool'
   | 'rectTool' | 'ellipseTool' | 'lineTool' | 'imageTool' | 'noteTool' | 'insert'
@@ -18,6 +14,7 @@ export type ShortcutAction =
   | 'minimap' | 'saveView' | 'goToView'
   | 'play' | 'preview' | 'askAI' | 'export'
   | 'new' | 'open' | 'save' | 'saveAs' | 'closeProject'
+  | 'holdPan' | 'holdZoom' | 'nextSlide' | 'previousSlide' | 'exitPresentation'
   | 'adaptLayout' | 'commandPalette' | 'help';
 
 export type ShortcutGroup = 'File' | 'Edit' | 'Arrange' | 'Selection' | 'Tools' | 'View' | 'Run' | 'Help';
@@ -28,12 +25,17 @@ type Binding = {
   action: ShortcutAction;
   label: string;
   group: ShortcutGroup;
-  /** The first entry is shown in menus and tooltips. */
   keys: KeyCombo[];
   display: string;
-  /** Actions that still make sense while the caret is in a text field. */
+  scope?: 'held' | 'presentation';
+  palette?: boolean;
+  canvasOnly?: boolean;
+  toolOrder?: number;
+  elementKind?: import("./types").ElementKind;
+  tool?: import("./EditorTools").EditorTool;
+  repeat?: boolean;
+  withoutProject?: boolean;
   inText?: boolean;
-  /** Actions that only apply while editing a canvas text layer. */
   textOnly?: boolean;
 };
 
@@ -45,145 +47,139 @@ const altMod = (key: string): KeyCombo => ({ key, mod: true, shift: false, alt: 
 const altModShift = (key: string): KeyCombo => ({ key, mod: true, shift: true, alt: true });
 const shiftCode = (code: string): KeyCombo => ({ code, shift: true });
 
-export const KEYMAP: Binding[] = [
-  // File
-  { action: 'new', label: 'New project', group: 'File', keys: [mod('n')], display: 'Ctrl/Cmd+N' },
-  { action: 'open', label: 'Open project', group: 'File', keys: [mod('o')], display: 'Ctrl/Cmd+O' },
-  { action: 'save', label: 'Save', group: 'File', keys: [mod('s')], display: 'Ctrl/Cmd+S', inText: true },
-  { action: 'saveAs', label: 'Save as', group: 'File', keys: [modShift('s')], display: 'Ctrl/Cmd+Shift+S', inText: true },
-  { action: 'closeProject', label: 'Close project', group: 'File', keys: [mod('w')], display: 'Ctrl/Cmd+W' },
+const bindings: Omit<Binding, "display">[] = [
+  { action: 'new', repeat: false, withoutProject: true, label: 'New project', group: 'File', keys: [mod('n')] },
+  { action: 'open', repeat: false, withoutProject: true, label: 'Open project…', group: 'File', keys: [mod('o')] },
+  { action: 'save', label: 'Save', group: 'File', keys: [mod('s')], inText: true },
+  { action: 'saveAs', repeat: false, label: 'Save as', group: 'File', keys: [modShift('s')], inText: true },
+  { action: 'closeProject', label: 'Close project', group: 'File', keys: [mod('w')] },
 
-  // Edit
-  { action: 'undo', label: 'Undo', group: 'Edit', keys: [mod('z')], display: 'Ctrl/Cmd+Z' },
-  { action: 'redo', label: 'Redo', group: 'Edit', keys: [modShift('z')], display: 'Shift+Ctrl/Cmd+Z' },
-  { action: 'cut', label: 'Cut', group: 'Edit', keys: [mod('x')], display: 'Ctrl/Cmd+X' },
-  { action: 'copy', label: 'Copy', group: 'Edit', keys: [mod('c')], display: 'Ctrl/Cmd+C' },
-  { action: 'paste', label: 'Paste', group: 'Edit', keys: [mod('v')], display: 'Ctrl/Cmd+V' },
-  { action: 'pasteChoice', label: 'Paste with linked or unlinked choice', group: 'Edit', keys: [modShift('v')], display: 'Shift+Ctrl/Cmd+V' },
-  { action: 'duplicate', label: 'Duplicate', group: 'Edit', keys: [mod('d')], display: 'Ctrl/Cmd+D' },
-  { action: 'copyStyle', label: 'Copy style', group: 'Edit', keys: [altMod('c')], display: 'Ctrl/Cmd+Alt+C' },
-  { action: 'pasteStyle', label: 'Paste style', group: 'Edit', keys: [altMod('v')], display: 'Ctrl/Cmd+Alt+V' },
-  { action: 'paintFormat', label: 'Paint format', group: 'Edit', keys: [altModShift('c')], display: 'Shift+Ctrl/Cmd+Alt+C' },
-  { action: 'link', label: 'Link layers', group: 'Edit', keys: [altMod('k')], display: 'Ctrl/Cmd+Alt+K' },
-  { action: 'unlink', label: 'Unlink layers', group: 'Edit', keys: [altMod('b')], display: 'Ctrl/Cmd+Alt+B' },
-  { action: 'delete', label: 'Delete selection', group: 'Edit', keys: [{ key: 'Delete', shift: false }, { key: 'Backspace', shift: false }], display: 'Delete or Backspace' },
-  { action: 'renameLayer', label: 'Rename selected layer', group: 'Edit', keys: [{ key: 'F2', shift: false }], display: 'F2' },
+  { action: 'undo', label: 'Undo', group: 'Edit', keys: [mod('z')] },
+  { action: 'redo', label: 'Redo', group: 'Edit', keys: [modShift('z')] },
+  { action: 'cut', label: 'Cut', group: 'Edit', keys: [mod('x')] },
+  { action: 'copy', label: 'Copy', group: 'Edit', keys: [mod('c')] },
+  { action: 'paste', label: 'Paste', group: 'Edit', keys: [mod('v')] },
+  { action: 'pasteChoice', label: 'Paste with linked or unlinked choice', group: 'Edit', keys: [modShift('v')] },
+  { action: 'duplicate', label: 'Duplicate', group: 'Edit', keys: [mod('d')] },
+  { action: 'copyStyle', label: 'Copy style', group: 'Edit', keys: [altMod('c')] },
+  { action: 'pasteStyle', label: 'Paste style', group: 'Edit', keys: [altMod('v')] },
+  { action: 'paintFormat', label: 'Paint format', group: 'Edit', keys: [altModShift('c')] },
+  { action: 'link', label: 'Link layers', group: 'Edit', keys: [altMod('k')] },
+  { action: 'unlink', label: 'Unlink layers', group: 'Edit', keys: [altMod('b')] },
+  { action: 'delete', label: 'Delete selection', group: 'Edit', keys: [{ key: 'Delete', shift: false }, { key: 'Backspace', shift: false }] },
+  { action: 'renameLayer', label: 'Rename selected layer', group: 'Edit', keys: [{ key: 'F2', shift: false }] },
 
-  { action: 'bold', label: 'Toggle bold', group: 'Edit', keys: [mod('b')], display: 'Ctrl/Cmd+B', inText: true, textOnly: true },
-  { action: 'italic', label: 'Toggle italic', group: 'Edit', keys: [mod('i')], display: 'Ctrl/Cmd+I', inText: true, textOnly: true },
-  { action: 'fontSizeUp', label: 'Increase font size', group: 'Edit', keys: [{ code: 'Period', mod: true, shift: true }, modShift('>')], display: 'Ctrl/Cmd+Shift+>' },
-  { action: 'fontSizeDown', label: 'Decrease font size', group: 'Edit', keys: [{ code: 'Comma', mod: true, shift: true }, modShift('<')], display: 'Ctrl/Cmd+Shift+<' },
-  { action: 'opacity100', label: 'Opacity 100%', group: 'Edit', keys: [plain('0')], display: '0' },
-  { action: 'opacity10', label: 'Opacity 10%', group: 'Edit', keys: [plain('1')], display: '1' },
-  { action: 'opacity20', label: 'Opacity 20%', group: 'Edit', keys: [plain('2')], display: '2' },
-  { action: 'opacity30', label: 'Opacity 30%', group: 'Edit', keys: [plain('3')], display: '3' },
-  { action: 'opacity40', label: 'Opacity 40%', group: 'Edit', keys: [plain('4')], display: '4' },
-  { action: 'opacity50', label: 'Opacity 50%', group: 'Edit', keys: [plain('5')], display: '5' },
-  { action: 'opacity60', label: 'Opacity 60%', group: 'Edit', keys: [plain('6')], display: '6' },
-  { action: 'opacity70', label: 'Opacity 70%', group: 'Edit', keys: [plain('7')], display: '7' },
-  { action: 'opacity80', label: 'Opacity 80%', group: 'Edit', keys: [plain('8')], display: '8' },
-  { action: 'opacity90', label: 'Opacity 90%', group: 'Edit', keys: [plain('9')], display: '9' },
+  { action: 'bold', label: 'Toggle bold', group: 'Edit', keys: [mod('b')], inText: true, textOnly: true },
+  { action: 'italic', label: 'Toggle italic', group: 'Edit', keys: [mod('i')], inText: true, textOnly: true },
+  { action: 'fontSizeUp', label: 'Increase font size', group: 'Edit', keys: [{ code: 'Period', mod: true, shift: true }, modShift('>')] },
+  { action: 'fontSizeDown', label: 'Decrease font size', group: 'Edit', keys: [{ code: 'Comma', mod: true, shift: true }, modShift('<')] },
+  { action: 'opacity100', canvasOnly: true, label: 'Opacity 100%', group: 'Edit', keys: [plain('0')] },
+  { action: 'opacity10', canvasOnly: true, label: 'Opacity 10%', group: 'Edit', keys: [plain('1')] },
+  { action: 'opacity20', canvasOnly: true, label: 'Opacity 20%', group: 'Edit', keys: [plain('2')] },
+  { action: 'opacity30', canvasOnly: true, label: 'Opacity 30%', group: 'Edit', keys: [plain('3')] },
+  { action: 'opacity40', canvasOnly: true, label: 'Opacity 40%', group: 'Edit', keys: [plain('4')] },
+  { action: 'opacity50', canvasOnly: true, label: 'Opacity 50%', group: 'Edit', keys: [plain('5')] },
+  { action: 'opacity60', canvasOnly: true, label: 'Opacity 60%', group: 'Edit', keys: [plain('6')] },
+  { action: 'opacity70', canvasOnly: true, label: 'Opacity 70%', group: 'Edit', keys: [plain('7')] },
+  { action: 'opacity80', canvasOnly: true, label: 'Opacity 80%', group: 'Edit', keys: [plain('8')] },
+  { action: 'opacity90', canvasOnly: true, label: 'Opacity 90%', group: 'Edit', keys: [plain('9')] },
 
-  // Arrange
-  { action: 'flipHorizontal', label: 'Flip horizontal', group: 'Arrange', keys: [shift('h')], display: 'Shift+H' },
-  { action: 'flipVertical', label: 'Flip vertical', group: 'Arrange', keys: [shift('v')], display: 'Shift+V' },
-  { action: 'adaptLayout', label: 'Adapt layout', group: 'Arrange', keys: [altModShift('a')], display: 'Ctrl/Cmd+Alt+Shift+A' },
-  { action: 'alignLeft', label: 'Align left', group: 'Arrange', keys: [{ key: 'a', code: 'KeyA', alt: true, shift: false }], display: 'Alt+A' },
-  { action: 'alignCentre', label: 'Align horizontal centres', group: 'Arrange', keys: [{ key: 'h', code: 'KeyH', alt: true, shift: false }], display: 'Alt+H' },
-  { action: 'alignRight', label: 'Align right', group: 'Arrange', keys: [{ key: 'd', code: 'KeyD', alt: true, shift: false }], display: 'Alt+D' },
-  { action: 'alignTop', label: 'Align top', group: 'Arrange', keys: [{ key: 'w', code: 'KeyW', alt: true, shift: false }], display: 'Alt+W' },
-  { action: 'alignMiddle', label: 'Align vertical centres', group: 'Arrange', keys: [{ key: 'v', code: 'KeyV', alt: true, shift: false }], display: 'Alt+V' },
-  { action: 'alignBottom', label: 'Align bottom', group: 'Arrange', keys: [{ key: 's', code: 'KeyS', alt: true, shift: false }], display: 'Alt+S' },
-  { action: 'distributeHorizontal', label: 'Distribute horizontally', group: 'Arrange', keys: [{ key: 'h', code: 'KeyH', alt: true, shift: true }], display: 'Alt+Shift+H' },
-  { action: 'distributeVertical', label: 'Distribute vertically', group: 'Arrange', keys: [{ key: 'v', code: 'KeyV', alt: true, shift: true }], display: 'Alt+Shift+V' },
-  { action: 'stack', label: 'Add Stack', group: 'Arrange', keys: [shift('a')], display: 'Shift+A' },
-  { action: 'toggleHidden', label: 'Hide or show selection', group: 'Arrange', keys: [modShift('h')], display: 'Ctrl/Cmd+Shift+H' },
-  { action: 'toggleLocked', label: 'Lock or unlock selection', group: 'Arrange', keys: [modShift('l')], display: 'Ctrl/Cmd+Shift+L' },
-  { action: 'forward', label: 'Bring forward', group: 'Arrange', keys: [mod(']'), { code: 'BracketRight', mod: true, shift: false }], display: 'Ctrl/Cmd+]' },
-  { action: 'backward', label: 'Send backward', group: 'Arrange', keys: [mod('['), { code: 'BracketLeft', mod: true, shift: false }], display: 'Ctrl/Cmd+[' },
-  { action: 'front', label: 'Bring to front', group: 'Arrange', keys: [modShift(']'), { code: 'BracketRight', mod: true, shift: true }], display: 'Shift+Ctrl/Cmd+]' },
-  { action: 'back', label: 'Send to back', group: 'Arrange', keys: [modShift('['), { code: 'BracketLeft', mod: true, shift: true }], display: 'Shift+Ctrl/Cmd+[' },
-  { action: 'group', label: 'Group', group: 'Arrange', keys: [mod('g')], display: 'Ctrl/Cmd+G' },
-  { action: 'ungroup', label: 'Ungroup', group: 'Arrange', keys: [modShift('g')], display: 'Shift+Ctrl/Cmd+G' },
+  { action: 'flipHorizontal', label: 'Flip horizontal', group: 'Arrange', keys: [shift('h')] },
+  { action: 'flipVertical', label: 'Flip vertical', group: 'Arrange', keys: [shift('v')] },
+  { action: 'adaptLayout', label: 'Adapt layout', group: 'Arrange', keys: [altModShift('a')] },
+  { action: 'alignLeft', label: 'Align left', group: 'Arrange', keys: [{ key: 'a', code: 'KeyA', alt: true, shift: false }] },
+  { action: 'alignCentre', label: 'Align horizontal centres', group: 'Arrange', keys: [{ key: 'h', code: 'KeyH', alt: true, shift: false }] },
+  { action: 'alignRight', label: 'Align right', group: 'Arrange', keys: [{ key: 'd', code: 'KeyD', alt: true, shift: false }] },
+  { action: 'alignTop', label: 'Align top', group: 'Arrange', keys: [{ key: 'w', code: 'KeyW', alt: true, shift: false }] },
+  { action: 'alignMiddle', label: 'Align vertical centres', group: 'Arrange', keys: [{ key: 'v', code: 'KeyV', alt: true, shift: false }] },
+  { action: 'alignBottom', label: 'Align bottom', group: 'Arrange', keys: [{ key: 's', code: 'KeyS', alt: true, shift: false }] },
+  { action: 'distributeHorizontal', label: 'Distribute horizontally', group: 'Arrange', keys: [{ key: 'h', code: 'KeyH', alt: true, shift: true }] },
+  { action: 'distributeVertical', label: 'Distribute vertically', group: 'Arrange', keys: [{ key: 'v', code: 'KeyV', alt: true, shift: true }] },
+  { action: 'stack', label: 'Add Stack', group: 'Arrange', keys: [shift('a')] },
+  { action: 'toggleHidden', label: 'Hide or show selection', group: 'Arrange', keys: [modShift('h')] },
+  { action: 'toggleLocked', label: 'Lock or unlock selection', group: 'Arrange', keys: [modShift('l')] },
+  { action: 'forward', label: 'Bring forward', group: 'Arrange', keys: [mod(']'), { code: 'BracketRight', mod: true, shift: false }] },
+  { action: 'backward', label: 'Send backward', group: 'Arrange', keys: [mod('['), { code: 'BracketLeft', mod: true, shift: false }] },
+  { action: 'front', label: 'Bring to front', group: 'Arrange', keys: [modShift(']'), { code: 'BracketRight', mod: true, shift: true }] },
+  { action: 'back', label: 'Send to back', group: 'Arrange', keys: [modShift('['), { code: 'BracketLeft', mod: true, shift: true }] },
+  { action: 'group', label: 'Group', group: 'Arrange', keys: [mod('g')] },
+  { action: 'ungroup', label: 'Ungroup', group: 'Arrange', keys: [modShift('g')] },
 
-  // Selection
-  { action: 'selectAll', label: 'Select all', group: 'Selection', keys: [mod('a')], display: 'Ctrl/Cmd+A' },
-  { action: 'selectChild', label: 'Select child', group: 'Selection', keys: [{ key: 'Enter', shift: false }], display: 'Enter' },
-  { action: 'selectParent', label: 'Select parent', group: 'Selection', keys: [{ key: 'Enter', shift: true }], display: 'Shift+Enter' },
+  { action: 'selectAll', label: 'Select all', group: 'Selection', keys: [mod('a')] },
+  { action: 'selectChild', label: 'Select child', group: 'Selection', keys: [{ key: 'Enter', shift: false }] },
+  { action: 'selectParent', label: 'Select parent', group: 'Selection', keys: [{ key: 'Enter', shift: true }] },
   { action: 'nudge', label: 'Nudge', group: 'Selection', keys: [
     { key: 'ArrowLeft', shift: false }, { key: 'ArrowRight', shift: false }, { key: 'ArrowUp', shift: false }, { key: 'ArrowDown', shift: false },
-  ], display: 'Arrow keys' },
+  ] },
   { action: 'nudgeFar', label: 'Far nudge', group: 'Selection', keys: [
     { key: 'ArrowLeft', shift: true }, { key: 'ArrowRight', shift: true }, { key: 'ArrowUp', shift: true }, { key: 'ArrowDown', shift: true },
-  ], display: 'Shift+Arrow keys' },
+  ] },
 
-  // Tools
-  { action: 'selectTool', label: 'Select tool', group: 'Tools', keys: [plain('v')], display: 'V' },
-  { action: 'boundaryTool', label: 'Boundary tool', group: 'Tools', keys: [plain('b')], display: 'B' },
-  { action: 'requestTool', label: 'Request tool', group: 'Tools', keys: [plain('f')], display: 'F' },
-  { action: 'requestFromShape', label: 'Request from a shape outline', group: 'Tools', keys: [{ key: 'f', shift: true }], display: 'Shift+F' },
-  { action: 'textTool', label: 'Text tool', group: 'Tools', keys: [plain('t')], display: 'T' },
-  { action: 'rectTool', label: 'Rectangle tool', group: 'Tools', keys: [plain('r')], display: 'R' },
-  { action: 'ellipseTool', label: 'Ellipse tool', group: 'Tools', keys: [plain('o')], display: 'O' },
-  { action: 'lineTool', label: 'Line tool', group: 'Tools', keys: [plain('l')], display: 'L' },
-  { action: 'imageTool', label: 'Image tool', group: 'Tools', keys: [{ key: 'k', mod: true, shift: true, alt: false }], display: 'Shift+Ctrl/Cmd+K' },
-  { action: 'insert', label: 'Insert any element', group: 'Tools', keys: [mod('i')], display: 'Ctrl/Cmd+I' },
-  { action: 'pointerTool', label: 'Pointer tool', group: 'Tools', keys: [plain('p')], display: 'P' },
-  { action: 'noteTool', label: 'Note tool', group: 'Tools', keys: [plain('n')], display: 'N' },
-  { action: 'panTool', label: 'Pan tool', group: 'Tools', keys: [plain('h')], display: 'H' },
+  { action: 'selectTool', tool: 'select', toolOrder: 0, label: 'Select tool', group: 'Tools', keys: [plain('v')] },
+  { action: 'boundaryTool', tool: 'boundary', toolOrder: 1, label: 'Boundary tool', group: 'Tools', keys: [plain('b')] },
+  { action: 'requestTool', tool: 'request', toolOrder: 2, label: 'Request tool', group: 'Tools', keys: [plain('f')] },
+  { action: 'requestFromShape', label: 'Request from a shape outline', group: 'Tools', keys: [{ key: 'f', shift: true }] },
+  { action: 'textTool', tool: 'text', toolOrder: 3, label: 'Text tool', group: 'Tools', keys: [plain('t')] },
+  { action: 'rectTool', tool: 'rect', elementKind: 'box', toolOrder: 4, label: 'Rectangle tool', group: 'Tools', keys: [plain('r')] },
+  { action: 'ellipseTool', tool: 'ellipse', elementKind: 'ellipse', toolOrder: 5, label: 'Ellipse tool', group: 'Tools', keys: [plain('o')] },
+  { action: 'lineTool', tool: 'line', elementKind: 'line', toolOrder: 6, label: 'Line tool', group: 'Tools', keys: [plain('l')] },
+  { action: 'imageTool', tool: 'image', toolOrder: 7, label: 'Image tool', group: 'Tools', keys: [{ key: 'k', mod: true, shift: true, alt: false }] },
+  { action: 'insert', tool: 'insert', toolOrder: 8, label: 'Insert any element', group: 'Tools', keys: [mod('i')] },
+  { action: 'pointerTool', tool: 'pointer', toolOrder: 9, label: 'Pointer tool', group: 'Tools', keys: [plain('p')] },
+  { action: 'noteTool', tool: 'note', toolOrder: 10, label: 'Note tool', group: 'Tools', keys: [plain('n')] },
+  { action: 'panTool', tool: 'pan', toolOrder: 11, label: 'Pan tool', group: 'Tools', keys: [plain('h')] },
 
-  // View
-  { action: 'zoomIn', label: 'Zoom in', group: 'View', keys: [{ key: '=', mod: true }, { key: '+', mod: true }, { code: 'Equal', mod: true }, { code: 'NumpadAdd', mod: true }], display: 'Ctrl/Cmd+=' },
-  { action: 'zoomOut', label: 'Zoom out', group: 'View', keys: [{ key: '-', mod: true }, { key: '_', mod: true }, { code: 'Minus', mod: true }, { code: 'NumpadSubtract', mod: true }], display: 'Ctrl/Cmd+-' },
-  { action: 'zoomReset', label: 'Zoom to 100%', group: 'View', keys: [{ code: 'Digit0', mod: true }, { key: '0', mod: true }], display: 'Ctrl/Cmd+0' },
-  { action: 'fitAll', label: 'Fit all boundaries', group: 'View', keys: [shiftCode('Digit1')], display: 'Shift+1' },
-  { action: 'fitSelection', label: 'Fit the selection', group: 'View', keys: [shiftCode('Digit2')], display: 'Shift+2' },
-  { action: 'minimap', label: 'Show or hide the minimap', group: 'View', keys: [shift('m')], display: 'Shift+M' },
-  { action: 'saveView', label: 'Save the current view', group: 'View', keys: ['1', '2', '3', '4', '5', '6', '7', '8', '9'].map(altMod), display: 'Ctrl/Cmd+Alt+1…9' },
-  { action: 'goToView', label: 'Go to a saved view', group: 'View', keys: ['1', '2', '3', '4', '5', '6', '7', '8', '9'].map(key => ({ key, alt: true, shift: false })), display: 'Alt+1…9' },
-  { action: 'hidePanels', label: 'Hide or show panels', group: 'View', keys: [{ key: '\\', mod: true, shift: false }, { code: 'Backslash', mod: true, shift: false }], display: 'Ctrl/Cmd+\\' },
+  { action: 'zoomIn', label: 'Zoom in', group: 'View', keys: [{ key: '=', mod: true }, { key: '+', mod: true }, { code: 'Equal', mod: true }, { code: 'NumpadAdd', mod: true }] },
+  { action: 'zoomOut', label: 'Zoom out', group: 'View', keys: [{ key: '-', mod: true }, { key: '_', mod: true }, { code: 'Minus', mod: true }, { code: 'NumpadSubtract', mod: true }] },
+  { action: 'zoomReset', label: 'Zoom to 100%', group: 'View', keys: [{ code: 'Digit0', mod: true }, { key: '0', mod: true }] },
+  { action: 'fitAll', label: 'Fit all boundaries', group: 'View', keys: [shiftCode('Digit1')] },
+  { action: 'fitSelection', label: 'Fit the selection', group: 'View', keys: [shiftCode('Digit2')] },
+  { action: 'minimap', label: 'Show or hide the minimap', group: 'View', keys: [shift('m')] },
+  { action: 'saveView', repeat: false, label: 'Save the current view', group: 'View', keys: ['1', '2', '3', '4', '5', '6', '7', '8', '9'].map(altMod) },
+  { action: 'goToView', label: 'Go to a saved view', group: 'View', keys: ['1', '2', '3', '4', '5', '6', '7', '8', '9'].map(key => ({ key, alt: true, shift: false })) },
+  { action: 'hidePanels', repeat: false, label: 'Hide or show panels', group: 'View', keys: [{ key: '\\', mod: true, shift: false }, { code: 'Backslash', mod: true, shift: false }] },
 
-  // Run
-  { action: 'play', label: 'Play', group: 'Run', keys: [{ key: ' ', code: 'Space', shift: true }], display: 'Shift+Space' },
-  { action: 'preview', label: 'Preview export', group: 'Run', keys: [{ key: 'Enter', mod: true }], display: 'Ctrl/Cmd+Enter', inText: true },
-  { action: 'askAI', label: 'Request on selection', group: 'Run', keys: [mod('k')], display: 'Ctrl/Cmd+K' },
-  { action: 'export', label: 'Export', group: 'Run', keys: [mod('e')], display: 'Ctrl/Cmd+E' },
+  { action: 'play', label: 'Play', group: 'Run', keys: [{ key: ' ', code: 'Space', shift: true }] },
+  { action: 'preview', label: 'Preview export', group: 'Run', keys: [{ key: 'Enter', mod: true }], inText: true },
+  { action: 'askAI', label: 'Request on selection', group: 'Run', keys: [mod('k')] },
+  { action: 'export', label: 'Export…', group: 'Run', keys: [mod('e')] },
 
-  // Help
-  { action: 'commandPalette', label: 'Command palette', group: 'Help', keys: [mod('/')], display: 'Ctrl/Cmd+/' },
-  { action: 'help', label: 'Keyboard shortcuts', group: 'Help', keys: [{ key: 'F1', shift: false }], display: 'F1' },
+  { action: 'commandPalette', withoutProject: true, label: 'Command palette', group: 'Help', keys: [mod('/')] },
+  { action: 'help', repeat: false, withoutProject: true, label: 'Keyboard shortcuts', group: 'Help', keys: [{ key: 'F1', shift: false }] },
+  { action: 'holdPan', label: 'Hold to pan', group: 'Tools', keys: [plain(' ')], scope: 'held', palette: false },
+  { action: 'holdZoom', label: 'Hold to zoom', group: 'Tools', keys: [plain('z')], scope: 'held', palette: false },
+  { action: 'nextSlide', label: 'Next slide', group: 'Run', keys: ['ArrowRight', 'ArrowDown', ' ', 'PageDown'].map(plain), scope: 'presentation', palette: false },
+  { action: 'previousSlide', label: 'Previous slide', group: 'Run', keys: ['ArrowLeft', 'ArrowUp', 'PageUp'].map(plain), scope: 'presentation', palette: false },
+  { action: 'exitPresentation', label: 'Stop presentation', group: 'Run', keys: [plain('Escape')], scope: 'presentation', palette: false },
 ];
+
+function comboLabel(combo: KeyCombo): string {
+  const key = combo.key ?? combo.code?.replace(/^(Digit|Key|Numpad)/, '') ?? '';
+  const label = key === ' ' ? 'Space' : key.startsWith('Arrow') ? key.replace('Arrow', '') : key.toUpperCase() === key && key.length > 1 ? key : key.length === 1 ? key.toUpperCase() : key;
+  return [combo.mod && 'Ctrl/Cmd', combo.alt && 'Alt', combo.shift && 'Shift', label].filter(Boolean).join('+');
+}
+
+export const KEYMAP: Binding[] = bindings.map(binding => ({ ...binding,
+  display: binding.action === 'delete' ? [...new Set(binding.keys.map(comboLabel))].join(' or ')
+    : binding.scope === 'presentation' ? binding.keys.map(comboLabel).join(' / ')
+    : binding.action === 'nudge' || binding.action === 'nudgeFar'
+    ? `${binding.keys[0].shift ? 'Shift+' : ''}Arrow keys`
+    : binding.action === 'saveView' || binding.action === 'goToView'
+      ? `${comboLabel(binding.keys[0]).slice(0, -1)}1…9` : comboLabel(binding.keys[0]),
+}));
+
+export const TOOL_ACTIONS = KEYMAP.filter((binding): binding is Binding & { tool: import('./EditorTools').EditorTool } => !!binding.tool).sort((a, b) => a.toolOrder! - b.toolOrder!);
+export const actionBinding = (action: ShortcutAction) => BINDING.get(action)!;
 
 const BINDING = new Map(KEYMAP.map(binding => [binding.action, binding]));
 
-/** The compact label a menu or tooltip shows for an action. */
 export function shortcutLabel(action: ShortcutAction): string {
   return BINDING.get(action)?.display ?? '';
 }
 
-/** A tooltip with its shortcut, e.g. "Request · Ctrl/Cmd+K". */
 export function withShortcut(label: string, action: ShortcutAction) {
   return `${label} · ${shortcutLabel(action)}`;
 }
-
-export const TOOL_SHORTCUTS: Record<string, string> = {
-  newProject: shortcutLabel('new'), openProject: shortcutLabel('open'), save: shortcutLabel('save'), saveAs: shortcutLabel('saveAs'),
-  copy: shortcutLabel('copy'), cut: shortcutLabel('cut'), paste: shortcutLabel('paste'), pasteChoice: shortcutLabel('pasteChoice'), duplicate: shortcutLabel('duplicate'),
-  copyStyle: shortcutLabel('copyStyle'), pasteStyle: shortcutLabel('pasteStyle'), paintFormat: shortcutLabel('paintFormat'),
-  forward: shortcutLabel('forward'), backward: shortcutLabel('backward'), front: shortcutLabel('front'), back: shortcutLabel('back'),
-  undo: shortcutLabel('undo'), redo: shortcutLabel('redo'), link: shortcutLabel('link'), unlink: shortcutLabel('unlink'),
-  group: shortcutLabel('group'), ungroup: shortcutLabel('ungroup'),
-  zoomIn: shortcutLabel('zoomIn'), zoomOut: shortcutLabel('zoomOut'), zoomReset: shortcutLabel('zoomReset'), fit: shortcutLabel('fitAll'), fitSelection: shortcutLabel('fitSelection'),
-  closeProject: shortcutLabel('closeProject'), closePage: shortcutLabel('closeProject'),
-  editElement: shortcutLabel('renameLayer'), remove: shortcutLabel('delete'), askAI: shortcutLabel('askAI'),
-  selectTool: shortcutLabel('selectTool'), requestTool: shortcutLabel('requestTool'), requestFromShape: shortcutLabel('requestFromShape'), boundaryTool: shortcutLabel('boundaryTool'), pointerTool: shortcutLabel('pointerTool'),
-  textTool: shortcutLabel('textTool'), panTool: shortcutLabel('panTool'), rectTool: shortcutLabel('rectTool'), rectangleTool: shortcutLabel('rectTool'),
-  ellipseTool: shortcutLabel('ellipseTool'), lineTool: shortcutLabel('lineTool'), imageTool: shortcutLabel('imageTool'), noteTool: shortcutLabel('noteTool'),
-  insertTool: shortcutLabel('insert'), play: shortcutLabel('play'), preview: shortcutLabel('preview'), export: shortcutLabel('export'), help: shortcutLabel('help'),
-  selectAll: shortcutLabel('selectAll'), selectChild: shortcutLabel('selectChild'), selectParent: shortcutLabel('selectParent'),
-};
-
-export type ToolShortcut = keyof typeof TOOL_SHORTCUTS;
 
 function comboMatches(combo: KeyCombo, event: ShortcutInput) {
   const command = event.ctrlKey || event.metaKey;
@@ -199,13 +195,12 @@ function comboMatches(combo: KeyCombo, event: ShortcutInput) {
   return false;
 }
 
-/** The action a key event performs, or null. Text fields keep their own editing keys. */
-export function shortcutFor(event: ShortcutInput, editingText: boolean): ShortcutAction | null {
+export function shortcutFor(event: ShortcutInput, editingText: boolean, canvasText = false, scope?: 'held' | 'presentation', canvasFocused = true): ShortcutAction | null {
   if (event.defaultPrevented || event.isComposing) return null;
-  editingText = editingText || !!event.target && isTextField(event.target);
   for (const binding of KEYMAP) {
-    if (editingText && !binding.inText) continue;
-    if (binding.textOnly && !(typeof HTMLElement !== 'undefined' && event.target instanceof HTMLElement && event.target.closest('.element-text-editor'))) continue;
+    if (binding.scope !== scope || binding.canvasOnly && !canvasFocused) continue;
+    if (editingText && !binding.inText && !(binding.textOnly && canvasText)) continue;
+    if (binding.textOnly && !canvasText) continue;
     if (binding.keys.some(combo => comboMatches(combo, event))) return binding.action;
   }
   return null;
@@ -213,7 +208,6 @@ export function shortcutFor(event: ShortcutInput, editingText: boolean): Shortcu
 
 export type ShortcutHelpGroup = { group: ShortcutGroup; items: { label: string; keys: string }[] };
 
-/** The numbered slot (1–9) a save-view or go-to-view chord refers to. */
 export function viewSlot(event: { key: string; code?: string }): number | null {
   const key = /^[1-9]$/.exec(event.key);
   if (key) return Number(key[0]);
@@ -221,12 +215,10 @@ export function viewSlot(event: { key: string; code?: string }): number | null {
   return code ? Number(code[1]) : null;
 }
 
-/** Saved views keep their number in the name, so a slot survives deletions and reordering. */
 export function viewNameForSlot(slot: number): string {
   return `View ${slot}`;
 }
 
-/** The keyboard help is generated from the keymap, grouped in reading order. */
 export const SHORTCUT_GROUPS: ShortcutHelpGroup[] = (() => {
   const order: ShortcutGroup[] = ['Tools', 'Edit', 'Arrange', 'Selection', 'View', 'Run', 'File', 'Help'];
   return order.map(group => ({
@@ -234,5 +226,3 @@ export const SHORTCUT_GROUPS: ShortcutHelpGroup[] = (() => {
     items: KEYMAP.filter(binding => binding.group === group).map(binding => ({ label: binding.label, keys: binding.display })),
   })).filter(entry => entry.items.length > 0);
 })();
-
-export const SHORTCUT_HELP = SHORTCUT_GROUPS.flatMap(entry => entry.items.map(item => [item.label, item.keys] as const));

@@ -33,6 +33,7 @@ try {
   const sizes = await modules.load('projectCanvas/sizes.js');
   const links = await modules.load('projectCanvas/links.js');
   const elementGeometry = await modules.load('projectCanvas/elementGeometry.js');
+  const geometry = await modules.load('projectCanvasGeometry.js');
   const minimap = await modules.load('projectCanvas/minimap.js');
   const shortcuts = await modules.load('shortcuts.js');
 
@@ -135,27 +136,15 @@ try {
 
   await test('size helpers read the base size and name the boundary', () => {
     const page = makePage('p', 'Home', '/', [makeSize('base', 'Desktop', 1440, 900), makeSize('phone', 'Phone', 390, 844, 'screen')], []);
-    assert.equal(sizes.baseSize(page).id, 'base');
     assert.equal(sizes.baseSizeId(page), 'base');
+    assert.deepEqual([500, 700, 1023, 1024].map(sizes.sizeLabel), ['Phone', 'Tablet', 'Tablet', 'Desktop']);
     assert.equal(sizes.hasManySizes(page), true);
     assert.equal(sizes.hasManySizes(makePage('one', 'One', '/one', [makeSize('only', 'Desktop', 800, 600)], [])), false);
-    assert.equal(sizes.findSize(page, 'phone').label, 'Phone');
-    assert.equal(sizes.findSize(page, 'gone'), null);
-    assert.equal(sizes.findSize(page, null), null);
-    assert.equal(sizes.isBaseSize(page, 'base'), true);
-    assert.equal(sizes.isBaseSize(page, 'phone'), false);
-    assert.equal(sizes.isBaseSize(page, null), false);
-    assert.equal(sizes.presetLabel('phone'), 'Phone');
-    assert.equal(sizes.presetLabel('tablet'), 'Tablet');
-    assert.equal(sizes.presetLabel('desktop'), 'Desktop');
-    assert.equal(sizes.presetLabel('custom', 100, 200), '100 × 200');
-    assert.equal(sizes.boundaryName(page, page.sizes[1]), 'Home · Phone');
-    assert.equal(sizes.boundaryName(makePage('one', 'One', '/one', [makeSize('only', 'Desktop', 800, 600)], []), makeSize('only', 'Desktop', 800, 600)), 'One');
+    assert.equal(sizes.boundaryLabel(page, page.sizes[1]), 'Home · Phone');
+    assert.equal(sizes.boundaryLabel(makePage('one', 'One', '/one', [makeSize('only', 'Desktop', 800, 600)], []), makeSize('only', 'Desktop', 800, 600)), 'One');
     assert.deepEqual(sizes.SIZE_PRESETS.map(preset => [preset.preset, preset.width, preset.height]), [
       ['phone', 390, 844], ['tablet', 820, 1180], ['desktop', 1440, 900],
     ]);
-    assert.equal(sizes.sameSizeRect(page.sizes[0], { ...page.sizes[0] }), true);
-    assert.equal(sizes.sameSizeRect(page.sizes[0], page.sizes[1]), false);
   });
 
   await test('resolveForSize applies overrides without writing them back', () => {
@@ -195,12 +184,7 @@ try {
     parent.children = [child];
     child.overrides = { phone: { hidden: true, dismissed: false } };
     const page = makePage('p', 'Home', '/', [makeSize('base', 'Desktop', 1440, 900), makeSize('phone', 'Phone', 390, 844)], [parent]);
-    assert.equal(sizes.hiddenInSize(child, 'phone'), true);
-    assert.equal(sizes.placeholderInSize(child, 'phone'), true);
-    assert.equal(sizes.placeholderInSize(child, 'base'), false);
     child.overrides.phone.dismissed = true;
-    assert.equal(sizes.placeholderInSize(child, 'phone'), false);
-    assert.deepEqual(sizes.overrideFor(child, 'phone'), child.overrides.phone);
     assert.deepEqual(sizes.elementOrigin(sizes.resolveForSize(makeProject([page]), page, 'base'), 'child'), { x: 110, y: 220 });
     assert.equal(sizes.elementOrigin(sizes.resolveForSize(makeProject([page]), page, 'base'), 'gone'), null);
   });
@@ -243,6 +227,8 @@ try {
     assert.equal(links.linkedName(project, makeElement('plain')), null);
     const resolved = links.resolveElement(project, copy);
     assert.equal(resolved.id, 'copy');
+    assert.equal(resolved.link, null);
+    assert.equal(links.linkedName(project, resolved), 'Card');
     assert.deepEqual(resolved.rect, { x: 300, y: 40, width: 200, height: 100 });
     assert.equal(resolved.visible, false);
     assert.equal(resolved.locked, true);
@@ -280,8 +266,8 @@ try {
   // -------------------------------------------------------------------------
 
   await test('element creation gives each kind sensible defaults', () => {
-    assert.equal(elementGeometry.ELEMENT_GRID, 8);
-    assert.equal(elementGeometry.MIN_ELEMENT_SIZE, 1);
+    assert.equal(geometry.GRID_SPACING, 8);
+    assert.equal(geometry.MIN_SIZE, 1);
     const input = elementGeometry.createElement('input', { x: 0, y: 0, width: 100, height: 40 });
     assert.equal(input.inputType, 'text');
     assert.equal(input.text, 'Input');
@@ -501,7 +487,7 @@ try {
           if (seen.has(key)) continue;
           seen.add(key);
           // Text-layer editing and everything else are separate contexts, as in shortcutFor.
-          for (const active of [other => other.inText, other => !other.textOnly]) {
+          for (const active of [other => !other.scope && other.inText, other => !other.scope && !other.textOnly]) {
             const fired = shortcuts.KEYMAP.filter(other => active(other) && other.keys.some(candidate => matches(candidate, event)));
             if (new Set(fired.map(other => other.action)).size > 1) {
               conflicts.push(`${key} → ${fired.map(other => other.action).join(', ')}`);
@@ -521,13 +507,13 @@ try {
     const expected = {
       'Select / Request / Boundary / Pointer / Text / Pan': [['selectTool', 'V'], ['requestTool', 'F'], ['boundaryTool', 'B'], ['pointerTool', 'P'], ['textTool', 'T'], ['panTool', 'H']],
       "Request on selection / request from a shape's outline": [['requestTool', 'F'], ['requestFromShape', 'Shift+F']],
-      'Rectangle / Ellipse / Line / Image': [['rectTool', 'R'], ['ellipseTool', 'O'], ['lineTool', 'L'], ['imageTool', 'Shift+Ctrl/Cmd+K']],
+      'Rectangle / Ellipse / Line / Image': [['rectTool', 'R'], ['ellipseTool', 'O'], ['lineTool', 'L'], ['imageTool', 'Ctrl/Cmd+Shift+K']],
       'Note (reference)': [['noteTool', 'N']],
       'Insert any element': [['insert', 'Ctrl/Cmd+I']],
-      'Copy / Paste / Paste with choice / Duplicate': [['copy', 'Ctrl/Cmd+C'], ['paste', 'Ctrl/Cmd+V'], ['pasteChoice', 'Shift+Ctrl/Cmd+V'], ['duplicate', 'Ctrl/Cmd+D']],
-      'Copy style / Paste style / Paint format': [['copyStyle', 'Ctrl/Cmd+Alt+C'], ['pasteStyle', 'Ctrl/Cmd+Alt+V'], ['paintFormat', 'Shift+Ctrl/Cmd+Alt+C']],
+      'Copy / Paste / Paste with choice / Duplicate': [['copy', 'Ctrl/Cmd+C'], ['paste', 'Ctrl/Cmd+V'], ['pasteChoice', 'Ctrl/Cmd+Shift+V'], ['duplicate', 'Ctrl/Cmd+D']],
+      'Copy style / Paste style / Paint format': [['copyStyle', 'Ctrl/Cmd+Alt+C'], ['pasteStyle', 'Ctrl/Cmd+Alt+V'], ['paintFormat', 'Ctrl/Cmd+Alt+Shift+C']],
       'Make linked / Unlink': [['link', 'Ctrl/Cmd+Alt+K'], ['unlink', 'Ctrl/Cmd+Alt+B']],
-      'Group / Ungroup': [['group', 'Ctrl/Cmd+G'], ['ungroup', 'Shift+Ctrl/Cmd+G']],
+      'Group / Ungroup': [['group', 'Ctrl/Cmd+G'], ['ungroup', 'Ctrl/Cmd+Shift+G']],
       'Bring forward / backward': [['forward', 'Ctrl/Cmd+]'], ['backward', 'Ctrl/Cmd+[']],
       'Select all / child / parent': [['selectAll', 'Ctrl/Cmd+A'], ['selectChild', 'Enter'], ['selectParent', 'Shift+Enter']],
       'Nudge / far nudge': [['nudge', 'Arrow keys'], ['nudgeFar', 'Shift+Arrow keys']],
@@ -539,7 +525,7 @@ try {
       'Hide panels': [['hidePanels', 'Ctrl/Cmd+\\']],
       'Request on selection': [['askAI', 'Ctrl/Cmd+K']],
       'Export': [['export', 'Ctrl/Cmd+E']],
-      'Undo / Redo': [['undo', 'Ctrl/Cmd+Z'], ['redo', 'Shift+Ctrl/Cmd+Z']],
+      'Undo / Redo': [['undo', 'Ctrl/Cmd+Z'], ['redo', 'Ctrl/Cmd+Shift+Z']],
     };
     assert.ok(rows.length >= 15, 'the Keyboard table was found');
     for (const [action, display] of Object.entries(expected)) {
@@ -550,7 +536,7 @@ try {
       assert.ok(bindings, `CANVAS.md Keyboard row is mapped: ${row[0]}`);
       for (const [action, display] of bindings) {
         assert.equal(shortcuts.shortcutLabel(action), display, `${action} display`);
-        assert.ok(shortcuts.SHORTCUT_HELP.some(item => item[0] === shortcuts.KEYMAP.find(binding => binding.action === action).label && item[1] === display));
+        assert.ok(shortcuts.SHORTCUT_GROUPS.flatMap(group => group.items).some(item => item.label === shortcuts.KEYMAP.find(binding => binding.action === action).label && item.keys === display));
         assert.equal(shortcuts.KEYMAP.filter(binding => binding.action === action).length, 1, `${action} has one binding`);
       }
     }
@@ -586,8 +572,6 @@ try {
     assert.equal(shortcuts.shortcutLabel('not-an-action'), '');
     assert.equal(shortcuts.withShortcut('Request', 'askAI'), 'Request · Ctrl/Cmd+K');
     assert.ok(shortcuts.SHORTCUT_GROUPS.find(group => group.group === 'Tools').items.length > 0);
-    assert.ok(shortcuts.TOOL_SHORTCUTS.selectTool);
-    assert.ok(shortcuts.TOOL_SHORTCUTS.rectangleTool === 'R');
   });
 } finally {
   await modules.cleanup();

@@ -1,3 +1,5 @@
+import { linkedDefinition } from './links';
+import { sizeTarget } from '../projectCanvasGeometry';
 import { sharedElementValues } from './sharedElementValues';
 import { ColourField } from './ColourField';
 import { FontField } from './FontField';
@@ -182,16 +184,17 @@ export function ElementProperties({ project, page, sizeId, elements, busy, updat
 }) {
   const single = elements.length === 1 ? elements[0] : null;
   const multi = elements.length > 1;
-  const linked = single?.link ? project.linked?.[single.link] ?? null : null;
+  const linked = linkedDefinition(project, single);
   // Every selected layer in one linked group already shares its content; offer the group, not
   // another link command that would only fail as "already linked".
   const shared = useMemo(() => sharedElementValues(elements), [elements]);
-  const sharedLinkId = multi ? shared.link || null : null;
+  const linkIds = elements.map(element => linkedDefinition(project, element)?.id ?? null);
+  const sharedLinkId = multi && linkIds.every(id => id === linkIds[0]) ? linkIds[0] : null;
   const sharedLinked = sharedLinkId ? project.linked?.[sharedLinkId] ?? null : null;
   // Edits in one size become that size's overrides; All sizes changes base values and clears
   // the same fields from every size.
   const sized = <T,>(patch: T): T & { size_id?: string | null; all_sizes?: boolean } =>
-    sizeId === null ? { ...patch, all_sizes: true } : { ...patch, size_id: sizeId };
+    ({ ...patch, ...sizeTarget({ sizeId }) });
   const sameKind = shared.kind !== undefined;
   const kind = shared.kind ?? null;
   const { fill, strokeColour, strokeWidth, radius, opacity, shadow, shadowColour, textStyle, textColour, text, url, layout, x, y, width, height, rotation } = shared;
@@ -282,7 +285,7 @@ export function ElementProperties({ project, page, sizeId, elements, busy, updat
   const showsRadius = multi || (kind !== null && kind !== 'text' && kind !== 'line' ? true : (radius ?? 0) > 0);
 
   // A layer inside a linked copy is already shared; only a plain layer can be made linked.
-  const makeLinkable = !!single && !single.link && !canUnlink;
+  const makeLinkable = !!single && !linked && !canUnlink;
   return <div className="dock-form props">
     <div className="dock-layer-title" style={{ alignItems: 'center' }}><strong>{single ? elementKindLabel(single) : `${elements.length} layers`}</strong>
       {page.sizes.length > 1 && <EditScopeChoice scope={sizeId === null ? 'all' : 'this'} choose={requestEditScope} />}

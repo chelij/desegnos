@@ -1,8 +1,8 @@
 import {
-  pointerAt, POINTER_HIT_PX, referenceItemAt, viewportWorldRect, type Boundary, type CanvasCamera,
+  pointerAt, POINTER_HIT_PX, boundaryAt, viewportWorldRect, type Boundary, type CanvasCamera,
   type CanvasTarget, type Point, type RequestBox,
 } from '../projectCanvasGeometry';
-import type { Command, PendingRequest, Project, Rect, RequestArea, RequestShape, RequestTarget } from '../types';
+import type { Command, PendingRequest, Project, Rect, RequestArea, RequestShape, RequestTarget, WorkspaceView } from '../types';
 import { coveredTargets, dedupeTargets, requestShapeBounds } from './requests';
 import { shownReference } from './reference';
 import { pointerEntries } from './pointers';
@@ -28,8 +28,7 @@ type Context = {
   focusedSize: string | null;
   elementEntries: (targets: CanvasTarget[]) => ElementEntry[];
   requestDraft: { targets: RequestTarget[]; area: RequestArea | null; screen: ScreenRect; } | null;
-  addRequest: (request: PendingRequest) => Promise<void>;
-  editProject: (command: Command) => Promise<unknown>;
+  editProject: (command: Command) => Promise<WorkspaceView | null>;
   generate: (elementIds: string[]) => void;
   selectRequest: (requestId: string) => void;
 };
@@ -42,7 +41,7 @@ export function createRequestTool(context: () => Context) {
       const page = project.pages.find(item => item.id === box.pageId);
       return { kind: 'element', page: box.pageId, size: page && page.sizes.length > 1 ? box.sizeId : null, id: box.elementId };
     }
-    const item = referenceItemAt(project.reference.map(entry => ({ itemId: entry.id, rect: shownReference(entry, movingItems) })), point);
+    const item = boundaryAt(project.reference.map(entry => ({ itemId: entry.id, rect: shownReference(entry, movingItems) })), point);
     if (item) return { kind: 'reference', id: item.itemId };
     const hits = pointerAt(pointerEntries(project.pointers ?? [], pointerWorldNow(), new Set(), viewportWorldRect(camera, viewSize)), point, POINTER_HIT_PX / camera.zoom);
     if (hits) return { kind: 'pointer', id: hits.pointer.id };
@@ -136,7 +135,7 @@ export function createRequestTool(context: () => Context) {
   }
 
   function submitRequestDraft(text: string, existing: PendingRequest | null = null) {
-    const { requestDraft, setRequestDraft, surface, addRequest, editProject, selectRequest } = context();
+    const { requestDraft, setRequestDraft, surface, editProject, selectRequest } = context();
     const draft = requestDraft;
     setRequestDraft(null);
     const trimmed = text.trim();
@@ -145,8 +144,12 @@ export function createRequestTool(context: () => Context) {
       id: crypto.randomUUID(), text: trimmed, attachments: [], targets: draft.targets, area: draft.area,
       requestedAt: new Date().toISOString(),
     };
-    const saved = existing ? editProject({ type: 'update_request', request }) : addRequest(request);
-    return saved.then(() => { selectRequest(request.id); return true; }, () => false)
+    const saved = editProject({ type: existing ? 'update_request' : 'add_request', request });
+    return saved.then(workspace => {
+      if (!workspace) return false;
+      selectRequest(request.id);
+      return true;
+    })
       .finally(() => surface.current?.focus({ preventScroll: true }));
   }
 

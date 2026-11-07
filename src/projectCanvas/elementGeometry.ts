@@ -1,11 +1,13 @@
+import { defaultText, ELEMENT_KIND_LABELS, findElementIn } from './elementFacts';
+export { ELEMENT_KIND_LABELS, defaultText, elementLabel, defaultLayerNameBase, isDefaultLayerName } from './elementFacts';
+import { GRID_SPACING, MIN_SIZE, snapValue } from '../projectCanvasGeometry';
+export { MIN_SIZE, snapValue, sameRect, unionBounds as unionRects, findElementIn } from '../projectCanvasGeometry';
 import { canvasFont } from './fonts';
 import type { Element, ElementKind, ElementLayout, ElementPadding, ElementStyle, InputType, OutputType, Page, Project, Rect } from '../types';
 import type { Point } from '../projectCanvasGeometry';
 import { resolveElements } from './links';
 import { resolveForSize } from './sizes';
 
-export const ELEMENT_GRID = 8;
-export const MIN_ELEMENT_SIZE = 1;
 export type ElementCorner = 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w';
 
 export type ElementPathEntry = {
@@ -68,12 +70,6 @@ const SHAPE_FILL = '#d9d9d9';
 const BORDER_COLOUR = '#d2d2d2';
 const SURFACE_COLOUR = '#ffffff';
 
-export const ELEMENT_KIND_LABELS: Record<ElementKind, string> = {
-  box: 'Box', group: 'Group', text: 'Text', ellipse: 'Ellipse', line: 'Line', image: 'Image',
-  button: 'Button', link: 'Link', input: 'Input', textarea: 'Textarea', select: 'Select',
-  checkbox: 'Checkbox', radio: 'Radio', video: 'Video', audio: 'Audio', embed: 'Embed', code: 'Code',
-};
-
 /** Insert groups: every element kind a website can hold, by what it is for. */
 export const INSERT_GROUPS: { label: string; kinds: ElementKind[] }[] = [
   { label: 'Shapes', kinds: ['box', 'ellipse', 'line'] },
@@ -85,7 +81,6 @@ export const INSERT_GROUPS: { label: string; kinds: ElementKind[] }[] = [
 
 export const TEXT_KINDS: ElementKind[] = ['text', 'button', 'link', 'input', 'textarea', 'select', 'checkbox', 'radio'];
 export const isTextKind = (kind: ElementKind) => TEXT_KINDS.includes(kind);
-export const isSingleLineText = (kind: ElementKind) => kind === 'button' || kind === 'link' || kind === 'input' || kind === 'select';
 export const holdsChildren = (kind: ElementKind) => kind === 'box' || kind === 'group';
 
 export const DEFAULT_TEXT_STYLE = { fontFamily: 'system-ui', size: 16, weight: 400, italic: false, lineHeight: 1.4, letterSpacing: 0, color: TEXT_COLOUR, align: 'left' as const };
@@ -108,29 +103,6 @@ export function defaultStyle(kind: ElementKind): ElementStyle {
     textStyle: { ...DEFAULT_TEXT_STYLE, size: kind === 'text' ? 20 : 14, color: kind === 'link' ? '#0b5cad' : TEXT_COLOUR },
   };
 }
-
-export function defaultText(kind: ElementKind): string {
-  switch (kind) {
-    case 'text': return 'Text';
-    case 'button': return 'Button';
-    case 'link': return 'Link';
-    case 'input': return 'Input';
-    case 'textarea': return 'Textarea';
-    case 'select': return 'Option 1';
-    case 'checkbox': return 'Checkbox';
-    case 'radio': return 'Radio';
-    default: return '';
-  }
-}
-
-export const DEFAULT_SIZES: Record<ElementKind, { width: number; height: number }> = {
-  box: { width: 240, height: 160 }, group: { width: 0, height: 0 }, text: { width: 0, height: 0 },
-  ellipse: { width: 160, height: 120 }, line: { width: 160, height: 0 }, image: { width: 320, height: 200 },
-  button: { width: 160, height: 44 }, link: { width: 120, height: 28 }, input: { width: 240, height: 40 },
-  textarea: { width: 240, height: 100 }, select: { width: 240, height: 40 }, checkbox: { width: 160, height: 24 },
-  radio: { width: 160, height: 24 }, video: { width: 320, height: 180 }, audio: { width: 320, height: 64 },
-  embed: { width: 320, height: 180 }, code: { width: 360, height: 160 },
-};
 
 export function createElement(kind: ElementKind, rect: Rect, patch: Partial<Element> = {}): Element {
   const base: Element = {
@@ -173,27 +145,7 @@ export const roundRect = (rect: Rect): Rect => ({
   x: Math.round(rect.x), y: Math.round(rect.y), width: Math.round(rect.width), height: Math.round(rect.height),
 });
 
-export const snapValue = (value: number) => Math.round(value / ELEMENT_GRID) * ELEMENT_GRID;
-export const snapPoint = (point: Point): Point => ({ x: snapValue(point.x), y: snapValue(point.y) });
-export const sameRect = (first: Rect, second: Rect) => first.x === second.x && first.y === second.y && first.width === second.width && first.height === second.height;
-
-export function unionRects(rects: Rect[]): Rect {
-  if (!rects.length) return { x: 0, y: 0, width: 0, height: 0 };
-  const left = Math.min(...rects.map(rect => rect.x));
-  const top = Math.min(...rects.map(rect => rect.y));
-  const right = Math.max(...rects.map(rect => rect.x + rect.width));
-  const bottom = Math.max(...rects.map(rect => rect.y + rect.height));
-  return { x: left, y: top, width: right - left, height: bottom - top };
-}
-
-export function findElementIn(elements: Element[], id: string): Element | null {
-  for (const element of elements) {
-    if (element.id === id) return element;
-    const found = findElementIn(element.children, id);
-    if (found) return found;
-  }
-  return null;
-}
+export const snapPoint = (point: Point, spacing = GRID_SPACING): Point => ({ x: snapValue(point.x, spacing), y: snapValue(point.y, spacing) });
 
 /** A boundary's layers as the canvas draws them in one size: linked copies resolved, then that
  * size's overrides. Without a size, the base size, the design every other size inherits. */
@@ -309,12 +261,12 @@ export function reparentedElementRect(
   return elementLocalRect(elementCanvasRect(rect, fromBoundary, fromParent), toBoundary, toParent);
 }
 
-export function movedElementRect(rect: Rect, delta: Point, snap: boolean): Rect {
-  return snap ? { ...rect, x: snapValue(rect.x + delta.x), y: snapValue(rect.y + delta.y) } : { ...rect, x: rect.x + delta.x, y: rect.y + delta.y };
+export function movedElementRect(rect: Rect, delta: Point, snap: boolean, spacing = GRID_SPACING): Rect {
+  return snap ? { ...rect, x: snapValue(rect.x + delta.x, spacing), y: snapValue(rect.y + delta.y, spacing) } : { ...rect, x: rect.x + delta.x, y: rect.y + delta.y };
 }
 
-export function resizedElementRect(rect: Rect, corner: ElementCorner, point: Point, snap: boolean): Rect {
-  const px = snap ? snapValue(point.x) : point.x, py = snap ? snapValue(point.y) : point.y;
+export function resizedElementRect(rect: Rect, corner: ElementCorner, point: Point, snap: boolean, spacing = GRID_SPACING): Rect {
+  const px = snap ? snapValue(point.x, spacing) : point.x, py = snap ? snapValue(point.y, spacing) : point.y;
   const left = corner === 'nw' || corner === 'w' || corner === 'sw';
   const right = corner === 'ne' || corner === 'e' || corner === 'se';
   const top = corner === 'nw' || corner === 'n' || corner === 'ne';
@@ -322,20 +274,20 @@ export function resizedElementRect(rect: Rect, corner: ElementCorner, point: Poi
   let x = left ? px : rect.x, y = top ? py : rect.y;
   let width = left ? rect.x + rect.width - px : right ? px - rect.x : rect.width;
   let height = top ? rect.y + rect.height - py : bottom ? py - rect.y : rect.height;
-  if (width < MIN_ELEMENT_SIZE) {
-    if (left) x = rect.x + rect.width - MIN_ELEMENT_SIZE;
-    width = MIN_ELEMENT_SIZE;
+  if (width < MIN_SIZE) {
+    if (left) x = rect.x + rect.width - MIN_SIZE;
+    width = MIN_SIZE;
   }
-  if (height < MIN_ELEMENT_SIZE) {
-    if (top) y = rect.y + rect.height - MIN_ELEMENT_SIZE;
-    height = MIN_ELEMENT_SIZE;
+  if (height < MIN_SIZE) {
+    if (top) y = rect.y + rect.height - MIN_SIZE;
+    height = MIN_SIZE;
   }
   return { x, y, width, height };
 }
 
 /** Shift-resize keeps the original ratio; the corner that is not dragged stays anchored. */
-export function ratioResizedRect(rect: Rect, corner: ElementCorner, point: Point, snap: boolean): Rect {
-  const free = resizedElementRect(rect, corner, point, snap);
+export function ratioResizedRect(rect: Rect, corner: ElementCorner, point: Point, snap: boolean, spacing = GRID_SPACING): Rect {
+  const free = resizedElementRect(rect, corner, point, snap, spacing);
   if (!rect.width || !rect.height) return free;
   const ratio = rect.width / rect.height;
   const widthDrives = corner === 'n' || corner === 's' ? false : free.width / ratio >= free.height;
@@ -350,7 +302,7 @@ export function ratioResizedRect(rect: Rect, corner: ElementCorner, point: Point
   };
 }
 
-export type ResizeKeys = { snap?: boolean; ratio?: boolean; fromCentre?: boolean };
+export type ResizeKeys = { spacing?: number; snap?: boolean; ratio?: boolean; fromCentre?: boolean };
 
 /**
  * A handle drag with the transform keys applied: Shift keeps the ratio, Alt resizes from the
@@ -358,22 +310,22 @@ export type ResizeKeys = { snap?: boolean; ratio?: boolean; fromCentre?: boolean
  */
 export function resizedRectWithKeys(rect: Rect, corner: ElementCorner, point: Point, keys: ResizeKeys = {}): Rect {
   const next = keys.ratio
-    ? ratioResizedRect(rect, corner, point, keys.snap === true)
-    : resizedElementRect(rect, corner, point, keys.snap === true);
+    ? ratioResizedRect(rect, corner, point, keys.snap === true, keys.spacing)
+    : resizedElementRect(rect, corner, point, keys.snap === true, keys.spacing);
   if (!keys.fromCentre) return next;
-  const width = Math.max(MIN_ELEMENT_SIZE, next.width);
-  const height = Math.max(MIN_ELEMENT_SIZE, next.height);
+  const width = Math.max(MIN_SIZE, next.width);
+  const height = Math.max(MIN_SIZE, next.height);
   return { x: rect.x + rect.width / 2 - width / 2, y: rect.y + rect.height / 2 - height / 2, width, height };
 }
 
-export type DrawKeys = { snap?: boolean; square?: boolean; fromCentre?: boolean };
+export type DrawKeys = { spacing?: number; snap?: boolean; square?: boolean; fromCentre?: boolean };
 
 /**
  * A shape drag with the transform keys applied: Shift constrains to a square (a circle inside
  * the square), Alt draws from the press point as the centre, and both combine.
  */
 export function drawRectWithKeys(start: Point, point: Point, keys: DrawKeys = {}): Rect {
-  const end = keys.snap === true ? snapPoint(point) : point;
+  const end = keys.snap === true ? snapPoint(point, keys.spacing) : point;
   let dx = end.x - start.x, dy = end.y - start.y;
   if (keys.square) {
     const size = Math.max(Math.abs(dx), Math.abs(dy));
@@ -407,8 +359,8 @@ export function rectFromPoints(start: Point, end: Point): Rect {
   return { x: Math.min(start.x, end.x), y: Math.min(start.y, end.y), width: Math.abs(end.x - start.x), height: Math.abs(end.y - start.y) };
 }
 
-export function draggedElementRect(rect: Rect, start: Point, point: Point, snap: boolean): Rect {
-  return movedElementRect(rect, { x: point.x - start.x, y: point.y - start.y }, snap);
+export function draggedElementRect(rect: Rect, start: Point, point: Point, snap: boolean, spacing = GRID_SPACING): Rect {
+  return movedElementRect(rect, { x: point.x - start.x, y: point.y - start.y }, snap, spacing);
 }
 
 /** A grid or stack box lays its children out itself; its own rect still places it. */
@@ -429,30 +381,6 @@ export const pictureName = (project: Project, id: string | null | undefined): st
   const identity = project.importedIdentity;
   return identity?.assets.find(asset => asset.id === id)?.name ?? identity?.photos?.find(photo => photo.id === id)?.name ?? `Picture ${id.slice(0, 8)}`;
 };
-
-export function elementLabel(element: Element): string {
-  const name = element.name?.trim() ?? '';
-  if (name && !isDefaultLayerName(element)) return name;
-  // A layer still showing its kind's placeholder text reads by its numbered name; once the
-  // text is its own, text layers and controls show that text, as they always have.
-  const line = element.text.trim().split('\n')[0];
-  if (line && line !== defaultText(element.kind)) return line.slice(0, 80);
-  if (element.kind === 'code') return `${element.language || 'Code'} code`;
-  return name || line.slice(0, 80) || ELEMENT_KIND_LABELS[element.kind];
-}
-
-/** The base name new layers of a kind are numbered from; a box reads as a rectangle. */
-export function defaultLayerNameBase(kind: ElementKind): string {
-  return kind === 'box' ? 'Rectangle' : ELEMENT_KIND_LABELS[kind];
-}
-
-/** True when a name is the numbered default new layers receive, not one the user chose. */
-export function isDefaultLayerName(element: Element): boolean {
-  const name = element.name?.trim() ?? '';
-  const base = defaultLayerNameBase(element.kind);
-  const number = name.startsWith(`${base} `) ? name.slice(base.length + 1) : '';
-  return /^[1-9]\d*$/.test(number);
-}
 
 /** Stack or grid padding per side: the layer's own sides, else the layout's all-sides value. */
 export function elementPadding(element: Element): ElementPadding {

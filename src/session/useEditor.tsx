@@ -26,9 +26,8 @@ import { type PendingRecovery, type RecoveryChoices } from '../RecoveryBanner';
 import type { ProjectLocationView, RequestArea } from '../types';
 import { type DossierSection } from '../Notes';
 import { type MenuItem } from '../Menus';
-import { KEYMAP, shortcutFor, shortcutLabel } from '../shortcuts';
+import { KEYMAP, shortcutFor } from '../shortcuts';
 import { toggleCanvasTarget, selectedReference, type CanvasTarget } from '../projectCanvasGeometry';
-
 import { elementPath, findElementIn } from '../projectCanvas/elementGeometry';
 import { usePanelState } from '../dock/panelState';
 import { announcesStatus } from '../generationSession.js';
@@ -59,15 +58,15 @@ type UpdateState =
 export function useEditor({ initialView }: { initialView?: WorkspaceView } = {}) {
 
   const {
-    performAction,
+    performAction, canPerformAction, actionMenuItem,
   } = createEditorShortcuts(() => ({
-    showStartPage, current, openPanel, setShowPalette, newUntitled, open, clearInsertKind,
+    run, showStartPage, current, openPanel, setShowPalette, newUntitled, open, clearInsertKind,
     setInsertSignal, changeCanvasTool, panelActions, canvasRef, togglePlay, previewSelectedBoundary,
     openExportPanel, runExport, travel, save, closeProject,
     adaptSelectedSize: () => {
       const page = current.current?.project?.pages.find(page => page.id === canvasFocus);
       const size = page?.sizes.find(size => size.id === canvasFocusSize);
-      if (page && size && size.width < page.sizes[0].width) void mutate({ type: 'adapt_size', page_id: page.id, size_id: size.id }).catch(() => {});
+      if (page && size && size.width < page.sizes[0].width) void mutate({ type: 'adapt_size', page_id: page.id, size_id: size.id });
     },
   }));
 
@@ -405,11 +404,15 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
       if (editingText && navigator.userAgent.includes('Linux') && (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') {
         event.preventDefault(); document.execCommand(event.shiftKey ? 'redo' : 'undo'); return;
       }
-      const action = shortcutFor(event, editingText);
+      if (!onStartPage && canvasRef.current?.handleKeyDown(event)) return;
+      const canvasText = event.target instanceof HTMLElement && event.target.classList.contains('element-text-editor');
+      const action = shortcutFor(event, editingText, canvasText, undefined, canvasRef.current?.containsTarget(event.target) ?? false);
       if (action) performAction(action, event);
     };
+    const release = (event: KeyboardEvent) => canvasRef.current?.handleKeyUp(event);
     window.addEventListener('keydown', listener);
-    return () => window.removeEventListener('keydown', listener);
+    window.addEventListener('keyup', release);
+    return () => { window.removeEventListener('keydown', listener); window.removeEventListener('keyup', release); };
   });
 
   const canvasBoundaries = project ? canvasView(project).boundaries : [];
@@ -575,22 +578,22 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
   const menuItems: MenuItem[] = [
     ...(!onStartPage ? [{ id: 'home', label: 'Home', action: () => setShowStartPage(true) }] : []),
     ...(onStartPage && project ? [{ id: 'back-to-canvas', label: 'Back to canvas', action: () => setShowStartPage(false) }] : []),
-    { id: 'new', label: 'New project', shortcut: shortcutLabel('new'), action: () => run(newUntitled) },
-    { id: 'open', label: 'Open project…', shortcut: shortcutLabel('open'), action: () => run(open) },
+    actionMenuItem('new', 'new'),
+    actionMenuItem('open', 'open'),
     ...(recentProjects.length ? [{ id: 'open-recent', label: 'Open recent', children: [
       ...recentProjects.map((entry, index) => ({ id: `open-recent-${index}`, label: entry.name, action: () => run(() => openRecent(entry.path)) })),
       { id: 'open-recent-separator', label: '', separator: true },
       { id: 'forget-recent', label: 'Forget recent project', children: recentProjects.map((entry, index) => ({ id: `forget-recent-${index}`, label: entry.name, action: () => run(() => forgetRecent(entry.path)) })) },
     ] }] : []),
     { id: 'open-folder', label: 'Open project folder…', action: () => run(() => open(true)) },
-    { id: 'save', label: 'Save', shortcut: shortcutLabel('save'), disabled: !canEditProject, action: () => run(() => save()) },
-    { id: 'close-project', label: 'Close project', shortcut: shortcutLabel('closeProject'), disabled: !canEditProject, action: () => run(closeProject) },
-    { id: 'save-as', label: 'Save as', shortcut: shortcutLabel('saveAs'), disabled: !canEditProject, action: () => run(() => save(true)) },
+    actionMenuItem('save', 'save'),
+    actionMenuItem('closeProject', 'close-project'),
+    actionMenuItem('saveAs', 'save-as'),
     { id: 'save-copy', label: 'Save a copy without history…', disabled: !canEditProject || pending > 0, action: () => run(saveCopy) },
     { id: 'rename-project', label: 'Rename project…', disabled: !canEditProject, action: () => openPanel({ kind: 'rename' }) },
     ...(view?.recoveries.length ? [{ id: 'recover', label: 'Recover unsaved projects', action: () => openPanel({ kind: 'recovery' }) }] : []),
     { id: 'file-divider', label: '', separator: true },
-    { id: 'export', label: 'Export…', shortcut: shortcutLabel('export'), disabled: !canEditProject, action: openExportPanel },
+    actionMenuItem('export', 'export'),
     ...(canEditProject && project.lastExport ? [{ id: 'open-browser', label: 'Open in browser', action: () => run(exports.openInBrowser) }] : []),
     { id: 'ai-divider', label: '', separator: true },
     { id: 'settings', label: 'AI settings', action: () => setShowAiSettings(true) },
@@ -606,7 +609,7 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
       { id: 'project-location', label: 'Default project location', action: () => openPanel({ kind: 'projectLocation' }) },
     ] },
     { id: 'check-updates', label: 'Check for updates…', disabled: updateState.kind === 'checking', action: () => { void checkForUpdates(); } },
-    { id: 'help', label: 'Keyboard shortcuts', shortcut: shortcutLabel('help'), action: () => openPanel({ kind: 'shortcuts' }) },
+    actionMenuItem('help', 'help'),
   ];
 
   const problemAction = needsAiSettings(error) ? { label: 'AI settings', onClick: () => setShowAiSettings(true) }
@@ -657,19 +660,18 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
   const selectedBounds = project ? selectionBounds(project, canvasSelection) ?? (canvasSelection.length ? null : focusedBoundary?.rect ?? null) : null;
   const zoomPercent = Math.round(canvasZoom * 100);
   const paletteCommands: PaletteCommand[] = [
-    ...KEYMAP.filter(binding => binding.action !== 'commandPalette').map(binding => {
-      const canvasAnswer = canvasRef.current?.canRunCanvasAction(binding.action) ?? null;
-      const missingProject = (onStartPage || !project) && !['new', 'open', 'help'].includes(binding.action);
+    ...KEYMAP.filter(binding => binding.action !== 'commandPalette' && binding.palette !== false).map(binding => {
       return {
         id: `action:${binding.action}`, label: binding.label, keys: binding.display, group: binding.group,
-        disabled: canvasAnswer === null ? missingProject : !canvasAnswer,
-        run: () => { if (!canvasRef.current?.runCanvasAction(binding.action)) performAction(binding.action); } };
+        disabled: !canPerformAction(binding.action),
+        run: () => performAction(binding.action),
+      };
     }),
     ...menuPaletteCommands(menuItems),
   ];
 
   return {
-    edits, exports, removedWithUndo,
+    edits, exports, removedWithUndo, performAction,
     panel, openPanel, closePanel, togglePanel, saving, updateState, dismissUpdate, changeCanvasTool,
     showPalette, paletteCommands, setShowPalette, closeRequest, setCloseRequest, onStartPage, project, view,
     run, switchProjectTab, closeProjectTab, menuItems, resolvedTheme, setTheme, compactHistory,

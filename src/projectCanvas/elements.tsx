@@ -5,7 +5,6 @@ import type { ElementCorner } from './elementGeometry';
 import { elementPadding, elementPath, intrinsicElementSize, isTextKind, measureText, pictureUri } from './elementGeometry';
 import { elementOrigin, resolveForSize, sizeAtWidth } from './sizes';
 import { canvasFont, useCanvasFont, useCanvasFontRevision } from './fonts';
-import { shortcutFor, type ShortcutAction } from '../shortcuts';
 import type { ScreenRect } from './surface';
 
 const FALLBACK_TEXT = '#1a1a1a';
@@ -274,7 +273,7 @@ export function ElementTree({ project, pageId, sizeId, elements, boundary, editi
   </div>;
 }
 
-export const ELEMENT_CORNERS: ElementCorner[] = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'];
+const ELEMENT_CORNERS: ElementCorner[] = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'];
 
 export type MeasuredSelection = { elementId: string; sizeId: string; rect: ScreenRect; inherited: boolean };
 
@@ -357,9 +356,8 @@ export function ElementSelectionOverlay({ surface, project, selection, camera, v
 }
 
 /** Text is edited in fixed screen pixels, never inside the transformed layer. */
-export function ElementTextEditor({ element, screen, zoom, autoWidth, autoFocus, onAction, onCommit }: {
+export function ElementTextEditor({ element, screen, zoom, autoWidth, autoFocus, onCommit }: {
   element: Element; screen: ScreenRect; zoom: number; autoWidth: boolean; autoFocus: boolean;
-  onAction: (action: ShortcutAction) => boolean;
   onCommit: (text: string) => void;
 }) {
   const [draft, setDraft] = useState(element.text);
@@ -403,12 +401,9 @@ export function ElementTextEditor({ element, screen, zoom, autoWidth, autoFocus,
       onPointerDown={event => event.stopPropagation()}
       onBlur={settle}
       onKeyDown={event => {
-        event.stopPropagation();
         if (event.nativeEvent.isComposing) return;
-        const action = shortcutFor(event, true);
-        if ((action === 'bold' || action === 'italic') && onAction(action)) { event.preventDefault(); return; }
         if (event.key === 'Escape' || event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
-          event.preventDefault(); settle();
+          event.preventDefault(); event.stopPropagation(); settle();
         }
       }} />
   </>;

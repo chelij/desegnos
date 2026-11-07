@@ -1,13 +1,15 @@
+import { TOOL_ACTIONS } from '../shortcuts';
+import { sizeTarget } from '../projectCanvasGeometry';
 import type { ProjectCanvasProps } from './interactionTypes';
 import { type PointerEvent as ReactPointerEvent } from 'react';
 import {
-  canvasTargetKey, fitCamera, MAX_ZOOM, referenceItemAt, referenceNoteRect, movedReferenceRect, panCamera,
+  canvasTargetKey, fitCamera, MAX_ZOOM, boundaryAt, referenceNoteRect, movedReferenceRect, panCamera,
   resizedReferenceRect, samePointerEndpoint, zoomCameraAt, type Boundary, type CanvasCamera, type CanvasTarget,
   type ElementTarget, type Point,
   CLICK_NOTE_SIZE,
 } from '../projectCanvasGeometry';
-import { steppedZoom } from '../canvasGeometry';
-import type { Element, ElementKind, ElementMove, ElementPatch, Page, Pointer, PointerSource, PointerTarget, Project, Rect, ReferenceItem, RequestArea, RequestTarget } from '../types';
+import { steppedZoom } from '../projectCanvasGeometry';
+import type { Element, ElementKind, ElementPatch, Page, Pointer, PointerSource, PointerTarget, Project, Rect, ReferenceItem, RequestArea, RequestTarget } from '../types';
 import type { ProjectTool, RequestToolShape } from '../EditorTools';
 import { dedupeTargets, requestTargetKey } from './requests';
 import { shownReference } from './reference';
@@ -91,8 +93,8 @@ type Context = {
   onTool: (tool: ProjectTool) => void;
   duplicateElementMove: (active: MoveElementsDrag, point: Point, snap: boolean) => Promise<void>;
   commitElementMove: (active: MoveElementsDrag, point: Point, snap: boolean) => Promise<boolean>;
-  updateElements: (pageId: string, patches: ElementPatch[]) => Promise<unknown> | void;
-  moveElements: (moves: ElementMove[]) => Promise<unknown> | void;
+  updateElements: ProjectCanvasProps['edits']['updateElements'];
+  moveElements: ProjectCanvasProps['edits']['moveElements'];
   marqueeTargets: (rect: Rect) => ElementTarget[];
   selectTargets: (targets: { pageId: string; elementId: string; sizeId?: string | null; }[]) => void;
   endpointAt: (point: Point) => { endpoint: PointerSource | PointerTarget; rect: Rect; } | null;
@@ -206,7 +208,7 @@ export function createCanvasInteraction(context: () => Context) {
     if (tool === 'note' || (tool === 'text' && !boundaryUnder(point) && !boundaryNear(point))) {
       event.preventDefault();
       beginPointerSession(event);
-      drag.current = { kind: 'draw-note', pointerId: event.pointerId, start: point, rect: referenceNoteRect(point, point), moved: false };
+      drag.current = { kind: 'draw-note', pointerId: event.pointerId, start: point, rect: referenceNoteRect(point, point, project.gridSettings.snap ? project.gridSettings.spacing : 0), moved: false };
       return;
     }
     if (tool === 'boundary') {
@@ -214,7 +216,7 @@ export function createCanvasInteraction(context: () => Context) {
       // keeps boundaries from overlapping and keeps the tool from silently refusing a press.
       event.preventDefault();
       beginPointerSession(event);
-      drag.current = { kind: 'draw-boundary', pointerId: event.pointerId, start: point, rect: boundaryDrawRect(point, point), moved: false };
+      drag.current = { kind: 'draw-boundary', pointerId: event.pointerId, start: point, rect: boundaryDrawRect(point, point, {}, project.gridSettings.snap ? project.gridSettings.spacing : 0), moved: false };
       return;
     }
     if (tool === 'pointer') {
@@ -255,7 +257,7 @@ export function createCanvasInteraction(context: () => Context) {
     }
     if (tool === 'insert' && !insertKind) return;
     if (DRAW_TOOLS.includes(tool) || (tool === 'insert' && insertKind)) {
-      const kind: ElementKind = tool === 'insert' ? insertKind! : tool === 'rect' ? 'box' : tool === 'ellipse' ? 'ellipse' : 'line';
+      const kind: ElementKind = tool === 'insert' ? insertKind! : TOOL_ACTIONS.find(binding => binding.tool === tool)!.elementKind!;
       drawElementDrag(event, point, kind, kind === 'line');
       return;
     }
@@ -306,7 +308,7 @@ export function createCanvasInteraction(context: () => Context) {
       return;
     }
     if (tool === 'select') {
-      const item = referenceItemAt(project.reference.map(entry => ({ itemId: entry.id, rect: shownReference(entry, movingItems) })), point);
+      const item = boundaryAt(project.reference.map(entry => ({ itemId: entry.id, rect: shownReference(entry, movingItems) })), point);
       if (item) {
         const next = nextSelectionFor({ kind: 'reference', itemId: item.itemId }, additive);
         selectReference(item.itemId, additive);
@@ -378,8 +380,8 @@ export function createCanvasInteraction(context: () => Context) {
     if (!active.moved && Math.hypot(point.x - pointerStart.x, point.y - pointerStart.y) * camera.zoom < 4) return;
     active.moved = true;
     if (active.kind === 'move-boundary') {
-      active.rect = { ...active.origin, x: Math.round(active.origin.x + point.x - active.start.x), y: Math.round(active.origin.y + point.y - active.start.y) };
-    } else if (active.kind === 'draw-boundary') active.rect = boundaryDrawRect(active.start, point, { square: event.shiftKey, fromCentre: event.altKey });
+      active.rect = { ...active.origin, ...snapPoint({ x: active.origin.x + point.x - active.start.x, y: active.origin.y + point.y - active.start.y }, project.gridSettings.snap ? project.gridSettings.spacing : 0) };
+    } else if (active.kind === 'draw-boundary') active.rect = boundaryDrawRect(active.start, point, { square: event.shiftKey, fromCentre: event.altKey }, project.gridSettings.snap ? project.gridSettings.spacing : 0);
     else if (active.kind === 'draw-request-area') {
       active.current = point;
       active.keys = { square: event.shiftKey, fromCentre: event.altKey };
@@ -388,9 +390,9 @@ export function createCanvasInteraction(context: () => Context) {
         if (Math.hypot(point.x - last.x, point.y - last.y) * camera.zoom >= 2) active.points.push(point);
       }
     }
-    else if (active.kind === 'draw-note') active.rect = referenceNoteRect(active.start, point);
+    else if (active.kind === 'draw-note') active.rect = referenceNoteRect(active.start, point, project.gridSettings.snap ? project.gridSettings.spacing : 0);
     else if (active.kind === 'draw-element') {
-      const endPoint = project.gridSettings.snap && !event.altKey ? snapPoint(point) : point;
+      const endPoint = project.gridSettings.snap && !event.altKey ? snapPoint(point, project.gridSettings.spacing) : point;
       if (active.line) {
         // A drawn line's rotation snaps to 15 degree steps while Shift is held.
         const end = event.shiftKey ? snappedLineEnd(active.start, endPoint, 15) : endPoint;
@@ -398,7 +400,7 @@ export function createCanvasInteraction(context: () => Context) {
         active.rotation = Math.atan2(end.y - active.start.y, end.x - active.start.x) * 180 / Math.PI;
         active.rect = { x: (active.start.x + end.x) / 2 - length / 2, y: (active.start.y + end.y) / 2, width: length, height: 0 };
       } else if (active.elementKind === 'box' || active.elementKind === 'ellipse') {
-        active.rect = drawRectWithKeys(active.start, endPoint, { square: event.shiftKey, fromCentre: event.altKey });
+        active.rect = drawRectWithKeys(active.start, endPoint, { square: event.shiftKey, fromCentre: event.altKey, spacing: project.gridSettings.spacing });
       } else {
         active.rect = rectFromPoints(active.start, endPoint);
       }
@@ -408,7 +410,7 @@ export function createCanvasInteraction(context: () => Context) {
       active.current = point;
     } else if (active.kind === 'move-elements') {
       active.axisLocked = event.shiftKey;
-      const delta = elementMoveDelta(active.entries, active.start, point, project.gridSettings.snap, active.axisLocked);
+      const delta = elementMoveDelta(active.entries, active.start, point, project.gridSettings.snap, active.axisLocked, project.gridSettings.spacing);
       const rects: Record<string, Rect> = {};
       for (const entry of active.entries) {
         const world = { ...entry.world, x: entry.world.x + delta.x, y: entry.world.y + delta.y };
@@ -419,7 +421,7 @@ export function createCanvasInteraction(context: () => Context) {
       const localPoint = elementLocalRect({ x: point.x, y: point.y, width: 0, height: 0 }, active.entry.boundaryOrigin, active.entry.parentOrigin);
       // Images keep their ratio by default and Shift frees it; Alt resizes from the centre.
       const keepRatio = active.entry.element.kind === 'image' ? !event.shiftKey : event.shiftKey;
-      active.rect = resizedRectWithKeys(active.entry.rect, active.corner, localPoint, { snap: true, ratio: keepRatio, fromCentre: event.altKey });
+      active.rect = resizedRectWithKeys(active.entry.rect, active.corner, localPoint, { snap: project.gridSettings.snap, ratio: keepRatio, fromCentre: event.altKey, spacing: project.gridSettings.spacing });
     } else if (active.kind === 'draw-pointer') {
       active.current = point;
     } else if (active.kind === 'reattach-pointer') {
@@ -430,7 +432,7 @@ export function createCanvasInteraction(context: () => Context) {
       const delta = active.axisLocked ? axisLockedDelta(travel) : travel;
       const items: Record<string, Rect> = {};
       for (const target of active.targets) {
-        const moved = movedReferenceRect(target.origin, delta);
+        const moved = movedReferenceRect(target.origin, delta, project.gridSettings.snap ? project.gridSettings.spacing : 0);
         // Keep the locked axis on its exact starting value, grid snapping included.
         const rect = active.axisLocked
           ? { ...moved, x: delta.x === 0 ? target.origin.x : moved.x, y: delta.y === 0 ? target.origin.y : moved.y }
@@ -439,7 +441,7 @@ export function createCanvasInteraction(context: () => Context) {
         items[target.itemId] = rect;
       }
     } else if (active.kind === 'resize-reference') {
-      active.rect = resizedReferenceRect(active.origin, active.corner, point);
+      active.rect = resizedReferenceRect(active.origin, active.corner, point, project.gridSettings.snap ? project.gridSettings.spacing : 0);
     }
     renderDrag(version => version + 1);
   }
@@ -480,7 +482,7 @@ export function createCanvasInteraction(context: () => Context) {
     if (active.kind === 'draw-request-area') {
       const points = [...active.points, active.current];
       if (active.shape === 'freehand') { if (points.length >= 3) closeRequestArea(points, 'freehand'); return; }
-      const rect = drawRectWithKeys(active.start, active.current, { square: event.shiftKey, fromCentre: event.altKey });
+      const rect = drawRectWithKeys(active.start, active.current, { square: event.shiftKey, fromCentre: event.altKey, spacing: project.gridSettings.spacing });
       if (rect.width < 4 || rect.height < 4) return;
       closeRequestArea(rect, active.shape);
       return;
@@ -489,7 +491,7 @@ export function createCanvasInteraction(context: () => Context) {
       const id = crypto.randomUUID();
       const rect = active.moved ? active.rect : { x: active.rect.x, y: active.rect.y, ...CLICK_NOTE_SIZE };
       busy.current = true;
-      void addReference({ id, rect, kind: { kind: 'note', text: '' } }).then(() => { createdItem.current = id; selectReference(id); onTool('select'); }).catch(() => {}).finally(() => { busy.current = false; });
+      void addReference({ id, rect, kind: { kind: 'note', text: '' } }).then(() => { createdItem.current = id; selectReference(id); onTool('select'); }).finally(() => { busy.current = false; });
       return;
     }
     if (active.kind === 'draw-element') {
@@ -515,13 +517,13 @@ export function createCanvasInteraction(context: () => Context) {
           if (active.elementKind === 'image') setPendingImage(null);
           onTool('select');
         }
-      }).catch(() => {}).finally(() => { busy.current = false; });
+      }).finally(() => { busy.current = false; });
       return;
     }
     if (active.kind === 'move-elements') {
       if (active.moved) {
-        if (active.duplicate) void duplicateElementMove(active, lastPointer.current ?? active.start, project.gridSettings.snap).catch(() => {});
-        else void commitElementMove(active, lastPointer.current ?? active.start, project.gridSettings.snap).catch(() => {});
+        if (active.duplicate) void duplicateElementMove(active, lastPointer.current ?? active.start, project.gridSettings.snap);
+        else void commitElementMove(active, lastPointer.current ?? active.start, project.gridSettings.snap);
       }
       return;
     }
@@ -529,7 +531,7 @@ export function createCanvasInteraction(context: () => Context) {
       if (!active.moved) return;
       const boundary = boundaryRect(active.entry.sizeId);
       if (!boundary) return;
-      const sizing = active.entry.allSizes ? { all_sizes: true } : { size_id: active.entry.sizeId };
+      const sizing = sizeTarget(active.entry);
       if (active.entry.element.kind === 'group' && active.entry.rect.width > 0 && active.entry.rect.height > 0) {
         const sx = active.rect.width / active.entry.rect.width, sy = active.rect.height / active.entry.rect.height;
         const patches: ElementPatch[] = [{ id: active.entry.id, rect: active.rect, ...sizing }];
@@ -537,10 +539,10 @@ export function createCanvasInteraction(context: () => Context) {
           if (child.id === active.entry.id) continue;
           patches.push({ id: child.id, rect: { x: child.rect.x * sx, y: child.rect.y * sy, width: child.rect.width * sx, height: child.rect.height * sy }, ...sizing });
         }
-        void Promise.resolve(updateElements(active.entry.pageId, patches)).catch(() => {});
+        void updateElements(active.entry.pageId, patches);
       } else {
-        void Promise.resolve(moveElements([{ id: active.entry.id, to_page_id: active.entry.pageId, to_parent_id: active.entry.parentId, index: active.entry.index, rect: active.rect,
-          size_id: active.entry.allSizes ? null : active.entry.sizeId, all_sizes: active.entry.allSizes }])).catch(() => {});
+        void moveElements([{ id: active.entry.id, to_page_id: active.entry.pageId, to_parent_id: active.entry.parentId, index: active.entry.index, rect: active.rect,
+          ...sizeTarget(active.entry) }]);
       }
       return;
     }
@@ -569,12 +571,12 @@ export function createCanvasInteraction(context: () => Context) {
         const focus = () => focusBehaviour(source);
         if (behaviourFor(project, source)) { focus(); return; }
         busy.current = true;
-        void addPointer(behaviourPointer(source, '')).then(focus).catch(() => {}).finally(() => { busy.current = false; });
+        void addPointer(behaviourPointer(source, '')).then(focus).finally(() => { busy.current = false; });
         return;
       }
       const pointer: Pointer = { id: crypto.randomUUID(), from: active.source, to: hit.endpoint as PointerTarget, comment: '', kind: 'reference', wiring: null };
       busy.current = true;
-      void addPointer(pointer).then(() => { createdPointer.current = pointer.id; setArmedPointer(null); selectPointer(pointer.id); }).catch(() => {}).finally(() => { busy.current = false; });
+      void addPointer(pointer).then(() => { createdPointer.current = pointer.id; setArmedPointer(null); selectPointer(pointer.id); }).finally(() => { busy.current = false; });
       return;
     }
     if (active.kind === 'reattach-pointer') {
@@ -583,7 +585,7 @@ export function createCanvasInteraction(context: () => Context) {
       const hit = endpointAt(lastPointer.current ?? active.current);
       if (!hit || samePointerEndpoint(active.original, hit.endpoint)) return;
       if (active.end === 'from' && hit.endpoint.kind !== 'element' && hit.endpoint.kind !== 'boundary') return;
-      void updatePointer(active.pointer, active.end === 'from' ? { from: hit.endpoint as PointerSource } : { to: hit.endpoint as PointerTarget }).catch(() => {});
+      void updatePointer(active.pointer, active.end === 'from' ? { from: hit.endpoint as PointerSource } : { to: hit.endpoint as PointerTarget });
       return;
     }
     if (active.kind === 'move-selection') { if (active.moved) void commitMove(active.targets, active.rects); return; }

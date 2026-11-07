@@ -1,3 +1,4 @@
+import { linkedName } from './links';
 import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { Icon, type IconName } from '../icons';
 import type { Element, ElementKind, ElementPatch, Project } from '../types';
@@ -363,7 +364,7 @@ export function ElementLayers({ project, pageId, sizeId, elements, selection, se
         : target && target.parentId === parentId && target.index === 0 && index === 0 ? 'after' : null;
       return <Fragment key={element.id}>
         {gap > 0 && <li aria-hidden="true" style={{ height: gap * LAYER_ROW_HEIGHT }} />}
-        <LayerRow linkedName={element.link ? project.linked?.[element.link]?.name ?? null : null}
+        <LayerRow linkedName={linkedName(project, element)}
         pageId={pageId} sizeId={sizeId} element={element} parentId={parentId} index={index} depth={depth} open={open}
         selected={selected.has(element.id)} toggle={toggle} select={selectRow} update={updateRow} remove={removeRow}
         movable={!fixed.has(element.id)} dropLine={dropLine} grab={grabRow} hasBehaviour={behaviourIds.has(`${pageId}:${element.id}`)} />

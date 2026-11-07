@@ -1,3 +1,4 @@
+import type { ProjectCanvasProps } from './interactionTypes';
 import { canvasBoxes } from './canvasView';
 import { screenRect } from './surface';
 import { type PointerEvent as ReactPointerEvent } from 'react';
@@ -34,7 +35,7 @@ type Context = {
   selectTargets: (targets: { pageId: string; elementId: string; sizeId?: string | null; }[]) => void;
   boundaryUnder: (point: Point) => Boundary | null;
   elementToReference: (pageId: string, elementId: string, rect: Rect, sizeId?: string | null) => Promise<void>;
-  moveElements: (moves: ElementMove[]) => Promise<unknown> | void;
+  moveElements: ProjectCanvasProps['edits']['moveElements'];
   clearSelection: () => void;
   selection: CanvasTarget[];
   worldPoint: (event: { clientX: number; clientY: number; }) => Point;
@@ -154,8 +155,8 @@ export function createMovingActions(context: () => Context) {
   }
 
   async function duplicateElementMove(active: MoveElementsDrag, point: Point, snap: boolean) {
-    const { insertElements, duplicateRepeat, selectTargets } = context();
-    const delta = elementMoveDelta(active.entries, active.start, point, snap, active.axisLocked);
+    const { project, insertElements, duplicateRepeat, selectTargets } = context();
+    const delta = elementMoveDelta(active.entries, active.start, point, snap, active.axisLocked, project.gridSettings.spacing);
     const groups = new Map<string, { pageId: string; parentId: string | null; index: number; sizeId: string | null; allSizes: boolean; elements: Element[]; targets: { pageId: string; elementId: string; sizeId: string | null }[] }>();
     for (const entry of active.entries) {
       const key = `${entry.pageId}\u0000${entry.parentId ?? ''}\u0000${entry.sizeId}\u0000${entry.allSizes}`;
@@ -168,7 +169,7 @@ export function createMovingActions(context: () => Context) {
     }
     const targets: { pageId: string; elementId: string; sizeId: string | null }[] = [];
     for (const group of groups.values()) {
-      await Promise.resolve(insertElements(group.pageId, group.parentId, group.index, group.elements, undefined, group.sizeId)).catch(() => {});
+      await insertElements(group.pageId, group.parentId, group.index, group.elements, undefined, group.sizeId);
       targets.push(...group.targets);
     }
     if (targets.length) {
@@ -184,7 +185,7 @@ export function createMovingActions(context: () => Context) {
     const skip = new Set(active.entries.map(entry => entry.id));
     for (const entry of active.entries) for (const id of elementTreeIds(entry.element.children)) skip.add(id);
     const moves: ElementMove[] = [];
-    const delta = elementMoveDelta(active.entries, active.start, point, snap, active.axisLocked);
+    const delta = elementMoveDelta(active.entries, active.start, point, snap, active.axisLocked, project.gridSettings.spacing);
     rememberRepeatMove(active.entries, delta);
     let converted = false;
     // Every entry is dropped at the same pointer position with the same excluded subtree.
@@ -221,7 +222,7 @@ export function createMovingActions(context: () => Context) {
         size_id: allSizes || pageChanged ? null : sizeId, all_sizes: allSizes,
       });
     }
-    if (moves.length) await Promise.resolve(moveElements(moves)).catch(() => {});
+    if (moves.length) await moveElements(moves);
     if (converted) clearSelection();
     else selectTargets(moves.map(move => ({ pageId: move.to_page_id, elementId: move.id, sizeId: move.all_sizes ? null : move.size_id ?? null })));
     return true;
@@ -276,8 +277,7 @@ export function createMovingActions(context: () => Context) {
     const { busy, savePlacements } = context();
     if (!moves.length && !reference.length) return;
     busy.current = true;
-    try { await savePlacements(moves, reference); } catch { /* App surfaces the failed command. */ }
-    finally { busy.current = false; }
+    try { await savePlacements(moves, reference); } finally { busy.current = false; }
   }
 
   async function commitMove(targets: MoveTarget[], rects: Record<string, Rect>) {
@@ -291,11 +291,10 @@ export function createMovingActions(context: () => Context) {
         const boundary = boundaryAt(boundaryList, centre(rect));
         const item = project.reference.find(entry => entry.id === target.itemId);
         if (boundary && item) {
-          await referenceToElement(target.itemId, boundary.pageId, pageRectFromCanvas(item.kind.kind === 'element' ? rect : referenceFrameRect(rect, boundary.rect), boundary.rect), boundary.sizeId);
+          await referenceToElement(target.itemId, boundary.pageId, pageRectFromCanvas(item.kind.kind === 'element' ? rect : referenceFrameRect(rect, boundary.rect, project.gridSettings.snap ? project.gridSettings.spacing : 0), boundary.rect), boundary.sizeId);
         } else updateReference(target.itemId, { rect });
       }
-    } catch { /* App surfaces the failed command. */ }
-    finally { busy.current = false; }
+    } finally { busy.current = false; }
   }
 
   return {

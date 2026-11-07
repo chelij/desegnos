@@ -100,7 +100,7 @@ export function createDrawingActions(context: () => Context) {
     event.preventDefault();
     beginPointerSession(event);
     const pointerStart = point;
-    point = project.gridSettings.snap && !event.altKey ? snapPoint(point) : point;
+    point = project.gridSettings.snap && !event.altKey ? snapPoint(point, project.gridSettings.spacing) : point;
     const rect = { ...point, width: 0, height: 0 };
     drag.current = { kind: 'draw-element', pointerId: event.pointerId, start: point, pointerStart, pageId: boundary.pageId, sizeId: boundary.sizeId, parentId, parentOrigin, boundary: boundary.rect, rect, elementKind: kind, line, rotation: 0, moved: false };
     return drag.current;
@@ -113,8 +113,7 @@ export function createDrawingActions(context: () => Context) {
     try {
       const pageId = await createBoundary(rect, boundaryKind);
       if (pageId) { selectBoundary(pageId); onTool('select'); }
-    } catch { /* App surfaces the failed command. */ }
-    finally { busy.current = false; }
+    } finally { busy.current = false; }
   }
 
   return { chooseImage, insertionPoint, elementRectAt, placeElement, drawElementDrag, persistDraw };
