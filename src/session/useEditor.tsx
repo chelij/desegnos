@@ -408,7 +408,9 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
         : preset === 'tablet' ? { label: 'Tablet', width: 820, height: 1180 }
           : preset === 'desktop' ? { label: 'Desktop', width: 1440, height: 900 }
             : { label: sizeName(Math.round(width)), width: Math.round(width), height: Math.round(height) };
-      const existing = preset !== 'custom' && page.sizes.find(size => size.label.toLowerCase() === dimensions.label.toLowerCase() || size.width === dimensions.width);
+      // A linked size of the same width already covers this preset: focus it instead of adding a
+      // duplicate. The base size is never a match; a small base can still gain a phone size.
+      const existing = preset !== 'custom' && page.sizes.slice(1).find(size => size.width === dimensions.width);
       if (existing) { focusedSizeId = existing.id; return null; }
       const size: PageSize = { id: sizeId, ...dimensions, kind: last.kind, x: last.x + last.width + 160, y: last.y };
       const anchor = sizeBoundaries(project);
