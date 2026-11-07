@@ -2015,3 +2015,23 @@ fn page_names_resolve_in_updates_inserts_and_replacement_children() {
         );
     }
 }
+
+#[test]
+fn generated_children_are_adapted_in_the_generation_undo_step() {
+    let (mut project, page, target, _) = setup();
+    let phone = Uuid::new_v4();
+    let mut size = project.pages[0].base_size().clone();
+    size.id = phone;
+    size.width = 390;
+    project.pages[0].sizes.push(size);
+    let snapshot = project.prepare_requirements().unwrap();
+    let reply = candidate(&snapshot, target, page, project.pointers[0].id);
+    let mut session = Session::new(project.clone()).unwrap();
+    session.apply_generation(&snapshot, &reply, &[], &BTreeMap::new(), |_| Ok(())).unwrap();
+    let child = &session.project().element(target).unwrap().1.children[0];
+    assert!(child.overrides[&phone].automatic);
+    assert!(child.overrides[&phone].style.as_ref().unwrap().text_style.size >= 14.0);
+    session.undo(|_| Ok(())).unwrap();
+    assert!(session.project().element(target).unwrap().1.children.is_empty());
+    assert_eq!(session.project().pages, project.pages);
+}

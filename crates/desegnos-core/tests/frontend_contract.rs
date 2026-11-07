@@ -401,6 +401,7 @@ fn populated(mut project: Project) -> Project {
             element.overrides.insert(
                 size_id,
                 ElementOverride {
+                    automatic: false,
                     rect: Some(rect(12.0, 22.0, 100.0, 30.0)),
                     style: Some(ElementStyle {
                         flip_x: false,

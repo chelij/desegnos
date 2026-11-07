@@ -1,3 +1,4 @@
+mod adapt;
 mod attachments;
 mod dossier;
 mod elements;
@@ -19,6 +20,7 @@ mod session;
 mod website;
 mod website_import;
 
+pub use adapt::adapt_size;
 pub use attachments::*;
 pub use dossier::*;
 pub use elements::*;

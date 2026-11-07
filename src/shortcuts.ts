@@ -18,7 +18,7 @@ export type ShortcutAction =
   | 'minimap' | 'saveView' | 'goToView'
   | 'play' | 'preview' | 'askAI' | 'export'
   | 'new' | 'open' | 'save' | 'saveAs' | 'closeProject'
-  | 'commandPalette' | 'help';
+  | 'adaptLayout' | 'commandPalette' | 'help';
 
 export type ShortcutGroup = 'File' | 'Edit' | 'Arrange' | 'Selection' | 'Tools' | 'View' | 'Run' | 'Help';
 export type ShortcutInput = { key: string; code?: string; ctrlKey: boolean; metaKey: boolean; altKey: boolean; shiftKey: boolean; defaultPrevented?: boolean; isComposing?: boolean; target?: EventTarget | null };
@@ -87,6 +87,7 @@ export const KEYMAP: Binding[] = [
   // Arrange
   { action: 'flipHorizontal', label: 'Flip horizontal', group: 'Arrange', keys: [shift('h')], display: 'Shift+H' },
   { action: 'flipVertical', label: 'Flip vertical', group: 'Arrange', keys: [shift('v')], display: 'Shift+V' },
+  { action: 'adaptLayout', label: 'Adapt layout', group: 'Arrange', keys: [altModShift('a')], display: 'Ctrl/Cmd+Alt+Shift+A' },
   { action: 'alignLeft', label: 'Align left', group: 'Arrange', keys: [{ key: 'a', code: 'KeyA', alt: true, shift: false }], display: 'Alt+A' },
   { action: 'alignCentre', label: 'Align horizontal centres', group: 'Arrange', keys: [{ key: 'h', code: 'KeyH', alt: true, shift: false }], display: 'Alt+H' },
   { action: 'alignRight', label: 'Align right', group: 'Arrange', keys: [{ key: 'd', code: 'KeyD', alt: true, shift: false }], display: 'Alt+D' },

@@ -592,10 +592,8 @@ fn size_override_edits_only_that_size_and_all_sizes_edits_clear_overrides() {
         rect(70.0, 80.0, 140.0, 28.0)
     );
     assert!(
-        !project.page(page).unwrap().elements[0]
-            .overrides
-            .contains_key(&phone),
-        "the all-sizes edit removed the override"
+        project.page(page).unwrap().elements[0].overrides[&phone].rect.is_none(),
+        "the all-sizes edit removed the manually changed geometry"
     );
 }
 
@@ -679,13 +677,8 @@ fn new_layers_are_shared_and_can_still_be_hidden_per_size() {
         .unwrap();
     assert!(phone_element.visible);
     assert!(
-        !included
-            .element(added)
-            .unwrap()
-            .1
-            .overrides
-            .contains_key(&phone),
-        "including removed the empty override"
+        !included.element(added).unwrap().1.overrides[&phone].hidden,
+        "including retains responsive geometry and clears visibility"
     );
 
     // Dismissing in the phone size leaves the phone placeholder state on its own.
@@ -706,7 +699,7 @@ fn new_layers_are_shared_and_can_still_be_hidden_per_size() {
 }
 
 #[test]
-fn new_layers_scale_x_and_only_shrink_width_when_narrower_sizes_need_it() {
+fn new_layers_adapt_in_the_insertion_transaction() {
     let (project, page, base, phone) = project_with_phone();
     let wide = Uuid::new_v4();
     let small = Uuid::new_v4();
@@ -738,8 +731,11 @@ fn new_layers_scale_x_and_only_shrink_width_when_narrower_sizes_need_it() {
         .find(|element| element.id == small)
         .unwrap();
     assert_eq!(desktop_wide.rect, rect(400.0, 20.0, 300.0, 40.0));
-    assert_eq!(phone_wide.rect, rect(195.0, 20.0, 195.0, 40.0));
-    assert_eq!(phone_small.rect, rect(48.75, 80.0, 100.0, 40.0));
+    assert_eq!(phone_wide.rect.width, 300.0);
+    assert_eq!(phone_small.rect.width, 100.0);
+    assert!(phone_wide.rect.x + phone_wide.rect.width <= 390.0);
+    assert!(phone_small.rect.y >= phone_wide.rect.y + phone_wide.rect.height);
+    assert!(project.element(wide).unwrap().1.overrides[&phone].automatic);
     assert!(phone_wide.visible && phone_small.visible && desktop_wide.visible);
 }
 

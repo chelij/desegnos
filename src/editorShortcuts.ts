@@ -18,6 +18,7 @@ type Context = {
   canvasRef: import("react").RefObject<ProjectCanvasHandle | null>;
   togglePlay: (pageId?: string | null) => void;
   previewSelectedBoundary: () => void;
+  adaptSelectedSize: () => void;
   openExportPanel: (restore?: boolean) => void;
   runExport: (previewPageId?: string | null) => Promise<void>;
   travel: (command: 'undo_project' | 'redo_project') => Promise<void>;
@@ -27,7 +28,7 @@ type Context = {
 
 export function createEditorShortcuts(context: () => Context) {
   function performAction(action: ShortcutAction, event: ActionEvent = NO_ACTION_EVENT) {
-    const { showStartPage, current, openPanel, setShowPalette, newUntitled, open, clearInsertKind, setInsertSignal, changeCanvasTool, panelActions, canvasRef, togglePlay, previewSelectedBoundary, openExportPanel, runExport, travel, save, closeProject } = context();
+    const { showStartPage, current, openPanel, setShowPalette, newUntitled, open, clearInsertKind, setInsertSignal, changeCanvasTool, panelActions, canvasRef, togglePlay, previewSelectedBoundary, adaptSelectedSize, openExportPanel, runExport, travel, save, closeProject } = context();
     // The start page has no canvas: project commands wait until a canvas is open again.
     if ((showStartPage || !current.current?.project) && !['new', 'open', 'help', 'commandPalette'].includes(action)) return;
     const project = current.current?.project;
@@ -78,6 +79,7 @@ export function createEditorShortcuts(context: () => Context) {
       case 'fitAll': event.preventDefault(); canvasRef.current?.fit(); return;
       case 'fitSelection': event.preventDefault(); canvasRef.current?.fitSelection(); return;
       case 'play': if (!project) return; event.preventDefault(); togglePlay(); return;
+      case 'adaptLayout': event.preventDefault(); adaptSelectedSize(); return;
       case 'preview': if (!project) return; event.preventDefault(); previewSelectedBoundary(); return;
       case 'export':
         if (!project) return;

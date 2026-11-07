@@ -475,6 +475,9 @@ impl ElementMeta {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ElementOverride {
+    /// True only for overrides owned by deterministic responsive adaptation.
+    #[serde(default)]
+    pub automatic: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rect: Option<Rect>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1349,8 +1352,8 @@ impl Project {
         false
     }
 
-    /// Add elements to a boundary. Adding in one size only (`size_id`) hides the new layer in
-    /// every other size, so those sizes draw a placeholder instead of a sudden copy.
+    /// Add shared elements to a boundary. The complete changed tree is adapted for narrower
+    /// linked sizes at the end of the project transaction.
     pub(crate) fn insert_elements(
         &mut self,
         page_id: Uuid,
@@ -1385,58 +1388,6 @@ impl Project {
             page.size(source).is_some(),
             "This size is not part of the boundary.",
         )?;
-        let parent = parent_id.and_then(|id| find_element(&page.elements, id));
-        let widths: Vec<(Uuid, f64)> = page
-            .sizes
-            .iter()
-            .map(|size| {
-                let width = parent
-                    .map(|element| {
-                        element
-                            .overrides
-                            .get(&size.id)
-                            .and_then(|over| over.rect.as_ref())
-                            .unwrap_or(&element.rect)
-                            .width
-                    })
-                    .unwrap_or(f64::from(size.width));
-                (size.id, width)
-            })
-            .collect();
-        let source_width = widths.iter().find(|(id, _)| *id == source).unwrap().1;
-        // New layers inherit everywhere. Only geometry that would overflow a narrower parent
-        // needs a per-size override; later This size edits still control visibility and style.
-        fn fit(elements: &mut [Element], widths: &[(Uuid, f64)], source: Uuid, source_width: f64) {
-            for element in elements {
-                let original = element.rect;
-                let mut child_widths = Vec::new();
-                for &(id, width) in widths {
-                    let mut rect = original;
-                    if width < source_width {
-                        rect.x =
-                            (original.x * width / source_width).clamp(0.0, (width - 1.0).max(0.0));
-                        rect.width = original.width.min((width - rect.x).max(1.0));
-                    }
-                    if id != source && !element.overrides.contains_key(&id) && rect != original {
-                        element.overrides.entry(id).or_default().rect = Some(rect);
-                    }
-                    let child_width = element
-                        .overrides
-                        .get(&id)
-                        .and_then(|over| over.rect.as_ref())
-                        .unwrap_or(&rect)
-                        .width;
-                    child_widths.push((id, child_width));
-                }
-                fit(
-                    &mut element.children,
-                    &child_widths,
-                    source,
-                    original.width.max(1.0),
-                );
-            }
-        }
-        fit(&mut elements, &widths, source, source_width.max(1.0));
         let children = match parent_id {
             None => &mut page.elements,
             Some(parent_id) => {
@@ -2485,6 +2436,14 @@ fn merge_override(
     visible: Option<bool>,
     dismissed: Option<bool>,
 ) {
+    if over.rect.is_some()
+        || over.style.is_some()
+        || over.layout.is_some()
+        || visible.is_some()
+        || dismissed.is_some()
+    {
+        entry.automatic = false;
+    }
     if over.rect.is_some() {
         entry.rect = over.rect;
     }
@@ -2553,7 +2512,9 @@ pub(crate) fn apply_sized_patch(
 fn write_rect(element: &mut Element, rect: Rect, target: SizeTarget) {
     match target {
         SizeTarget::Size(size_id) => {
-            element.overrides.entry(size_id).or_default().rect = Some(rect);
+            let entry = element.overrides.entry(size_id).or_default();
+            entry.automatic = false;
+            entry.rect = Some(rect);
         }
         SizeTarget::AllSizes => {
             element.rect = rect;

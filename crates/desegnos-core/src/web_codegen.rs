@@ -897,31 +897,6 @@ fn rules(
     }
 }
 
-/// The width one size's layers were drawn at. Per-size overrides are authored in that size's
-/// space, but a layer that keeps the base size's geometry still carries the base size's pixels.
-/// Scaling by the widest right edge keeps such a tree inside the viewport instead of letting a
-/// narrower breakpoint stretch it past the edge.
-fn layout_width(size: &crate::PageSize, elements: &[Element]) -> u32 {
-    fn right(element: &Element) -> f64 {
-        let own = element.rect.x + element.rect.width;
-        if !element.layout.is_free() {
-            return own;
-        }
-        element
-            .children
-            .iter()
-            .filter(|child| child.visible)
-            .map(|child| element.rect.x + right(child))
-            .fold(own, f64::max)
-    }
-    let widest = elements
-        .iter()
-        .filter(|element| element.visible)
-        .map(right)
-        .fold(0.0, f64::max);
-    size.width.max(widest.ceil().max(0.0) as u32)
-}
-
 /// The page shell's declarations for one size.
 fn page_declarations(
     size: &crate::PageSize,
@@ -941,7 +916,7 @@ fn page_declarations(
     let mut css = Declarations::new();
     css.set(
         "--desegnos-unit",
-        format!("calc(100cqw / {})", layout_width(size, elements)),
+        format!("calc(100cqw / {})", size.width),
     );
     css.set("height", length(height));
     if matches!(size.kind, crate::BoundaryKind::Screen) {
@@ -1103,7 +1078,7 @@ pub(super) fn render(
             rules(&elements, &ElementLayout::Free, &mut fonts, &mut sorted);
             match (&base_page, &base_rules) {
                 (Some(base_page), Some(base_rules)) => {
-                    // A size restates only the declarations that differ from the base size.
+                    // A size restates declarations that differ from the preceding size.
                     let declarations = page_css.diff(base_page);
                     if !declarations.is_empty() {
                         css.push_str(&format!(".desegnos-page{{{declarations}}}\n"));
@@ -1128,10 +1103,10 @@ pub(super) fn render(
                     }
                 }
             }
-            if index == 0 {
-                base_page = Some(page_css);
-                base_rules = Some(sorted);
-            }
+            // Queries accumulate. Diff against the preceding breakpoint so returning to a
+            // smaller size's value still resets an intervening breakpoint's declaration.
+            base_page = Some(page_css);
+            base_rules = Some(sorted);
             if index > 0 {
                 css.push_str("}\n");
             }
@@ -1939,44 +1914,33 @@ mod tests {
         assert!(css.contains(&format!("max-width:{};", length(200.0))));
     }
 
-    // A size whose layers keep the base size's geometry is still drawn in base-size pixels. The
-    // unit must follow that geometry, or a narrower breakpoint multiplies every layer by
-    // base/breakpoint (a 1440px nav at the 820px tablet query becomes ~1772px at 1024).
     #[test]
-    fn a_size_that_keeps_the_base_geometry_scales_instead_of_overflowing() {
+    fn each_breakpoint_uses_its_own_pixel_space() {
         let mut project = project();
         let base = project.pages[0].base_size().width;
-        project.pages[0].elements = vec![empty_element(
-            ElementKind::Group,
-            Rect {
-                x: 0.0,
-                y: 0.0,
-                width: base as f64,
-                height: 80.0,
-            },
-        )];
         project.pages[0].sizes.push(PageSize {
-            id: Uuid::new_v4(),
-            label: "Phone".into(),
-            width: 390,
-            height: 844,
-            kind: BoundaryKind::Page,
-            x: 1000.0,
-            y: 0.0,
+            id: Uuid::new_v4(), label: "Phone".into(), width: 390, height: 844,
+            kind: BoundaryKind::Page, x: 1000.0, y: 0.0,
         });
         let css = exported_css(&project);
-        assert!(
-            css.contains(&format!("100cqw / {base}")),
-            "the base geometry sets the scale: {css}"
-        );
-        assert!(
-            !css.contains("100cqw / 390"),
-            "the phone breakpoint must not stretch a base-size layout: {css}"
-        );
-        assert!(
-            css.contains("html,body{margin:0;padding:0;overflow-x:clip;}"),
-            "horizontal overflow is clipped at the page edge: {css}"
-        );
+        assert!(css.contains("100cqw / 390"), "{css}");
+        assert!(css.contains(&format!("100cqw / {base}")), "{css}");
+    }
+
+    #[test]
+    fn breakpoints_restore_values_that_match_the_smallest_size() {
+        let mut project = project();
+        project.pages[0].sizes.push(PageSize {
+            id: Uuid::new_v4(), label: "Phone".into(), width: 390, height: 600,
+            kind: BoundaryKind::Page, x: 1000.0, y: 0.0,
+        });
+        project.pages[0].sizes.push(PageSize {
+            id: Uuid::new_v4(), label: "Tablet".into(), width: 600, height: 900,
+            kind: BoundaryKind::Page, x: 1500.0, y: 0.0,
+        });
+        let css = exported_css(&project);
+        let desktop = css.split("@media (min-width:800px)").nth(1).unwrap();
+        assert!(desktop.contains("height:calc(600 * var(--desegnos-unit))"), "{desktop}");
     }
 
     #[test]

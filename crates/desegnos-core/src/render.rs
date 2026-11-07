@@ -2376,6 +2376,26 @@ fn write_items(svg: &mut String, scene: &Scene, items: &[Item], ids: &mut SvgIds
     }
 }
 
+/// Uses exactly the same font advances and word wrapping as canvas fit-text.
+pub(crate) struct ResponsiveTextMeasure(FontSet, crate::ProjectStyles);
+impl ResponsiveTextMeasure {
+    pub(crate) fn new(styles: crate::ProjectStyles) -> Self {
+        Self(FontSet::new(), styles)
+    }
+    pub(crate) fn resolve_style(&self, base: &crate::ElementStyle) -> crate::ElementStyle {
+        let mut style = base.clone();
+        self.1.resolve(&mut style);
+        style
+    }
+    pub(crate) fn height(&mut self, element: &Element, style: &crate::ElementStyle, width: f64) -> f64 {
+        let mut measured = element.clone();
+        measured.style = style.clone();
+        let content = text_box(&measured, Rect { x: 0.0, y: 0.0, width, height: 1.0 }).0;
+        wrap_text(&mut self.0, &element.text, &style.text_style, content.width, wraps(&element.kind))
+            .len().max(1) as f64 * line_height(&style.text_style) + 4.0
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

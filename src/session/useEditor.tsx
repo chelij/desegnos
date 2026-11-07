@@ -74,6 +74,11 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
     showStartPage, current, openPanel, setShowPalette, newUntitled, open, clearInsertKind,
     setInsertSignal, changeCanvasTool, panelActions, canvasRef, togglePlay, previewSelectedBoundary,
     openExportPanel, runExport, travel, save, closeProject,
+    adaptSelectedSize: () => {
+      const page = current.current?.project?.pages.find(page => page.id === canvasFocus);
+      const size = page?.sizes.find(size => size.id === canvasFocusSize);
+      if (page && size && size.width < page.sizes[0].width) void mutate({ type: 'adapt_size', page_id: page.id, size_id: size.id }).catch(() => {});
+    },
   }));
 
   const [closeRequest, setCloseRequest] = useState<{ message: string; resolve: (answer: boolean) => void } | null>(null);

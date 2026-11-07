@@ -1779,6 +1779,7 @@ fn collect_overrides(elements: &[Element], overrides: &mut BTreeMap<Uuid, Elemen
                     .then(|| element.layout.clone()),
                 hidden: false,
                 dismissed: false,
+                automatic: false,
             },
         );
         collect_overrides(&element.children, overrides);

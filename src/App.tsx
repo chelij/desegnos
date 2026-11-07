@@ -240,6 +240,7 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
                 behaviour={elementBehaviourSource ? behaviourProps(elementBehaviourSource) : undefined} />
           : selectedBoundary
             ? <BoundaryProperties page={selectedBoundary} selectedSizeId={canvasFocusSize} widthPreview={widthPreview} previewWidth={setWidthPreview} busy={pending > 0} commit={patch => updateCanvasPage(selectedBoundary.id, patch)}
+                adaptSize={sizeId => { void mutate({ type: 'adapt_size', page_id: selectedBoundary.id, size_id: sizeId }).catch(() => {}); }}
                 updateSize={(sizeId, patch) => updateCanvasPageSize(selectedBoundary.id, sizeId, patch)}
                 addSize={(preset, width, height) => addCanvasPageSize(selectedBoundary.id, preset, width, height)}
                 removeSize={size => {

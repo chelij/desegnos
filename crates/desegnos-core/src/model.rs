@@ -1444,6 +1444,11 @@ pub enum Command {
         page_id: Uuid,
         output: OutputType,
     },
+    /// Rebuild this size's automatic responsive overrides as one undoable edit.
+    AdaptSize {
+        page_id: Uuid,
+        size_id: Uuid,
+    },
     /// Change one linked size of a boundary: its name, dimensions or kind.
     UpdatePageSize {
         page_id: Uuid,
@@ -1753,6 +1758,7 @@ impl Command {
             Self::SetGenerationMode { .. } => "Changed the AI style",
             Self::UpdatePage { .. } => "Changed a boundary",
             Self::SetPageOutput { .. } => "Changed a boundary's output",
+            Self::AdaptSize { .. } => "Adapted layout",
             Self::UpdatePageSize { .. } => "Changed a size",
             Self::CreateBoundary { .. } | Self::AddCanvasPage { .. } => "Added a boundary",
             Self::AddPageSize { .. } => "Added a size",
@@ -3002,6 +3008,10 @@ impl Project {
             Command::SetPageOutput { page_id, output } => {
                 next.page_mut(page_id)?.output = output;
             }
+            Command::AdaptSize { page_id, size_id } => {
+                let styles = next.styles.clone();
+                crate::adapt::adapt_with_styles(next.page_mut(page_id)?, size_id, &styles)?;
+            }
             Command::UpdatePageSize {
                 page_id,
                 size_id,
@@ -3533,6 +3543,8 @@ impl Project {
         if crate::render::sync_fit_rects(&mut next) {
             next.validate()?;
         }
+        crate::adapt::adapt_changed_pages(self, &mut next)?;
+        next.validate()?;
         Ok(next)
     }
 }

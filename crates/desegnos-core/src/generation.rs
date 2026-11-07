@@ -2382,6 +2382,9 @@ pub fn apply_generation_output(
         crate::elements::assign_default_names(&mut page.elements, &mut used);
     }
     next.validate()?;
+    crate::render::sync_fit_rects(&mut next);
+    crate::adapt::adapt_changed_pages(project, &mut next)?;
+    next.validate()?;
     Ok(next)
 }
 

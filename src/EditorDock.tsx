@@ -275,12 +275,13 @@ export function ChoiceRow<T extends string>({ label, value, choices, choose, dis
 }
 
 /** Boundary properties: one rhythm — 8px rows inside a section, 16px between sections. */
-export function BoundaryProperties({ page, commit, updateSize, addSize, removeSize, remove, busy, selectedSizeId, widthPreview, previewWidth, behaviour }: {
+export function BoundaryProperties({ page, commit, updateSize, adaptSize, addSize, removeSize, remove, busy, selectedSizeId, widthPreview, previewWidth, behaviour }: {
   page: Page;
   selectedSizeId?: string | null;
   widthPreview?: { sizeId: string; width: number } | null;
   previewWidth?: (value: { sizeId: string; width: number } | null) => void;
   commit: (patch: { name?: string; path?: string; background?: string; included?: boolean }) => void;
+  adaptSize: (sizeId: string) => void;
   updateSize: (sizeId: string, patch: { label?: string; width?: number; height?: number; kind?: BoundaryKind }) => void;
   addSize: (preset: SizePreset, width?: number, height?: number) => void;
   removeSize: (size: PageSize) => void;
@@ -340,6 +341,7 @@ export function BoundaryProperties({ page, commit, updateSize, addSize, removeSi
           {index > 0 && <button type="button" className="icon-button sm dock-row-toggle" aria-label={`Remove ${labelForSize(size)} size`} title={`Remove ${labelForSize(size)} size`} disabled={busy} onClick={() => removeSize(size)}><Icon name="trash" size={13} /></button>}
         </div>
       </div>)}
+      {selectedSize.width < page.sizes[0].width && <button type="button" className="dock-action" disabled={busy} title={`Adapt ${labelForSize(selectedSize)} layout`} onClick={() => adaptSize(selectedSize.id)}>Adapt layout</button>}
       <div className="dock-size-add">
         <div className="boundary-add-row">
           {/* A preset resizes this boundary; adding another linked size lives behind the + above. */}

@@ -31,7 +31,7 @@ export type StackJustify = 'start' | 'center' | 'end' | 'spaceBetween';
 export type ElementStroke = { color: string | null; width: number };
 export type ElementShadow = { x: number; y: number; blur: number; color: string | null };
 export type ElementTextStyle = { fontFamily: string; size: number; weight: number; italic: boolean; lineHeight: number; letterSpacing: number; color: string; align: TextAlign };
-export type ElementOverride = { rect?: Rect | null; style?: ElementStyle | null; layout?: ElementLayout | null; hidden: boolean; dismissed: boolean };
+export type ElementOverride = { automatic?: boolean; rect?: Rect | null; style?: ElementStyle | null; layout?: ElementLayout | null; hidden: boolean; dismissed: boolean };
 export type SizingMode = 'fixed' | 'fit' | 'fill';
 export type ElementSizing = { width: SizingMode; height: SizingMode; minWidth?: number | null; maxWidth?: number | null; minHeight?: number | null; maxHeight?: number | null };
 /** Content inset for a stack or grid; the layout's single padding is the all-sides fallback. */
@@ -192,6 +192,7 @@ export type Command =
   | { type: 'update_page'; page_id: string; name: string; path: string; background: string; included: boolean }
   | { type: 'set_page_output'; page_id: string; output: OutputType }
   | { type: 'forget_export_pointer'; pointer_id: string }
+  | { type: 'adapt_size'; page_id: string; size_id: string }
   | { type: 'update_page_size'; page_id: string; size_id: string; label?: string; width?: number; height?: number; kind?: BoundaryKind; moves?: Placements; reference?: ReferencePlacement[] }
   | { type: 'create_boundary'; page: Page; after_page_id?: string; moves: Placements; reference: ReferencePlacement[] }
   | { type: 'add_canvas_page'; name: string; path: string; size: PageSize; moves: Placements; reference: ReferencePlacement[] }
