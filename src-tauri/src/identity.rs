@@ -1614,7 +1614,7 @@ pub fn analyze_identity(
                 if let Ok(mut service) = app.state::<Mutex<IdentityService>>().lock() {
                     if let Some(record) = service.latest.as_mut().filter(|record| record.requirements.job_id == job_id) {
                         record.provider = provider;
-                        record.provider_error = reason.provider_error;
+                        record.provider_error = reason.provider_error.map(|error| *error);
                     }
                     let _ = service.fail_before_send(job_id, reason.message);
                 }

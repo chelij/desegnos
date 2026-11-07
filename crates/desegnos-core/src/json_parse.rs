@@ -62,6 +62,44 @@ fn push_control_escape(target: &mut String, character: char) {
     }
 }
 
+/// Restore only absent host echoes; null, malformed and differing supplied values are errors.
+pub fn fill_reply_echoes(
+    value: &mut serde_json::Value,
+    job_id: uuid::Uuid,
+    sha256: &str,
+) -> crate::Result<()> {
+    let object = value
+        .as_object_mut()
+        .ok_or_else(|| crate::Error("The AI reply must be a JSON object.".into()))?;
+    for (key, expected) in [
+        ("jobId", job_id.to_string()),
+        ("requirementsSha256", sha256.into()),
+    ] {
+        if let Some(actual) = object.get(key) {
+            crate::ensure(
+                actual.as_str() == Some(expected.as_str()),
+                format!("The AI reply has a different {key} from this frozen request."),
+            )?;
+        } else {
+            object.insert(key.into(), serde_json::Value::String(expected));
+        }
+    }
+    Ok(())
+}
+
+/// Parse a structured model reply using the same schema sent with its frozen request.
+pub fn parse_structured_reply<T: DeserializeOwned>(
+    source: &str,
+    schema: &serde_json::Value,
+    job_id: uuid::Uuid,
+    sha256: &str,
+) -> crate::Result<T> {
+    let mut value = parse_provider_json(source).map_err(|error| crate::Error(error.to_string()))?;
+    fill_reply_echoes(&mut value, job_id, sha256)?;
+    crate::conform_to_schema(&mut value, schema);
+    serde_json::from_value(value).map_err(|error| crate::Error(error.to_string()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -117,42 +155,4 @@ mod tests {
         assert_eq!(parsed, strict);
         assert!(strict.contains("trailing comma"), "{strict}");
     }
-}
-
-/// Restore only absent host echoes; null, malformed and differing supplied values are errors.
-pub fn fill_reply_echoes(
-    value: &mut serde_json::Value,
-    job_id: uuid::Uuid,
-    sha256: &str,
-) -> crate::Result<()> {
-    let object = value
-        .as_object_mut()
-        .ok_or_else(|| crate::Error("The AI reply must be a JSON object.".into()))?;
-    for (key, expected) in [
-        ("jobId", job_id.to_string()),
-        ("requirementsSha256", sha256.into()),
-    ] {
-        if let Some(actual) = object.get(key) {
-            crate::ensure(
-                actual.as_str() == Some(expected.as_str()),
-                format!("The AI reply has a different {key} from this frozen request."),
-            )?;
-        } else {
-            object.insert(key.into(), serde_json::Value::String(expected));
-        }
-    }
-    Ok(())
-}
-
-/// Parse a structured model reply using the same schema sent with its frozen request.
-pub fn parse_structured_reply<T: DeserializeOwned>(
-    source: &str,
-    schema: &serde_json::Value,
-    job_id: uuid::Uuid,
-    sha256: &str,
-) -> crate::Result<T> {
-    let mut value = parse_provider_json(source).map_err(|error| crate::Error(error.to_string()))?;
-    fill_reply_echoes(&mut value, job_id, sha256)?;
-    crate::conform_to_schema(&mut value, schema);
-    serde_json::from_value(value).map_err(|error| crate::Error(error.to_string()))
 }

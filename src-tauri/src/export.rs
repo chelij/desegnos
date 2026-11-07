@@ -794,10 +794,10 @@ pub async fn start_export(
             })
     }
     .await;
-    if let Some(error) = provider_error {
-        if let Some(job) = service.lock().map_err(message)?.jobs.get_mut(&job_id) {
-            job.view.provider_error = Some(error);
-        }
+    if let Some(error) = provider_error
+        && let Some(job) = service.lock().map_err(message)?.jobs.get_mut(&job_id)
+    {
+        job.view.provider_error = Some(error);
     }
     finish(&workspace, &service, &site, job_id, plan, result)
 }

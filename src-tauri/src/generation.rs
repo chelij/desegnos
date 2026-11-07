@@ -3493,7 +3493,7 @@ impl GenerationService {
 
 pub(super) struct IdentityAccessFailure {
     pub message: String,
-    pub provider_error: Option<ProviderError>,
+    pub provider_error: Option<Box<ProviderError>>,
 }
 impl From<String> for IdentityAccessFailure {
     fn from(message: String) -> Self {
@@ -3512,7 +3512,7 @@ impl From<ProviderError> for IdentityAccessFailure {
     fn from(error: ProviderError) -> Self {
         Self {
             message: error.message(),
-            provider_error: Some(error),
+            provider_error: Some(Box::new(error)),
         }
     }
 }

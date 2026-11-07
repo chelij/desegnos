@@ -618,8 +618,10 @@ impl GenerationCandidate {
                                 &scope,
                                 outcome.element_id,
                                 std::slice::from_ref(operation),
-                                self,
-                                &BTreeMap::new(),
+                                OperationImages {
+                                    requests: &self.images,
+                                    generated: &BTreeMap::new(),
+                                },
                                 &mut element_id,
                                 &mut trial_sources,
                             )
@@ -1429,11 +1431,18 @@ fn apply_operations(
         scope,
         anchor,
         operations,
-        candidate,
-        generated,
+        OperationImages {
+            requests: &candidate.images,
+            generated,
+        },
         rejected,
         &mut Vec::new(),
     )
+}
+
+struct OperationImages<'a> {
+    requests: &'a [GeneratedImage],
+    generated: &'a BTreeMap<String, Uuid>,
 }
 
 fn apply_operations_with_sources(
@@ -1441,13 +1450,12 @@ fn apply_operations_with_sources(
     scope: &RequestScope,
     anchor: Option<Uuid>,
     operations: &[ElementOperation],
-    candidate: &GenerationCandidate,
-    generated: &BTreeMap<String, Uuid>,
+    image_sources: OperationImages<'_>,
     rejected: &mut Option<Uuid>,
     behaviour_sources: &mut Vec<crate::PointerSource>,
 ) -> Result<BTreeSet<Uuid>> {
-    let images: BTreeMap<String, String> = candidate
-        .images
+    let images: BTreeMap<String, String> = image_sources
+        .requests
         .iter()
         .map(|image| (image.key.to_lowercase(), image.prompt.clone()))
         .collect();
@@ -1510,7 +1518,7 @@ fn apply_operations_with_sources(
                     })?;
                 let mut built = Vec::with_capacity(children.len());
                 for child in children {
-                    let element = build_element(child, generated, &images)?;
+                    let element = build_element(child, image_sources.generated, &images)?;
                     built.push(element);
                 }
                 let parent_rect = project
@@ -1681,7 +1689,7 @@ fn apply_operations_with_sources(
                     .element(*parent_id)
                     .map(|(_, parent)| parent.rect)
                     .ok_or_else(|| Error("This box no longer exists.".into()))?;
-                let built = build_element(element, generated, &images)?;
+                let built = build_element(element, image_sources.generated, &images)?;
                 if !fits(&parent_rect, &built.rect) {
                     return Err(reject(
                         rejected,
@@ -1744,7 +1752,7 @@ fn apply_operations_with_sources(
                 }
                 .ok_or_else(|| Error("This boundary has no size.".into()))?
                 .clone();
-                let built = build_element(element, generated, &images)?;
+                let built = build_element(element, image_sources.generated, &images)?;
                 let right = built.rect.x + built.rect.width;
                 let bottom = built.rect.y + built.rect.height;
                 let outside_width =
