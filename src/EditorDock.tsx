@@ -275,8 +275,9 @@ export function ChoiceRow<T extends string>({ label, value, choices, choose, dis
 }
 
 /** Boundary properties: one rhythm — 8px rows inside a section, 16px between sections. */
-export function BoundaryProperties({ page, commit, updateSize, adaptSize, addSize, removeSize, remove, busy, selectedSizeId, widthPreview, previewWidth, behaviour }: {
+export function BoundaryProperties({ page, commit, updateSize, adaptSize, addSize, removeSize, remove, busy, selectSize, selectedSizeId, widthPreview, previewWidth, behaviour }: {
   page: Page;
+  selectSize: (sizeId: string) => void;
   selectedSizeId?: string | null;
   widthPreview?: { sizeId: string; width: number } | null;
   previewWidth?: (value: { sizeId: string; width: number } | null) => void;
@@ -344,10 +345,15 @@ export function BoundaryProperties({ page, commit, updateSize, adaptSize, addSiz
       {selectedSize.width < page.sizes[0].width && <button type="button" className="dock-action" disabled={busy} title={`Adapt ${labelForSize(selectedSize)} layout`} onClick={() => adaptSize(selectedSize.id)}>Adapt layout</button>}
       <div className="dock-size-add">
         <div className="boundary-add-row">
-          {/* A preset resizes this boundary; adding another linked size lives behind the + above. */}
-          {(presets ?? SIZE_PRESETS).map(preset => <button key={preset.label} type="button" className="dock-action" disabled={busy} title={`${preset.width} × ${preset.height}`}
-            aria-pressed={page.sizes[0].width === preset.width && page.sizes[0].height === preset.height}
-            onClick={() => updateSize(page.sizes[0].id, { label: preset.label, width: preset.width, height: preset.height })}>{preset.label}</button>)}
+          {presets ? presets.map(preset => <button key={preset.label} type="button" className="dock-action" disabled={busy} title={`${preset.width} × ${preset.height}`}
+            aria-pressed={selectedSize.width === preset.width && selectedSize.height === preset.height}
+            onClick={() => updateSize(page.sizes[0].id, preset)}>{preset.label}</button>)
+            : SIZE_PRESETS.map(preset => {
+              const size = page.sizes.find(size => size.label.toLowerCase() === preset.label.toLowerCase() || size.width === preset.width);
+              return <button key={preset.preset} type="button" className="dock-action" disabled={busy} title={`${preset.width} × ${preset.height}`}
+                aria-pressed={selectedSize.label.toLowerCase() === preset.label.toLowerCase() || selectedSize.width === preset.width}
+                onClick={() => size ? selectSize(size.id) : addSize(preset.preset)}>{preset.label}</button>;
+            })}
         </div>
         {customOpen && !presets && <div className="boundary-add-row">{SIZE_PRESETS.map(preset => <button key={preset.preset} type="button" className="dock-action" disabled={busy}
           title={`${preset.width} × ${preset.height}`} onClick={() => { addSize(preset.preset); setCustomOpen(false); }}>Add {preset.label}</button>)}</div>}

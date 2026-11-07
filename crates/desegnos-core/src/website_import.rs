@@ -468,6 +468,7 @@ fn text_style(styles: &WebStyles) -> ElementTextStyle {
         letter_spacing: styles.letter_spacing.clamp(-20.0, 100.0),
         color: parse_colour(&styles.color).unwrap_or_else(|| "#1a1a1a".into()),
         align: text_align(&styles.align),
+        decoration: None,
     }
 }
 

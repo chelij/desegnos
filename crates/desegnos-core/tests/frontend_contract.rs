@@ -431,6 +431,7 @@ fn populated(mut project: Project) -> Project {
                             letter_spacing: 0.0,
                             color: "#111111".into(),
                             align: TextAlign::Left,
+                            decoration: None,
                         },
                     }),
                     layout: Some(ElementLayout::Free),
@@ -547,4 +548,21 @@ fn elements_keep_their_kind_fields_flat_for_the_editor() {
         .expect("a code element");
     assert_eq!(code["language"], "html");
     assert_eq!(code["source"], "<div>Hello</div>");
+}
+
+#[test]
+fn text_decoration_is_optional_in_saved_projects_and_round_trips() {
+    let style = desegnos_core::ElementTextStyle::default();
+    let mut value = serde_json::to_value(&style).unwrap();
+    assert!(value.get("decoration").is_none());
+    assert_eq!(
+        serde_json::from_value::<desegnos_core::ElementTextStyle>(value.clone()).unwrap(),
+        style
+    );
+    for decoration in ["none", "underline", "line-through"] {
+        value["decoration"] = serde_json::json!(decoration);
+        let restored: desegnos_core::ElementTextStyle =
+            serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(serde_json::to_value(restored).unwrap(), value);
+    }
 }

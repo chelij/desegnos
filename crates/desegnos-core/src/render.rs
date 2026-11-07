@@ -48,8 +48,7 @@
 //! letter spacing follows every character including the last, and alignment positions each line
 //! inside the text box. Text wraps at the content box width, except for the single-line controls
 //! the canvas gives `white-space: nowrap` (button, link, select, checkbox, radio). Buttons and
-//! checkbox/radio labels are centred horizontally, links, inputs and text areas follow the
-//! element's alignment, and a select's label is always at the start, as flexbox lays them out.
+//! checkbox/radio labels, links, inputs, text areas and selects follow the element's alignment.
 //!
 //! **Transforms.** `rotation` in degrees turns the element clockwise about the centre of its
 //! rect, and everything the element draws turns with it, children included; nested rotations
@@ -1545,18 +1544,12 @@ pub(crate) fn sync_fit_rects(project: &mut Project) -> bool {
 /// Where a text-bearing element's first line box starts, and how its lines align.
 fn text_box(element: &Element, content: Rect) -> (Rect, TextAlign) {
     let style = &element.style.text_style;
-    let (padding, align) = match element.kind {
-        ElementKind::Text => (0.0, style.align),
-        ElementKind::Textarea => (8.0, style.align),
-        ElementKind::Button | ElementKind::Checkbox | ElementKind::Radio => {
-            (1.0, TextAlign::Center)
-        }
-        ElementKind::Link => (1.0, style.align),
-        ElementKind::Input { .. } => (8.0, style.align),
-        // A select lays its label out at the start and its arrow at the end.
-        ElementKind::Select { .. } => (8.0, TextAlign::Left),
-        _ => (0.0, style.align),
+    let padding = match element.kind {
+        ElementKind::Textarea | ElementKind::Input { .. } | ElementKind::Select { .. } => 8.0,
+        ElementKind::Button | ElementKind::Link | ElementKind::Checkbox | ElementKind::Radio => 1.0,
+        _ => 0.0,
     };
+    let align = style.align;
     let height = line_height(style);
     let top = match element.kind {
         ElementKind::Text => content.y,
@@ -1605,6 +1598,27 @@ fn paint_text(
             TextAlign::Right => boxed.width - width,
         };
         let baseline = boxed.y + baseline_offset + index as f64 * height;
+        let decoration_y = match style.decoration {
+            Some(crate::TextDecoration::Underline) => Some(baseline + style.size * 0.1),
+            Some(crate::TextDecoration::LineThrough) => Some(baseline - style.size * 0.3),
+            _ => None,
+        };
+        if let Some(y) = decoration_y {
+            let path_ref = scene.push_path(Path::rect(
+                Rect {
+                    x: boxed.x + offset,
+                    y,
+                    width,
+                    height: (style.size / 16.0).max(1.0),
+                },
+                0.0,
+            ));
+            out.push(Item::Shape(Shape {
+                path_ref,
+                fill: Some(colour),
+                stroke: None,
+            }));
+        }
         let mut pen = boxed.x + offset;
         for character in line.chars() {
             let (advance, outline) = fonts.glyph(run, character, pen, baseline);
@@ -2794,6 +2808,57 @@ mod tests {
         element.text = "Handgloves 123".into();
         element.style.text_style.font_family = family.into();
         element
+    }
+
+    #[test]
+    fn text_controls_use_stored_alignment_and_decoration() {
+        for kind in [
+            ElementKind::Text,
+            ElementKind::Button,
+            ElementKind::Link,
+            ElementKind::Input {
+                input_type: crate::InputType::Text,
+            },
+            ElementKind::Textarea,
+            ElementKind::Select { options: vec![] },
+            ElementKind::Checkbox,
+            ElementKind::Radio,
+        ] {
+            let mut element = text_element("Archivo");
+            element.kind = kind;
+            for align in [TextAlign::Left, TextAlign::Center, TextAlign::Right] {
+                element.style.text_style.align = align;
+                assert_eq!(text_box(&element, element.rect).1, align);
+            }
+            let mut fonts = FontSet::new();
+            let mut target = scene();
+            let mut plain = Vec::new();
+            paint_text(&mut target, &mut fonts, &element, element.rect, &mut plain);
+            for decoration in [
+                crate::TextDecoration::Underline,
+                crate::TextDecoration::LineThrough,
+            ] {
+                element.style.text_style.decoration = Some(decoration);
+                let mut decorated = Vec::new();
+                paint_text(
+                    &mut target,
+                    &mut fonts,
+                    &element,
+                    element.rect,
+                    &mut decorated,
+                );
+                let (boxed, _) = text_box(&element, element.rect);
+                let lines = wrap_text(
+                    &mut fonts,
+                    &element.text,
+                    &element.style.text_style,
+                    boxed.width,
+                    wraps(&element.kind),
+                )
+                .len();
+                assert_eq!(decorated.len(), plain.len() + lines);
+            }
+        }
     }
 
     fn text_svg(family: &str) -> String {

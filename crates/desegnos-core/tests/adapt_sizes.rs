@@ -386,3 +386,32 @@ fn uneven_headliner_cards_share_a_tablet_grid_without_overlapping() {
         assert!(pair[1].rect.x >= pair[0].rect.x + pair[0].rect.width);
     }
 }
+
+#[test]
+fn adding_a_linked_size_adapts_without_resizing_the_base_in_one_undo_step() {
+    let (mut p, phone_id) = project();
+    let phone = p.pages[0].sizes.pop().unwrap();
+    p.pages[0].elements = vec![text(20.0, 0.0, 1200.0, 24.0)];
+    let before = p.pages[0].clone();
+    let mut session = Session::new(p.clone()).unwrap();
+    session
+        .execute(
+            p.revision,
+            Command::AddPageSize {
+                page_id: before.id,
+                size: phone,
+                moves: vec![],
+                reference: vec![],
+            },
+            |_| Ok(()),
+        )
+        .unwrap();
+    let page = &session.project().pages[0];
+    assert_eq!(page.base_size(), before.base_size());
+    assert_eq!(page.elements[0].rect, before.elements[0].rect);
+    assert!(page.elements[0].overrides[&phone_id].automatic);
+    let phone_elements = resolve_for_size(session.project(), page, phone_id);
+    assert!(phone_elements[0].rect.width < before.elements[0].rect.width);
+    session.undo(|_| Ok(())).unwrap();
+    assert_eq!(session.project().pages[0], before);
+}

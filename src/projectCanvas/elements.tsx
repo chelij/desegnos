@@ -23,6 +23,7 @@ function textStyle(element: Element): CSSProperties {
     letterSpacing: style.letterSpacing,
     color: style.color || FALLBACK_TEXT,
     textAlign: style.align,
+    textDecoration: style.decoration ?? 'none',
   };
 }
 
@@ -132,8 +133,9 @@ const placeholderText = (element: Element): string => {
 
 function ControlText({ element }: { element: Element }) {
   const style = textStyle(element);
+  const justifyContent = element.style.textStyle.align === 'center' ? 'center' : element.style.textStyle.align === 'right' ? 'flex-end' : 'flex-start';
   if (element.kind === 'checkbox' || element.kind === 'radio') {
-    return <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '0 2px', ...style }}>
+    return <div style={{ display: 'flex', alignItems: 'center', justifyContent, gap: 6, padding: '0 2px', ...style }}>
       <span aria-hidden="true" style={{
         width: 13, height: 13, flex: '0 0 auto', boxSizing: 'border-box',
         border: `1px solid ${element.style.stroke.color ?? '#8a8a8a'}`, borderRadius: element.kind === 'radio' ? '50%' : 2,
@@ -144,24 +146,21 @@ function ControlText({ element }: { element: Element }) {
   }
   if (element.kind === 'select') {
     return <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, padding: '0 8px', height: '100%', ...style }}>
-      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{element.text || element.options?.[0] || ''}</span>
+      <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{element.text || element.options?.[0] || ''}</span>
       <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true" style={{ flex: '0 0 auto', opacity: 0.7 }}><path d="M2 3.5 5 6.5 8 3.5" fill="none" stroke="currentColor" strokeWidth="1.2" /></svg>
     </div>;
   }
   if (element.kind === 'input' || element.kind === 'textarea') {
     return <div style={{
       ...style, padding: element.kind === 'textarea' ? '8px' : '0 8px', height: element.kind === 'textarea' ? '100%' : '100%',
-      display: 'flex', alignItems: element.kind === 'textarea' ? 'flex-start' : 'center', color: element.text ? style.color : '#8a8a8a',
+      display: 'flex', justifyContent, alignItems: element.kind === 'textarea' ? 'flex-start' : 'center', color: element.text ? style.color : '#8a8a8a',
       whiteSpace: 'pre-wrap', overflow: 'hidden', wordBreak: 'break-word',
     }}>{element.text || (element.kind === 'input' ? element.inputType ?? 'text' : 'Text')}</div>;
   }
-  if (element.kind === 'button') {
-    return <div style={{
-      ...style, display: 'flex', alignItems: 'center', justifyContent: 'center', width: '100%', height: '100%',
-      padding: '0 12px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', boxSizing: 'border-box',
-    }}>{element.text}</div>;
-  }
-  return <div style={{ ...style, display: 'flex', alignItems: 'center', height: '100%', padding: '0 1px', textDecoration: element.kind === 'link' ? 'underline' : undefined, whiteSpace: 'nowrap', overflow: 'hidden' }}>{element.text}</div>;
+  return <div style={{
+    ...style, display: 'flex', alignItems: 'center', justifyContent, width: '100%', height: '100%',
+    padding: '0 1px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', boxSizing: 'border-box',
+  }}>{element.text}</div>;
 }
 
 function MediaCard({ element }: { element: Element }) {

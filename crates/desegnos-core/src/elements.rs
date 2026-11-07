@@ -68,6 +68,15 @@ pub enum TextAlign {
     Right,
 }
 
+/// CSS text decoration, shared by canvas and exports. Missing means undecorated.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum TextDecoration {
+    None,
+    Underline,
+    LineThrough,
+}
+
 /// What a visual element is. Kind-specific settings live on the variant, so an input always
 /// carries its type, a select its options and a code block its language and source.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -199,6 +208,8 @@ pub struct ElementTextStyle {
     pub letter_spacing: f64,
     pub color: String,
     pub align: TextAlign,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decoration: Option<TextDecoration>,
 }
 
 /// The text style a new layer starts with; exported CSS resets every layer to these values so a
@@ -214,6 +225,7 @@ impl Default for ElementTextStyle {
             letter_spacing: 0.0,
             color: "#1a1a1a".into(),
             align: TextAlign::Left,
+            decoration: None,
         }
     }
 }

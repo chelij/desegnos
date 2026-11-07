@@ -445,6 +445,8 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
   }, [mutate]);
   /** Adding a linked size is one undo step, including the boundaries it pushes aside. */
   const addCanvasPageSize = useCallback((pageId: string, preset: SizePreset, width = 0, height = 0) => {
+    const sizeId = crypto.randomUUID();
+    let focusedSizeId: string = sizeId;
     void mutate(project => {
       const page = project.pages.find(item => item.id === pageId);
       if (!page) return null;
@@ -453,7 +455,9 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
         : preset === 'tablet' ? { label: 'Tablet', width: 820, height: 1180 }
           : preset === 'desktop' ? { label: 'Desktop', width: 1440, height: 900 }
             : { label: sizeName(Math.round(width)), width: Math.round(width), height: Math.round(height) };
-      const size: PageSize = { id: crypto.randomUUID(), ...dimensions, kind: last.kind, x: last.x + last.width + 160, y: last.y };
+      const existing = preset !== 'custom' && page.sizes.find(size => size.label.toLowerCase() === dimensions.label.toLowerCase() || size.width === dimensions.width);
+      if (existing) { focusedSizeId = existing.id; return null; }
+      const size: PageSize = { id: sizeId, ...dimensions, kind: last.kind, x: last.x + last.width + 160, y: last.y };
       const anchor = sizeBoundaries(project);
       const pushed = pushApartBoundaries([...anchor, { pageId, sizeId: size.id, label: size.label, rect: { x: size.x, y: size.y, width: size.width, height: size.height }, kind: size.kind }], size.id);
       const placed = pushed.find(item => item.sizeId === size.id)!;
@@ -464,8 +468,10 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
           .map(({ pageId: movePageId, sizeId, x, y, kind }) => ({ page_id: movePageId, size_id: sizeId, x, y, kind })),
         reference: [],
       };
+    }).then(next => {
+      if (next.project?.pages.find(page => page.id === pageId)?.sizes.some(size => size.id === focusedSizeId)) selectCanvasBoundary(pageId, focusedSizeId);
     }).catch(() => {});
-  }, [mutate]);
+  }, [mutate, selectCanvasBoundary]);
   const renameProject = useCallback((name: string) => { void mutate({ type: 'rename_project', name }).catch(() => {}); }, [mutate]);
   const showDotGrid = useCallback((enabled: boolean) => { void mutate({ type: 'set_grid', enabled }).catch(() => {}); }, [mutate]);
   const changeGridFlags = useCallback((patch: Partial<Pick<GridSettings, 'snap'>>) => {

@@ -764,12 +764,21 @@ fn declarations(element: &Element, parent: &ElementLayout, fonts: &mut Fonts) ->
             css.set("color", text.color.clone());
         }
     }
+    if renders_text(element) || element.url.is_some() {
+        css.set(
+            "text-decoration",
+            match text.decoration {
+                Some(crate::TextDecoration::Underline) => "underline",
+                Some(crate::TextDecoration::LineThrough) => "line-through",
+                _ => "none",
+            },
+        );
+    }
     // `object-fit` only affects replaced content; text, boxes and shapes ignore it.
     if matches!(element.kind, ElementKind::Image | ElementKind::Video) {
         css.set("object-fit", "cover");
     }
     if matches!(element.kind, ElementKind::Link) || element.url.is_some() {
-        css.set("text-decoration", "none");
         css.set("cursor", "pointer");
     }
     if control {
@@ -862,12 +871,8 @@ fn declarations(element: &Element, parent: &ElementLayout, fonts: &mut Fonts) ->
             }
         }
     }
-    // The canvas centres a button's label on both axes and a link's label vertically, with its
-    // horizontal position from text-align; the PNG renderer paints the same boxes.
-    if matches!(element.kind, ElementKind::Button) {
-        css.set("align-items", "center");
-        css.set("justify-content", "center");
-    } else if matches!(element.kind, ElementKind::Link) {
+    // Flex text controls align their anonymous text item using the stored text alignment.
+    if text_control || control {
         css.set("align-items", "center");
         css.set(
             "justify-content",
@@ -1655,27 +1660,42 @@ mod tests {
     }
 
     #[test]
-    fn buttons_and_links_centre_their_labels_like_the_canvas() {
-        let mut project = project();
-        let mut button = element(ElementKind::Button);
-        button.text = "Go".into();
-        let mut link = element(ElementKind::Link);
-        link.text = "Read".into();
-        link.style.text_style.align = TextAlign::Right;
-        let mut left_link = element(ElementKind::Link);
-        left_link.text = "Home".into();
-        project.pages[0].elements = vec![button.clone(), link.clone(), left_link.clone()];
-        let bundle = direct_export_bundle(&project, &[]).unwrap();
-        let css = std::str::from_utf8(&bundle.files["index.css"]).unwrap();
-        for id in [button.id, link.id, left_link.id] {
-            let rule = rule_of(css, id);
-            assert!(rule.contains("display:flex;"), "{rule}");
-            assert!(!rule.contains("display:block;"), "{rule}");
-            assert!(rule.contains("align-items:center;"), "{rule}");
+    fn text_controls_use_stored_alignment_and_decoration() {
+        for kind in [ElementKind::Button, ElementKind::Link, ElementKind::Text] {
+            for (align, justify) in [
+                (TextAlign::Left, "flex-start"),
+                (TextAlign::Center, "center"),
+                (TextAlign::Right, "flex-end"),
+            ] {
+                for (decoration, css_decoration) in [
+                    (None, "none"),
+                    (Some(crate::TextDecoration::Underline), "underline"),
+                    (Some(crate::TextDecoration::LineThrough), "line-through"),
+                ] {
+                    let mut project = project();
+                    let mut control = element(kind.clone());
+                    control.text = "GET TICKETS".into();
+                    control.style.text_style.align = align;
+                    control.style.text_style.decoration = decoration;
+                    project.pages[0].elements = vec![control.clone()];
+                    let bundle = direct_export_bundle(&project, &[]).unwrap();
+                    let css = std::str::from_utf8(&bundle.files["index.css"]).unwrap();
+                    let rule = rule_of(css, control.id);
+                    assert!(
+                        rule.contains(&format!("text-decoration:{css_decoration};")),
+                        "{rule}"
+                    );
+                    if !matches!(kind, ElementKind::Text) {
+                        assert!(rule.contains("display:flex;"), "{rule}");
+                        assert!(rule.contains("align-items:center;"), "{rule}");
+                        assert!(
+                            rule.contains(&format!("justify-content:{justify};")),
+                            "{rule}"
+                        );
+                    }
+                }
+            }
         }
-        assert!(rule_of(css, button.id).contains("justify-content:center;"));
-        assert!(rule_of(css, link.id).contains("justify-content:flex-end;"));
-        assert!(rule_of(css, left_link.id).contains("justify-content:flex-start;"));
     }
 
     #[test]
