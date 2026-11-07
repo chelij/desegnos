@@ -140,6 +140,24 @@ impl Vault for SystemVault {
 struct CredentialState {
     session: Option<ApiKey>,
     suppress_system: bool,
+    /// The last system-keyring read. A keyring that is locked, missing or slow to activate can
+    /// take seconds per lookup, and settings, generation and image checks each read the key, so
+    /// one read is reused: keys this app sets or removes update it, and a failed read expires.
+    /// A key changed by another running instance shows after this one restarts.
+    system: Option<(std::time::Instant, Result<Option<ApiKey>>)>,
+}
+
+/// How long a failed keyring read is remembered before the keyring is asked again.
+const FAILED_READ_TTL: std::time::Duration = std::time::Duration::from_secs(30);
+
+impl CredentialState {
+    fn system_key(&mut self, vault: &dyn Vault) -> Result<Option<ApiKey>> {
+        let fresh = self.system.as_ref().is_some_and(|(at, result)| result.is_ok() || at.elapsed() < FAILED_READ_TTL);
+        if !fresh {
+            self.system = Some((std::time::Instant::now(), vault.get()));
+        }
+        self.system.as_ref().expect("read above").1.clone()
+    }
 }
 
 pub struct CredentialManager {
@@ -177,7 +195,7 @@ impl CredentialManager {
     }
 
     pub fn status(&self) -> CredentialInfo {
-        let state = self
+        let mut state = self
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -187,7 +205,7 @@ impl CredentialManager {
         if state.suppress_system {
             return info(None, CredentialLocation::None, None);
         }
-        match self.vault.get() {
+        match state.system_key(self.vault.as_ref()) {
             Ok(key) => info(key.as_ref(), CredentialLocation::System, None),
             Err(error) => info(None, CredentialLocation::None, Some(error.message())),
         }
@@ -202,6 +220,7 @@ impl CredentialManager {
         match storage {
             CredentialStorage::System => {
                 self.vault.set(&key)?;
+                state.system = Some((std::time::Instant::now(), Ok(Some(key.clone()))));
                 state.session = None;
                 state.suppress_system = false;
                 Ok(info(Some(&key), CredentialLocation::System, None))
@@ -224,13 +243,14 @@ impl CredentialManager {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         self.vault.remove()?;
+        state.system = Some((std::time::Instant::now(), Ok(None)));
         state.session = None;
         state.suppress_system = true;
         Ok(info(None, CredentialLocation::None, None))
     }
 
     pub fn key(&self) -> Result<ApiKey> {
-        let state = self
+        let mut state = self
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -240,8 +260,8 @@ impl CredentialManager {
         if state.suppress_system {
             return Err(ProviderError::before(ErrorKind::MissingCredential));
         }
-        self.vault
-            .get()?
+        state
+            .system_key(self.vault.as_ref())?
             .ok_or_else(|| ProviderError::before(ErrorKind::MissingCredential))
     }
 
@@ -420,5 +440,55 @@ mod tests {
         );
         assert_eq!(manager.status(), before);
         assert_eq!(manager.key().unwrap().expose(), KEY);
+    }
+
+    #[derive(Default)]
+    struct CountingVault {
+        reads: std::sync::atomic::AtomicUsize,
+        key: Mutex<Option<ApiKey>>,
+        fail: bool,
+    }
+    impl Vault for Arc<CountingVault> {
+        fn get(&self) -> Result<Option<ApiKey>> {
+            self.reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if self.fail {
+                return Err(ProviderError::before(ErrorKind::VaultUnavailable));
+            }
+            Ok(self.key.lock().unwrap().clone())
+        }
+        fn set(&self, key: &ApiKey) -> Result<()> {
+            *self.key.lock().unwrap() = Some(key.clone());
+            Ok(())
+        }
+        fn remove(&self) -> Result<()> {
+            *self.key.lock().unwrap() = None;
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn the_keyring_is_read_once_and_kept_current_by_this_apps_own_changes() {
+        let vault = Arc::new(CountingVault::default());
+        let manager = CredentialManager { state: Mutex::default(), vault: Box::new(vault.clone()) };
+        let reads = || vault.reads.load(std::sync::atomic::Ordering::SeqCst);
+        assert!(!manager.status().configured);
+        assert!(manager.key().is_err());
+        assert!(!manager.status().configured);
+        assert_eq!(reads(), 1, "a slow keyring must not be asked on every settings read");
+        manager.set_key(KEY.into(), CredentialStorage::System).unwrap();
+        assert!(manager.status().configured);
+        assert_eq!(manager.key().unwrap().expose(), KEY);
+        manager.remove_key().unwrap();
+        assert!(!manager.status().configured);
+        assert_eq!(reads(), 1);
+    }
+
+    #[test]
+    fn a_failed_keyring_read_is_remembered_briefly_not_retried_on_every_call() {
+        let vault = Arc::new(CountingVault { fail: true, ..Default::default() });
+        let manager = CredentialManager { state: Mutex::default(), vault: Box::new(vault.clone()) };
+        assert!(manager.status().vault_error.is_some());
+        assert_eq!(manager.key().unwrap_err().kind, ErrorKind::VaultUnavailable);
+        assert_eq!(vault.reads.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 }
