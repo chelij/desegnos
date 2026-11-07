@@ -1095,7 +1095,9 @@ impl IdentityService {
                 .map_err(error)?;
         }
         if let Some(model) = &access.api_model {
-            model.validate_api_input(&access.settings, estimate.input_token_upper_bound).map_err(error)?;
+            model
+                .validate_api_input(&access.settings, estimate.input_token_upper_bound)
+                .map_err(error)?;
         }
         record.provider = Some(access.provider);
         record.authentication = Some(access.authentication);
@@ -1174,7 +1176,8 @@ impl IdentityService {
                 record.status = if failure.kind == desegnos_ai::ErrorKind::Cancelled {
                     AnalysisStatus::Cancelled
                 } else if failure.outcome == SubmissionOutcome::Unknown
-                    && !failure.http_status.is_some_and(|status| status >= 400) {
+                    && !failure.http_status.is_some_and(|status| status >= 400)
+                {
                     AnalysisStatus::Unknown
                 } else {
                     AnalysisStatus::Failed
@@ -1451,7 +1454,6 @@ impl IdentityService {
                 .collect(),
         })
     }
-
 }
 
 #[derive(Deserialize)]
@@ -1612,7 +1614,11 @@ pub fn analyze_identity(
             Ok(access) => access,
             Err(reason) => {
                 if let Ok(mut service) = app.state::<Mutex<IdentityService>>().lock() {
-                    if let Some(record) = service.latest.as_mut().filter(|record| record.requirements.job_id == job_id) {
+                    if let Some(record) = service
+                        .latest
+                        .as_mut()
+                        .filter(|record| record.requirements.job_id == job_id)
+                    {
                         record.provider = provider;
                         record.provider_error = reason.provider_error.map(|error| *error);
                     }
@@ -1645,14 +1651,16 @@ pub fn analyze_identity(
         let progress_app = app.clone();
         let result = access
             .client
-            .analyze_identity_for_auth(
-                access.authentication,
-                &snapshot,
-                &schema,
-                &access.settings,
-                &access.key,
-                &cancellation,
-                &images,
+            .analyze_identity(
+                desegnos_ai::IdentityRequest {
+                    authentication: access.authentication,
+                    snapshot: &snapshot,
+                    schema: &schema,
+                    settings: &access.settings,
+                    key: &access.key,
+                    cancellation: &cancellation,
+                    images: &images,
+                },
                 move |progress| {
                     if let Ok(mut service) = progress_app.state::<Mutex<IdentityService>>().lock() {
                         service.progress(job_id, progress);
@@ -1701,9 +1709,15 @@ mod strict_schema_tests {
         ] {
             let mut invalid = json!({"summary":"Brand evidence"});
             invalid[key] = value;
-            assert!(parse_structured_reply::<IdentityCandidate>(
-                &invalid.to_string(), &candidate_schema(), job_id, &sha,
-            ).is_err());
+            assert!(
+                parse_structured_reply::<IdentityCandidate>(
+                    &invalid.to_string(),
+                    &candidate_schema(),
+                    job_id,
+                    &sha,
+                )
+                .is_err()
+            );
         }
     }
 

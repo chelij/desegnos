@@ -154,31 +154,34 @@ fn candidate_status(text: &str, record: &mut JobRecord, original: &Project) -> J
             }
         }
         Ok((candidate, Err(error))) => {
-            let element_id =
-                candidate.rejected_element(&record.view.requirements, original);
-            record.view.validation_events.push(desegnos_core::ValidationEvent {
-                kind: desegnos_core::validation_failure_kind(&error.to_string()).into(),
-                disposition: "conflicted".into(),
-                element_id,
-                message: error.to_string(),
-            });
+            let element_id = candidate.rejected_element(&record.view.requirements, original);
+            record
+                .view
+                .validation_events
+                .push(desegnos_core::ValidationEvent {
+                    kind: desegnos_core::validation_failure_kind(&error.to_string()).into(),
+                    disposition: "conflicted".into(),
+                    element_id,
+                    message: error.to_string(),
+                });
             record.view.raw_reply = Some(desegnos_ai::scrub_diagnostic_reply(text, None));
-            record.view.message = format!(
-                "Desegnos rejected the candidate: {error} Nothing was applied."
-            );
+            record.view.message =
+                format!("Desegnos rejected the candidate: {error} Nothing was applied.");
             JobStatus::Blocked
         }
         Err(error) => {
-            record.view.validation_events.push(desegnos_core::ValidationEvent {
-                kind: desegnos_core::validation_failure_kind(&error.to_string()).into(),
-                disposition: "conflicted".into(),
-                element_id: None,
-                message: error.to_string(),
-            });
+            record
+                .view
+                .validation_events
+                .push(desegnos_core::ValidationEvent {
+                    kind: desegnos_core::validation_failure_kind(&error.to_string()).into(),
+                    disposition: "conflicted".into(),
+                    element_id: None,
+                    message: error.to_string(),
+                });
             record.view.raw_reply = Some(desegnos_ai::scrub_diagnostic_reply(text, None));
-            record.view.message = format!(
-                "Desegnos rejected the candidate: {error} Nothing was applied."
-            );
+            record.view.message =
+                format!("Desegnos rejected the candidate: {error} Nothing was applied.");
             JobStatus::Blocked
         }
     }
@@ -452,7 +455,6 @@ impl GenerationJobView {
             .as_ref()
             .unwrap_or(&self.requirements)
     }
-
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2046,7 +2048,10 @@ impl GenerationService {
                 // Rescan a short overlap so a page id split across two deltas is still found.
                 let from = record.partial_text.len().saturating_sub(64);
                 record.partial_text.push_str(&progress.text_delta);
-                let from = (0..=from).rev().find(|at| record.partial_text.is_char_boundary(*at)).unwrap_or(0);
+                let from = (0..=from)
+                    .rev()
+                    .find(|at| record.partial_text.is_char_boundary(*at))
+                    .unwrap_or(0);
                 for page in page_ids_in(&record.partial_text[from..]) {
                     if !record.view.pages_started.contains(&page) {
                         record.view.pages_started.push(page);
@@ -2233,7 +2238,10 @@ impl GenerationService {
                         let before = record.view.validation_events.len();
                         let recovered_status = candidate_status(&text, &mut record, original);
                         let kept = record.view.candidate.as_ref().is_some_and(|candidate| {
-                            candidate.requests.iter().any(|request| !request.operations.is_empty())
+                            candidate
+                                .requests
+                                .iter()
+                                .any(|request| !request.operations.is_empty())
                         });
                         if kept && recovered_status != JobStatus::Blocked {
                             // Treated as a partial success, not a failed attempt.
@@ -3208,8 +3216,16 @@ async fn submit(
                     let manager = chatgpt.manager()?;
                     let mut available = chatgpt.view().await;
                     if available.models.is_empty() {
-                        let client = app.state::<Mutex<GenerationService>>().lock().map_err(message)?.client.clone()?;
-                        available = manager.discover_models(account_id, &client, &cancellation).await.map_err(message)?;
+                        let client = app
+                            .state::<Mutex<GenerationService>>()
+                            .lock()
+                            .map_err(message)?
+                            .client
+                            .clone()?;
+                        available = manager
+                            .discover_models(account_id, &client, &cancellation)
+                            .await
+                            .map_err(message)?;
                     }
                     if available.active_account_id != Some(account_id) {
                         return Err(
@@ -3299,14 +3315,16 @@ async fn submit(
                         )?;
                     }
                     client_ref
-                        .generate_for_auth(
-                            request_ref.authentication,
-                            &requirements,
-                            request_ref.generation_mode,
-                            &schema,
-                            &request_ref.settings,
-                            key_ref,
-                            cancel_ref,
+                        .generate(
+                            desegnos_ai::GenerationRequest {
+                                authentication: request_ref.authentication,
+                                snapshot: &requirements,
+                                mode: request_ref.generation_mode,
+                                schema: &schema,
+                                settings: &request_ref.settings,
+                                key: key_ref,
+                                cancellation: cancel_ref,
+                            },
                             move |progress| {
                                 if let Ok(mut service) =
                                     progress_app.state::<Mutex<GenerationService>>().lock()
@@ -3757,10 +3775,15 @@ mod unreadable_reply_retry_tests {
     fn page_ids_in_streamed_text_are_found_once_in_order() {
         let a = "11111111-1111-4111-8111-111111111111";
         let b = "22222222-2222-4222-8222-222222222222";
-        let text = format!(r#"{{"kind":"setPage","pageId":"{a}"}},{{"kind":"insertInBoundary","pageId": "{b}"}},{{"kind":"insertInBoundary","pageId":"{a}"}},{{"kind":"insertInBoundary","pageId":"{b}"}}"#);
+        let text = format!(
+            r#"{{"kind":"setPage","pageId":"{a}"}},{{"kind":"insertInBoundary","pageId": "{b}"}},{{"kind":"insertInBoundary","pageId":"{a}"}},{{"kind":"insertInBoundary","pageId":"{b}"}}"#
+        );
         assert_eq!(
             super::page_ids_in(&text),
-            vec![uuid::Uuid::parse_str(b).unwrap(), uuid::Uuid::parse_str(a).unwrap()]
+            vec![
+                uuid::Uuid::parse_str(b).unwrap(),
+                uuid::Uuid::parse_str(a).unwrap()
+            ]
         );
         assert!(super::page_ids_in(r#"{"pageId":"1111"#).is_empty());
     }
@@ -3914,10 +3937,7 @@ mod unreadable_reply_retry_tests {
         ] {
             let truncated = Err(ProviderError::new(kind, SubmissionOutcome::Received));
             assert!(!should_retry_unreadable_reply(
-                &truncated,
-                false,
-                &settings,
-                0.01
+                &truncated, false, &settings, 0.01
             ));
         }
         let cancelled = Err(ProviderError::new(
@@ -3925,10 +3945,7 @@ mod unreadable_reply_retry_tests {
             SubmissionOutcome::NotSubmitted,
         ));
         assert!(!should_retry_unreadable_reply(
-            &cancelled,
-            true,
-            &settings,
-            0.01
+            &cancelled, true, &settings, 0.01
         ));
         assert!(!should_retry_unreadable_reply(
             &Ok(malformed.clone()),
@@ -3958,13 +3975,7 @@ mod unreadable_reply_retry_tests {
     #[tokio::test]
     async fn malformed_reply_is_retried_once_and_the_valid_layers_are_applied() {
         let (mut service, project, job_id, element_id, directory) = prepared(settings());
-        let requirements = service
-            .jobs
-            .get(&job_id)
-            .unwrap()
-            .view
-            .requirements
-            .clone();
+        let requirements = service.jobs.get(&job_id).unwrap().view.requirements.clone();
         let estimate = service.jobs.get(&job_id).unwrap().view.estimate_usd;
         let settings = service.settings.clone();
         let valid = candidate_json(&requirements, element_id);
@@ -4004,9 +4015,11 @@ mod unreadable_reply_retry_tests {
         let view = &service.jobs.get(&job_id).unwrap().view;
         assert!(matches!(view.status, JobStatus::Ready));
         assert_eq!(view.usage.unwrap().total_tokens, 800);
-        assert!(view.validation_events.iter().any(|event| {
-            event.kind == "unreadableReply" && event.disposition == "retried"
-        }));
+        assert!(
+            view.validation_events
+                .iter()
+                .any(|event| { event.kind == "unreadableReply" && event.disposition == "retried" })
+        );
         let applied = apply_generation_output(
             &project,
             view.request_requirements(),
@@ -4022,13 +4035,7 @@ mod unreadable_reply_retry_tests {
     #[tokio::test]
     async fn both_malformed_replies_fail_after_exactly_two_sends() {
         let (mut service, project, job_id, element_id, directory) = prepared(settings());
-        let requirements = service
-            .jobs
-            .get(&job_id)
-            .unwrap()
-            .view
-            .requirements
-            .clone();
+        let requirements = service.jobs.get(&job_id).unwrap().view.requirements.clone();
         let estimate = service.jobs.get(&job_id).unwrap().view.estimate_usd;
         let settings = service.settings.clone();
         let valid = candidate_json(&requirements, element_id);
@@ -4061,9 +4068,11 @@ mod unreadable_reply_retry_tests {
         assert!(matches!(view.status, JobStatus::Blocked));
         assert!(view.message.starts_with("Desegnos rejected the candidate:"));
         assert_eq!(view.usage.unwrap().total_tokens, 400);
-        assert!(view.validation_events.iter().any(|event| {
-            event.kind == "unreadableReply" && event.disposition == "retried"
-        }));
+        assert!(
+            view.validation_events
+                .iter()
+                .any(|event| { event.kind == "unreadableReply" && event.disposition == "retried" })
+        );
         fs::remove_dir_all(directory).unwrap();
     }
 

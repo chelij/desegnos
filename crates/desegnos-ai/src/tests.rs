@@ -572,14 +572,16 @@ async fn sparse_wire_indices_correlate_with_compact_completed_messages_by_identi
         let server = Server::start(reply).await;
         let response = server
             .client()
-            .generate_for_auth(
-                authentication,
-                &frozen,
-                GenerationMode::Strict,
-                &schema(),
-                &ProviderSettings::default(),
-                &ApiKey::new(KEY.into()).unwrap(),
-                &CancellationToken::new(),
+            .generate(
+                crate::GenerationRequest {
+                    authentication,
+                    snapshot: &frozen,
+                    mode: GenerationMode::Strict,
+                    schema: &schema(),
+                    settings: &ProviderSettings::default(),
+                    key: &ApiKey::new(KEY.into()).unwrap(),
+                    cancellation: &CancellationToken::new(),
+                },
                 |_| {},
             )
             .await
@@ -600,14 +602,16 @@ async fn generate_events(
     let server = Server::start(reply).await;
     let result = server
         .client()
-        .generate_for_auth(
-            authentication,
-            snapshot,
-            GenerationMode::Strict,
-            &schema(),
-            &ProviderSettings::default(),
-            &ApiKey::new(KEY.into()).unwrap(),
-            &CancellationToken::new(),
+        .generate(
+            crate::GenerationRequest {
+                authentication,
+                snapshot,
+                mode: GenerationMode::Strict,
+                schema: &schema(),
+                settings: &ProviderSettings::default(),
+                key: &ApiKey::new(KEY.into()).unwrap(),
+                cancellation: &CancellationToken::new(),
+            },
             |_| {},
         )
         .await;
@@ -1033,14 +1037,16 @@ async fn completion_rejections_identify_the_failed_check_without_retaining_outpu
             let server = Server::start(Reply::sse(frame(value.clone()))).await;
             let error = server
                 .client()
-                .generate_for_auth(
-                    authentication,
-                    &frozen,
-                    GenerationMode::Strict,
-                    &schema(),
-                    &ProviderSettings::default(),
-                    &ApiKey::new(KEY.into()).unwrap(),
-                    &CancellationToken::new(),
+                .generate(
+                    crate::GenerationRequest {
+                        authentication,
+                        snapshot: &frozen,
+                        mode: GenerationMode::Strict,
+                        schema: &schema(),
+                        settings: &ProviderSettings::default(),
+                        key: &ApiKey::new(KEY.into()).unwrap(),
+                        cancellation: &CancellationToken::new(),
+                    },
                     |_| {},
                 )
                 .await
@@ -1163,14 +1169,16 @@ async fn credentials_split_between_final_text_parts_are_still_rejected() {
         let server = Server::start(Reply::sse(frame(value.clone()))).await;
         let error = server
             .client()
-            .generate_for_auth(
-                authentication,
-                &frozen,
-                GenerationMode::Strict,
-                &schema(),
-                &ProviderSettings::default(),
-                &ApiKey::new(KEY.into()).unwrap(),
-                &CancellationToken::new(),
+            .generate(
+                crate::GenerationRequest {
+                    authentication,
+                    snapshot: &frozen,
+                    mode: GenerationMode::Strict,
+                    schema: &schema(),
+                    settings: &ProviderSettings::default(),
+                    key: &ApiKey::new(KEY.into()).unwrap(),
+                    cancellation: &CancellationToken::new(),
+                },
                 |_| {},
             )
             .await
@@ -1188,12 +1196,15 @@ async fn generate(server: &Server, snapshot: &RequirementsSnapshot) -> Result<Pr
     server
         .client()
         .generate(
-            snapshot,
-            GenerationMode::Strict,
-            &schema(),
-            &ProviderSettings::default(),
-            &ApiKey::new(KEY.into()).unwrap(),
-            &CancellationToken::new(),
+            crate::GenerationRequest {
+                authentication: AuthenticationMethod::ApiKey,
+                snapshot,
+                mode: GenerationMode::Strict,
+                schema: &schema(),
+                settings: &ProviderSettings::default(),
+                key: &ApiKey::new(KEY.into()).unwrap(),
+                cancellation: &CancellationToken::new(),
+            },
             |_| {},
         )
         .await
@@ -1208,12 +1219,15 @@ async fn responses_adapter_contract_through_a_real_loopback_http_server() {
         let response = server
             .client()
             .generate(
-                &frozen,
-                mode,
-                &schema(),
-                &ProviderSettings::default(),
-                &ApiKey::new(KEY.into()).unwrap(),
-                &CancellationToken::new(),
+                crate::GenerationRequest {
+                    authentication: AuthenticationMethod::ApiKey,
+                    snapshot: &frozen,
+                    mode,
+                    schema: &schema(),
+                    settings: &ProviderSettings::default(),
+                    key: &ApiKey::new(KEY.into()).unwrap(),
+                    cancellation: &CancellationToken::new(),
+                },
                 |value| progress.lock().unwrap().push(value),
             )
             .await
@@ -1490,14 +1504,16 @@ async fn a_large_valid_stream_without_a_content_type_reaches_the_site_reader() {
             let server = Server::start(reply).await;
             let response = server
                 .client()
-                .generate_for_auth(
-                    authentication,
-                    &frozen,
-                    GenerationMode::Strict,
-                    &schema(),
-                    &ProviderSettings::default(),
-                    &ApiKey::new(KEY.into()).unwrap(),
-                    &CancellationToken::new(),
+                .generate(
+                    crate::GenerationRequest {
+                        authentication,
+                        snapshot: &frozen,
+                        mode: GenerationMode::Strict,
+                        schema: &schema(),
+                        settings: &ProviderSettings::default(),
+                        key: &ApiKey::new(KEY.into()).unwrap(),
+                        cancellation: &CancellationToken::new(),
+                    },
                     |_| {},
                 )
                 .await
@@ -1838,12 +1854,15 @@ async fn request_digest_mode_size_context_and_spending_fail_before_connecting() 
         async move {
             client
                 .generate(
-                    &snapshot,
-                    mode,
-                    &schema,
-                    &settings,
-                    &key,
-                    &CancellationToken::new(),
+                    crate::GenerationRequest {
+                        authentication: AuthenticationMethod::ApiKey,
+                        snapshot: &snapshot,
+                        mode,
+                        schema: &schema,
+                        settings: &settings,
+                        key: &key,
+                        cancellation: &CancellationToken::new(),
+                    },
                     |_| {},
                 )
                 .await
@@ -1935,12 +1954,15 @@ async fn cancellation_before_and_during_streaming_prevents_a_candidate() {
     let error = server
         .client()
         .generate(
-            &frozen,
-            GenerationMode::Strict,
-            &schema(),
-            &ProviderSettings::default(),
-            &key,
-            &cancelled,
+            crate::GenerationRequest {
+                authentication: AuthenticationMethod::ApiKey,
+                snapshot: &frozen,
+                mode: GenerationMode::Strict,
+                schema: &schema(),
+                settings: &ProviderSettings::default(),
+                key: &key,
+                cancellation: &cancelled,
+            },
             |_| {},
         )
         .await
@@ -1954,12 +1976,15 @@ async fn cancellation_before_and_during_streaming_prevents_a_candidate() {
     let error = server
         .client()
         .generate(
-            &frozen,
-            GenerationMode::Strict,
-            &schema(),
-            &ProviderSettings::default(),
-            &key,
-            &cancelled_at_send,
+            crate::GenerationRequest {
+                authentication: AuthenticationMethod::ApiKey,
+                snapshot: &frozen,
+                mode: GenerationMode::Strict,
+                schema: &schema(),
+                settings: &ProviderSettings::default(),
+                key: &key,
+                cancellation: &cancelled_at_send,
+            },
             move |_| signal.cancel(),
         )
         .await
@@ -1988,12 +2013,15 @@ async fn cancellation_before_and_during_streaming_prevents_a_candidate() {
     let error = server
         .client()
         .generate(
-            &frozen,
-            GenerationMode::Strict,
-            &schema(),
-            &ProviderSettings::default(),
-            &key,
-            &cancelled,
+            crate::GenerationRequest {
+                authentication: AuthenticationMethod::ApiKey,
+                snapshot: &frozen,
+                mode: GenerationMode::Strict,
+                schema: &schema(),
+                settings: &ProviderSettings::default(),
+                key: &key,
+                cancellation: &cancelled,
+            },
             move |progress| {
                 if progress.received_bytes > 0 {
                     signal.cancel();
@@ -2017,12 +2045,15 @@ async fn a_deadline_during_a_live_request_records_uncertainty_and_never_retries(
         .client()
         .with_test_deadline(Duration::from_millis(30))
         .generate(
-            &frozen,
-            GenerationMode::Strict,
-            &schema(),
-            &ProviderSettings::default(),
-            &ApiKey::new(KEY.into()).unwrap(),
-            &CancellationToken::new(),
+            crate::GenerationRequest {
+                authentication: AuthenticationMethod::ApiKey,
+                snapshot: &frozen,
+                mode: GenerationMode::Strict,
+                schema: &schema(),
+                settings: &ProviderSettings::default(),
+                key: &ApiKey::new(KEY.into()).unwrap(),
+                cancellation: &CancellationToken::new(),
+            },
             |_| {},
         )
         .await
@@ -2043,12 +2074,15 @@ async fn a_silent_provider_times_out_long_before_the_overall_deadline() {
         .client()
         .with_test_idle(Duration::from_millis(30))
         .generate(
-            &frozen,
-            GenerationMode::Strict,
-            &schema(),
-            &ProviderSettings::default(),
-            &ApiKey::new(KEY.into()).unwrap(),
-            &CancellationToken::new(),
+            crate::GenerationRequest {
+                authentication: AuthenticationMethod::ApiKey,
+                snapshot: &frozen,
+                mode: GenerationMode::Strict,
+                schema: &schema(),
+                settings: &ProviderSettings::default(),
+                key: &ApiKey::new(KEY.into()).unwrap(),
+                cancellation: &CancellationToken::new(),
+            },
             |_| {},
         )
         .await
@@ -2131,12 +2165,15 @@ async fn keys_in_provider_text_or_ids_cannot_enter_results_progress_or_errors() 
         let error = server
             .client()
             .generate(
-                &frozen,
-                GenerationMode::Strict,
-                &schema(),
-                &ProviderSettings::default(),
-                &ApiKey::new(KEY.into()).unwrap(),
-                &CancellationToken::new(),
+                crate::GenerationRequest {
+                    authentication: AuthenticationMethod::ApiKey,
+                    snapshot: &frozen,
+                    mode: GenerationMode::Strict,
+                    schema: &schema(),
+                    settings: &ProviderSettings::default(),
+                    key: &ApiKey::new(KEY.into()).unwrap(),
+                    cancellation: &CancellationToken::new(),
+                },
                 |value| progress.lock().unwrap().push(value),
             )
             .await
@@ -2244,14 +2281,16 @@ async fn generate_plan(
 ) -> Result<ProviderResponse> {
     server
         .client()
-        .generate_for_auth(
-            AuthenticationMethod::Chatgpt,
-            snapshot,
-            GenerationMode::Strict,
-            &schema(),
-            settings,
-            &ApiKey::from_chatgpt_token(KEY.into()).unwrap(),
-            &CancellationToken::new(),
+        .generate(
+            crate::GenerationRequest {
+                authentication: AuthenticationMethod::Chatgpt,
+                snapshot,
+                mode: GenerationMode::Strict,
+                schema: &schema(),
+                settings,
+                key: &ApiKey::from_chatgpt_token(KEY.into()).unwrap(),
+                cancellation: &CancellationToken::new(),
+            },
             |_| {},
         )
         .await
@@ -2338,14 +2377,16 @@ async fn chatgpt_exact_file_and_global_modes_omit_api_only_fields_and_cost_caps(
         );
         let response = server
             .client()
-            .generate_for_auth(
-                AuthenticationMethod::Chatgpt,
-                &frozen,
-                mode,
-                &schema(),
-                &settings,
-                &ApiKey::from_chatgpt_token(KEY.into()).unwrap(),
-                &CancellationToken::new(),
+            .generate(
+                crate::GenerationRequest {
+                    authentication: AuthenticationMethod::Chatgpt,
+                    snapshot: &frozen,
+                    mode,
+                    schema: &schema(),
+                    settings: &settings,
+                    key: &ApiKey::from_chatgpt_token(KEY.into()).unwrap(),
+                    cancellation: &CancellationToken::new(),
+                },
                 |_| {},
             )
             .await
@@ -2596,14 +2637,16 @@ async fn available_openai_models_remain_selectable_and_reach_the_requested_trans
             let server = Server::start(Reply::sse(stream(&frozen))).await;
             let response = server
                 .client()
-                .generate_for_auth(
-                    auth,
-                    &frozen,
-                    GenerationMode::Strict,
-                    &schema(),
-                    &saved,
-                    &ApiKey::new(KEY.into()).unwrap(),
-                    &CancellationToken::new(),
+                .generate(
+                    crate::GenerationRequest {
+                        authentication: auth,
+                        snapshot: &frozen,
+                        mode: GenerationMode::Strict,
+                        schema: &schema(),
+                        settings: &saved,
+                        key: &ApiKey::new(KEY.into()).unwrap(),
+                        cancellation: &CancellationToken::new(),
+                    },
                     |_| {},
                 )
                 .await
@@ -2781,12 +2824,15 @@ async fn new_openai_api_model_uses_its_selected_id_and_explicit_prices() {
     server
         .client()
         .generate(
-            &frozen,
-            GenerationMode::Strict,
-            &schema(),
-            &settings,
-            &ApiKey::new(KEY.into()).unwrap(),
-            &CancellationToken::new(),
+            crate::GenerationRequest {
+                authentication: AuthenticationMethod::ApiKey,
+                snapshot: &frozen,
+                mode: GenerationMode::Strict,
+                schema: &schema(),
+                settings: &settings,
+                key: &ApiKey::new(KEY.into()).unwrap(),
+                cancellation: &CancellationToken::new(),
+            },
             |_| {},
         )
         .await
@@ -2803,13 +2849,16 @@ async fn new_openai_api_model_uses_its_selected_id_and_explicit_prices() {
         server
             .client()
             .generate(
-                &frozen,
-                GenerationMode::Strict,
-                &schema(),
-                &no_price,
-                &ApiKey::new(KEY.into()).unwrap(),
-                &CancellationToken::new(),
-                |_| {},
+                crate::GenerationRequest {
+                    authentication: AuthenticationMethod::ApiKey,
+                    snapshot: &frozen,
+                    mode: GenerationMode::Strict,
+                    schema: &schema(),
+                    settings: &no_price,
+                    key: &ApiKey::new(KEY.into()).unwrap(),
+                    cancellation: &CancellationToken::new()
+                },
+                |_| {}
             )
             .await
             .unwrap_err()
@@ -3208,14 +3257,16 @@ async fn chatgpt_cancel_deadline_and_redirect_preserve_authentication_without_re
     cancellation.cancel();
     let before = server
         .client()
-        .generate_for_auth(
-            AuthenticationMethod::Chatgpt,
-            &frozen,
-            GenerationMode::Strict,
-            &schema(),
-            &ProviderSettings::default(),
-            &key,
-            &cancellation,
+        .generate(
+            crate::GenerationRequest {
+                authentication: AuthenticationMethod::Chatgpt,
+                snapshot: &frozen,
+                mode: GenerationMode::Strict,
+                schema: &schema(),
+                settings: &ProviderSettings::default(),
+                key: &key,
+                cancellation: &cancellation,
+            },
             |_| {},
         )
         .await
@@ -3228,14 +3279,16 @@ async fn chatgpt_cancel_deadline_and_redirect_preserve_authentication_without_re
     let signal = cancellation.clone();
     let during = server
         .client()
-        .generate_for_auth(
-            AuthenticationMethod::Chatgpt,
-            &frozen,
-            GenerationMode::Strict,
-            &schema(),
-            &ProviderSettings::default(),
-            &key,
-            &cancellation,
+        .generate(
+            crate::GenerationRequest {
+                authentication: AuthenticationMethod::Chatgpt,
+                snapshot: &frozen,
+                mode: GenerationMode::Strict,
+                schema: &schema(),
+                settings: &ProviderSettings::default(),
+                key: &key,
+                cancellation: &cancellation,
+            },
             move |progress| {
                 if progress.received_bytes > 0 {
                     signal.cancel();
@@ -3254,14 +3307,16 @@ async fn chatgpt_cancel_deadline_and_redirect_preserve_authentication_without_re
     let deadline = deadline_server
         .client()
         .with_test_deadline(Duration::from_millis(30))
-        .generate_for_auth(
-            AuthenticationMethod::Chatgpt,
-            &frozen,
-            GenerationMode::Strict,
-            &schema(),
-            &ProviderSettings::default(),
-            &key,
-            &CancellationToken::new(),
+        .generate(
+            crate::GenerationRequest {
+                authentication: AuthenticationMethod::Chatgpt,
+                snapshot: &frozen,
+                mode: GenerationMode::Strict,
+                schema: &schema(),
+                settings: &ProviderSettings::default(),
+                key: &key,
+                cancellation: &CancellationToken::new(),
+            },
             |_| {},
         )
         .await
@@ -3317,14 +3372,16 @@ async fn chatgpt_candidates_still_require_matching_identity_bounded_usage_and_no
         let progress = Mutex::new(vec![]);
         let error = server
             .client()
-            .generate_for_auth(
-                AuthenticationMethod::Chatgpt,
-                &frozen,
-                GenerationMode::Strict,
-                &schema(),
-                &ProviderSettings::default(),
-                &ApiKey::from_chatgpt_token(KEY.into()).unwrap(),
-                &CancellationToken::new(),
+            .generate(
+                crate::GenerationRequest {
+                    authentication: AuthenticationMethod::Chatgpt,
+                    snapshot: &frozen,
+                    mode: GenerationMode::Strict,
+                    schema: &schema(),
+                    settings: &ProviderSettings::default(),
+                    key: &ApiKey::from_chatgpt_token(KEY.into()).unwrap(),
+                    cancellation: &CancellationToken::new(),
+                },
                 |update| progress.lock().unwrap().push(update),
             )
             .await
@@ -3555,14 +3612,16 @@ async fn image_probe_shares_text_authorization_and_transport() {
         .await;
         let client = server.client();
         client
-            .generate_for_auth(
-                auth,
-                &frozen,
-                GenerationMode::Strict,
-                &schema(),
-                &settings,
-                &key,
-                &CancellationToken::new(),
+            .generate(
+                crate::GenerationRequest {
+                    authentication: auth,
+                    snapshot: &frozen,
+                    mode: GenerationMode::Strict,
+                    schema: &schema(),
+                    settings: &settings,
+                    key: &key,
+                    cancellation: &CancellationToken::new(),
+                },
                 |_| {},
             )
             .await
@@ -3913,12 +3972,9 @@ fn deepseek_requests_use_system_role_and_effort_names() {
     assert!(system.contains(&snapshot.job_id.to_string()));
     assert!(system.contains(&snapshot.sha256));
     assert!(system.to_ascii_lowercase().contains("json object"));
-    let identity = crate::identity::identity_content(
-        &snapshot,
-        &desegnos_core::candidate_schema(),
-        &[],
-    )
-    .unwrap();
+    let identity =
+        crate::identity::identity_content(&snapshot, &desegnos_core::candidate_schema(), &[])
+            .unwrap();
     let identity_body =
         crate::providers::foreign_body(ProviderId::Deepseek, &identity, &settings).unwrap();
     assert_eq!(
@@ -4287,12 +4343,15 @@ async fn transient_http_retries_reuse_the_frozen_request_and_count_only_returned
         let response = server
             .client()
             .generate(
-                &frozen,
-                GenerationMode::Strict,
-                &schema(),
-                &ProviderSettings::default(),
-                &ApiKey::new(KEY.into()).unwrap(),
-                &CancellationToken::new(),
+                crate::GenerationRequest {
+                    authentication: AuthenticationMethod::ApiKey,
+                    snapshot: &frozen,
+                    mode: GenerationMode::Strict,
+                    schema: &schema(),
+                    settings: &ProviderSettings::default(),
+                    key: &ApiKey::new(KEY.into()).unwrap(),
+                    cancellation: &CancellationToken::new(),
+                },
                 |update| updates.lock().unwrap().push(update),
             )
             .await
@@ -4369,12 +4428,15 @@ async fn cancelling_during_backoff_never_submits_the_next_attempt() {
     let error = server
         .client()
         .generate(
-            &frozen,
-            GenerationMode::Strict,
-            &schema(),
-            &ProviderSettings::default(),
-            &ApiKey::new(KEY.into()).unwrap(),
-            &cancel,
+            crate::GenerationRequest {
+                authentication: AuthenticationMethod::ApiKey,
+                snapshot: &frozen,
+                mode: GenerationMode::Strict,
+                schema: &schema(),
+                settings: &ProviderSettings::default(),
+                key: &ApiKey::new(KEY.into()).unwrap(),
+                cancellation: &cancel,
+            },
             |update| {
                 if update.retry.is_some() {
                     let cancel = cancel.clone();
@@ -4442,10 +4504,21 @@ async fn read_only_preflight_network_failures_do_not_claim_an_unknown_generation
     reset.drop_before_headers = true;
     let server = Server::start(reset).await;
     let cancel = CancellationToken::new();
-    let client = reqwest::Client::builder().retry(reqwest::retry::never()).build().unwrap();
-    let error = crate::retry::send(client.get(&server.endpoint), &cancel,
-        tokio::time::Instant::now() + Duration::from_millis(100), Duration::from_secs(30),
-        1024, &|_| {}).await.err().unwrap();
+    let client = reqwest::Client::builder()
+        .retry(reqwest::retry::never())
+        .build()
+        .unwrap();
+    let error = crate::retry::send(
+        client.get(&server.endpoint),
+        &cancel,
+        tokio::time::Instant::now() + Duration::from_millis(100),
+        Duration::from_secs(30),
+        1024,
+        &|_| {},
+    )
+    .await
+    .err()
+    .unwrap();
     assert_eq!(error.kind, ErrorKind::Transport);
     assert_eq!(error.outcome, SubmissionOutcome::NotSubmitted);
     assert_eq!(server.count.load(Ordering::SeqCst), 1);

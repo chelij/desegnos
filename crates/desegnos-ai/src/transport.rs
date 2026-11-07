@@ -1,7 +1,7 @@
 use crate::retry::RetryResponse as Response;
 use crate::{
-    ApiKey, AuthenticationMethod, ChatgptModel, ErrorKind, IdentityImage, MODEL_MAX_OUTPUT_TOKENS,
-    ProviderError, ProviderSettings, ResponseBodyKind, Result, SubmissionOutcome, TokenUsage,
+    ApiKey, AuthenticationMethod, ChatgptModel, ErrorKind, MODEL_MAX_OUTPUT_TOKENS, ProviderError,
+    ProviderSettings, ResponseBodyKind, Result, SubmissionOutcome, TokenUsage,
     identity::prepare_identity_body,
     settings::prepare_body,
     sse::{
@@ -9,7 +9,7 @@ use crate::{
         event_stream_prefix,
     },
 };
-use desegnos_core::{GenerationMode, RequirementsSnapshot};
+use desegnos_core::RequirementsSnapshot;
 use reqwest::{
     Client, StatusCode,
     header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, HeaderValue},
@@ -241,43 +241,13 @@ impl OpenAiClient {
             .body(body))
     }
 
-    #[allow(clippy::too_many_arguments)]
+    /// Send one frozen generation request and stream its reply.
     pub async fn generate(
         &self,
-        snapshot: &RequirementsSnapshot,
-        mode: GenerationMode,
-        schema: &Value,
-        settings: &ProviderSettings,
-        key: &ApiKey,
-        cancellation: &CancellationToken,
+        request: crate::GenerationRequest<'_>,
         progress: impl Fn(ProviderProgress) + Send + Sync,
     ) -> Result<ProviderResponse> {
-        self.generate_for_auth(
-            AuthenticationMethod::ApiKey,
-            snapshot,
-            mode,
-            schema,
-            settings,
-            key,
-            cancellation,
-            progress,
-        )
-        .await
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub async fn generate_for_auth(
-        &self,
-        authentication: AuthenticationMethod,
-        snapshot: &RequirementsSnapshot,
-        mode: GenerationMode,
-        schema: &Value,
-        settings: &ProviderSettings,
-        key: &ApiKey,
-        cancellation: &CancellationToken,
-        progress: impl Fn(ProviderProgress) + Send + Sync,
-    ) -> Result<ProviderResponse> {
-        self.generate_inner(
+        let crate::GenerationRequest {
             authentication,
             snapshot,
             mode,
@@ -285,53 +255,42 @@ impl OpenAiClient {
             settings,
             key,
             cancellation,
-            progress,
-        )
+        } = request;
+        async {
+            let body = prepare_body(authentication, snapshot, mode, schema, settings)?;
+            self.submit_for_auth(
+                authentication,
+                snapshot,
+                settings,
+                key,
+                cancellation,
+                body,
+                progress,
+            )
+            .await
+        }
         .await
         .map_err(|error| error.with_authentication(authentication))
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    async fn generate_inner(
-        &self,
-        authentication: AuthenticationMethod,
-        snapshot: &RequirementsSnapshot,
-        mode: GenerationMode,
-        schema: &Value,
-        settings: &ProviderSettings,
-        key: &ApiKey,
-        cancellation: &CancellationToken,
-        progress: impl Fn(ProviderProgress) + Send + Sync,
-    ) -> Result<ProviderResponse> {
-        let body = prepare_body(authentication, snapshot, mode, schema, settings)?;
-        self.submit_for_auth(
-            authentication,
-            snapshot,
-            settings,
-            key,
-            cancellation,
-            body,
-            progress,
-        )
-        .await
     }
 
     /// Analyze reusable identity from a frozen source packet without generating website code.
     ///
     /// The caller validates the identity-specific candidate after the shared transport verifies
     /// the completed stream and its exact job ID and requirements digest.
-    #[allow(clippy::too_many_arguments)]
-    pub async fn analyze_identity_for_auth(
+    pub async fn analyze_identity(
         &self,
-        authentication: AuthenticationMethod,
-        snapshot: &RequirementsSnapshot,
-        schema: &Value,
-        settings: &ProviderSettings,
-        key: &ApiKey,
-        cancellation: &CancellationToken,
-        images: &[IdentityImage],
+        request: crate::IdentityRequest<'_>,
         progress: impl Fn(ProviderProgress) + Send + Sync,
     ) -> Result<ProviderResponse> {
+        let crate::IdentityRequest {
+            authentication,
+            snapshot,
+            schema,
+            settings,
+            key,
+            cancellation,
+            images,
+        } = request;
         let result = async {
             let body = prepare_identity_body(authentication, snapshot, schema, settings, images)?;
             self.submit_for_auth(

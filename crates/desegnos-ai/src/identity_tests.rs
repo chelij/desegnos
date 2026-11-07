@@ -47,14 +47,16 @@ async fn analyze(
 ) -> Result<ProviderResponse> {
     server
         .client()
-        .analyze_identity_for_auth(
-            authentication,
-            frozen,
-            &identity_schema(),
-            &ProviderSettings::default(),
-            &ApiKey::new(KEY.into()).unwrap(),
-            &CancellationToken::new(),
-            images,
+        .analyze_identity(
+            crate::IdentityRequest {
+                authentication,
+                snapshot: frozen,
+                schema: &identity_schema(),
+                settings: &ProviderSettings::default(),
+                key: &ApiKey::new(KEY.into()).unwrap(),
+                cancellation: &CancellationToken::new(),
+                images,
+            },
             |_| {},
         )
         .await
@@ -87,7 +89,10 @@ async fn identity_analysis_has_a_distinct_request_and_correlated_answer_for_both
         assert_eq!(body["tool_choice"], "none");
         assert_eq!(body["model"], MODEL_ID);
         assert_eq!(body["reasoning"]["effort"], "medium");
-        assert_eq!(body["text"]["format"]["name"], "desegnos_identity_candidate");
+        assert_eq!(
+            body["text"]["format"]["name"],
+            "desegnos_identity_candidate"
+        );
         assert_eq!(body["text"]["format"]["strict"], true);
         let mut expected = caller_schema.clone();
         expected["properties"]["jobId"]["enum"] = json!([frozen.job_id]);
@@ -375,14 +380,16 @@ async fn identity_invalid_packet_schema_and_images_fail_before_connecting() {
     bad_schema["required"] = json!(["brandName"]);
     let error = server
         .client()
-        .analyze_identity_for_auth(
-            AuthenticationMethod::Chatgpt,
-            &frozen,
-            &bad_schema,
-            &ProviderSettings::default(),
-            &ApiKey::new(KEY.into()).unwrap(),
-            &CancellationToken::new(),
-            &[],
+        .analyze_identity(
+            crate::IdentityRequest {
+                authentication: AuthenticationMethod::Chatgpt,
+                snapshot: &frozen,
+                schema: &bad_schema,
+                settings: &ProviderSettings::default(),
+                key: &ApiKey::new(KEY.into()).unwrap(),
+                cancellation: &CancellationToken::new(),
+                images: &[],
+            },
             |_| {},
         )
         .await
@@ -461,14 +468,16 @@ async fn identity_cancellation_stops_submission_or_stream_without_retry() {
         cancellation.cancel();
         let error = server
             .client()
-            .analyze_identity_for_auth(
-                authentication,
-                &frozen,
-                &identity_schema(),
-                &ProviderSettings::default(),
-                &ApiKey::new(KEY.into()).unwrap(),
-                &cancellation,
-                &[],
+            .analyze_identity(
+                crate::IdentityRequest {
+                    authentication,
+                    snapshot: &frozen,
+                    schema: &identity_schema(),
+                    settings: &ProviderSettings::default(),
+                    key: &ApiKey::new(KEY.into()).unwrap(),
+                    cancellation: &cancellation,
+                    images: &[],
+                },
                 |_| {},
             )
             .await
@@ -480,14 +489,16 @@ async fn identity_cancellation_stops_submission_or_stream_without_retry() {
         let signal = cancellation.clone();
         let error = server
             .client()
-            .analyze_identity_for_auth(
-                authentication,
-                &frozen,
-                &identity_schema(),
-                &ProviderSettings::default(),
-                &ApiKey::new(KEY.into()).unwrap(),
-                &cancellation,
-                &[],
+            .analyze_identity(
+                crate::IdentityRequest {
+                    authentication,
+                    snapshot: &frozen,
+                    schema: &identity_schema(),
+                    settings: &ProviderSettings::default(),
+                    key: &ApiKey::new(KEY.into()).unwrap(),
+                    cancellation: &cancellation,
+                    images: &[],
+                },
                 move |progress| {
                     if progress.received_bytes > 0 {
                         signal.cancel();

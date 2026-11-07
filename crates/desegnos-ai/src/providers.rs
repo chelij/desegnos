@@ -282,6 +282,16 @@ pub struct GenerationRequest<'a> {
     pub key: &'a ApiKey,
     pub cancellation: &'a CancellationToken,
 }
+/// One frozen brand-identity analysis: the source packet, its logo images and the account.
+pub struct IdentityRequest<'a> {
+    pub authentication: AuthenticationMethod,
+    pub snapshot: &'a RequirementsSnapshot,
+    pub schema: &'a Value,
+    pub settings: &'a ProviderSettings,
+    pub key: &'a ApiKey,
+    pub cancellation: &'a CancellationToken,
+    pub images: &'a [IdentityImage],
+}
 pub type ProviderFuture<'a> = Pin<Box<dyn Future<Output = Result<ProviderResponse>> + Send + 'a>>;
 /// Provider differences stop here. No HTTP or credential details enter the UI.
 pub trait ProviderAdapter: Send + Sync {
@@ -297,16 +307,7 @@ impl ProviderAdapter for OpenAiClient {
         r: GenerationRequest<'a>,
         p: &'a (dyn Fn(ProviderProgress) + Send + Sync),
     ) -> ProviderFuture<'a> {
-        Box::pin(self.generate_for_auth(
-            r.authentication,
-            r.snapshot,
-            r.mode,
-            r.schema,
-            r.settings,
-            r.key,
-            r.cancellation,
-            p,
-        ))
+        Box::pin(OpenAiClient::generate(self, r, p))
     }
 }
 
@@ -403,45 +404,33 @@ impl ProviderClient {
             self.openai.test_model_access(settings, key, cancel).await
         }
     }
-    #[allow(clippy::too_many_arguments)]
-    pub async fn generate_for_auth(
+    /// Send one frozen generation request to the selected provider and stream its reply.
+    pub async fn generate(
         &self,
-        auth: AuthenticationMethod,
-        snapshot: &RequirementsSnapshot,
-        mode: GenerationMode,
-        schema: &Value,
-        settings: &ProviderSettings,
-        key: &ApiKey,
-        cancel: &CancellationToken,
+        r: GenerationRequest<'_>,
         progress: impl Fn(ProviderProgress) + Send + Sync,
     ) -> Result<ProviderResponse> {
-        let r = GenerationRequest {
-            authentication: auth,
-            snapshot,
-            mode,
-            schema,
-            settings,
-            key,
-            cancellation: cancel,
-        };
         if let Some(remote) = &self.remote {
             remote.generate(r, &progress).await
         } else {
             ProviderAdapter::generate(&self.openai, r, &progress).await
         }
     }
-    #[allow(clippy::too_many_arguments)]
-    pub async fn analyze_identity_for_auth(
+    /// Analyze reusable brand identity with the selected provider; never generates site code.
+    pub async fn analyze_identity(
         &self,
-        auth: AuthenticationMethod,
-        snapshot: &RequirementsSnapshot,
-        schema: &Value,
-        settings: &ProviderSettings,
-        key: &ApiKey,
-        cancel: &CancellationToken,
-        images: &[IdentityImage],
+        request: IdentityRequest<'_>,
         progress: impl Fn(ProviderProgress) + Send + Sync,
     ) -> Result<ProviderResponse> {
+        let IdentityRequest {
+            authentication: auth,
+            snapshot,
+            schema,
+            settings,
+            key,
+            cancellation: cancel,
+            images,
+        } = request;
         if let Some(remote) = &self.remote {
             self.estimate_identity(auth, snapshot, schema, settings, images)?;
             let common = crate::identity::identity_content(snapshot, schema, images)?;
@@ -450,8 +439,17 @@ impl ProviderClient {
                 .await
         } else {
             self.openai
-                .analyze_identity_for_auth(
-                    auth, snapshot, schema, settings, key, cancel, images, progress,
+                .analyze_identity(
+                    IdentityRequest {
+                        authentication: auth,
+                        snapshot,
+                        schema,
+                        settings,
+                        key,
+                        cancellation: cancel,
+                        images,
+                    },
+                    progress,
                 )
                 .await
         }
@@ -2301,14 +2299,16 @@ mod tests {
             };
             let frozen = crate::tests::snapshot(GenerationMode::Strict);
             let response = client
-                .generate_for_auth(
-                    AuthenticationMethod::ApiKey,
-                    &frozen,
-                    GenerationMode::Strict,
-                    &desegnos_core::candidate_schema(),
-                    &settings,
-                    &ApiKey::new("private-fixture-credential".into()).unwrap(),
-                    &CancellationToken::new(),
+                .generate(
+                    crate::GenerationRequest {
+                        authentication: AuthenticationMethod::ApiKey,
+                        snapshot: &frozen,
+                        mode: GenerationMode::Strict,
+                        schema: &desegnos_core::candidate_schema(),
+                        settings: &settings,
+                        key: &ApiKey::new("private-fixture-credential".into()).unwrap(),
+                        cancellation: &CancellationToken::new(),
+                    },
                     |_| {},
                 )
                 .await

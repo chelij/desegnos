@@ -782,14 +782,16 @@ pub async fn start_export(
                 .map_err(message)?;
         }
         client
-            .generate_for_auth(
-                authentication,
-                &snapshot,
-                mode,
-                &plan.schema,
-                &settings,
-                &key,
-                &cancellation,
+            .generate(
+                desegnos_ai::GenerationRequest {
+                    authentication,
+                    snapshot: &snapshot,
+                    mode,
+                    schema: &plan.schema,
+                    settings: &settings,
+                    key: &key,
+                    cancellation: &cancellation,
+                },
                 |_progress| {},
             )
             .await
