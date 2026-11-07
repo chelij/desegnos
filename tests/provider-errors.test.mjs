@@ -67,7 +67,7 @@ try {
   });
   await test('export behaviour failures use the same structured messages and actions', () => {
     for (const [httpStatus, label] of [[500, 'Try again'], [429, 'Try again'], [402, 'AI settings'], [401, 'AI settings']]) {
-      const html = renderToStaticMarkup(React.createElement(ExportPanel, { project: { pages: [] }, job: { status: 'failed', provider: 'deepseek', providerError: failure({ httpStatus }), message: 'connection failed', pages: [], warnings: [] }, error: 'connection failed' }));
+      const html = renderToStaticMarkup(React.createElement(ExportPanel, { project: { pages: [] }, exports: { job: { status: 'failed', provider: 'deepseek', providerError: failure({ httpStatus }), message: 'connection failed', pages: [], warnings: [] }, error: 'connection failed' } }));
       assert.match(html, /Nothing was changed/);
       assert.ok(html.includes(`>${label}</button>`));
       assert.doesNotMatch(html, /connection failed|internet/);

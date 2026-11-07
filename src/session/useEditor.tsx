@@ -167,7 +167,8 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
   const generationRef = useRef<GenerationJobView | null>(null);
   const generationOwns = useRef(false);
   const briefGenerateFlight = useRef(false);
-  const { openExportPanel, chooseExportDestination, setExportDestination, runExport, sendExport, cancelExport, openExportFolder, openInBrowser, keepPointerCode, forgetExportPointer, previewSelectedBoundary, closePreview, refreshPreview, exportDestination, exportJob, exportError, exportSending, checkedStates, checkedProject, preview } = useExportJobs({ current, view, panel, play, setPlay, openPanel, closePanel }, () => ({ current, panels, panelActions, accept, setNotice, settle, setError, setOpenFailure, openPanel, closePanel, mutate, canvasFocus, selectedElementPageId, play, setPlay, view, panel, aiConnected, spendingLimitUsd: aiCurrent.current?.settings.spendingLimitUsd ?? null }));
+  const exports = useExportJobs({ current, view, panel, play, setPlay, openPanel, closePanel }, () => ({ current, panels, panelActions, accept, setNotice, settle, setError, setOpenFailure, openPanel, closePanel, mutate, canvasFocus, selectedElementPageId, play, setPlay, view, panel, aiConnected, spendingLimitUsd: aiCurrent.current?.settings.spendingLimitUsd ?? null }));
+  const { openPanel: openExportPanel, run: runExport, previewBoundary: previewSelectedBoundary, closePreview, checkedStates, checkedProject, preview } = exports;
 
   const storeAiSettings = useCallback((value: AiSettingsView) => { aiCurrent.current = value; setAiSettings(value); setAiPollingError(''); }, []);
   const refreshAiSettings = useCallback(async (refreshModels = false) => {
@@ -780,7 +781,7 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
     ...(view?.recoveries.length ? [{ id: 'recover', label: 'Recover unsaved projects', action: () => openPanel({ kind: 'recovery' }) }] : []),
     { id: 'file-divider', label: '', separator: true },
     { id: 'export', label: 'Export…', shortcut: shortcutLabel('export'), disabled: !canEditProject, action: openExportPanel },
-    ...(canEditProject && project.lastExport ? [{ id: 'open-browser', label: 'Open in browser', action: () => run(openInBrowser) }] : []),
+    ...(canEditProject && project.lastExport ? [{ id: 'open-browser', label: 'Open in browser', action: () => run(exports.openInBrowser) }] : []),
     { id: 'ai-divider', label: '', separator: true },
     { id: 'settings', label: 'AI settings', action: () => setShowAiSettings(true) },
     { id: 'mode', label: 'AI style', disabled: !canEditProject || working, children: (['fuzzy', 'strict'] as GenerationMode[]).map(mode => ({ id: mode, label: mode === 'fuzzy' ? 'Flexible' : 'Precise', checked: project?.generationMode === mode, action: () => run(() => mutate(current => current.generationMode === mode ? null : { type: 'set_generation_mode', mode })) })) },
@@ -888,12 +889,12 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
   ];
 
   return {
-    edits,
+    edits, exports,
     panel, openPanel, closePanel, togglePanel, saving, updateState, dismissUpdate, changeCanvasTool,
     showPalette, paletteCommands, setShowPalette, closeRequest, setCloseRequest, onStartPage, project, view,
     run, switchProjectTab, closeProjectTab, menuItems, resolvedTheme, setTheme, compactHistory,
     travel, panels, panelActions, play,
-    togglePlay, previewSelectedBoundary, openExportPanel, aiConnected, showAiSettings,
+    togglePlay, aiConnected, showAiSettings,
     setShowAiSettings, generation, requestedAreas, working, generate,
     error, setError, problemAction, openFailure, setNotice, setOpenFailure, openRelease,
     notices, setNotices, dismissedRecovery, setDismissedRecovery,
@@ -903,13 +904,9 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
     selectCanvasBoundary, createCanvasBoundary, addProjectBoundary, addNamedViewAt, saveCurrentView,
     canvasSelection, canvasFocus, canvasFocusSize, widthPreview, setWidthPreview, selectCanvasReference, selectCanvasPointer,
     selectCanvasRequest, clearCanvasSelection, removeCanvasSelection, elementToReference, referenceToElement, attachToRequest, deleteBoundary, pointerStateMap,
-    reportCanvasZoom, selectCanvasElement, groupCanvasElements, ungroupCanvasElements, playElement, setPlay, preview, closePreview, refreshPreview,
-    showGenerationStatus, openImportDialog, editGenerationRequest,
-    openGeneration, aiSettings, manageChatgptUsage, replyToGeneration, exportDestination,
-    exportJob, exportSending, exportError, chooseExportDestination, setExportDestination, runExport, sendExport, cancelExport,
-    openExportFolder, openInBrowser, historyEpoch, accept, projectLocation,
-    closeUntitledSave, saveUntitledProject, selectedPointer, selectedPointerState, forgetExportPointer,
-    keepPointerComment, keepPointerCode, selectedPointerOther, keepPointerThis, mergePointerClash,
+    reportCanvasZoom, selectCanvasElement, groupCanvasElements, ungroupCanvasElements, playElement, setPlay, showGenerationStatus, openImportDialog, editGenerationRequest,
+    openGeneration, aiSettings, manageChatgptUsage, replyToGeneration, historyEpoch, accept, projectLocation,
+    closeUntitledSave, saveUntitledProject, selectedPointer, selectedPointerState, keepPointerComment, selectedPointerOther, keepPointerThis, mergePointerClash,
     selectedReferenceItem, selectedRequest, attachReferenceContext, selectedElements, selectedElementPageId,
     selectedElementTargets, renameCanvasElement, selectedElementRequest, setCanvasElementRequest,
     selectedBoundary, updateCanvasPage, mutate, updateCanvasPageSize,

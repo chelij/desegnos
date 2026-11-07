@@ -270,9 +270,15 @@ export function useExportJobs(input: Pick<Context, 'current' | 'view' | 'panel' 
   }
 
   return {
-    exportDestination, exportJob, exportError, exportSending, checkedStates,
-    checkedProject, preview, openExportPanel, chooseExportDestination, setExportDestination,
-    runExport, sendExport, cancelExport, openExportFolder, openInBrowser, keepPointerCode, forgetExportPointer,
-    previewSelectedBoundary, closePreview, refreshPreview,
+    destination: exportDestination, job: exportJob, error: exportError, sending: exportSending,
+    checkedStates, checkedProject, preview,
+    openPanel: openExportPanel, chooseDestination: chooseExportDestination, setDestination: setExportDestination,
+    /** Exports the included boundaries, or previews one page when given its id. */
+    run: runExport, send: sendExport, cancel: cancelExport,
+    openFolder: openExportFolder, openInBrowser, keepPointerCode, forgetPointer: forgetExportPointer,
+    previewBoundary: previewSelectedBoundary, closePreview, refreshPreview,
   };
 }
+
+/** Export and Preview: the job, its folder and every action on it. */
+export type ExportJobs = ReturnType<typeof useExportJobs>;

@@ -8,15 +8,17 @@ const modules = await compileModules(['src/projectCanvas/exportPanel.tsx']);
 try {
   const { ExportPanel } = await modules.load('projectCanvas/exportPanel.js');
   const noop = () => {};
+  const action = async () => {};
   const render = (patch) => renderToStaticMarkup(React.createElement(ExportPanel, {
-    project: { pages: [] }, destination: '/Documents/Desegnos', busy: false,
-    sending: false, error: '', chooseDestination: noop, runExport: noop, sendExport: noop,
-    cancelExport: noop, retryExport: noop, openFolder: noop, openInBrowser: noop,
-    previewExport: noop, selectBoundary: noop, setIncluded: noop, setOutput: noop,
+    project: { pages: [] }, busy: false, selectBoundary: noop, setIncluded: noop, setOutput: noop,
     close: noop, openSettings: noop,
-    job: { status: 'ready', kind: 'code', message: 'Exported 3 boundaries.', summary: '',
-      pages: Array.from({ length: 3 }, (_, i) => ({ pageId: String(i), name: `Page ${i}`, file: `${i}.html` })),
-      sizeCount: 9, pointerCount: 3, reusedBehaviourCount: 3, warnings: [], attempts: [], ...patch },
+    exports: {
+      destination: '/Documents/Desegnos', sending: false, error: '', setDestination: noop, openFolder: noop,
+      chooseDestination: action, run: action, send: action, cancel: action, openInBrowser: action,
+      job: { status: 'ready', kind: 'code', message: 'Exported 3 boundaries.', summary: '',
+        pages: Array.from({ length: 3 }, (_, i) => ({ pageId: String(i), name: `Page ${i}`, file: `${i}.html` })),
+        sizeCount: 9, pointerCount: 3, reusedBehaviourCount: 3, warnings: [], attempts: [], ...patch },
+    },
   }));
 
   await test('export counts behaviour code reused after Preview', () => {

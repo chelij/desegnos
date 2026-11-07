@@ -74,8 +74,8 @@ try {
     for (const label of ['Phone', 'Tablet', 'Desktop']) assert.match(properties, new RegExp(`>${label}</button>`));
     assert.doesNotMatch(properties, />Screen<\/option>|Delete screen/);
     const html = renderToStaticMarkup(React.createElement(ExportPanel, {
-      project: { ...project, pages: [page] }, destination: null, busy: false, job: null, sending: false, error: '',
-      selectBoundary: noop, setIncluded: noop, setOutput: noop, previewExport: noop, close: noop,
+      project: { ...project, pages: [page] }, busy: false, exports: { destination: null, job: null, sending: false, error: '' },
+      selectBoundary: noop, setIncluded: noop, setOutput: noop, close: noop,
     }));
     assert.match(html, /<option value="webpage" selected="">Page<\/option>/);
     assert.doesNotMatch(html, /<option value="appScreen"/);
@@ -89,8 +89,8 @@ try {
       { ...project.pages[0], id: 'excluded', name: 'Draft', included: false, output: 'image' },
     ];
     const html = renderToStaticMarkup(React.createElement(ExportPanel, {
-      project: { ...project, pages }, destination: null, busy: false, job: null, sending: false, error: '',
-      selectBoundary: noop, setIncluded: noop, setOutput: noop, previewExport: noop, close: noop,
+      project: { ...project, pages }, busy: false, exports: { destination: null, job: null, sending: false, error: '' },
+      selectBoundary: noop, setIncluded: noop, setOutput: noop, close: noop,
     }));
     assert.match(html, /aria-label="Include Home in export" checked=""/);
     assert.match(html, /aria-label="Include Draft in export"/);

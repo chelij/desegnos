@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { userError, providerProblem } from '../userErrors.js';
-import type { ExportJobView, OutputType, Project } from '../types';
+import type { OutputType, Project } from '../types';
+import type { ExportJobs } from '../exportJobs/useExportJobs';
 
 const money = (value: number) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 4 }).format(value);
 
@@ -20,14 +21,20 @@ const STATUS_LABELS: Record<string, string> = {
 };
 
 /** The inline export panel the dock shows when Export is chosen. No modal dialog. */
-export function ExportPanel({ project, destination, busy, job, sending, error, chooseDestination, setDestination, runExport, sendExport, cancelExport, retryExport, openFolder, openInBrowser, previewExport, selectBoundary, setIncluded, setOutput, close, openSettings }: {
-  openSettings: () => void;
+export function ExportPanel({ project, exports, busy, selectBoundary, setIncluded, setOutput, close, openSettings }: {
+  project: Project; exports: ExportJobs; busy: boolean;
   selectBoundary: (pageId: string) => void; setIncluded: (pageId: string, included: boolean) => void; setOutput: (pageId: string, output: OutputType) => void;
-  project: Project; destination: string | null; busy: boolean;
-  job: ExportJobView | null; sending: boolean; error: string;
-  chooseDestination: () => void; setDestination: (path: string) => void; runExport: () => void; sendExport: () => void; cancelExport: () => void; retryExport: () => void;
-  openFolder: (path: string) => void; openInBrowser: () => void; previewExport: (pageId: string) => void; close: () => void;
+  close: () => void; openSettings: () => void;
 }) {
+  const { destination, job, sending, error, setDestination, openFolder } = exports;
+  // Every action reports its own failure in the panel; a rejection needs no further handling.
+  const act = (action: () => Promise<unknown>) => () => { void action().catch(() => {}); };
+  const chooseDestination = act(exports.chooseDestination);
+  const runExport = act(() => exports.run());
+  const sendExport = act(() => exports.send());
+  const cancelExport = act(exports.cancel);
+  const openInBrowser = act(exports.openInBrowser);
+  const previewExport = (pageId: string) => { void exports.run(pageId).catch(() => {}); };
   const boundaries = project.pages;
   const prepared = job?.status === 'prepared';
   const running = job?.status === 'sending';
@@ -76,7 +83,7 @@ export function ExportPanel({ project, destination, busy, job, sending, error, c
       {prepared && <button type="button" className="primary" disabled={sending} onClick={sendExport}>{sending ? 'Sending…' : job?.kind === 'comment' ? 'Send to rewrite the comment' : 'Generate behaviour'}</button>}
       {prepared && <button type="button" className="dock-action" disabled={sending} onClick={cancelExport}>Cancel</button>}
       {running && <button type="button" className="dock-action" onClick={cancelExport}>Cancel</button>}
-      {(job?.status === 'failed' || job?.status === 'cancelled' || job?.status === 'stale') && <button type="button" className="dock-action" disabled={sending} onClick={providerProblem(job.providerError, job.provider)?.settings ? openSettings : retryExport}>{providerProblem(job.providerError, job.provider)?.action ?? 'Try again'}</button>}
+      {(job?.status === 'failed' || job?.status === 'cancelled' || job?.status === 'stale') && <button type="button" className="dock-action" disabled={sending} onClick={providerProblem(job.providerError, job.provider)?.settings ? openSettings : sendExport}>{providerProblem(job.providerError, job.provider)?.action ?? 'Try again'}</button>}
     </div>
   </div>;
 }

@@ -49,12 +49,12 @@ export default function App({ initialView }: { initialView?: WorkspaceView } = {
 
 function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
   const {
-    edits,
+    edits, exports,
     panel, openPanel, closePanel, togglePanel, saving, updateState, dismissUpdate, changeCanvasTool,
     showPalette, paletteCommands, setShowPalette, closeRequest, setCloseRequest, onStartPage, project, view,
     run, switchProjectTab, closeProjectTab, menuItems, resolvedTheme, setTheme,
     travel, panels, panelActions, play,
-    togglePlay, previewSelectedBoundary, openExportPanel, aiConnected, showAiSettings,
+    togglePlay, aiConnected, showAiSettings,
     setShowAiSettings, generation, requestedAreas, working, generate,
     error, setError, problemAction, openFailure, setNotice, setOpenFailure, openRelease,
     notices, setNotices, dismissedRecovery, setDismissedRecovery,
@@ -64,13 +64,9 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
     selectCanvasBoundary, createCanvasBoundary, addProjectBoundary, addNamedViewAt, saveCurrentView,
     canvasSelection, canvasFocus, canvasFocusSize, widthPreview, setWidthPreview, selectCanvasReference, selectCanvasPointer,
     selectCanvasRequest, clearCanvasSelection, removeCanvasSelection, elementToReference, referenceToElement, attachToRequest, deleteBoundary, pointerStateMap,
-    reportCanvasZoom, selectCanvasElement, groupCanvasElements, ungroupCanvasElements, playElement, setPlay, preview, closePreview, refreshPreview,
-    showGenerationStatus, openImportDialog, editGenerationRequest,
-    openGeneration, aiSettings, manageChatgptUsage, replyToGeneration, exportDestination,
-    exportJob, exportSending, exportError, chooseExportDestination, setExportDestination, runExport, sendExport, cancelExport,
-    openExportFolder, openInBrowser, historyEpoch, accept, projectLocation,
-    closeUntitledSave, saveUntitledProject, selectedPointer, selectedPointerState, forgetExportPointer,
-    keepPointerComment, keepPointerCode, keepPointerThis, mergePointerClash,
+    reportCanvasZoom, selectCanvasElement, groupCanvasElements, ungroupCanvasElements, playElement, setPlay, showGenerationStatus, openImportDialog, editGenerationRequest,
+    openGeneration, aiSettings, manageChatgptUsage, replyToGeneration, historyEpoch, accept, projectLocation,
+    closeUntitledSave, saveUntitledProject, selectedPointer, selectedPointerState, keepPointerComment, keepPointerThis, mergePointerClash,
     selectedReferenceItem, selectedRequest, attachReferenceContext, selectedElements, selectedElementPageId,
     selectedElementTargets, renameCanvasElement, selectedElementRequest, setCanvasElementRequest,
     selectedBoundary, updateCanvasPage, mutate, updateCanvasPageSize,
@@ -86,8 +82,8 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
   function clashActions(pointer: Pointer, state: PointerStateView | null) {
     const other = state?.clashWith.length ? (project?.pointers ?? []).find(item => item.id === state.clashWith[0]) ?? null : null;
     return {
-      keepComment: () => ["codeChanged", "needsExporting"].includes(state?.state ?? '') ? forgetExportPointer(pointer.id) : keepPointerComment(pointer.id),
-      keepCode: () => run(() => keepPointerCode(pointer.id)),
+      keepComment: () => ["codeChanged", "needsExporting"].includes(state?.state ?? '') ? exports.forgetPointer(pointer.id) : keepPointerComment(pointer.id),
+      keepCode: () => run(() => exports.keepPointerCode(pointer.id)),
       keepThis: () => { if (other) keepPointerThis(pointer.id, other.id); },
       merge: () => { if (other) mergePointerClash(pointer, other); },
       reattach: () => canvasRef.current?.armPointer(pointer.id),
@@ -149,8 +145,8 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
         {!onStartPage && project && <><button aria-label="Undo last change" type="button" className="icon-button" disabled={!view?.canUndo} title={withShortcut('Undo', 'undo')} onClick={() => run(() => travel('undo_project'))}><Icon name="undo" /></button><button aria-label="Redo last change" type="button" className="icon-button" disabled={!view?.canRedo} title={withShortcut('Redo', 'redo')} onClick={() => run(() => travel('redo_project'))}><Icon name="redo" /></button>
           <button type="button" className={panel.kind === 'history' ? 'icon-button active' : 'icon-button'} aria-pressed={panel.kind === 'history'} aria-label="History and alternatives" title="History and alternatives" onClick={() => { togglePanel({ kind: 'history' }); if (panels.hidden) panelActions.toggleHidden(); if (panels.collapsed) panelActions.setCollapsed(false); }}><Icon name="history" /></button></>}
         {!onStartPage && project && <button type="button" className={`icon-button labeled${playIsActive(play) ? ' active' : ''}`} aria-pressed={playIsActive(play)} aria-label={playIsActive(play) ? 'Stop Play' : 'Play'} title={withShortcut(playIsActive(play) ? 'Stop Play' : 'Play', 'play')} onClick={() => playIsActive(play) ? setPlay(idlePlay) : togglePlay()}><Icon name={playIsActive(play) ? 'stop' : 'play'} /><span className="button-label">{playIsActive(play) ? 'Stop' : 'Play'}</span></button>}
-        {previewAvailable && <button type="button" className="icon-button labeled" aria-label="Preview export" title={withShortcut('Preview export', 'preview')} onClick={() => previewSelectedBoundary()}><Icon name="monitor" /><span className="button-label">Preview</span></button>}
-        {!onStartPage && project && <button type="button" className={`icon-button labeled${panel.kind === 'export' ? ' active' : ''}`} aria-pressed={panel.kind === 'export'} aria-label="Export" title={withShortcut('Export', 'export')} onClick={() => panel.kind === 'export' ? closePanel('export') : openExportPanel()}><Icon name="download" /><span className="button-label">Export</span></button>}
+        {previewAvailable && <button type="button" className="icon-button labeled" aria-label="Preview export" title={withShortcut('Preview export', 'preview')} onClick={() => exports.previewBoundary()}><Icon name="monitor" /><span className="button-label">Preview</span></button>}
+        {!onStartPage && project && <button type="button" className={`icon-button labeled${panel.kind === 'export' ? ' active' : ''}`} aria-pressed={panel.kind === 'export'} aria-label="Export" title={withShortcut('Export', 'export')} onClick={() => panel.kind === 'export' ? closePanel('export') : exports.openPanel()}><Icon name="download" /><span className="button-label">Export</span></button>}
         {showsOpener({ available: !aiConnected, open: showAiSettings }) && <button className="ai-shortcut needs-connection" onClick={() => setShowAiSettings(true)} aria-label="AI settings" title="Connect AI to generate">Connect AI</button>}
         {showsOpener({ available: !onStartPage && !!project && !!(generation.job || generation.operation), open: panel.kind === 'log' }) && <button type="button" className="icon-button" aria-label="AI log" title="AI conversation" onClick={() => openPanel({ kind: 'log', focus: 0 })}><Icon name="note" /></button>}
         {!onStartPage && project && <button className={generation.canStop ? undefined : 'primary'} title={generation.canStop ? 'Stop generation (Esc)' : nothingToGenerate ? 'Describe at least one request first.' : working ? 'Wait for the current generation to finish.' : !aiConnected ? 'Connect AI to generate' : 'Generate the described changes'} disabled={!generation.canStop && (nothingToGenerate || working)} onClick={generation.canStop ? () => { void generation.cancel(); } : !aiConnected && !nothingToGenerate ? () => setShowAiSettings(true) : () => generate()}>{generation.canStop ? 'Stop' : 'Generate'}</button>}
@@ -194,7 +190,7 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
         groupElements={groupCanvasElements} ungroupElements={ungroupCanvasElements}
        
         play={play} onPlayBoundary={id => setPlay(current => ({ ...current, boundary: id }))} onPlayElement={playElement} onPlayExit={() => setPlay(idlePlay)}
-        preview={preview} previewClose={closePreview} previewRefresh={refreshPreview} generate={ids => generate(ids)} />
+        preview={exports.preview} previewClose={exports.closePreview} previewRefresh={exports.refreshPreview} generate={ids => generate(ids)} />
       {showGenerationStatus ? <GenerationFeedback controller={generation} project={project} openSettings={() => setShowAiSettings(true)} openImport={openImportDialog} openBrief={() => openPanel({ kind: 'notes', section: 'decisions' })} changeRequest={editGenerationRequest} details={showsOpener({ available: true, open: panel.kind === 'log' }) ? openGeneration : undefined} /> : null}
       </div>
       {panel.kind === 'log' && project && <GenerationLog key={`${project.id}:${panel.focus}`} controller={generation} job={generation.job} operation={generation.operation} error={generation.error} project={project} settings={aiSettings} openSettings={() => setShowAiSettings(true)} openImport={openImportDialog} openBrief={() => openPanel({ kind: 'notes', section: 'decisions' })} editRequest={editGenerationRequest} reply={replyToGeneration} close={() => closePanel('log')} />}
@@ -203,10 +199,7 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
       </div>
       <EditorDock state={panels} actions={panelActions}
         exportPanel={panel.kind === 'export' && project
-          ? <ExportPanel openSettings={() => setShowAiSettings(true)} project={project} destination={exportDestination} busy={pending > 0} job={exportJob} sending={exportSending} error={exportError}
-              chooseDestination={() => run(chooseExportDestination)} setDestination={setExportDestination} runExport={() => runExport()} sendExport={() => run(sendExport)}
-              cancelExport={() => run(cancelExport)} retryExport={() => run(sendExport)}
-              openFolder={openExportFolder} openInBrowser={() => run(openInBrowser)} previewExport={pageId => runExport(pageId)}
+          ? <ExportPanel openSettings={() => setShowAiSettings(true)} project={project} exports={exports} busy={pending > 0}
               selectBoundary={selectCanvasBoundary} setIncluded={(pageId, included) => updateCanvasPage(pageId, { included })}
               setOutput={(pageId, output) => void mutate({ type: 'set_page_output', page_id: pageId, output })}
               close={() => closePanel('export')} />
