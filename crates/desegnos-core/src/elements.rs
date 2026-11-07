@@ -1,5 +1,10 @@
 //! Visual elements: the things drawn on the canvas. Elements hold visual properties only;
 //! code appears at export. Every page boundary owns a back-to-front tree of root elements.
+use crate::limits::{
+    LINE_HEIGHT_MAX, MAX_FONT_FAMILY_CHARS, MAX_FONT_WEIGHT, MAX_GRID_COLUMNS, MAX_LAYOUT_SPACING,
+    MAX_LETTER_SPACING, MAX_RADIUS, MAX_SHADOW_BLUR, MAX_SHADOW_OFFSET, MAX_STROKE_WIDTH,
+    TEXT_SIZE_RANGE,
+};
 use crate::{
     Error, MAX_PROMPT_CHARS, Page, Project, Rect, RequestAttachment, Result, ensure,
     model::validate_text,
@@ -307,7 +312,7 @@ impl ElementPadding {
         ensure(
             [self.top, self.right, self.bottom, self.left]
                 .iter()
-                .all(|value| value.is_finite() && (0.0..=4096.0).contains(value)),
+                .all(|value| value.is_finite() && (0.0..=MAX_LAYOUT_SPACING).contains(value)),
             "Padding must be between 0 and 4,096 pixels on every side.",
         )
     }
@@ -374,11 +379,11 @@ impl ElementLayout {
             Self::Free => Ok(()),
             Self::Stack { gap, padding, .. } => {
                 ensure(
-                    gap.is_finite() && (0.0..=4096.0).contains(gap),
+                    gap.is_finite() && (0.0..=MAX_LAYOUT_SPACING).contains(gap),
                     "A stack gap must be between 0 and 4,096 pixels.",
                 )?;
                 ensure(
-                    padding.is_finite() && (0.0..=4096.0).contains(padding),
+                    padding.is_finite() && (0.0..=MAX_LAYOUT_SPACING).contains(padding),
                     "Stack padding must be between 0 and 4,096 pixels.",
                 )
             }
@@ -388,15 +393,15 @@ impl ElementLayout {
                 padding,
             } => {
                 ensure(
-                    (1..=64).contains(columns),
+                    (1..=MAX_GRID_COLUMNS).contains(columns),
                     "A grid needs between 1 and 64 columns.",
                 )?;
                 ensure(
-                    gap.is_finite() && (0.0..=4096.0).contains(gap),
+                    gap.is_finite() && (0.0..=MAX_LAYOUT_SPACING).contains(gap),
                     "A grid gap must be between 0 and 4,096 pixels.",
                 )?;
                 ensure(
-                    padding.is_finite() && (0.0..=4096.0).contains(padding),
+                    padding.is_finite() && (0.0..=MAX_LAYOUT_SPACING).contains(padding),
                     "Grid padding must be between 0 and 4,096 pixels.",
                 )
             }
@@ -743,11 +748,11 @@ impl ElementStyle {
             validate_colour(colour, "Stroke")?;
         }
         ensure(
-            self.stroke.width.is_finite() && (0.0..=256.0).contains(&self.stroke.width),
+            self.stroke.width.is_finite() && (0.0..=MAX_STROKE_WIDTH).contains(&self.stroke.width),
             "A stroke width must be between 0 and 256 pixels.",
         )?;
         ensure(
-            self.radius.is_finite() && (0.0..=40_000.0).contains(&self.radius),
+            self.radius.is_finite() && (0.0..=MAX_RADIUS).contains(&self.radius),
             "A corner radius must not be negative.",
         )?;
         ensure(
@@ -760,30 +765,35 @@ impl ElementStyle {
                 .iter()
                 .all(|value| value.is_finite())
                 && shadow.blur >= 0.0
-                && shadow.blur <= 4096.0
-                && shadow.x.abs() <= 40_000.0
-                && shadow.y.abs() <= 40_000.0,
+                && shadow.blur <= MAX_SHADOW_BLUR
+                && shadow.x.abs() <= MAX_SHADOW_OFFSET
+                && shadow.y.abs() <= MAX_SHADOW_OFFSET,
             "A shadow must use finite offsets and a blur between 0 and 4,096 pixels.",
         )?;
         if let Some(colour) = &shadow.color {
             validate_colour(colour, "Shadow")?;
         }
         let text = &self.text_style;
-        validate_text(&text.font_family, "Font family", 200, false)?;
+        validate_text(
+            &text.font_family,
+            "Font family",
+            MAX_FONT_FAMILY_CHARS,
+            false,
+        )?;
         ensure(
-            text.size.is_finite() && (1.0..=512.0).contains(&text.size),
+            text.size.is_finite() && (TEXT_SIZE_RANGE.0..=TEXT_SIZE_RANGE.1).contains(&text.size),
             "Text size must be between 1 and 512 pixels.",
         )?;
         ensure(
-            (1..=1000).contains(&text.weight),
+            (1..=MAX_FONT_WEIGHT).contains(&text.weight),
             "Text weight must be between 1 and 1,000.",
         )?;
         ensure(
-            text.line_height.is_finite() && (0.0..=10.0).contains(&text.line_height),
+            text.line_height.is_finite() && (0.0..=LINE_HEIGHT_MAX).contains(&text.line_height),
             "Line height must be between 0 and 10.",
         )?;
         ensure(
-            text.letter_spacing.is_finite() && text.letter_spacing.abs() <= 100.0,
+            text.letter_spacing.is_finite() && text.letter_spacing.abs() <= MAX_LETTER_SPACING,
             "Letter spacing must be between -100 and 100 pixels.",
         )?;
         validate_colour(&text.color, "Text colour")?;

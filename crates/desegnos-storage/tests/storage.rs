@@ -147,7 +147,6 @@ fn generated_attachment_picture_survives_acceptance_save_reopen_and_export() {
             name: "my-picture.png".into(),
             kind: AttachmentKind::Image,
             data_uri: Some(uri.into()),
-            preview: None,
             text: None,
             url: None,
         }],

@@ -198,6 +198,30 @@ impl std::fmt::Debug for RequestImage {
     }
 }
 
+/// Previews of the frozen requests' picture attachments, at most `MAX_REQUEST_IMAGES`.
+/// GIFs cannot be previewed and travel by name and `pictureId` only.
+fn request_images(requests: &[&crate::PendingRequest]) -> Vec<RequestImage> {
+    requests
+        .iter()
+        .flat_map(|request| &request.attachments)
+        .filter(|attachment| attachment.kind == crate::AttachmentKind::Image)
+        .filter_map(|attachment| {
+            let uri = attachment.data_uri.as_deref()?;
+            let metadata = crate::picture_scaling::image_metadata(uri);
+            Some(RequestImage {
+                attachment_id: attachment.id.clone(),
+                data_uri: crate::ai_preview(uri)?,
+                stored_format: metadata["storedFormat"].as_str().map(str::to_owned),
+                transparent: metadata["transparent"].as_bool(),
+                transparent_percent: metadata["transparentPercent"]
+                    .as_u64()
+                    .and_then(|percent| u8::try_from(percent).ok()),
+            })
+        })
+        .take(crate::limits::MAX_REQUEST_IMAGES)
+        .collect()
+}
+
 fn json(value: &impl Serialize) -> Result<String> {
     serde_json::to_string_pretty(value).map_err(|e| Error(e.to_string()))
 }
@@ -721,7 +745,7 @@ impl Project {
             request_history: String::new(),
             capabilities,
             reference_ids,
-            images: vec![],
+            images: request_images(&requests),
             layer_requests: requests
                 .iter()
                 .flat_map(|request| {

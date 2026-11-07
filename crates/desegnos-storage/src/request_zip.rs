@@ -132,7 +132,6 @@ pub fn unpack_request_zip<R: Read + Seek>(
             name: full_name,
             kind: AttachmentKind::Text,
             data_uri: None,
-            preview: None,
             text: None,
             url: None,
         };

@@ -282,7 +282,6 @@ impl Project {
                     name: name.chars().take(crate::limits::MAX_NAME_CHARS).collect(),
                     kind: *kind,
                     data_uri: None,
-                    preview: None,
                     text: text.clone(),
                     url: url.clone(),
                 });
@@ -320,7 +319,6 @@ impl Project {
             name,
             kind,
             data_uri,
-            preview: None,
             text: None,
             url,
         };
