@@ -1,15 +1,50 @@
 //! Brand import from a website address: the home page, its stylesheets and logo images.
 //! Every request uses the same public-address, size and timeout rules as generation image
 //! downloads, carries no credentials, and never runs page code.
-use crate::images::{fetch_public, fetch_public_document};
+use crate::public_fetch::{FetchRequest, PublicFetcher};
 use reqwest::Url;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 /// Web address type used by the website fetcher (re-exported so callers need no HTTP dependency).
 pub use reqwest::Url as WebUrl;
 
+pub struct WebsiteFetcher {
+    fetcher: PublicFetcher,
+}
+impl Default for WebsiteFetcher {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+impl WebsiteFetcher {
+    pub fn new() -> Self {
+        Self {
+            fetcher: PublicFetcher::new(None).expect("public fetching needs no fixture"),
+        }
+    }
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn for_fixture(origin: &Url) -> Result<Self, String> {
+        if origin.scheme() != "http"
+            || !origin
+                .host_str()
+                .is_some_and(|host| matches!(host, "127.0.0.1" | "[::1]"))
+        {
+            return Err("Test website sources require a literal loopback HTTP origin.".into());
+        }
+        Ok(Self {
+            fetcher: PublicFetcher::new(Some(origin))?,
+        })
+    }
+}
+
 const MAX_PAGE_BYTES: usize = 256 * 1024;
-const MAX_IMAGE_BYTES: usize = 256 * 1024;
+use desegnos_core::MAX_DOWNLOADED_IMAGE_BYTES as MAX_IMAGE_BYTES;
+const MAX_BRAND_PAGES: usize = 20;
+const MAX_BRAND_TEXT_BYTES: usize = 2 * 1024 * 1024;
+const MAX_PHOTOS: usize = 32;
+const MAX_PHOTO_BYTES: usize = 2 * 1024 * 1024;
+const MAX_PHOTO_TOTAL_BYTES: usize = 8 * 1024 * 1024;
+const MAX_WEBSITE_IMAGE_BYTES: usize = 8 * 1024 * 1024;
 
 #[derive(Debug, Default)]
 pub struct WebsiteFiles {
@@ -39,6 +74,13 @@ pub fn website_address(input: &str) -> Result<Url, String> {
     Ok(url)
 }
 
+fn website_name(url: &Url) -> String {
+    url.host_str()
+        .unwrap_or("website")
+        .trim_start_matches("www.")
+        .to_owned()
+}
+
 fn file_name(url: &Url, fallback: &str, extension: &str) -> String {
     let last = url
         .path_segments()
@@ -63,210 +105,197 @@ fn file_name(url: &Url, fallback: &str, extension: &str) -> String {
     format!("{stem}.{extension}")
 }
 
-pub async fn fetch_website(input: &str, fixture: Option<&Url>) -> Result<WebsiteFiles, String> {
-    #[cfg(not(any(test, feature = "test-support")))]
-    if fixture.is_some() {
-        return Err("Test website sources are unavailable in this build.".into());
-    }
-    let page_url = match fixture {
-        Some(origin) => origin
-            .join(input)
-            .map_err(|_| "Enter a website address.".to_owned())?,
-        None => website_address(input)?,
-    };
-    let host = page_url
-        .host_str()
-        .unwrap_or("website")
-        .trim_start_matches("www.")
-        .to_owned();
-    let (html, _, page_url) = fetch_public_document(
-        page_url.as_str(),
-        fixture,
-        "/",
-        "text/html,application/xhtml+xml",
-        &["text/html", "application/xhtml+xml"],
-        MAX_PAGE_BYTES,
-        None,
-    )
-    .await
-    .map_err(|reason| format!("That website couldn’t be read: it {reason}."))?;
-    let text = String::from_utf8_lossy(&html).into_owned();
-    let links = desegnos_core::website_links(&text);
-    let mut site = WebsiteFiles {
-        name: host,
-        files: vec![(
-            "index.html".into(),
-            format!("<!-- Source URL: {} -->\n{}", page_url, text).into_bytes(),
-        )],
-        skipped: vec![],
-        photo_pages: BTreeMap::new(),
-    };
-    // Freeze bounded public page context before styles/images. Every redirect repeats
-    // the downloader's address checks and must stay on the original host.
-    let mut seen = BTreeSet::from([page_url.to_string()]);
-    let mut queue = VecDeque::new();
-    enqueue_pages(&page_url, &links.pages, &mut seen, &mut queue);
-    let mut page_bytes = site.files[0].1.len();
-    let mut requests = 1;
-    while requests < 20 {
-        let Some(url) = queue.pop_front() else {
-            break;
+impl WebsiteFetcher {
+    pub async fn fetch_website(&self, input: &str) -> Result<WebsiteFiles, String> {
+        let fetcher = &self.fetcher;
+        let page_url = match fetcher.fixture() {
+            Some(origin) => origin
+                .join(input)
+                .map_err(|_| "Enter a website address.".to_owned())?,
+            None => website_address(input)?,
         };
-        requests += 1;
-        match fetch_public_document(
-            url.as_str(),
-            fixture,
-            "/",
-            "text/html,application/xhtml+xml",
-            &["text/html", "application/xhtml+xml"],
-            MAX_PAGE_BYTES,
-            page_url.host_str(),
-        )
-        .await
-        {
-            Ok((bytes, _, url)) => {
-                if page_bytes + bytes.len() > 2 * 1024 * 1024 {
-                    site.skipped
-                        .push("Linked pages reached the 2 MiB text limit".into());
-                    break;
+        let host = website_name(&page_url);
+        let (html, _, page_url) = fetcher
+            .document(FetchRequest {
+                url: page_url.as_str(),
+                mimes: &["text/html", "application/xhtml+xml"],
+                limit: MAX_PAGE_BYTES,
+                host_lock: None,
+            })
+            .await
+            .map_err(|reason| format!("That website couldn’t be read: it {reason}."))?;
+        let text = String::from_utf8_lossy(&html).into_owned();
+        let links = desegnos_core::website_links(&text);
+        let mut site = WebsiteFiles {
+            name: host,
+            files: vec![(
+                "index.html".into(),
+                format!("<!-- Source URL: {} -->\n{}", page_url, text).into_bytes(),
+            )],
+            skipped: vec![],
+            photo_pages: BTreeMap::new(),
+        };
+        // Freeze bounded public page context before styles/images. Every redirect repeats
+        // the downloader's address checks and must stay on the original host.
+        let mut seen = BTreeSet::from([page_url.to_string()]);
+        let mut queue = VecDeque::new();
+        enqueue_pages(&page_url, &links.pages, &mut seen, &mut queue, true);
+        let mut page_bytes = site.files[0].1.len();
+        let mut requests = 1;
+        while requests < MAX_BRAND_PAGES {
+            let Some(url) = queue.pop_front() else {
+                break;
+            };
+            requests += 1;
+            match fetcher
+                .document(FetchRequest {
+                    url: url.as_str(),
+                    mimes: &["text/html", "application/xhtml+xml"],
+                    limit: MAX_PAGE_BYTES,
+                    host_lock: page_url.host_str(),
+                })
+                .await
+            {
+                Ok((bytes, _, url)) => {
+                    if page_bytes + bytes.len() > MAX_BRAND_TEXT_BYTES {
+                        site.skipped
+                            .push("Linked pages reached the 2 MiB text limit".into());
+                        break;
+                    }
+                    page_bytes += bytes.len();
+                    let text = String::from_utf8_lossy(&bytes);
+                    let next = desegnos_core::website_links(&text);
+                    enqueue_pages(&url, &next.pages, &mut seen, &mut queue, true);
+                    let source = format!("<!-- Source URL: {} -->\n{}", url, text);
+                    site.files.push((
+                        format!("pages/{:02}-{}", requests, file_name(&url, "page", "html")),
+                        source.into_bytes(),
+                    ));
                 }
-                page_bytes += bytes.len();
-                let text = String::from_utf8_lossy(&bytes);
-                let next = desegnos_core::website_links(&text);
-                enqueue_pages(&url, &next.pages, &mut seen, &mut queue);
-                let source = format!("<!-- Source URL: {} -->\n{}", url, text);
-                site.files.push((
-                    format!("pages/{:02}-{}", requests, file_name(&url, "page", "html")),
-                    source.into_bytes(),
-                ));
+                Err(reason) => site
+                    .skipped
+                    .push(format!("{url}: page skipped, it {reason}")),
             }
-            Err(reason) => site
-                .skipped
-                .push(format!("{url}: page skipped, it {reason}")),
         }
-    }
-    if !queue.is_empty() {
-        site.skipped
-            .push("Only the first 20 page requests are included".into());
-    }
-    for (index, href) in links.stylesheets.iter().enumerate() {
-        let Ok(url) = page_url.join(href) else {
-            site.skipped.push(format!("{href}: not a valid address"));
-            continue;
-        };
-        match fetch_public(
-            url.as_str(),
-            fixture,
-            "/",
-            "text/css",
-            &["text/css"],
-            MAX_PAGE_BYTES,
-        )
-        .await
-        {
-            Ok((bytes, _)) => site.files.push((
-                format!(
-                    "styles/{}",
-                    file_name(&url, &format!("style-{}", index + 1), "css")
-                ),
-                bytes,
-            )),
-            Err(reason) => site
-                .skipped
-                .push(format!("{}: stylesheet skipped, it {reason}", url.as_str())),
+        if !queue.is_empty() {
+            site.skipped
+                .push("Only the first 20 page requests are included".into());
         }
-    }
-    for href in &links.logos {
-        let Ok(url) = page_url.join(href) else {
-            site.skipped.push(format!("{href}: not a valid address"));
-            continue;
-        };
-        match fetch_public(
-            url.as_str(),
-            fixture,
-            "/",
-            "image/png,image/jpeg",
-            &["image/png", "image/jpeg"],
-            MAX_IMAGE_BYTES,
-        )
-        .await
-        {
-            Ok((bytes, mime)) => {
-                let extension = if mime == "image/png" { "png" } else { "jpg" };
-                // Keep "logo" in the name so the importer's logo selection recognises it.
-                let name = file_name(&url, "logo", extension);
-                let name = if name.to_ascii_lowercase().contains("logo") {
-                    name
-                } else {
-                    format!("logo-{name}")
-                };
-                site.files.push((format!("images/{name}"), bytes));
+        for (index, href) in links.stylesheets.iter().enumerate() {
+            let Ok(url) = page_url.join(href) else {
+                site.skipped.push(format!("{href}: not a valid address"));
+                continue;
+            };
+            match fetcher
+                .fetch(FetchRequest {
+                    url: url.as_str(),
+                    mimes: &["text/css"],
+                    limit: MAX_PAGE_BYTES,
+                    host_lock: None,
+                })
+                .await
+            {
+                Ok((bytes, _)) => site.files.push((
+                    format!(
+                        "styles/{}",
+                        file_name(&url, &format!("style-{}", index + 1), "css")
+                    ),
+                    bytes,
+                )),
+                Err(reason) => site
+                    .skipped
+                    .push(format!("{}: stylesheet skipped, it {reason}", url.as_str())),
             }
-            Err(reason) => site
-                .skipped
-                .push(format!("{}: image skipped, it {reason}", url.as_str())),
         }
-    }
-    // Keep explicit page attribution as CDN, query and extensionless image URLs do
-    // not have a unique local filename. Download names are stable per original URL.
-    let mut photos: BTreeMap<String, Vec<desegnos_core::SourcePageRef>> = BTreeMap::new();
-    for (name, bytes) in &site.files {
-        if !name.ends_with(".html") {
-            continue;
+        for href in &links.logos {
+            let Ok(url) = page_url.join(href) else {
+                site.skipped.push(format!("{href}: not a valid address"));
+                continue;
+            };
+            match fetcher
+                .fetch(FetchRequest {
+                    url: url.as_str(),
+                    mimes: &["image/png", "image/jpeg"],
+                    limit: MAX_IMAGE_BYTES,
+                    host_lock: None,
+                })
+                .await
+            {
+                Ok((bytes, mime)) => {
+                    let extension = if mime == "image/png" { "png" } else { "jpg" };
+                    let name = file_name(&url, "logo", extension);
+                    let name = if name.to_ascii_lowercase().contains("logo") {
+                        name
+                    } else {
+                        format!("logo-{name}")
+                    };
+                    site.files.push((format!("images/{name}"), bytes));
+                }
+                Err(reason) => site
+                    .skipped
+                    .push(format!("{}: image skipped, it {reason}", url.as_str())),
+            }
         }
-        let text = String::from_utf8_lossy(bytes);
-        let Some(page) = desegnos_core::identity_source_page(name, &text) else {
-            continue;
-        };
-        let Some(base) = page.url.as_deref().and_then(|url| Url::parse(url).ok()) else {
-            continue;
-        };
-        for href in desegnos_core::website_links(&text).photos {
-            if let Ok(mut url) = base.join(&href) {
-                url.set_fragment(None);
-                let pages = photos.entry(url.to_string()).or_default();
-                if !pages.iter().any(|source| source.path == page.path) {
-                    pages.push(page.reference());
+        // Keep explicit page attribution as CDN, query and extensionless image URLs do
+        // not have a unique local filename. Download names are stable per original URL.
+        let mut photos: BTreeMap<String, Vec<desegnos_core::SourcePageRef>> = BTreeMap::new();
+        for (name, bytes) in &site.files {
+            if !name.ends_with(".html") {
+                continue;
+            }
+            let text = String::from_utf8_lossy(bytes);
+            let Some(page) = desegnos_core::identity_source_page(name, &text) else {
+                continue;
+            };
+            let Some(base) = page.url.as_deref().and_then(|url| Url::parse(url).ok()) else {
+                continue;
+            };
+            for href in desegnos_core::website_links(&text).photos {
+                if let Ok(mut url) = base.join(&href) {
+                    url.set_fragment(None);
+                    let pages = photos.entry(url.to_string()).or_default();
+                    if !pages.iter().any(|source| source.path == page.path) {
+                        pages.push(page.reference());
+                    }
                 }
             }
         }
-    }
-    let mut photo_bytes = 0;
-    for (address, pages) in photos.into_iter().take(32) {
-        match fetch_public(
-            &address,
-            fixture,
-            "/",
-            "image/png,image/jpeg,image/webp",
-            &["image/png", "image/jpeg", "image/webp"],
-            2 * 1024 * 1024,
-        )
-        .await
-        {
-            Ok((bytes, mime)) if photo_bytes + bytes.len() <= 8 * 1024 * 1024 => {
-                photo_bytes += bytes.len();
-                let extension = match mime.as_str() {
-                    "image/png" => "png",
-                    "image/webp" => "webp",
-                    _ => "jpg",
-                };
-                let name = format!(
-                    "photos/{}.{}",
-                    desegnos_core::digest(address.as_bytes()),
-                    extension
-                );
-                site.photo_pages.insert(name.clone(), pages);
-                site.files.push((name, bytes));
+        let mut photo_bytes = 0;
+        for (address, pages) in photos.into_iter().take(MAX_PHOTOS) {
+            match fetcher
+                .fetch(FetchRequest {
+                    url: &address,
+                    mimes: &["image/png", "image/jpeg", "image/webp"],
+                    limit: MAX_PHOTO_BYTES,
+                    host_lock: None,
+                })
+                .await
+            {
+                Ok((bytes, mime)) if photo_bytes + bytes.len() <= MAX_PHOTO_TOTAL_BYTES => {
+                    photo_bytes += bytes.len();
+                    let extension = match mime.as_str() {
+                        "image/png" => "png",
+                        "image/webp" => "webp",
+                        _ => "jpg",
+                    };
+                    let name = format!(
+                        "photos/{}.{}",
+                        desegnos_core::digest(address.as_bytes()),
+                        extension
+                    );
+                    site.photo_pages.insert(name.clone(), pages);
+                    site.files.push((name, bytes));
+                }
+                Ok(_) => site
+                    .skipped
+                    .push(format!("{address}: photo download budget is full")),
+                Err(reason) => site
+                    .skipped
+                    .push(format!("{address}: photo skipped, it {reason}")),
             }
-            Ok(_) => site
-                .skipped
-                .push(format!("{address}: photo download budget is full")),
-            Err(reason) => site
-                .skipped
-                .push(format!("{address}: photo skipped, it {reason}")),
         }
+        Ok(site)
     }
-    Ok(site)
 }
 
 fn enqueue_pages(
@@ -274,6 +303,7 @@ fn enqueue_pages(
     links: &[String],
     seen: &mut BTreeSet<String>,
     queue: &mut VecDeque<Url>,
+    prioritize_work: bool,
 ) {
     let mut candidates = Vec::new();
     for href in links {
@@ -284,6 +314,9 @@ fn enqueue_pages(
             continue;
         };
         url.set_fragment(None);
+        if !prioritize_work && matches!(url.path(), "/index.html" | "/index.htm") {
+            url.set_path("/");
+        }
         if url.host_str() != base.host_str()
             || url.origin() != base.origin()
             || !url.username().is_empty()
@@ -316,13 +349,12 @@ fn enqueue_pages(
             ]
             .iter()
             .any(|part| path.contains(part));
-            candidates.push((!work, url));
+            candidates.push((prioritize_work && !work, url));
         }
     }
     candidates.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.as_str().cmp(b.1.as_str())));
     queue.extend(candidates.into_iter().map(|(_, url)| url));
 }
-
 
 /// One renderable snapshot fetched from a public website. Files keep their original site paths
 /// so relative CSS, image and link URLs keep working when the snapshot is served locally.
@@ -437,252 +469,198 @@ fn localize_same_site(text: &str, origin: &Url) -> String {
 }
 
 /// Fetch up to 30 same-site pages and the assets they need, with size and request caps.
-pub async fn fetch_website_snapshot(input: &str, fixture: Option<&Url>) -> Result<WebsiteSnapshot, String> {
-    #[cfg(not(any(test, feature = "test-support")))]
-    if fixture.is_some() {
-        return Err("Test website sources are unavailable in this build.".into());
-    }
-    let mut first = match fixture {
-        Some(origin) => origin
-            .join(input)
-            .map_err(|_| "Enter a website address.".to_owned())?,
-        None => website_address(input)?,
-    };
-    if first.path() == "/index.html" || first.path() == "/index.htm" {
-        first.set_path("/");
-    }
-    let host = first
-        .host_str()
-        .unwrap_or("website")
-        .trim_start_matches("www.")
-        .to_owned();
-    let mut snapshot = WebsiteSnapshot {
-        name: host,
-        ..WebsiteSnapshot::default()
-    };
-    let mut files: BTreeMap<String, Vec<u8>> = BTreeMap::new();
-    let mut pages_seen = BTreeSet::new();
-    let mut page_queue = VecDeque::new();
-    page_queue.push_back(first.clone());
-    pages_seen.insert(first.to_string());
-    let mut requests = 0;
-    let mut total = 0usize;
-    let mut assets: VecDeque<(Url, Url)> = VecDeque::new();
-    let mut asset_seen = BTreeSet::new();
-    while requests < MAX_SNAPSHOT_PAGES {
-        let Some(url) = page_queue.pop_front() else { break };
-        requests += 1;
-        let (bytes, _mime, final_url) = fetch_public_document(
-            url.as_str(),
-            fixture,
-            "/",
-            "text/html,application/xhtml+xml",
-            &["text/html", "application/xhtml+xml"],
-            MAX_SNAPSHOT_PAGE_BYTES,
-            Some(first.host_str().unwrap_or_default()),
-        )
-        .await
-        .map_err(|reason| format!("That website couldn’t be read: it {reason}."))?;
-        let origin = Url::parse(&format!("{}://{}", final_url.scheme(), final_url.authority())).ok();
-        let Some(origin) = origin else { continue };
-        total += bytes.len();
-        if total > MAX_SNAPSHOT_TOTAL_BYTES {
-            return Err("The website is larger than the import limit.".into());
+impl WebsiteFetcher {
+    pub async fn fetch_website_snapshot(&self, input: &str) -> Result<WebsiteSnapshot, String> {
+        let fetcher = &self.fetcher;
+        let mut first = match fetcher.fixture() {
+            Some(origin) => origin
+                .join(input)
+                .map_err(|_| "Enter a website address.".to_owned())?,
+            None => website_address(input)?,
+        };
+        if first.path() == "/index.html" || first.path() == "/index.htm" {
+            first.set_path("/");
         }
-        let text = localize_same_site(&String::from_utf8_lossy(&bytes), &origin);
-        let route = snapshot_route(&url);
-        let file = page_file(&route);
-        files.insert(file.clone(), text.clone().into_bytes());
-        let title = desegnos_core::identity_source_page(&file, &text)
-            .map(|page| page.title)
-            .filter(|title| !title.trim().is_empty())
-            .unwrap_or_else(|| {
-                if route == "/" {
-                    "Home".into()
-                } else {
-                    route.trim_matches('/').rsplit('/').next().unwrap_or("Page").replace(['-', '_'], " ")
+        let host = website_name(&first);
+        let mut snapshot = WebsiteSnapshot {
+            name: host,
+            ..WebsiteSnapshot::default()
+        };
+        let mut files: BTreeMap<String, Vec<u8>> = BTreeMap::new();
+        let mut pages_seen = BTreeSet::new();
+        let mut page_queue = VecDeque::new();
+        page_queue.push_back(first.clone());
+        pages_seen.insert(first.to_string());
+        let mut requests = 0;
+        let mut total = 0usize;
+        let mut assets: VecDeque<(Url, Url)> = VecDeque::new();
+        let mut asset_seen = BTreeSet::new();
+        while requests < MAX_SNAPSHOT_PAGES {
+            let Some(url) = page_queue.pop_front() else {
+                break;
+            };
+            requests += 1;
+            let (bytes, _mime, final_url) = fetcher
+                .document(FetchRequest {
+                    url: url.as_str(),
+                    mimes: &["text/html", "application/xhtml+xml"],
+                    limit: MAX_SNAPSHOT_PAGE_BYTES,
+                    host_lock: Some(first.host_str().unwrap_or_default()),
+                })
+                .await
+                .map_err(|reason| format!("That website couldn’t be read: it {reason}."))?;
+            let origin = Url::parse(&format!(
+                "{}://{}",
+                final_url.scheme(),
+                final_url.authority()
+            ))
+            .ok();
+            let Some(origin) = origin else { continue };
+            total += bytes.len();
+            if total > MAX_SNAPSHOT_TOTAL_BYTES {
+                return Err("The website is larger than the import limit.".into());
+            }
+            let text = localize_same_site(&String::from_utf8_lossy(&bytes), &origin);
+            let route = snapshot_route(&url);
+            let file = page_file(&route);
+            files.insert(file.clone(), text.clone().into_bytes());
+            let title = desegnos_core::identity_source_page(&file, &text)
+                .map(|page| page.title)
+                .filter(|title| !title.trim().is_empty())
+                .unwrap_or_else(|| {
+                    if route == "/" {
+                        "Home".into()
+                    } else {
+                        route
+                            .trim_matches('/')
+                            .rsplit('/')
+                            .next()
+                            .unwrap_or("Page")
+                            .replace(['-', '_'], " ")
+                    }
+                });
+            snapshot.pages.push(WebsiteSnapshotPage { route, title });
+            let links = desegnos_core::website_links(&text);
+            enqueue_pages(&url, &links.pages, &mut pages_seen, &mut page_queue, false);
+            let found = desegnos_core::website_assets(&text);
+            for href in found
+                .stylesheets
+                .iter()
+                .chain(found.images.iter())
+                .chain(found.scripts.iter())
+                .chain(found.media.iter())
+                .chain(found.frames.iter())
+                .chain(found.inline_styles.iter())
+            {
+                let Ok(asset) = url.join(href) else { continue };
+                if asset.host_str() != first.host_str()
+                    || asset.origin() != first.origin()
+                    || asset.scheme() != first.scheme()
+                {
+                    continue;
                 }
-            });
-        snapshot.pages.push(WebsiteSnapshotPage { route, title });
-        // Discover more pages before assets, so navigation is complete even on large sites.
-        let links = desegnos_core::website_links(&text);
-        enqueue_snapshot_pages(&url, &links.pages, &mut pages_seen, &mut page_queue);
-        let found = desegnos_core::website_assets(&text);
-        for href in found
-            .stylesheets
-            .iter()
-            .chain(found.images.iter())
-            .chain(found.scripts.iter())
-            .chain(found.media.iter())
-            .chain(found.frames.iter())
-            .chain(found.inline_styles.iter())
-        {
-            let Ok(asset) = url.join(href) else { continue };
-            if asset.host_str() != first.host_str() || asset.origin() != first.origin() || asset.scheme() != first.scheme() {
-                continue;
+                if asset_seen.insert(asset.to_string()) {
+                    assets.push_back((asset, url.clone()));
+                }
             }
-            if asset_seen.insert(asset.to_string()) {
-                assets.push_back((asset, url.clone()));
+            if page_queue.is_empty() || requests >= MAX_SNAPSHOT_PAGES {
+                break;
             }
         }
-        if page_queue.is_empty() || requests >= MAX_SNAPSHOT_PAGES {
-            break;
-        }
-    }
-    if !page_queue.is_empty() {
-        snapshot
-            .skipped
-            .push("Only the first 30 same-site pages are imported".into());
-    }
-    let mut downloaded = 0;
-    while let Some((url, referrer)) = assets.pop_front() {
-        if downloaded >= MAX_SNAPSHOT_ASSETS {
+        if !page_queue.is_empty() {
             snapshot
                 .skipped
-                .push("Only the first 240 page assets are imported".into());
-            break;
+                .push("Only the first 30 same-site pages are imported".into());
         }
-        let Some(file) = asset_file(&url) else { continue };
-        if files.contains_key(&file) {
-            continue;
-        }
-        let extension = file.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
-        let accept = if extension == "css" {
-            "text/css"
-        } else if matches!(extension.as_str(), "js" | "mjs") {
-            "text/javascript"
-        } else if matches!(
-            extension.as_str(),
-            "png" | "jpg" | "jpeg" | "webp" | "gif" | "svg" | "avif" | "ico"
-        ) {
-            "image/png,image/jpeg,image/webp,image/gif,image/svg+xml,image/avif,image/x-icon"
-        } else if matches!(extension.as_str(), "woff" | "woff2" | "ttf" | "otf" | "eot") {
-            "font/woff,font/woff2,font/ttf,font/otf,application/font-woff,application/vnd.ms-fontobject"
-        } else {
-            "*/*"
-        };
-        match fetch_public(
-            url.as_str(),
-            fixture,
-            referrer.path(),
-            accept,
-            ASSET_MIMES,
-            MAX_SNAPSHOT_ASSET_BYTES,
-        )
-        .await
-        {
-            Ok((bytes, _mime)) => {
-                downloaded += 1;
-                total += bytes.len();
-                if total > MAX_SNAPSHOT_TOTAL_BYTES {
-                    snapshot
-                        .skipped
-                        .push("Website assets reached the import size limit".into());
-                    break;
-                }
-                let stored = if extension == "css" {
-                    localize_same_site(&String::from_utf8_lossy(&bytes), &first).into_bytes()
-                } else {
-                    bytes
-                };
-                if extension == "css" {
-                    // One level of stylesheet references is enough for backgrounds and fonts.
-                    for href in desegnos_core::css_urls(&String::from_utf8_lossy(&stored)) {
-                        let Ok(asset) = url.join(&href) else { continue };
-                        if asset.host_str() == first.host_str()
-                            && asset.origin() == first.origin()
-                            && asset_seen.insert(asset.to_string())
-                        {
-                            assets.push_back((asset, url.clone()));
+        let mut downloaded = 0;
+        while let Some((url, _referrer)) = assets.pop_front() {
+            if downloaded >= MAX_SNAPSHOT_ASSETS {
+                snapshot
+                    .skipped
+                    .push("Only the first 240 page assets are imported".into());
+                break;
+            }
+            let Some(file) = asset_file(&url) else {
+                continue;
+            };
+            if files.contains_key(&file) {
+                continue;
+            }
+            let extension = file.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+            match fetcher
+                .fetch(FetchRequest {
+                    url: url.as_str(),
+                    mimes: ASSET_MIMES,
+                    limit: MAX_SNAPSHOT_ASSET_BYTES,
+                    host_lock: None,
+                })
+                .await
+            {
+                Ok((bytes, _mime)) => {
+                    downloaded += 1;
+                    total += bytes.len();
+                    if total > MAX_SNAPSHOT_TOTAL_BYTES {
+                        snapshot
+                            .skipped
+                            .push("Website assets reached the import size limit".into());
+                        break;
+                    }
+                    let stored = if extension == "css" {
+                        localize_same_site(&String::from_utf8_lossy(&bytes), &first).into_bytes()
+                    } else {
+                        bytes
+                    };
+                    if extension == "css" {
+                        for href in desegnos_core::css_urls(&String::from_utf8_lossy(&stored)) {
+                            let Ok(asset) = url.join(&href) else { continue };
+                            if asset.host_str() == first.host_str()
+                                && asset.origin() == first.origin()
+                                && asset_seen.insert(asset.to_string())
+                            {
+                                assets.push_back((asset, url.clone()));
+                            }
                         }
                     }
+                    files.insert(file, stored);
                 }
-                files.insert(file, stored);
+                Err(reason) => snapshot
+                    .skipped
+                    .push(format!("{url}: asset skipped, it {reason}")),
             }
-            Err(reason) => snapshot
-                .skipped
-                .push(format!("{url}: asset skipped, it {reason}")),
         }
+        snapshot.files = files.into_iter().collect();
+        snapshot.pages.sort_by(|first, second| {
+            (first.route != "/", &first.route).cmp(&(second.route != "/", &second.route))
+        });
+        snapshot
+            .pages
+            .dedup_by(|first, second| first.route == second.route);
+        Ok(snapshot)
     }
-    snapshot.files = files.into_iter().collect();
-    snapshot.pages.sort_by(|first, second| {
-        (first.route != "/", &first.route).cmp(&(second.route != "/", &second.route))
-    });
-    snapshot.pages.dedup_by(|first, second| first.route == second.route);
-    Ok(snapshot)
 }
-
-fn enqueue_snapshot_pages(
-    base: &Url,
-    links: &[String],
-    seen: &mut BTreeSet<String>,
-    queue: &mut VecDeque<Url>,
-) {
-    let mut candidates = Vec::new();
-    for href in links {
-        if seen.len() >= 256 {
-            break;
-        }
-        let Ok(mut url) = base.join(href) else { continue };
-        url.set_fragment(None);
-        if url.path() == "/index.html" || url.path() == "/index.htm" {
-            url.set_path("/");
-        }
-        if url.host_str() != base.host_str()
-            || url.origin() != base.origin()
-            || !url.username().is_empty()
-            || url.password().is_some()
-            || url.query().is_some()
-        {
-            continue;
-        }
-        let path = url.path().to_ascii_lowercase();
-        let last = path.rsplit('/').next().unwrap_or_default();
-        if (last.contains('.') && !last.ends_with(".html") && !last.ends_with(".htm"))
-            || path.split('/').any(|part| {
-                matches!(part, "logout" | "signout" | "delete" | "checkout" | "admin" | "login" | "account")
-            })
-        {
-            continue;
-        }
-        if seen.insert(url.to_string()) {
-            candidates.push(url);
-        }
-    }
-    candidates.sort_by(|first, second| first.as_str().cmp(second.as_str()));
-    queue.extend(candidates);
-}
-
-
 
 /// Download one picture referenced by an imported page. Same public-address and size rules as
 /// every other Desegnos download; the bytes are capped before they reach the project store.
-pub async fn fetch_website_image(
-    source: &str,
-    fixture: Option<&Url>,
-) -> Result<(Vec<u8>, String), String> {
-    #[cfg(not(any(test, feature = "test-support")))]
-    if fixture.is_some() {
-        return Err("Test website sources are unavailable in this build.".into());
+impl WebsiteFetcher {
+    pub async fn fetch_website_image(&self, source: &str) -> Result<(Vec<u8>, String), String> {
+        let fetcher = &self.fetcher;
+        fetcher
+            .fetch(FetchRequest {
+                url: source,
+                mimes: &[
+                    "image/png",
+                    "image/jpeg",
+                    "image/webp",
+                    "image/gif",
+                    "image/svg+xml",
+                ],
+                limit: MAX_WEBSITE_IMAGE_BYTES,
+                host_lock: None,
+            })
+            .await
+            .map_err(|reason| format!("That picture couldn’t be read: it {reason}."))
     }
-    fetch_public(
-        source,
-        fixture,
-        "/",
-        "image/png,image/jpeg,image/webp,image/gif,image/svg+xml",
-        &[
-            "image/png",
-            "image/jpeg",
-            "image/webp",
-            "image/gif",
-            "image/svg+xml",
-        ],
-        8 * 1024 * 1024,
-    )
-    .await
-    .map_err(|reason| format!("That picture couldn’t be read: it {reason}."))
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -753,7 +731,11 @@ mod tests {
                 });
             }
         });
-        let site = fetch_website("/", Some(&origin)).await.unwrap();
+        let site = WebsiteFetcher::for_fixture(&origin)
+            .unwrap()
+            .fetch_website("/")
+            .await
+            .unwrap();
         let names: Vec<_> = site.files.iter().map(|(name, _)| name.as_str()).collect();
         assert_eq!(
             names,
@@ -764,7 +746,10 @@ mod tests {
                 .iter()
                 .any(|reason| reason.contains("favicon.ico"))
         );
-        let error = fetch_website("https://127.0.0.1/", None).await.unwrap_err();
+        let error = WebsiteFetcher::new()
+            .fetch_website("https://127.0.0.1/")
+            .await
+            .unwrap_err();
         assert!(
             error.contains("couldn’t be read") || error.contains("public"),
             "{error}"
@@ -811,7 +796,11 @@ mod crawl_tests {
                 });
             }
         });
-        let site = fetch_website("/", Some(&origin)).await.unwrap();
+        let site = WebsiteFetcher::for_fixture(&origin)
+            .unwrap()
+            .fetch_website("/")
+            .await
+            .unwrap();
         assert_eq!(site.files.len(), 20);
         let paths = requested.lock().unwrap();
         assert_eq!(paths.len(), 20);
@@ -867,7 +856,11 @@ mod page_photo_tests {
                 });
             }
         });
-        let site = fetch_website("/", Some(&origin)).await.unwrap();
+        let site = WebsiteFetcher::for_fixture(&origin)
+            .unwrap()
+            .fetch_website("/")
+            .await
+            .unwrap();
         let page = site
             .files
             .iter()

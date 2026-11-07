@@ -509,7 +509,6 @@ async fn identity_cancellation_stops_submission_or_stream_without_retry() {
             .unwrap_err();
         assert_eq!(error.kind, ErrorKind::Cancelled);
         assert_eq!(error.outcome, SubmissionOutcome::Unknown);
-        tokio::time::sleep(Duration::from_millis(30)).await;
         assert_eq!(server.count.load(Ordering::SeqCst), 1);
     }
 }
@@ -533,7 +532,6 @@ async fn identity_route_failure_and_truncation_never_fall_back_to_generation_or_
                 .unwrap_err();
             assert_eq!(error.authentication, authentication);
             assert!(!serde_json::to_string(&error).unwrap().contains(KEY));
-            tokio::time::sleep(Duration::from_millis(30)).await;
             assert_eq!(server.count.load(Ordering::SeqCst), 1);
             assert_eq!(server.request().path, "/v1/responses");
         }

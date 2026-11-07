@@ -2,7 +2,7 @@
 use base64::{Engine, engine::general_purpose::STANDARD};
 use desegnos_core::{AttachmentKind, Error, RequestAttachment, Result};
 use serde::Serialize;
-use std::io::{Read, Seek};
+use std::io::{Read, Seek, SeekFrom};
 use zip::ZipArchive;
 
 pub const MAX_ARCHIVE_BYTES: usize = 32 * 1024 * 1024;
@@ -22,10 +22,16 @@ pub struct ZipAttachments {
 }
 
 pub fn unpack_request_zip<R: Read + Seek>(
-    reader: R,
+    mut reader: R,
     name: &str,
     remaining: usize,
 ) -> Result<ZipAttachments> {
+    if reader.seek(SeekFrom::End(0)).map_err(crate::io)? > MAX_ARCHIVE_BYTES as u64 {
+        return Err(Error(
+            "The ZIP exceeds the 32 MiB archive size limit.".into(),
+        ));
+    }
+    reader.seek(SeekFrom::Start(0)).map_err(crate::io)?;
     let mut zip =
         ZipArchive::new(reader).map_err(|_| Error("The ZIP could not be opened.".into()))?;
     if zip.len() > MAX_ENTRIES {
@@ -42,8 +48,7 @@ pub fn unpack_request_zip<R: Read + Seek>(
             .by_index(i)
             .map_err(|_| Error("The ZIP contains an unreadable entry.".into()))?;
         let path = entry.name().to_owned();
-        // Match identity imports: also reject Windows paths on Unix and vice versa.
-        if super::identity_source::safe_archive_name(&path).is_none()
+        if crate::source_files::safe_archive_name(&path).is_none()
             || entry.enclosed_name().is_none()
         {
             return Err(Error("The ZIP contains an unsafe path.".into()));
@@ -62,10 +67,7 @@ pub fn unpack_request_zip<R: Read + Seek>(
                 "The ZIP exceeds the 64 MiB expanded size limit.".into(),
             ));
         }
-        if entry
-            .unix_mode()
-            .is_some_and(|mode| !matches!(mode & 0o170000, 0 | 0o100000 | 0o040000))
-        {
+        if !crate::source_files::ordinary_zip_mode(entry.unix_mode()) {
             skip("symlink or special file");
             continue;
         }
@@ -109,23 +111,13 @@ pub fn unpack_request_zip<R: Read + Seek>(
             skip("exceeds 16 MiB file limit");
             continue;
         }
-        if entry.size() > 1024 * 1024
-            && entry.size() > entry.compressed_size().max(1).saturating_mul(1000)
-        {
+        if crate::source_files::excessive_expansion(entry.size(), entry.compressed_size()) {
             skip("excessive expansion ratio");
             continue;
         }
         let expected = entry.size();
-        let mut bytes = Vec::new();
-        (&mut entry)
-            .take(MAX_FILE_BYTES + 1)
-            .read_to_end(&mut bytes)
-            .map_err(|_| Error("A ZIP entry could not be read safely.".into()))?;
-        if bytes.len() as u64 > MAX_FILE_BYTES || bytes.len() as u64 != expected {
-            return Err(Error(
-                "A ZIP entry has an inconsistent expanded size.".into(),
-            ));
-        }
+        let bytes =
+            crate::source_files::read_exact_bounded(&mut entry, expected, MAX_FILE_BYTES as usize)?;
         if bytes.starts_with(b"PK\x03\x04") || bytes.starts_with(b"PK\x05\x06") {
             skip("nested ZIP");
             continue;

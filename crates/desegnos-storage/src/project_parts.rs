@@ -6,8 +6,8 @@
 //! and `settings` (everything a boundary does not own: grid, mode, decisions, revision).
 //! Picture bytes are parts of their own. Every part is canonical JSON or raw picture bytes,
 //! so equal content always hashes equally and unchanged parts are stored once.
-use base64::{Engine, engine::general_purpose::STANDARD};
 use crate::ensure;
+use base64::{Engine, engine::general_purpose::STANDARD};
 use desegnos_core::{Error, Project, Result};
 use serde_json::{Map, Value};
 use std::{collections::BTreeMap, sync::Arc};
@@ -79,9 +79,11 @@ fn write_canonical(value: &Value, out: &mut Vec<u8>) {
         Value::Bool(true) => out.extend_from_slice(b"true"),
         Value::Bool(false) => out.extend_from_slice(b"false"),
         Value::Number(number) => out.extend_from_slice(number.to_string().as_bytes()),
-        Value::String(text) => {
-            out.extend_from_slice(serde_json::to_string(text).unwrap_or_default().as_bytes())
-        }
+        Value::String(text) => out.extend_from_slice(
+            serde_json::to_string(text)
+                .expect("serializing a JSON string is infallible")
+                .as_bytes(),
+        ),
         Value::Array(items) => {
             out.push(b'[');
             for (index, item) in items.iter().enumerate() {
@@ -100,7 +102,11 @@ fn write_canonical(value: &Value, out: &mut Vec<u8>) {
                 if index > 0 {
                     out.push(b',');
                 }
-                out.extend_from_slice(serde_json::to_string(key).unwrap_or_default().as_bytes());
+                out.extend_from_slice(
+                    serde_json::to_string(key)
+                        .expect("serializing a JSON object key is infallible")
+                        .as_bytes(),
+                );
                 out.push(b':');
                 write_canonical(&map[key], out);
             }
@@ -149,7 +155,6 @@ pub fn split_project(project: &Project) -> Result<BTreeMap<String, PartData>> {
         parts.insert(name.to_owned(), PartData::Json(canonical_json(&part)));
     }
 
-    // Pictures live in blobs by content, one per picture id.
     root.remove("pictures");
     parts.insert(
         SETTINGS.to_owned(),
@@ -257,10 +262,7 @@ fn decode_picture(uri: &Arc<str>) -> Result<(String, Vec<u8>)> {
     let bytes = STANDARD
         .decode(encoded)
         .map_err(|_| Error("A project picture holds invalid base64.".into()))?;
-    ensure(
-        !bytes.is_empty(),
-        "A project picture is empty.".to_string(),
-    )?;
+    ensure(!bytes.is_empty(), "A project picture is empty.".to_string())?;
     Ok((mime.to_owned(), bytes))
 }
 

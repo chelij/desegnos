@@ -169,31 +169,80 @@ pub fn website_assets(html: &str) -> WebsiteAssets {
 /// The raw `url(...)` targets in a stylesheet, including `@import` strings. Data URIs are kept
 /// out; callers resolve them against the stylesheet URL and fetch only same-site ones.
 pub fn css_urls(css: &str) -> Vec<String> {
-    let mut urls = Vec::new();
-    let mut rest = css;
-    while let Some(index) = rest.find("url(") {
-        rest = &rest[index + 4..];
-        let Some(end) = rest.find(')') else { break };
-        let value = rest[..end].trim().trim_matches(['\'', '"']).trim();
-        push_url(&mut urls, Some(value), usize::MAX, false);
-        rest = &rest[end + 1..];
+    fn string_end(bytes: &[u8], start: usize) -> usize {
+        let mut end = start + 1;
+        while end < bytes.len() {
+            if bytes[end] == b'\\' {
+                end += 2;
+            } else if bytes[end] == bytes[start] {
+                return end + 1;
+            } else {
+                end += 1;
+            }
+        }
+        bytes.len()
     }
-    let mut rest = css;
-    while let Some(index) = rest.find("@import") {
-        rest = &rest[index + 7..];
-        let rest_trimmed = rest.trim_start();
-        let Some(quote) = rest_trimmed
-            .chars()
-            .next()
-            .filter(|value| *value == '\'' || *value == '"')
-        else {
-            continue;
-        };
-        let quoted = &rest_trimmed[1..];
-        let Some(end) = quoted.find(quote) else { break };
-        let value = quoted[..end].trim();
-        push_url(&mut urls, Some(value), usize::MAX, false);
-        rest = &quoted[end + 1..];
+    let bytes = css.as_bytes();
+    let mut references = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i..].starts_with(b"/*") {
+            i += 2;
+            while i < bytes.len() && !bytes[i..].starts_with(b"*/") {
+                i += 1;
+            }
+            i = (i + 2).min(bytes.len());
+        } else if matches!(bytes[i], b'\'' | b'"') {
+            i = string_end(bytes, i);
+        } else if bytes[i..]
+            .get(..4)
+            .is_some_and(|v| v.eq_ignore_ascii_case(b"url("))
+        {
+            i += 4;
+            while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+                i += 1;
+            }
+            let start = i;
+            if i < bytes.len() && matches!(bytes[i], b'\'' | b'"') {
+                i = string_end(bytes, i);
+                if i > start + 1 && bytes[i - 1] == bytes[start] {
+                    references.push(css[start + 1..i - 1].to_owned());
+                }
+            } else {
+                while i < bytes.len() && bytes[i] != b')' {
+                    i += 1;
+                }
+                references.push(css[start..i].trim().to_owned());
+            }
+        } else if bytes[i..]
+            .get(..7)
+            .is_some_and(|v| v.eq_ignore_ascii_case(b"@import"))
+        {
+            i += 7;
+            while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+                i += 1;
+            }
+            if i < bytes.len() && matches!(bytes[i], b'\'' | b'"') {
+                let start = i;
+                i = string_end(bytes, i);
+                if i > start + 1 && bytes[i - 1] == bytes[start] {
+                    references.push(css[start + 1..i - 1].to_owned());
+                }
+            }
+        } else {
+            i += 1;
+        }
+    }
+    let mut urls = Vec::new();
+    for reference in references {
+        let reference = reference.trim();
+        if !reference.is_empty()
+            && !reference.starts_with("data:")
+            && !reference.starts_with('#')
+            && !urls.iter().any(|value| value == reference)
+        {
+            urls.push(reference.to_owned());
+        }
     }
     urls
 }

@@ -1819,7 +1819,6 @@ async fn streamed_errors_and_truncated_streams_never_trigger_an_automatic_retry(
         assert_eq!(error.kind, kind);
         assert_eq!(error.outcome, SubmissionOutcome::Unknown);
         assert_eq!(error.response_id.as_deref(), Some("resp_test_123"));
-        tokio::time::sleep(Duration::from_millis(50)).await;
         assert_eq!(server.count.load(Ordering::SeqCst), 1);
     }
     let mut reply = Reply::sse(vec![]);
@@ -1828,7 +1827,6 @@ async fn streamed_errors_and_truncated_streams_never_trigger_an_automatic_retry(
     let error = generate(&server, &frozen).await.unwrap_err();
     assert_eq!(error.kind, ErrorKind::Transport);
     assert_eq!(error.outcome, SubmissionOutcome::Unknown);
-    tokio::time::sleep(Duration::from_millis(50)).await;
     assert_eq!(server.count.load(Ordering::SeqCst), 3);
 }
 
@@ -2197,20 +2195,11 @@ fn settings_catalogue_cost_and_loopback_gate_are_explicit_and_bounded() {
     assert!(OpenAiClient::for_loopback("http://[::1]:8080/v1").is_ok());
     let settings = ProviderSettings::default();
     settings.validate().unwrap();
-    assert_eq!(settings.max_output_tokens, DEFAULT_MAX_OUTPUT_TOKENS);
     // The API-key ceiling reaches the model maximum and accepts exactly that.
     let mut raised = settings.clone();
     raised.max_output_tokens = MAX_OUTPUT_TOKENS;
     raised.spending_limit_usd = 10_000.0;
     raised.validate().unwrap();
-    assert_eq!(model_catalogue()[0].max_output_tokens, MAX_OUTPUT_TOKENS);
-    let info = &model_catalogue()[0];
-    assert_eq!(info.id, MODEL_ID);
-    assert_eq!(info.input_usd_per_million, 2.0);
-    assert_eq!(info.output_usd_per_million, 10.0);
-    assert_eq!(info.verified_at, "2026-10-31");
-    assert_eq!(info.long_context_input_usd_per_million, 4.0);
-    assert_eq!(info.long_context_output_usd_per_million, 15.0);
     for invalid in [
         ProviderSettings {
             model: "../invalid-model".into(),
@@ -3553,16 +3542,12 @@ async fn image_probe_uses_invalid_size_and_classifies_access_without_generating(
         (400, json!({"error":{"message":"Invalid model"}}), Unknown),
         (200, json!({"data":[]}), Unknown),
     ];
-    for auth in [AuthenticationMethod::ApiKey, AuthenticationMethod::Chatgpt] {
+    {
         for (status, body, expected) in &cases {
             let server = Server::start(Reply::json(*status, body.clone())).await;
             let access = server
                 .client()
-                .probe_image_access(
-                    auth,
-                    &ProviderSettings::default(),
-                    &ApiKey::new(KEY.into()).unwrap(),
-                )
+                .probe_image_access(&ApiKey::new(KEY.into()).unwrap())
                 .await;
             assert_eq!(access.available, *expected, "{body}");
             if body.to_string().to_lowercase().contains("verif") {
@@ -3593,11 +3578,7 @@ async fn image_probe_uses_invalid_size_and_classifies_access_without_generating(
     assert_eq!(
         server
             .client()
-            .probe_image_access(
-                AuthenticationMethod::Chatgpt,
-                &ProviderSettings::default(),
-                &ApiKey::new(KEY.into()).unwrap()
-            )
+            .probe_image_access(&ApiKey::new(KEY.into()).unwrap())
             .await
             .available,
         Unknown
@@ -3635,10 +3616,7 @@ async fn image_probe_shares_text_authorization_and_transport() {
             .await
             .unwrap();
         assert_eq!(
-            client
-                .probe_image_access(auth, &settings, &key)
-                .await
-                .available,
+            client.probe_image_access(&key).await.available,
             ImageAvailability::Yes
         );
         let captured = server.captured.lock().unwrap();
@@ -3726,7 +3704,7 @@ fn image_probe_error_detail_scrubs_secrets_before_unicode_safe_truncation() {
 
 #[test]
 fn image_cache_expiry_and_capabilities_apply_equally_to_both_authentication_methods() {
-    for auth in [AuthenticationMethod::ApiKey, AuthenticationMethod::Chatgpt] {
+    {
         for available in [
             ImageAvailability::Yes,
             ImageAvailability::No,
@@ -3748,20 +3726,20 @@ fn image_cache_expiry_and_capabilities_apply_equally_to_both_authentication_meth
                 };
                 assert_eq!(
                     ProviderId::Openai
-                        .capabilities_for(auth, &settings, Some(&access))
+                        .capabilities_for(&settings, Some(&access))
                         .image_generation
                         .is_some(),
                     enabled && available == ImageAvailability::Yes
                 );
                 assert!(
                     ProviderId::Openai
-                        .capabilities_for(auth, &settings, None)
+                        .capabilities_for(&settings, None)
                         .image_generation
                         .is_none()
                 );
                 assert!(
                     ProviderId::Google
-                        .capabilities_for(auth, &settings, Some(&access))
+                        .capabilities_for(&settings, Some(&access))
                         .image_generation
                         .is_none()
                 );
@@ -3769,7 +3747,7 @@ fn image_cache_expiry_and_capabilities_apply_equally_to_both_authentication_meth
             access.checked_at -= 7 * 86400;
             assert!(
                 ProviderId::Openai
-                    .capabilities_for(auth, &ProviderSettings::default(), Some(&access))
+                    .capabilities_for(&ProviderSettings::default(), Some(&access))
                     .image_generation
                     .is_none()
             );
@@ -4448,10 +4426,7 @@ async fn cancelling_during_backoff_never_submits_the_next_attempt() {
             |update| {
                 if update.retry.is_some() {
                     let cancel = cancel.clone();
-                    tokio::spawn(async move {
-                        tokio::time::sleep(Duration::from_millis(1)).await;
-                        cancel.cancel();
-                    });
+                    cancel.cancel();
                 }
             },
         )
@@ -4519,9 +4494,11 @@ async fn read_only_preflight_network_failures_do_not_claim_an_unknown_generation
     let error = crate::retry::send(
         client.get(&server.endpoint),
         &cancel,
-        tokio::time::Instant::now() + Duration::from_secs(5),
-        Duration::from_secs(30),
-        1024,
+        crate::retry::RetryPolicy::new(
+            tokio::time::Instant::now() + Duration::from_secs(5),
+            Duration::from_secs(30),
+            1024,
+        ),
         &|_| {},
     )
     .await

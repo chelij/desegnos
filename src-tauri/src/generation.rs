@@ -1072,9 +1072,6 @@ impl GenerationService {
     }
     fn select_provider(&mut self, provider: ProviderId, persist: bool) -> NativeResult<()> {
         self.ensure_switch_allowed()?;
-        if !provider.available() {
-            return Err("This AI connection is not available yet.".into());
-        }
         let authentication = if provider == ProviderId::Openai {
             let path = self.directory.join("authentication.json");
             if path.exists() {
@@ -1789,7 +1786,6 @@ impl GenerationService {
             return Err("Apply or discard the existing generation review, or cancel its running request, before starting another.".into());
         }
         let capabilities = provider.capabilities_for(
-            authentication,
             &settings,
             self.selected_image_cache_id(account_id)
                 .as_ref()
@@ -2486,19 +2482,10 @@ pub(super) async fn refresh_image_access(
         let probe_id = Uuid::new_v4();
         service.image_access_checking.insert(id.clone(), probe_id);
         let prior_access = service.image_access.get(&id).cloned();
-        (
-            id,
-            key,
-            client,
-            service.settings.clone(),
-            probe_id,
-            prior_access,
-        )
+        (id, key, client, probe_id, prior_access)
     };
-    let (id, key, client, settings, probe_id, prior_access) = probe;
-    let access = client
-        .probe_image_access(AuthenticationMethod::ApiKey, &settings, &key)
-        .await;
+    let (id, key, client, probe_id, prior_access) = probe;
+    let access = client.probe_image_access(&key).await;
     let mut service = state.lock().map_err(message)?;
     if service.image_access_checking.get(&id) == Some(&probe_id) {
         service.image_access_checking.remove(&id);
@@ -2520,7 +2507,7 @@ async fn refresh_main_image_access(
     if view.sign_in.status == desegnos_ai::ChatgptSignInStatus::AwaitingBrowser {
         return Ok(());
     }
-    let (id, auth, settings, client, credentials, prior_access) = {
+    let (id, auth, client, credentials, prior_access) = {
         let service = state.lock().map_err(message)?;
         let Some(id) = service.image_cache_id(view.active_account_id) else {
             return Ok(());
@@ -2547,7 +2534,6 @@ async fn refresh_main_image_access(
         (
             id.clone(),
             service.authentication,
-            service.settings.clone(),
             service.client.clone()?,
             service.credentials.clone(),
             service.image_access.get(&id).cloned(),
@@ -2585,7 +2571,7 @@ async fn refresh_main_image_access(
         }
         service.image_access_checking.insert(id.clone(), probe_id);
     }
-    let access = client.probe_image_access(auth, &settings, &key).await;
+    let access = client.probe_image_access(&key).await;
     let mut service = state.lock().map_err(message)?;
     if service.image_access_checking.get(&id) != Some(&probe_id) {
         return Ok(());
@@ -3567,6 +3553,17 @@ pub async fn apply_generation(
             _ => BTreeMap::new(),
         }
     };
+    let mut image_failures = Vec::new();
+    let generated = generated
+        .into_iter()
+        .filter_map(|(name, result)| match result {
+            Ok(uri) => Some((name, uri)),
+            Err(error) => {
+                image_failures.push(format!("Image {name}: {error}"));
+                None
+            }
+        })
+        .collect();
     let mut workspace = workspace.lock().map_err(message)?;
     let mut service = state.lock().map_err(message)?;
     let record = service.record(workspace.project()?, job_id)?;
@@ -3594,6 +3591,12 @@ pub async fn apply_generation(
     } else {
         format!("Layers updated with warnings. {}", warnings.join(" "))
     };
+    if !image_failures.is_empty() {
+        record
+            .view
+            .message
+            .push_str(&format!(" {}", image_failures.join(" ")));
+    }
     record.transition(JobStatus::Applied);
     record.view.accepted_decision_indices = accepted_decision_indices;
     service.persist(record)?;

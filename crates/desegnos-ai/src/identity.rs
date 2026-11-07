@@ -8,7 +8,7 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 use desegnos_core::{RequirementsSnapshot, digest};
 use serde_json::{Value, json};
 
-pub const MAX_IDENTITY_IMAGES: usize = 4;
+pub use desegnos_core::MAX_IDENTITY_ASSETS as MAX_IDENTITY_IMAGES;
 pub const MAX_IDENTITY_IMAGE_URI_BYTES: usize = 256 * 1024;
 pub const MAX_IDENTITY_IMAGE_URI_TOTAL_BYTES: usize = 512 * 1024;
 /// Photo thumbnails are looked at in low detail only, to describe what each photo shows.

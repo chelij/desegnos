@@ -1,15 +1,22 @@
 //! Read-only, bounded snapshots for identity analysis. Sources are untrusted data;
 //! collecting a website never runs its scripts or extracts its archive.
 
+use crate::source_files::{SourcePurpose, excluded as source_excluded};
+use crate::source_files::{
+    excessive_expansion, extension, is_image, is_text, open_unchanged, ordinary_zip_mode,
+    portable_name, read_exact_bounded, safe_archive_name,
+};
 use crate::{io, load_project};
+fn excluded(name: &str) -> bool {
+    source_excluded(name, SourcePurpose::Identity)
+}
 use base64::{Engine, engine::general_purpose::STANDARD};
 use desegnos_core::{Error, MAX_PROJECT_PHOTO_BYTES, ProjectPhoto, Result, digest};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
-    fs::{self, File, Metadata},
-    io::Read,
-    path::{Component, Path},
+    fs::{self, Metadata},
+    path::Path,
 };
 use uuid::Uuid;
 use zip::ZipArchive;
@@ -19,7 +26,7 @@ const MAX_FILES: usize = 128;
 const MAX_TEXT_BYTES: usize = 256 * 1024;
 const MAX_TOTAL_TEXT: usize = 2 * 1024 * 1024;
 const MAX_ASSET_BYTES: usize = 128 * 1024;
-const MAX_ASSETS: usize = 4;
+use desegnos_core::MAX_IDENTITY_ASSETS as MAX_ASSETS;
 const MAX_ASSET_URI_BYTES: usize = 512 * 1024;
 const MAX_COLLECTED_BYTES: usize = 4 * 1024 * 1024;
 const MAX_ARCHIVE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
@@ -393,7 +400,6 @@ pub fn collect_identity_source(path: &Path) -> Result<IdentitySource> {
         let root = path.canonicalize().map_err(io)?;
         collect_folder(&root, &root, &mut 0, &mut collector, false)?;
         if source_routes(&collector.inventory, &collector.candidates).is_empty() {
-            // A downloaded static site may contain only a build folder.
             collector.photos.clear();
             collector.photo_aliases.clear();
             collector.candidates.clear();
@@ -467,7 +473,7 @@ fn collect_folder(
                     return Err(Error("A source path changed during collection. Choose the original folder again.".into()));
                 }
                 let mut file = open_unchanged(&path, &metadata)?;
-                let bytes = read_bounded(&mut file, MAX_PHOTO_FILE_BYTES)?;
+                let bytes = read_exact_bounded(&mut file, metadata.len(), MAX_PHOTO_FILE_BYTES)?;
                 collector.add_photo(name, &bytes);
             }
         } else if metadata.is_file() && relevant(&name) {
@@ -479,7 +485,7 @@ fn collect_folder(
                     return Err(Error("A source path changed during collection. Choose the original folder again.".into()));
                 }
                 let mut file = open_unchanged(&path, &metadata)?;
-                let bytes = read_bounded(&mut file, MAX_TEXT_BYTES)?;
+                let bytes = read_exact_bounded(&mut file, metadata.len(), MAX_TEXT_BYTES)?;
                 collector.add(name, bytes);
             }
         } else if !metadata.is_dir() {
@@ -518,15 +524,11 @@ fn collect_zip(path: &Path, metadata: &Metadata, collector: &mut Collector) -> R
     for index in 0..archive.len() {
         let mut entry = archive.by_index(index).map_err(io)?;
         let name = entry.name().to_owned();
-        // Validate every entry, even files that would otherwise be ignored.
         if safe_archive_name(&name).is_none()
             || entry.enclosed_name().is_none()
             || !names.insert(name.clone())
             || entry.encrypted()
-            || entry.unix_mode().is_some_and(|mode| {
-                let kind = mode & 0o170000;
-                kind != 0 && kind != 0o100000 && kind != 0o040000
-            })
+            || !ordinary_zip_mode(entry.unix_mode())
         {
             return Err(Error("The website ZIP contains an unsafe, encrypted, symbolic-link, duplicate, or unsupported entry.".into()));
         }
@@ -538,9 +540,7 @@ fn collect_zip(path: &Path, metadata: &Metadata, collector: &mut Collector) -> R
                 "The website ZIP exceeds the 2 GiB expanded size limit.".into(),
             ));
         }
-        if entry.size() > 1024 * 1024
-            && entry.size() > entry.compressed_size().max(1).saturating_mul(1000)
-        {
+        if excessive_expansion(entry.size(), entry.compressed_size()) {
             return Err(Error(
                 "The website ZIP has an excessive expansion ratio.".into(),
             ));
@@ -554,12 +554,7 @@ fn collect_zip(path: &Path, metadata: &Metadata, collector: &mut Collector) -> R
                 collector.skip(&name, "photo exceeds the 30 MiB file limit");
             } else {
                 let expected = entry.size();
-                let bytes = read_bounded(&mut entry, MAX_PHOTO_FILE_BYTES)?;
-                if bytes.len() as u64 != expected {
-                    return Err(Error(
-                        "A ZIP source has an inconsistent expanded size.".into(),
-                    ));
-                }
+                let bytes = read_exact_bounded(&mut entry, expected, MAX_PHOTO_FILE_BYTES)?;
                 collector.add_photo(name, &bytes);
             }
         } else if skip || !relevant(&name) {
@@ -571,12 +566,7 @@ fn collect_zip(path: &Path, metadata: &Metadata, collector: &mut Collector) -> R
             collector.skip(&name, "exceeds the 256 KiB source file limit");
         } else {
             let expected = entry.size();
-            let bytes = read_bounded(&mut entry, MAX_TEXT_BYTES)?;
-            if bytes.len() as u64 != expected {
-                return Err(Error(
-                    "A ZIP source has an inconsistent expanded size.".into(),
-                ));
-            }
+            let bytes = read_exact_bounded(&mut entry, expected, MAX_TEXT_BYTES)?;
             collector.add(name, bytes);
         }
     }
@@ -611,18 +601,9 @@ fn collect_project(path: &Path, metadata: &Metadata, collector: &mut Collector) 
             .insert(format!("{prefix}/index.html"), source);
         collector.add(format!("{prefix}/page.json"), serde_json::to_vec(&serde_json::json!({ "name": page.name, "path": page.path, "background": page.background, "viewport": page.viewport(), "sizes": page.sizes })).map_err(io)?);
     }
-    // Newer schema models may carry approved identity assets. Reading through
-    // serialization keeps this collector compatible with the current model
-    // without accepting arbitrary extension objects as executable resources.
-    let value = serde_json::to_value(&project).map_err(io)?;
-    if let Some(assets) = value
-        .pointer("/importedIdentity/assets")
-        .and_then(serde_json::Value::as_array)
-    {
-        for (index, asset) in assets.iter().take(32).enumerate() {
-            let Some(uri) = asset.get("dataUri").and_then(serde_json::Value::as_str) else {
-                continue;
-            };
+    if let Some(identity) = &project.imported_identity {
+        for (index, asset) in identity.assets.iter().enumerate() {
+            let uri = &asset.data_uri;
             if uri.len() > MAX_ASSET_BYTES * 2 {
                 continue;
             }
@@ -636,134 +617,11 @@ fn collect_project(path: &Path, metadata: &Metadata, collector: &mut Collector) 
                 "data:image/svg+xml;base64" => "svg",
                 _ => continue,
             };
-            if let Ok(bytes) = STANDARD.decode(encoded) {
-                collector.add(format!("identity/logo-{index}.{suffix}"), bytes);
-            }
+            let bytes = STANDARD.decode(encoded).map_err(io)?;
+            collector.add(format!("identity/logo-{index}.{suffix}"), bytes);
         }
     }
     Ok(())
-}
-
-pub(crate) fn open_unchanged(path: &Path, expected: &Metadata) -> Result<File> {
-    if fs::symlink_metadata(path)
-        .map_err(io)?
-        .file_type()
-        .is_symlink()
-    {
-        return Err(Error(
-            "A source became a symbolic link during collection.".into(),
-        ));
-    }
-    let file = File::open(path).map_err(io)?;
-    let current = file.metadata().map_err(io)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        if current.dev() != expected.dev() || current.ino() != expected.ino() {
-            return Err(Error(
-                "A source changed during collection. Try the import again.".into(),
-            ));
-        }
-    }
-    if !current.is_file() || current.len() != expected.len() {
-        return Err(Error(
-            "A source changed during collection. Try the import again.".into(),
-        ));
-    }
-    Ok(file)
-}
-
-fn read_bounded(reader: &mut impl Read, limit: usize) -> Result<Vec<u8>> {
-    let mut bytes = Vec::new();
-    reader
-        .take(limit as u64 + 1)
-        .read_to_end(&mut bytes)
-        .map_err(io)?;
-    if bytes.len() > limit {
-        return Err(Error(
-            "A source grew beyond its file size limit during collection.".into(),
-        ));
-    }
-    Ok(bytes)
-}
-
-fn portable_name(path: &Path) -> Option<String> {
-    let mut parts = Vec::new();
-    for component in path.components() {
-        if let Component::Normal(part) = component {
-            let part = part.to_str()?;
-            if part.is_empty() || part.contains(['\\', ':']) || part.chars().any(char::is_control) {
-                return None;
-            }
-            parts.push(part);
-        } else {
-            return None;
-        }
-    }
-    let name = parts.join("/");
-    (name.len() <= 1024 && !name.is_empty()).then_some(name)
-}
-
-pub(crate) fn safe_archive_name(name: &str) -> Option<String> {
-    if name.contains(['\\', ':']) || name.chars().any(char::is_control) {
-        return None;
-    }
-    let name = name.strip_suffix('/').unwrap_or(name);
-    if name
-        .split('/')
-        .any(|part| part.is_empty() || part == "." || part == "..")
-    {
-        return None;
-    }
-    portable_name(Path::new(name))
-}
-
-fn extension(name: &str) -> String {
-    Path::new(name)
-        .extension()
-        .and_then(|value| value.to_str())
-        .unwrap_or_default()
-        .to_ascii_lowercase()
-}
-
-fn is_text(name: &str) -> bool {
-    matches!(
-        extension(name).as_str(),
-        "html"
-            | "htm"
-            | "css"
-            | "scss"
-            | "sass"
-            | "less"
-            | "js"
-            | "jsx"
-            | "mjs"
-            | "cjs"
-            | "ts"
-            | "tsx"
-            | "md"
-            | "mdx"
-            | "json"
-            | "svg"
-            | "txt"
-            | "astro"
-            | "vue"
-            | "svelte"
-            | "njk"
-            | "hbs"
-            | "liquid"
-            | "php"
-            | "toml"
-            | "yaml"
-            | "yml"
-    )
-}
-
-fn is_image(name: &str) -> bool {
-    matches!(
-        extension(name).as_str(),
-        "png" | "jpg" | "jpeg" | "webp" | "svg"
-    )
 }
 
 /// PNG, JPEG and WebP pictures that are not logos or icons.
@@ -855,70 +713,6 @@ fn prepare_photo(
 
 fn relevant(name: &str) -> bool {
     is_text(name) || is_image(name) && logo_name(name)
-}
-
-fn excluded(name: &str) -> bool {
-    name.split('/').any(|part| {
-        let part = part.to_ascii_lowercase();
-        part.starts_with('.')
-            || matches!(
-                part.as_str(),
-                "node_modules"
-                    | "target"
-                    | "coverage"
-                    | "vendor"
-                    | "__pycache__"
-                    | "cache"
-                    | "tmp"
-                    | "temp"
-                    | "credentials"
-                    | "secrets"
-                    | "auth"
-                    | "config"
-                    | "configuration"
-                    | "tests"
-                    | "test-results"
-            )
-            || part.ends_with(".lock")
-            || part.ends_with(".map")
-            || part.ends_with(".min.js")
-            || part.ends_with(".min.css")
-            || part.contains(".min.")
-            || part.starts_with("vendor.")
-            || part.contains(".bundle.")
-            || part.split(['.', '-', '_']).any(|word| {
-                matches!(
-                    word,
-                    "license" | "licence" | "licenses" | "licences" | "ofl" | "copying"
-                )
-            })
-            || [
-                "package-lock.json",
-                "pnpm-lock.yaml",
-                "yarn.lock",
-                "cargo.lock",
-                "composer.lock",
-                "bun.lock",
-                "bun.lockb",
-                "auth.json",
-                "authentication.json",
-                "passwords.json",
-                "service-account.json",
-            ]
-            .contains(&part.as_str())
-            || part.contains("credential")
-            || part.contains("secret")
-            || part.contains("private-key")
-            || part.starts_with("config.")
-            || (part.contains(".config.")
-                && !["tailwind", "theme", "unocss"]
-                    .iter()
-                    .any(|prefix| part.starts_with(prefix)))
-            || matches!(
-                extension(&part).as_str(),
-                "pem" | "key" | "p12" | "pfx" | "keystore"
-            )
-    })
 }
 
 fn build_path(name: &str) -> bool {
@@ -1455,7 +1249,6 @@ fn source_routes(
     } else if nuxt {
         vec!["app/pages/", "pages/"]
     } else if eleventy && !has("src/pages/") && !has("pages/") {
-        // Eleventy's default input is the project directory.
         vec![""]
     } else {
         vec!["src/pages/", "pages/"]

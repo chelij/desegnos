@@ -1,5 +1,5 @@
 //! Free account-specific discovery using a deliberately invalid Image API size.
-use crate::{ApiKey, AuthenticationMethod, OpenAiClient, ProviderSettings};
+use crate::{ApiKey, OpenAiClient};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -41,7 +41,10 @@ impl ImageAccess {
         } else {
             7 * 24 * 60 * 60
         };
-        now < self.checked_at || now.saturating_sub(self.checked_at) >= ttl
+        now == 0
+            || self.checked_at == 0
+            || now < self.checked_at
+            || now.saturating_sub(self.checked_at) >= ttl
     }
 }
 
@@ -150,60 +153,56 @@ pub(crate) fn image_access_error(status: u16, body: &Value, key: &ApiKey) -> Ima
     ImageAccess::new(available, &reason)
 }
 
-pub(crate) async fn bounded_json(response: &mut reqwest::Response, limit: usize) -> Option<Value> {
-    let mut bytes = Vec::new();
-    while let Some(chunk) = response.chunk().await.ok()? {
-        if bytes.len() + chunk.len() > limit {
-            return None;
-        }
-        bytes.extend_from_slice(&chunk);
-    }
-    serde_json::from_slice(&bytes).ok()
-}
-
 impl OpenAiClient {
-    pub async fn probe_image_access(
-        &self,
-        auth: AuthenticationMethod,
-        settings: &ProviderSettings,
-        key: &ApiKey,
-    ) -> ImageAccess {
-        let access = tokio::time::timeout(
-            Duration::from_secs(25),
-            self.probe_images(auth, settings, key),
-        )
-        .await
-        .unwrap_or_else(|_| ImageAccess::new(ImageAvailability::Unknown, "network_or_timeout"));
-        eprintln!(
-            "Image access probe ({auth:?}): {:?}: {}",
-            access.available, access.reason
-        );
+    pub async fn probe_image_access(&self, key: &ApiKey) -> ImageAccess {
+        let access = tokio::time::timeout(Duration::from_secs(25), self.probe_images(key))
+            .await
+            .unwrap_or_else(|_| ImageAccess::new(ImageAvailability::Unknown, "network_or_timeout"));
         access
     }
-    async fn probe_images(
-        &self,
-        _auth: AuthenticationMethod,
-        _settings: &ProviderSettings,
-        key: &ApiKey,
-    ) -> ImageAccess {
+    async fn probe_images(&self, key: &ApiKey) -> ImageAccess {
         // 16x16 is invalid for every supported model. Do not retry with a valid size:
         // validation proves access without ever authorizing image generation.
         let body = json!({"model": crate::image_generation::IMAGE_MODELS[0], "prompt": "Access check",
             "size": "16x16", "n": 1, "quality": "low", "output_format": "png"});
-        let request = serde_json::to_vec(&body).ok().and_then(|bytes| {
-            self.image_api_request("images/generations", key, "application/json", bytes)
-                .ok()
-        });
-        let Some(request) = request else {
-            return ImageAccess::new(ImageAvailability::Unknown, "invalid_probe_request");
+        let request = serde_json::to_vec(&body)
+            .map_err(|_| crate::ProviderError::before(crate::ErrorKind::InvalidRequirements))
+            .and_then(|bytes| {
+                self.image_api_request("images/generations", key, "application/json", bytes)
+            });
+        let request = match request {
+            Ok(request) => request,
+            Err(error) => {
+                return ImageAccess::new(
+                    ImageAvailability::Unknown,
+                    &format!("invalid_probe_{:?}", error.kind),
+                );
+            }
         };
         let Ok(mut response) = request.send().await else {
             return ImageAccess::new(ImageAvailability::Unknown, "network_or_timeout");
         };
         let status = response.status().as_u16();
-        let value = bounded_json(&mut response, 65_536)
-            .await
-            .unwrap_or(Value::Null);
+        let bytes = match crate::net::bounded_body(
+            &mut response,
+            crate::net::ERROR_BODY_LIMIT,
+            &crate::CancellationToken::new(),
+            tokio::time::Instant::now() + Duration::from_secs(25),
+        )
+        .await
+        {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                return ImageAccess::new(
+                    ImageAvailability::Unknown,
+                    &format!("probe_body_{:?}", error.kind),
+                );
+            }
+        };
+        let value = match serde_json::from_slice(&bytes) {
+            Ok(value) => value,
+            Err(_) => return ImageAccess::new(ImageAvailability::Unknown, "invalid_probe_json"),
+        };
         image_access_error(status, &value, key)
     }
 }

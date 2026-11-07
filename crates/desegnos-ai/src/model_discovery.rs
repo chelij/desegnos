@@ -1,12 +1,61 @@
 //! Account model discovery. Metadata is not permission to change endpoints or prices.
+use crate::net::{ERROR_BODY_LIMIT, IDLE, MODELS_BODY_LIMIT, PROBE_IDLE};
 use crate::{
     ApiKey, CancellationToken, ErrorKind, MAX_OUTPUT_TOKENS, ModelInfo, ProviderError, ProviderId,
     ReasoningEffort, Result,
 };
 use reqwest::{Client, RequestBuilder, header::HeaderValue};
 use serde_json::Value;
-use std::{collections::HashSet, time::Duration};
+use std::collections::HashSet;
 use tokio::time::Instant;
+
+const MAX_MODEL_PAGES: usize = 32;
+const MAX_MODELS: usize = 4096;
+#[derive(Clone, Copy)]
+enum Pagination {
+    None,
+    Offset(usize),
+    Token,
+    AfterId,
+}
+struct DiscoveryProfile {
+    path: &'static str,
+    cursor: &'static str,
+    entries: &'static str,
+    pagination: Pagination,
+    generation_method: Option<&'static str>,
+}
+impl DiscoveryProfile {
+    fn for_provider(provider: ProviderId) -> Self {
+        let standard = Self {
+            path: "models",
+            cursor: "after_id",
+            entries: "data",
+            pagination: Pagination::None,
+            generation_method: None,
+        };
+        match provider {
+            ProviderId::Openrouter => Self {
+                path: "models/user",
+                cursor: "offset",
+                pagination: Pagination::Offset(100),
+                ..standard
+            },
+            ProviderId::Google => Self {
+                cursor: "pageToken",
+                entries: "models",
+                pagination: Pagination::Token,
+                generation_method: Some("generateContent"),
+                ..standard
+            },
+            ProviderId::Anthropic => Self {
+                pagination: Pagination::AfterId,
+                ..standard
+            },
+            _ => standard,
+        }
+    }
+}
 
 pub(crate) async fn list_models(
     provider: ProviderId,
@@ -15,71 +64,53 @@ pub(crate) async fn list_models(
     key: &ApiKey,
     cancel: &CancellationToken,
 ) -> Result<Vec<ModelInfo>> {
-    let deadline = Instant::now() + Duration::from_secs(90);
+    let profile = DiscoveryProfile::for_provider(provider);
+    let deadline = Instant::now() + IDLE;
     let mut cursor: Option<String> = None;
     let mut cursors = HashSet::new();
     let mut ids = HashSet::new();
     let mut result = Vec::new();
-    for _ in 0..32 {
+    for _ in 0..MAX_MODEL_PAGES {
         if cancel.is_cancelled() {
             return Err(failure(ErrorKind::Cancelled));
         }
-        let path = if provider == ProviderId::Openrouter {
-            "models/user"
-        } else {
-            "models"
-        };
-        let mut url = reqwest::Url::parse(&format!("{endpoint}/{path}"))
+        let mut url = reqwest::Url::parse(&format!("{endpoint}/{}", profile.path))
             .map_err(|_| failure(ErrorKind::InvalidSettings))?;
-        if provider == ProviderId::Openrouter {
-            url.query_pairs_mut().append_pair("limit", "100");
+        if let Pagination::Offset(size) = profile.pagination {
+            url.query_pairs_mut()
+                .append_pair("limit", &size.to_string());
         }
         if let Some(cursor) = &cursor {
-            url.query_pairs_mut().append_pair(
-                if provider == ProviderId::Google {
-                    "pageToken"
-                } else if provider == ProviderId::Openrouter {
-                    "offset"
-                } else {
-                    "after_id"
-                },
-                cursor,
-            );
+            url.query_pairs_mut().append_pair(profile.cursor, cursor);
         }
         let request = client.get(url).header("accept", "application/json");
         let request = authorize(provider, request, key)?;
         let mut response = crate::retry::send(
             request,
             cancel,
-            deadline,
-            Duration::from_secs(30),
-            1024 * 1024,
+            crate::retry::RetryPolicy::new(deadline, PROBE_IDLE, MODELS_BODY_LIMIT),
             &|_| {},
         )
         .await?;
         if !response.status().is_success() {
             let status = response.status().as_u16();
-            let body = crate::transport::bounded_body(&mut response, 65_536, cancel, deadline)
+            let body = crate::net::bounded_body(&mut response, ERROR_BODY_LIMIT, cancel, deadline)
                 .await
-                .unwrap_or_default();
+                .map_err(|error| failure(error.kind))?;
             return Err(crate::providers::foreign_http_error(
                 status, &body, key, None, None,
             ));
         }
-        let bytes = crate::transport::bounded_body(&mut response, 1024 * 1024, cancel, deadline)
+        let bytes = crate::net::bounded_body(&mut response, MODELS_BODY_LIMIT, cancel, deadline)
             .await
             .map_err(|error| failure(error.kind))?;
         let body: Value =
             serde_json::from_slice(&bytes).map_err(|_| failure(ErrorKind::Malformed))?;
-        let entries = body[if provider == ProviderId::Google {
-            "models"
-        } else {
-            "data"
-        }]
-        .as_array()
-        .ok_or_else(|| failure(ErrorKind::Malformed))?;
+        let entries = body[profile.entries]
+            .as_array()
+            .ok_or_else(|| failure(ErrorKind::Malformed))?;
         for entry in entries {
-            if ids.len() >= 4096 {
+            if ids.len() >= MAX_MODELS {
                 return Err(failure(ErrorKind::OutputLimit));
             }
             let mut model = parse_model(provider, entry)?;
@@ -94,14 +125,11 @@ pub(crate) async fn list_models(
                 return Err(failure(ErrorKind::Malformed));
             }
             // Gemini publishes embedding-only models through this same endpoint.
-            if provider == ProviderId::Google {
+            if let Some(method) = profile.generation_method {
                 let methods = entry["supportedGenerationMethods"]
                     .as_array()
                     .ok_or_else(|| failure(ErrorKind::Malformed))?;
-                if !methods
-                    .iter()
-                    .any(|method| method.as_str() == Some("generateContent"))
-                {
+                if !methods.iter().any(|value| value.as_str() == Some(method)) {
                     continue;
                 }
                 if entry["thinking"] == false {
@@ -110,22 +138,24 @@ pub(crate) async fn list_models(
             }
             result.push(model);
         }
-        cursor = match provider {
-            ProviderId::Openrouter if entries.len() == 100 => Some(
+        cursor = match profile.pagination {
+            Pagination::Offset(size) if entries.len() == size => Some(
                 (cursor
                     .as_ref()
-                    .and_then(|value| value.parse::<usize>().ok())
+                    .map(|value| value.parse::<usize>())
+                    .transpose()
+                    .map_err(|_| failure(ErrorKind::Malformed))?
                     .unwrap_or(0)
                     + entries.len())
                 .to_string(),
             ),
-            ProviderId::Google => match body.get("nextPageToken") {
+            Pagination::Token => match body.get("nextPageToken") {
                 None | Some(Value::Null) => None,
                 Some(Value::String(value)) if value.is_empty() => None,
                 Some(Value::String(value)) => Some(value.clone()),
                 _ => return Err(failure(ErrorKind::Malformed)),
             },
-            ProviderId::Anthropic => match body.get("has_more") {
+            Pagination::AfterId => match body.get("has_more") {
                 Some(Value::Bool(true)) => Some(
                     body["last_id"]
                         .as_str()
