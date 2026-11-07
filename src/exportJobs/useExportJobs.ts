@@ -140,7 +140,7 @@ export function useExportJobs(input: Pick<Context, 'current' | 'view' | 'panel' 
     const project = current.current?.project;
     const trimmed = path.trim();
     if (!project || !trimmed) return;
-    if (!/^(\/|[A-Za-z]:[\\/]|\\\\)/.test(trimmed)) { setExportError('Use a full folder path, like /home/you/Sites.'); return; }
+    if (!/^(\/|[A-Za-z]:[\\/]|\\\\)/.test(trimmed)) { setExportError('Enter the full path of the folder.'); return; }
     setExportError('');
     setExportFolders(current => ({ ...current, [project.id]: trimmed.replace(/[\\/]+$/, '') || trimmed }));
   }
