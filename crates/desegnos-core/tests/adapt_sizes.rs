@@ -230,3 +230,159 @@ fn shared_text_styles_are_measured_and_updates_readapt() {
         24.0
     );
 }
+
+#[test]
+fn inline_rows_wrap_only_when_the_next_item_does_not_fit() {
+    let (mut p, id) = project();
+    let widths = [180.0, 60.0, 80.0, 80.0, 170.0];
+    let positions = [48.0, 900.0, 980.0, 1080.0, 1190.0];
+    p.pages[0].elements = widths
+        .into_iter()
+        .zip(positions)
+        .map(|(w, x)| {
+            let mut e = empty_element(ElementKind::Link, rect(x, 20.0, w, 40.0));
+            e.text = "Link".into();
+            e
+        })
+        .collect();
+    adapt_size(&mut p.pages[0], id).unwrap();
+    let phone = resolve_for_size(&p, &p.pages[0], id);
+    assert_eq!(phone[0].rect.y, phone[2].rect.y);
+    assert!(phone[3].rect.y >= phone[0].rect.y + 40.0);
+    assert_eq!(phone[3].rect.y, phone[4].rect.y);
+    p.pages[0].size_mut(id).unwrap().width = 820;
+    adapt_size(&mut p.pages[0], id).unwrap();
+    let tablet = resolve_for_size(&p, &p.pages[0], id);
+    assert!(tablet.iter().all(|e| e.rect.y == tablet[0].rect.y));
+}
+
+#[test]
+fn repeated_tiles_use_two_phone_columns_and_four_tablet_columns() {
+    let (mut p, id) = project();
+    let mut parent = empty_element(ElementKind::Group, rect(0.0, 0.0, 620.0, 110.0));
+    parent.children = (0..4)
+        .map(|i| {
+            let mut tile = empty_element(
+                ElementKind::Group,
+                rect(f64::from(i) * 160.0, 0.0, 140.0, 110.0),
+            );
+            let mut label = text(12.0, 12.0, 116.0, 40.0);
+            label.text = "12".into();
+            tile.children = vec![
+                empty_element(ElementKind::Box, rect(0.0, 0.0, 140.0, 110.0)),
+                label,
+            ];
+            tile
+        })
+        .collect();
+    p.pages[0].elements = vec![parent];
+    adapt_size(&mut p.pages[0], id).unwrap();
+    let phone = resolve_for_size(&p, &p.pages[0], id);
+    let tiles = &phone[0].children;
+    assert_eq!(tiles[0].rect.y, tiles[1].rect.y);
+    assert!(tiles[2].rect.y >= tiles[0].rect.y + tiles[0].rect.height);
+    assert_eq!(tiles[2].rect.y, tiles[3].rect.y);
+    assert_eq!(tiles[0].rect.width, tiles[3].rect.width);
+    for tile in tiles {
+        assert_eq!(tile.children[0].rect.width, tile.rect.width);
+        assert!(tile.children[0].rect.height <= tile.rect.height);
+    }
+    p.pages[0].size_mut(id).unwrap().width = 820;
+    adapt_size(&mut p.pages[0], id).unwrap();
+    let tablet = resolve_for_size(&p, &p.pages[0], id);
+    assert!(
+        tablet[0]
+            .children
+            .iter()
+            .all(|e| e.rect.y == tablet[0].children[0].rect.y)
+    );
+}
+
+#[test]
+fn wrapped_price_rows_keep_the_parent_content_inset() {
+    let (mut p, id) = project();
+    let mut card = empty_element(ElementKind::Group, rect(0.0, 0.0, 380.0, 400.0));
+    let mut title = text(32.0, 32.0, 316.0, 20.0);
+    title.text = "GA PASS".into();
+    let mut price = text(32.0, 70.0, 200.0, 70.0);
+    price.text = "$39".into();
+    price.style.text_style.size = 54.0;
+    let mut suffix = text(196.0, 106.0, 100.0, 20.0);
+    suffix.text = "/ MO".into();
+    let mut body = text(32.0, 150.0, 316.0, 40.0);
+    body.text = "Every stage".into();
+    card.children = vec![title, price, suffix, body];
+    p.pages[0].elements = vec![card];
+    adapt_size(&mut p.pages[0], id).unwrap();
+    let tree = resolve_for_size(&p, &p.pages[0], id);
+    let children = &tree[0].children;
+    assert_eq!(children[0].rect.x, children[1].rect.x);
+    assert_eq!(children[0].rect.x, children[3].rect.x);
+    assert!(children[1].rect.x >= 20.0);
+    assert!(children[2].rect.x >= children[0].rect.x);
+}
+
+#[test]
+fn field_labels_wrap_with_their_controls() {
+    let (mut p, id) = project();
+    let mut parent = empty_element(ElementKind::Group, rect(0.0, 0.0, 1440.0, 300.0));
+    for x in [80.0, 520.0, 960.0] {
+        let mut label = text(x, 130.0, 200.0, 18.0);
+        label.text = "NAME".into();
+        parent.children.push(label);
+    }
+    for x in [80.0, 520.0, 960.0] {
+        parent.children.push(empty_element(
+            ElementKind::Input {
+                input_type: InputType::Text,
+            },
+            rect(x, 150.0, 400.0, 52.0),
+        ));
+    }
+    p.pages[0].elements = vec![parent];
+    for width in [390, 820] {
+        p.pages[0].size_mut(id).unwrap().width = width;
+        adapt_size(&mut p.pages[0], id).unwrap();
+        let tree = resolve_for_size(&p, &p.pages[0], id);
+        let fields = &tree[0].children;
+        for i in 0..3 {
+            assert_eq!(fields[i].rect.x, fields[i + 3].rect.x);
+            assert_eq!(
+                fields[i + 3].rect.y,
+                fields[i].rect.y + fields[i].rect.height + 8.0
+            );
+        }
+        if width == 390 {
+            assert!(fields[1].rect.y > fields[3].rect.y);
+        } else {
+            assert_eq!(fields[0].rect.y, fields[2].rect.y);
+        }
+    }
+}
+
+#[test]
+fn uneven_headliner_cards_share_a_tablet_grid_without_overlapping() {
+    let (mut p, id) = project();
+    p.pages[0].size_mut(id).unwrap().width = 820;
+    let mut parent = empty_element(ElementKind::Group, rect(0.0, 0.0, 1280.0, 340.0));
+    for (x, y, w, h) in [
+        (0.0, 40.0, 320.0, 260.0),
+        (340.0, 0.0, 600.0, 340.0),
+        (960.0, 40.0, 320.0, 260.0),
+    ] {
+        let mut card = empty_element(ElementKind::Group, rect(x, y, w, h));
+        let mut title = text(24.0, 24.0, w - 48.0, 40.0);
+        title.text = "HEADLINER".into();
+        card.children = vec![title];
+        parent.children.push(card);
+    }
+    p.pages[0].elements = vec![parent];
+    adapt_size(&mut p.pages[0], id).unwrap();
+    let tree = resolve_for_size(&p, &p.pages[0], id);
+    let cards = &tree[0].children;
+    assert_eq!(cards[0].rect.y, cards[2].rect.y);
+    assert_eq!(cards[0].rect.width, cards[1].rect.width);
+    for pair in cards.windows(2) {
+        assert!(pair[1].rect.x >= pair[0].rect.x + pair[0].rect.width);
+    }
+}

@@ -1,4 +1,10 @@
 // Optional integration check: no AI, no release build, no changes to the source fixture.
+// Run: node tests/adapt-sizes.test.mjs. The storage example opens a copy, preferring
+// its autosave (the fixture's saved head is empty), and reuses accepted behaviour.
+// DESEGNOS_ADAPT_FIXTURE / CHROMIUM / DESEGNOS_ADAPT_SHOTS override local paths;
+// DESEGNOS_KEEP_ADAPT_OUTPUT=1 retains before/after exports for diagnosis.
+// Desktop keeps intentional text effects; narrow layouts must avoid text overlap
+// and may not introduce sibling-box intersections absent from the desktop design.
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
@@ -57,7 +63,7 @@ try {
     return evaluate(`(() => {
       const nodes = [...document.querySelectorAll('[data-desegnos-id]')];
       const visible = node => { const s = getComputedStyle(node), r = node.getBoundingClientRect(); return s.display !== 'none' && s.visibility !== 'hidden' && Number(s.opacity) > 0 && r.width > 0 && r.height > 0; };
-      const all = nodes.filter(visible).map(node => { const r = node.getBoundingClientRect(), s = getComputedStyle(node); return { id: node.dataset.desegnosId, text: [...node.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim(), x:r.x, y:r.y, w:r.width, h:r.height, font:parseFloat(s.fontSize) }; });
+      const all = nodes.filter(visible).map(node => { const r = node.getBoundingClientRect(), s = getComputedStyle(node); return { id: node.dataset.desegnosId, parent: node.parentElement?.closest('[data-desegnos-id]')?.dataset.desegnosId ?? null, position:s.position, tag:node.tagName, text: [...node.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim(), x:r.x, y:r.y, w:r.width, h:r.height, font:parseFloat(s.fontSize) }; });
       const text = all.filter(n => n.text);
       const overlaps = [];
       for (let i=0;i<text.length;i++) for (let j=i+1;j<text.length;j++) { const a=text[i], b=text[j]; if (Math.min(a.x+a.w,b.x+b.w)-Math.max(a.x,b.x)>2 && Math.min(a.y+a.h,b.y+b.h)-Math.max(a.y,b.y)>2) overlaps.push([a.text,b.text,a.id,b.id]); }
@@ -82,11 +88,49 @@ try {
       console.log(path);
       assert.ok(result.scroll <= width, `${page}/${label}: horizontal scroll ${result.scroll}`);
       if (label === 'phone') assert.deepEqual(result.small, [], `${page}: fonts below 13px`);
+      const nav = result.all.find(n => n.position === 'fixed');
+      assert.ok(nav, `${page}: fixture nav must be inspected`);
+      const navItems = result.all.filter(n => n.parent === nav.id && n.text);
+      console.log(`${page}/${label}: nav ${nav.h.toFixed(1)}px`);
+      if (label === 'phone') assert.ok(nav.h <= 140, `${page}: phone nav is ${nav.h}px high`);
+      else assert.ok(Math.max(...navItems.map(n => n.y)) - Math.min(...navItems.map(n => n.y)) <= 16, `${page}: tablet nav wraps`);
+      if (page === 'index.html') {
+        const labels = result.all.filter(n => ['DAYS', 'HOURS', 'MINS', 'SECS'].includes(n.text));
+        const boxes = labels.map(n => result.all.find(box => box.id === n.parent));
+        assert.equal(boxes.length, 4, 'inspect all countdown boxes');
+        assert.ok(boxes.some((a, i) => boxes.slice(i+1).some(b => Math.abs(a.y-b.y) < 4)), 'phone countdown must have at least two boxes per line');
+        if (label === 'tablet') assert.ok(boxes.every(box => Math.abs(box.y-boxes[0].y) < 4), 'tablet countdown must fit four boxes per line');
+      }
+      if (page === 'tickets.html') {
+        const tiers = result.all.filter(n => ['GA PASS', 'VIP PASS', 'ULTRA PASS'].includes(n.text)).map(n => result.all.find(box => box.id === n.parent));
+        assert.equal(tiers.length, 3, 'inspect all pricing tiers');
+        if (label === 'tablet') assert.ok(tiers.some((a,i) => tiers.slice(i+1).some(b => Math.abs(a.y-b.y)<4)), 'tablet pricing must have multiple columns');
+        for (const title of before.all.filter(n => ['FULL NAME', 'EMAIL', 'PASS TYPE'].includes(n.text))) {
+          const control=before.all.find(n => ['INPUT','SELECT'].includes(n.tag) && n.parent===title.parent && Math.abs(n.x-title.x)<2 && n.y>title.y && n.y-title.y<50);
+          assert.ok(control, 'inspect the matching form control');
+          const label=result.all.find(n => n.id===title.id), field=result.all.find(n => n.id===control.id);
+          assert.ok(Math.abs(label.x-field.x)<2 && field.y>=label.y+label.h && field.y-label.y-label.h<=12, 'labels must wrap with their fields');
+        }
+        for (const tier of tiers) {
+          const children = result.all.filter(n => n.parent === tier.id);
+          const price = children.find(n => n.text.startsWith('$'));
+          const title = children.find(n => n.text.endsWith('PASS'));
+          assert.ok(Math.abs(price.x-title.x)<2 && price.x-tier.x>=15, 'prices must retain the card content inset');
+        }
+      }
+      const intersects = (a,b) => Math.min(a.x+a.w,b.x+b.w)-Math.max(a.x,b.x)>4 && Math.min(a.y+a.h,b.y+b.h)-Math.max(a.y,b.y)>4;
+      const desktop = new Map(before.all.map(n => [n.id,n]));
+      const newOverlaps = [];
+      for (let i=0;i<result.all.length;i++) for (const b of result.all.slice(i+1)) {
+        const a=result.all[i], da=desktop.get(a.id), db=desktop.get(b.id);
+        if (a.parent && a.parent===b.parent && intersects(a,b) && !(da && db && intersects(da,db))) newOverlaps.push([a.id,b.id,a.text,b.text]);
+      }
+      assert.deepEqual(newOverlaps, [], `${page}/${label}: new sibling overlaps`);
       assert.deepEqual(result.overlaps, [], `${page}/${label}: overlapping text`);
     }
   }
   socket.close();
-  console.log('PASS: 3 pages × 3 sizes; desktop unchanged, no narrow text overlap/overflow.');
+  console.log('PASS: 3 pages × 3 sizes; desktop unchanged; wrapping, grids, insets, nav and sibling overlap checks passed.');
 } finally {
   if (browser.exitCode === null && browser.signalCode === null) {
     const exited = new Promise(resolve => browser.once('exit', resolve));

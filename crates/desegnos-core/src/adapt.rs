@@ -222,7 +222,7 @@ fn place(
             &layout,
             measure,
         );
-        rect.height = rect.height.max(bottom);
+        rect.height = rect.height.max(bottom).max(e.rect.height * ratio);
     }
     e.overrides.insert(
         id,
@@ -335,13 +335,28 @@ fn children(
             .total_cmp(&elements[b].rect.y)
             .then(elements[a].rect.x.total_cmp(&elements[b].rect.x))
     });
-    let gutter = if base_width >= 600.0 {
-        20.0_f64.min(width * 0.06)
+    // Use the containing design's content insets, including inside small cards. A
+    // wrap starts at this inset, never at an unrelated global gutter or at x=0.
+    let left = indices
+        .iter()
+        .map(|&i| elements[i].rect.x)
+        .fold(base_width, f64::min)
+        .max(0.0);
+    let right = indices
+        .iter()
+        .map(|&i| base_width - elements[i].rect.x - elements[i].rect.width)
+        .fold(base_width, f64::min)
+        .max(0.0);
+    let inset = |value: f64| (value * ratio).min(value);
+    let gutter = inset(left);
+    let right_gutter = if base_width >= 600.0 {
+        inset(right).min(24.0)
     } else {
-        0.0
+        inset(right)
     };
-    let available = (width - 2.0 * gutter).max(1.0);
+    let available = (width - gutter - right_gutter).max(1.0);
     let mut offset: f64 = 0.0;
+    let mut anchors = vec![(0.0, 0.0)];
     let mut cursor = 0;
     while cursor < indices.len() {
         let start = cursor;
@@ -360,81 +375,233 @@ fn children(
                 .total_cmp(&elements[b].rect.x)
                 .then(elements[a].rect.y.total_cmp(&elements[b].rect.y))
         });
-        let left = row
+        let y = top * ratio + offset;
+        // A label row immediately followed by a matching input row is a run
+        // of fields. Wrap each label/input pair together without changing the tree.
+        let controls: Vec<_> = row
             .iter()
-            .map(|&i| elements[i].rect.x)
-            .fold(f64::INFINITY, f64::min);
-        let right = row
-            .iter()
-            .map(|&i| elements[i].rect.x + elements[i].rect.width)
-            .fold(0.0, f64::max);
-        let overlapping = row.iter().enumerate().any(|(a, &i)| {
-            row[a + 1..].iter().any(|&j| {
-                let a = elements[i].rect;
-                let b = elements[j].rect;
-                a.x < b.x + b.width - 2.0 && b.x < a.x + a.width - 2.0
+            .filter_map(|&label| {
+                let e = &elements[label];
+                if !matches!(e.kind, ElementKind::Text) {
+                    return None;
+                }
+                indices[cursor..].iter().copied().find(|&i| {
+                    let input = &elements[i];
+                    matches!(
+                        input.kind,
+                        ElementKind::Input { .. }
+                            | ElementKind::Select { .. }
+                            | ElementKind::Textarea
+                    ) && (input.rect.x - e.rect.x).abs() < 2.0
+                        && input.rect.y >= e.rect.y + e.rect.height
+                        && input.rect.y - e.rect.y - e.rect.height <= 24.0
+                })
             })
-        });
-        let gaps: Vec<_> = row
+            .collect();
+        if row.len() > 1
+            && controls.len() == row.len()
+            && indices
+                .get(cursor..cursor + controls.len())
+                .is_some_and(|next| next.iter().all(|i| controls.contains(i)))
+        {
+            cursor += controls.len();
+            let columns = (((available + 12.0) / 232.0).floor() as usize)
+                .max(1)
+                .min(row.len());
+            let cell = (available - 12.0 * columns.saturating_sub(1) as f64) / columns as f64;
+            let mut line_y = y;
+            let mut line_bottom = y;
+            for (column, (&label, &input)) in row.iter().zip(&controls).enumerate() {
+                if column > 0 && column % columns == 0 {
+                    line_y = line_bottom + 12.0;
+                }
+                let x = gutter + (column % columns) as f64 * (cell + 12.0);
+                let e = &mut elements[label];
+                let label_rect = place(
+                    e,
+                    id,
+                    Rect {
+                        x,
+                        y: line_y,
+                        width: e.rect.width.min(cell),
+                        height: e.rect.height,
+                    },
+                    measure,
+                );
+                let e = &mut elements[input];
+                end = end.max(e.rect.y + e.rect.height);
+                let input_rect = place(
+                    e,
+                    id,
+                    Rect {
+                        x,
+                        y: label_rect.y + label_rect.height + 8.0,
+                        width: cell,
+                        height: e.rect.height * ratio,
+                    },
+                    measure,
+                );
+                line_bottom = line_bottom.max(input_rect.y + input_rect.height);
+            }
+            anchors.push((top, y));
+            anchors.push((end, line_bottom));
+            offset += (line_bottom - (end * ratio + offset)).max(0.0);
+            bottom = bottom.max(line_bottom);
+            continue;
+        }
+        // Repeated containers get equal cells, rather than a ragged sequence of
+        // natural widths. Stat tiles keep a smaller minimum than content cards.
+        let smallest = row
+            .iter()
+            .map(|&i| elements[i].rect.width)
+            .fold(f64::INFINITY, f64::min);
+        let largest = row
+            .iter()
+            .map(|&i| elements[i].rect.width)
+            .fold(0.0, f64::max);
+        let similar = row.len() >= 2
+            && largest <= smallest * 2.0
+            && row.iter().all(|&i| {
+                !elements[i].children.is_empty() || matches!(elements[i].kind, ElementKind::Image)
+            });
+        let gap = if row.iter().all(|&i| {
+            matches!(elements[i].kind, ElementKind::Button) && elements[i].rect.width <= 180.0
+        }) {
+            4.0
+        } else {
+            12.0
+        };
+        let minimum = if largest <= 180.0 {
+            smallest
+        } else {
+            (smallest * 0.65).clamp(220.0, 280.0)
+        };
+        let columns = (((available + gap) / (minimum + gap)).floor() as usize)
+            .max(1)
+            .min(row.len());
+        let cell = (available - gap * columns.saturating_sub(1) as f64) / columns as f64;
+        let mut line_y = y;
+        let mut line_top = top;
+        let mut line_bottom = y;
+        let mut next_x = gutter;
+        // Overlapping desktop text boxes (a price and its suffix, for example)
+        // can share a line when their distinct left edges leave enough space.
+        let widths: Vec<_> = row
+            .iter()
+            .enumerate()
+            .map(|(column, &i)| {
+                let e = &elements[i];
+                let mut w = e.rect.width.min(available);
+                for (art, is_decor) in elements.iter().zip(&decor) {
+                    if *is_decor
+                        && !art.children.is_empty()
+                        && matches!(e.kind, ElementKind::Text)
+                        && e.rect.x + e.rect.width <= art.rect.x
+                        && e.rect.y < art.rect.y + art.rect.height
+                        && art.rect.y < e.rect.y + e.rect.height
+                    {
+                        w = w.min(
+                            (art.rect.x * ratio - (e.rect.x * ratio).max(gutter) - 8.0).max(40.0),
+                        );
+                    }
+                }
+                if let Some(&next) = row.get(column + 1) {
+                    let distance = elements[next].rect.x - e.rect.x;
+                    if e.children.is_empty() && distance > 0.0 && distance < e.rect.width {
+                        w = w.min(((distance - 8.0) * ratio).max(1.0));
+                    }
+                }
+                w.max(1.0)
+            })
+            .collect();
+        let packed = widths.iter().sum::<f64>() + gap * row.len().saturating_sub(1) as f64;
+        let fits = packed <= available;
+        let raw_gaps: Vec<_> = row
             .windows(2)
             .map(|pair| {
                 let a = elements[pair[0]].rect;
                 let b = elements[pair[1]].rect;
-                ((b.x - a.x - a.width) * ratio).clamp(8.0, 24.0)
+                ((b.x - a.x - a.width) * ratio).max(gap)
             })
             .collect();
-        let packed_width =
-            row.iter().map(|&i| elements[i].rect.width).sum::<f64>() + gaps.iter().sum::<f64>();
-        let stack =
-            row.len() > 1 && (right - left > available || packed_width > available || overlapping);
-        let y = top * ratio + offset;
-        let mut next_y = y;
-        let mut row_bottom = y;
-        let mut next_x = (left * ratio).clamp(gutter, (width - gutter - packed_width).max(gutter));
+        let gap_sum = raw_gaps.iter().sum::<f64>();
+        let gap_budget = (available - widths.iter().sum::<f64>())
+            .max(0.0)
+            .min(gap_sum);
         for (column, &i) in row.iter().enumerate() {
+            if similar && column > 0 && column % columns == 0 {
+                line_y = line_bottom + gap;
+                let remaining = (row.len() - column).min(columns);
+                let used = cell * remaining as f64 + gap * remaining.saturating_sub(1) as f64;
+                next_x = gutter + (available - used) / 2.0;
+            }
             let e = &mut elements[i];
             let full_bleed =
                 e.rect.x.abs() < 1.0 && e.rect.width >= base_width - 1.0 && !e.children.is_empty();
             let w = if full_bleed {
                 width
+            } else if similar {
+                cell
             } else {
-                e.rect.width.min(available)
+                widths[column]
+            };
+            if !similar && next_x > gutter && next_x + w > width - right_gutter + 0.5 {
+                line_y = line_bottom + gap;
+                line_top = e.rect.y;
+                next_x = gutter;
             }
-            .max(1.0);
             let x = if full_bleed {
                 0.0
-            } else if stack {
-                gutter
+            } else if row.len() == 1 {
+                (e.rect.x * ratio).clamp(gutter, (width - right_gutter - w).max(gutter))
             } else {
-                (e.rect.x * ratio).clamp(gutter, (width - gutter - w).max(gutter))
-            };
-            let x = if !stack && !full_bleed && row.len() > 1 {
                 next_x
+            };
+            let dy = if similar {
+                0.0
             } else {
-                x
+                (e.rect.y - line_top).max(0.0) * ratio
             };
             let r = place(
                 e,
                 id,
                 Rect {
                     x,
-                    y: if stack {
-                        next_y
-                    } else {
-                        y + (e.rect.y - top) * ratio
-                    },
+                    y: line_y + dy,
                     width: w,
                     height: e.rect.height * ratio,
                 },
                 measure,
             );
-            row_bottom = row_bottom.max(r.y + r.height);
-            next_y = r.y + r.height + 16.0;
-            next_x = r.x + r.width + gaps.get(column).copied().unwrap_or(0.0);
+            line_bottom = line_bottom.max(r.y + r.height);
+            let next_gap = if fits && gap_sum > 0.0 {
+                raw_gaps.get(column).copied().unwrap_or(0.0) * gap_budget / gap_sum
+            } else {
+                gap
+            };
+            next_x = r.x + r.width + next_gap;
         }
-        offset += (row_bottom - (end * ratio + offset)).max(0.0);
-        bottom = bottom.max(row_bottom);
+        anchors.push((top, y));
+        anchors.push((end, line_bottom));
+        offset += (line_bottom - (end * ratio + offset)).max(0.0);
+        bottom = bottom.max(line_bottom);
     }
+    let foreground: Vec<_> = elements
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| !decor[*i] && !duplicates[*i])
+        .map(|(_, e)| (e.rect, effective(e, id)))
+        .collect();
+    let map_y = |y: f64| {
+        let mut previous = (0.0, 0.0);
+        for &(old, new) in &anchors {
+            if old > y {
+                return previous.1 + (y - previous.0) * (new - previous.1) / (old - previous.0);
+            }
+            previous = (old, new);
+        }
+        previous.1 + (y - previous.0) * ratio
+    };
     for (i, e) in elements.iter_mut().enumerate() {
         if decor[i] && !manual(e, id) {
             fn scale(e: &mut Element, id: Uuid, ratio: f64) {
@@ -458,7 +625,36 @@ fn children(
                     scale(c, id, ratio);
                 }
             }
-            scale(e, id, ratio);
+            let mut x = e.rect.x * ratio;
+            let y = map_y(e.rect.y);
+            let height = if matches!(e.kind, ElementKind::Ellipse | ElementKind::Group) {
+                e.rect.height * ratio
+            } else {
+                (map_y(e.rect.y + e.rect.height) - y).max(1.0)
+            };
+            // Keep art beside content that it did not cover at desktop. Text can
+            // gain readable width, so simply scaling the art's x would cross it.
+            for (base, adapted) in &foreground {
+                if base.x + base.width <= e.rect.x
+                    && adapted.y < y + height
+                    && y < adapted.y + adapted.height
+                {
+                    // Leave a motion gutter for small decorative translations.
+                    x = x.max(adapted.x + adapted.width + 28.0);
+                }
+            }
+            let art_width = (e.rect.width * ratio).min((width - x).max(1.0));
+            scale(e, id, art_width / e.rect.width.max(1.0));
+            let over = e.overrides.get_mut(&id).unwrap().rect.as_mut().unwrap();
+            over.x = x;
+            over.y = y;
+            if e.rect.x.abs() < 1.0 && e.rect.width >= base_width - 1.0 {
+                over.width = width;
+            }
+            if e.children.is_empty() && !matches!(e.kind, ElementKind::Ellipse) {
+                over.height = height;
+            }
+
             if e.rect.x.abs() < 1.0
                 && e.rect.y.abs() < 1.0
                 && e.rect.width >= base_width * 0.8
