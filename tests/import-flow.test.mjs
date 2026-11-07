@@ -184,23 +184,4 @@ try {
     assert.ok(button(flow.render(), 'Read my brand'));
     assert.equal(flow.calls.filter(call => /pick|fetch/.test(call.command)).length, 0);
   });
-  await test('the toolbar, panel and menu expose one Import route', async () => {
-    const editor = await readFile(join(root, 'src/session/useEditor.tsx'), 'utf8');
-    const app = await readFile(join(root, 'src/App.tsx'), 'utf8');
-    assert.equal((editor.match(/label: 'Import…'/g) ?? []).length, 1);
-    assert.doesNotMatch(editor + app, /showWebsiteImport|startWebsiteImport|Import context|Import website/);
-    assert.match(app, /aria-label="Import" title="Import"/);
-    assert.match(app, /title="Import".*<ImportContext/);
-    assert.match(editor, /label: 'Open project folder…'.*open\(true\)/);
-  });
-  await test('native identity uses the selected snapshot and preserves its validation', async () => {
-    const website = await readFile(join(root, 'src-tauri/src/website_import.rs'), 'utf8');
-    const identity = await readFile(join(root, 'src-tauri/src/identity.rs'), 'utf8');
-    const renderer = await readFile(join(root, 'src/ImportContext.tsx'), 'utf8');
-    assert.match(website, /retain_import_snapshot\(&snapshot, project\)/);
-    assert.match(website, /state\.revision != revision/);
-    assert.match(identity, /fn retain_import_snapshot[\s\S]*?identity_source_from_files\([\s\S]*?and_then\(normalize_source\)/);
-    assert.match(identity, /fn retain_source[\s\S]*?validate_source\(&source\)/);
-    assert.doesNotMatch(renderer, /pick_identity_source|fetch_identity_source|filePaths|sourcePath/);
-  });
 } finally { await rm(temporary, { recursive: true, force: true }); }

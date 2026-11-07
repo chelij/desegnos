@@ -1788,4 +1788,71 @@ mod strict_schema_tests {
     fn identity_candidate_schema_conforms_to_strict_structured_output() {
         assert_strict_schema(&candidate_schema(), "identity");
     }
+
+    #[test]
+    fn import_snapshot_builds_and_keeps_a_source_and_rejects_an_invalid_one() {
+        let directory =
+            std::env::temp_dir().join(format!("desegnos-identity-import-{}", Uuid::new_v4()));
+        let mut service = IdentityService::from_directory(directory.clone()).unwrap();
+        let html = "<!doctype html><title>Acme</title><p>We build chairs.</p>";
+        let notes = "Voice: plain and warm.";
+        let snapshot = desegnos_storage::WebsiteSnapshot {
+            name: "Acme site".into(),
+            files: vec![
+                ("index.html".into(), html.as_bytes().to_vec()),
+                ("brand.md".into(), notes.as_bytes().to_vec()),
+            ],
+            pages: Vec::new(),
+            skipped: vec!["hero.png: not needed to read your brand".into()],
+        };
+
+        let retained = service.retain_import_snapshot(&snapshot, None).unwrap();
+        assert_eq!(retained.name, "Acme site");
+        assert_eq!(retained.skipped, snapshot.skipped);
+        let mut files: Vec<(String, usize)> = retained
+            .files
+            .iter()
+            .map(|file| (file.name.clone(), file.text_bytes))
+            .collect();
+        files.sort();
+        let mut expected = vec![
+            ("brand.md".to_string(), notes.len()),
+            ("index.html".to_string(), html.len()),
+        ];
+        expected.sort();
+        assert_eq!(files, expected);
+        let source = service.sources.get(&retained.id).unwrap();
+        assert_eq!(source.name, retained.name);
+        assert_eq!(source.sha256, retained.sha256);
+        assert_eq!(source.files.len(), retained.files.len());
+
+        // A source that fails validation is reported and leaves the retained one intact.
+        let rejected = IdentitySource {
+            id: Uuid::nil(),
+            name: "Rejected site".into(),
+            sha256: String::new(),
+            files: vec![desegnos_storage::IdentitySourceFile {
+                id: Uuid::new_v4(),
+                name: "index.html".into(),
+                text: Some("binary\0text".into()),
+                asset: None,
+                source_page: None,
+            }],
+            skipped: Vec::new(),
+            photos: Vec::new(),
+            pages: Vec::new(),
+        };
+        let reason = service
+            .retain_import_snapshot(&snapshot, Some(rejected))
+            .unwrap_err();
+        assert_eq!(
+            reason,
+            "A frozen identity text source is invalid or oversized."
+        );
+        assert_eq!(service.sources.len(), 1);
+        let source = service.sources.get(&retained.id).unwrap();
+        assert_eq!(source.sha256, retained.sha256);
+        assert_eq!(source.files.len(), retained.files.len());
+        fs::remove_dir_all(directory).unwrap();
+    }
 }
