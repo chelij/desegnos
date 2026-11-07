@@ -22,7 +22,7 @@ const SCALE: f64 = 0.75;
 /// Maximum raster area per shadow, bounding allocation and embedded image size.
 const MAX_SHADOW_PIXELS: u32 = 4_000_000;
 
-pub(super) fn deck(scenes: &[Scene]) -> Vec<u8> {
+pub(super) fn deck(scenes: &[Scene]) -> crate::Result<Vec<u8>> {
     // Content comes first: it is what discovers the pictures and the opacity states the
     // resources dictionary has to hold.
     let mut alphas = Alphas::default();
@@ -41,12 +41,13 @@ pub(super) fn deck(scenes: &[Scene]) -> Vec<u8> {
         };
         page.paint_alpha(scene.background.a);
         set_fill(&mut page.stream, scene.background);
-        let _ = writeln!(
+        writeln!(
             page.stream,
             "0 0 {:.3} {:.3} re f",
             scene.width * SCALE,
             scene.height * SCALE
-        );
+        )
+        .expect("writing to an in-memory buffer");
         page.items(&scene.items);
         streams.push(page.stream);
     }
@@ -102,7 +103,7 @@ pub(super) fn deck(scenes: &[Scene]) -> Vec<u8> {
     }
     for (index, (mime, bytes)) in pictures.iter().enumerate() {
         let id = first_picture + index * 2;
-        let (image, mask) = image_stream(mime, bytes, id + 1);
+        let (image, mask) = image_stream(mime, bytes, id + 1)?;
         writer.stream(id, image, true);
         if let Some(mask) = mask {
             writer.stream(id + 1, mask, true);
@@ -135,7 +136,7 @@ pub(super) fn deck(scenes: &[Scene]) -> Vec<u8> {
             format!("<< /Type /ExtGState /ca {alpha:.3} /CA {alpha:.3} >>"),
         );
     }
-    writer.finish()
+    Ok(writer.finish())
 }
 
 /// The opacity states one deck needs, rounded so the same product reuses one state.
@@ -202,7 +203,7 @@ impl Page<'_> {
         if let Some((stroke, width)) = shape.stroke {
             self.paint_alpha(stroke.a);
             set_stroke(&mut self.stream, stroke);
-            let _ = write!(self.stream, "{:.3} w ", width * SCALE);
+            write!(self.stream, "{:.3} w ", width * SCALE).expect("writing to an in-memory buffer");
             write_path(&mut self.stream, scene, path);
             self.stream.push_str("S\n");
         }
@@ -222,7 +223,7 @@ impl Page<'_> {
         let height = intrinsic_height * scale;
         let x = picture.x - (width - picture.width) / 2.0;
         let y = picture.y - (height - picture.height) / 2.0;
-        let _ = write!(
+        write!(
             self.stream,
             "q\n{:.3} {:.3} {:.3} {:.3} re W n\n{:.3} 0 0 {:.3} {:.3} {:.3} cm\n/Im{index} Do\nQ\n",
             picture.x * SCALE,
@@ -233,7 +234,8 @@ impl Page<'_> {
             height * SCALE,
             x * SCALE,
             pdf_y(self.scene, y + height)
-        );
+        )
+        .expect("writing to an in-memory buffer");
     }
 
     fn shadow(&mut self, shadow: &Shadow) {
@@ -263,14 +265,15 @@ impl Page<'_> {
                 let padding = shadow.blur * 1.5;
                 let width = f64::from(image.width) / image.scale;
                 let height = f64::from(image.height) / image.scale;
-                let _ = writeln!(
+                writeln!(
                     self.stream,
                     "{:.6} 0 0 {:.6} {:.6} {:.6} cm\n/Sh{index} Do",
                     width * SCALE,
                     height * SCALE,
                     (bounds.x - padding) * SCALE,
                     pdf_y(scene, bounds.y - padding + height)
-                );
+                )
+                .expect("writing to an in-memory buffer");
             }
         }
         self.stream.push_str("Q\n");
@@ -305,7 +308,7 @@ impl Page<'_> {
             return;
         }
         let index = self.alphas.index(value);
-        let _ = writeln!(self.stream, "/GS{index} gs");
+        writeln!(self.stream, "/GS{index} gs").expect("writing to an in-memory buffer");
         self.current = value;
     }
 }
@@ -448,12 +451,12 @@ impl ShadowImage {
 
 fn set_fill(stream: &mut String, colour: Rgba) {
     let (r, g, b) = colour.components();
-    let _ = write!(stream, "{r:.3} {g:.3} {b:.3} rg ");
+    write!(stream, "{r:.3} {g:.3} {b:.3} rg ").expect("writing to an in-memory buffer");
 }
 
 fn set_stroke(stream: &mut String, colour: Rgba) {
     let (r, g, b) = colour.components();
-    let _ = write!(stream, "{r:.3} {g:.3} {b:.3} RG ");
+    write!(stream, "{r:.3} {g:.3} {b:.3} RG ").expect("writing to an in-memory buffer");
 }
 
 /// The canvas transform about its centre, with PDF's upward Y axis.
@@ -468,27 +471,30 @@ fn write_transform(stream: &mut String, scene: &Scene, transform: &LayerTransfor
     // The translation stays in layer coordinates; PDF's Y axis points the other way.
     let e = cx - a * cx - c * cy + transform.tx * SCALE;
     let f = cy - b * cx - d * cy - transform.ty * SCALE;
-    let _ = writeln!(stream, "{a:.6} {b:.6} {c:.6} {d:.6} {e:.6} {f:.6} cm");
+    writeln!(stream, "{a:.6} {b:.6} {c:.6} {d:.6} {e:.6} {f:.6} cm")
+        .expect("writing to an in-memory buffer");
 }
 
 fn write_path(stream: &mut String, scene: &Scene, path: &Path) {
     for segment in &path.segments {
         match segment {
             Segment::Move(point) => {
-                let _ = write!(
+                write!(
                     stream,
                     "{:.3} {:.3} m ",
                     point.x * SCALE,
                     pdf_y(scene, point.y)
-                );
+                )
+                .expect("writing to an in-memory buffer");
             }
             Segment::Line(point) => {
-                let _ = write!(
+                write!(
                     stream,
                     "{:.3} {:.3} l ",
                     point.x * SCALE,
                     pdf_y(scene, point.y)
-                );
+                )
+                .expect("writing to an in-memory buffer");
             }
             // PDF has no quadratic curves; each is raised to an equivalent cubic.
             Segment::Quad(control, point) => {
@@ -502,7 +508,7 @@ fn write_path(stream: &mut String, scene: &Scene, path: &Path) {
                     point.x + 2.0 / 3.0 * (control.x - point.x),
                     point.y + 2.0 / 3.0 * (control.y - point.y),
                 );
-                let _ = write!(
+                write!(
                     stream,
                     "{:.3} {:.3} {:.3} {:.3} {:.3} {:.3} c ",
                     c1.0 * SCALE,
@@ -511,10 +517,11 @@ fn write_path(stream: &mut String, scene: &Scene, path: &Path) {
                     pdf_y(scene, c2.1),
                     point.x * SCALE,
                     pdf_y(scene, point.y)
-                );
+                )
+                .expect("writing to an in-memory buffer");
             }
             Segment::Cubic(first, second, point) => {
-                let _ = write!(
+                write!(
                     stream,
                     "{:.3} {:.3} {:.3} {:.3} {:.3} {:.3} c ",
                     first.x * SCALE,
@@ -523,7 +530,8 @@ fn write_path(stream: &mut String, scene: &Scene, path: &Path) {
                     pdf_y(scene, second.y),
                     point.x * SCALE,
                     pdf_y(scene, point.y)
-                );
+                )
+                .expect("writing to an in-memory buffer");
             }
             Segment::Close => stream.push_str("h "),
         }
@@ -576,7 +584,11 @@ fn picture_dimensions(mime: &str, bytes: &[u8]) -> Option<(f64, f64)> {
 }
 
 /// A picture as a deflated RGB XObject, with a grayscale soft mask when it has transparency.
-fn image_stream(mime: &str, bytes: &[u8], mask_id: usize) -> (Vec<u8>, Option<Vec<u8>>) {
+fn image_stream(
+    mime: &str,
+    bytes: &[u8],
+    mask_id: usize,
+) -> crate::Result<(Vec<u8>, Option<Vec<u8>>)> {
     let decoded = image::load_from_memory(bytes).ok().or_else(|| {
         // The canvas renderer already supports SVG and GIF via resvg. The image crate's
         // configured codecs do not, so use that same renderer for these PDF pictures.
@@ -601,16 +613,20 @@ fn image_stream(mime: &str, bytes: &[u8], mask_id: usize) -> (Vec<u8>, Option<Ve
                 alpha,
             )
         }
-        None => (1, 1, vec![0_u8, 0, 0], None),
+        None => {
+            return Err(crate::Error(format!(
+                "Cannot decode {mime} picture for PDF export."
+            )));
+        }
     };
     let extra = alpha
         .as_ref()
         .map_or(String::new(), |_| format!(" /SMask {mask_id} 0 R"));
     let mask = alpha.map(|alpha| raster_stream(width, height, "DeviceGray", &alpha, ""));
-    (
+    Ok((
         raster_stream(width, height, "DeviceRGB", &rgb, &extra),
         mask,
-    )
+    ))
 }
 
 /// A deflated image stream; a shadow's RGB image references its grayscale soft mask.
@@ -654,7 +670,8 @@ impl Writer {
         if complete {
             bytes.extend_from_slice(&body);
         } else {
-            let _ = write!(bytes, "<< /Length {} >>\nstream\n", body.len());
+            write!(bytes, "<< /Length {} >>\nstream\n", body.len())
+                .expect("writing to an in-memory buffer");
             let mut body = body;
             bytes.append(&mut body);
             bytes.extend_from_slice(b"\nendstream");
@@ -768,7 +785,7 @@ mod tests {
                 items: vec![Item::Picture(moved)],
             }),
         ]);
-        let pdf = deck(&[page]);
+        let pdf = deck(&[page]).unwrap();
         assert_eq!(String::from_utf8_lossy(&pdf).matches("/SMask ").count(), 2);
         let directory =
             std::env::temp_dir().join(format!("desegnos-pdf-alpha-{}", uuid::Uuid::new_v4()));
@@ -833,7 +850,7 @@ mod tests {
             ("image/gif", gif.as_slice(), (1.0, 1.0), vec![255, 255, 255]),
         ] {
             assert_eq!(picture_dimensions(mime, bytes), Some(expected_size));
-            let (stream, mask) = image_stream(mime, bytes, 99);
+            let (stream, mask) = image_stream(mime, bytes, 99).unwrap();
             assert!(mask.is_none());
             let start = stream
                 .windows(7)
@@ -902,7 +919,7 @@ mod tests {
                 items: vec![Item::Shadow(moved)],
             }),
         ]);
-        let pdf = deck(&[page.clone(), page]);
+        let pdf = deck(&[page.clone(), page]).unwrap();
         let content = String::from_utf8_lossy(&pdf);
         assert_eq!(content.matches("/SMask ").count(), 1);
         assert_eq!(content.matches("/Subtype /Image").count(), 2);
@@ -920,7 +937,7 @@ mod tests {
 
     #[test]
     fn zero_blur_stays_vector() {
-        let pdf = deck(&[scene(vec![Item::Shadow(shadow(0.0))])]);
+        let pdf = deck(&[scene(vec![Item::Shadow(shadow(0.0))])]).unwrap();
         let content = String::from_utf8_lossy(&pdf);
         assert!(!content.contains("/SMask"));
         assert!(!content.contains("/Subtype /Image"));
@@ -982,7 +999,8 @@ mod tests {
             deck(&[scene(vec![
                 Item::Shadow(shadow(20.0)),
                 Item::Shadow(shadow(0.0)),
-            ])]),
+            ])])
+            .unwrap(),
         )
         .unwrap();
         let result = std::process::Command::new("qpdf")

@@ -5,24 +5,21 @@
 //! always come from the model. Pointer fingerprints are SHA-256
 //! digests over each pointer's marked fragments, so later code changes can be spotted.
 use crate::{
-    Element, Error, ExportRecord, ExportedPage, ExportedPointer, GenerationMode, Page, Pointer,
-    PointerSource, PointerTarget, Project, Result, digest, element_subtree, ensure,
+    Element, ElementKind, Error, ExportRecord, ExportedPage, ExportedPointer, GenerationMode, Page,
+    Pointer, PointerSource, PointerTarget, Project, Result, digest, element_subtree, ensure,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
 
-#[path = "web_codegen.rs"]
-mod web_codegen;
-pub(crate) use web_codegen::generic_fallback;
+use crate::web_codegen;
 
-/// Largest single exported file.
 pub const MAX_EXPORT_FILE_BYTES: usize = 4 * 1024 * 1024;
-/// Largest complete export, including pictures.
 pub const MAX_EXPORT_BYTES: usize = 64 * 1024 * 1024;
-/// Most files one export may write.
 pub const MAX_EXPORT_FILES: usize = 2_000;
 /// The schema version of the exported manifest.
+pub(crate) const SLIDES_FILE: &str = "slides.pdf";
+pub(crate) const BEHAVIOURS_FILE: &str = "behaviours.js";
 pub const EXPORT_MANIFEST_VERSION: u32 = 1;
 pub const EXPORT_MANIFEST_FILE: &str = "desegnos-export.json";
 
@@ -74,44 +71,8 @@ pub fn validate_behaviours(behaviours: &BTreeMap<Uuid, ExportBehaviour>) -> Resu
 
 /// IDs, kinds and child order define the DOM contract a behaviour can address.
 pub fn behaviour_fingerprint(project: &Project, pointer: &Pointer) -> String {
-    fn structure(elements: &[Element]) -> serde_json::Value {
-        serde_json::Value::Array(
-            elements
-                .iter()
-                .map(|e| {
-                    let mut hook = serde_json::json!({
-                        "id": e.id, "kind": e.kind.label(),
-                        "inputType": match &e.kind { crate::ElementKind::Input { input_type } => serde_json::to_value(input_type).ok(), _ => None },
-                        "optionCount": match &e.kind { crate::ElementKind::Select { options } => Some(options.len()), _ => None },
-                        "children": structure(&e.children),
-                    });
-                    // These hooks now address the styled label rather than its inner input.
-                    // Preserve cache keys for pages whose DOM contract has not changed.
-                    if matches!(e.kind, crate::ElementKind::Checkbox | crate::ElementKind::Radio) {
-                        hook["controlHook"] = serde_json::json!("label");
-                    }
-                    hook
-                })
-                .collect(),
-        )
-    }
-    let source = match &pointer.from {
-        PointerSource::Element {
-            page_id,
-            element_id,
-            ..
-        } => (*page_id, Some(*element_id)),
-        PointerSource::Boundary { page_id, .. } => (*page_id, None),
-    };
-    let target = match &pointer.to {
-        PointerTarget::Element {
-            page_id,
-            element_id,
-            ..
-        } => Some((*page_id, Some(*element_id))),
-        PointerTarget::Boundary { page_id, .. } => Some((*page_id, None)),
-        _ => None,
-    };
+    let source = pointer.source_endpoint();
+    let target = pointer.target_endpoint();
     let endpoints: Vec<_> = std::iter::once(source)
         .chain(target.filter(|endpoint| *endpoint != source))
         .map(|(id, element_id)| {
@@ -124,7 +85,7 @@ pub fn behaviour_fingerprint(project: &Project, pointer: &Pointer) -> String {
                 } else {
                     &elements
                 };
-                serde_json::json!({"page": id, "path": page.path, "tree": structure(elements)})
+                serde_json::json!({"page": id, "path": page.path, "tree": web_codegen::behaviour_structure(elements)})
             })
         })
         .collect();
@@ -154,9 +115,10 @@ pub struct ExportPagePlan {
     pub name: String,
     pub path: String,
     pub output: crate::OutputType,
-    /// The HTML file, for web pages: `index.html` at the root, `<slug>.html` otherwise.
+    /// The planned primary output: HTML, PNG, or the shared slide deck.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub file: String,
+    pub companion_file: Option<String>,
     pub size_ids: Vec<Uuid>,
 }
 
@@ -425,7 +387,6 @@ pub fn plan_export(project: &Project, page_ids: &[Uuid], job_id: Uuid) -> Result
     let mut pages_json: Vec<serde_json::Value> = Vec::new();
     let mut references_json: Vec<serde_json::Value> = Vec::new();
     let mut allowed_urls: BTreeSet<String> = BTreeSet::new();
-    let ids: BTreeSet<Uuid> = ai_pages.iter().map(|page| page.id).collect();
     let mut linked_ids: BTreeSet<Uuid> = BTreeSet::new();
     for page in &ai_pages {
         let mut sizes = Vec::new();
@@ -441,7 +402,7 @@ pub fn plan_export(project: &Project, page_ids: &[Uuid], job_id: Uuid) -> Result
                 "height": size.height,
                 "kind": size.kind,
                 "elements": elements.iter().map(element_subtree).collect::<Vec<_>>(),
-                "initiallyHiddenIds": initially_hidden_ids(&elements),
+                "initiallyHiddenIds": web_codegen::initially_hidden_ids(&elements),
             }));
         }
         let touching: Vec<&Pointer> = project
@@ -491,7 +452,6 @@ pub fn plan_export(project: &Project, page_ids: &[Uuid], job_id: Uuid) -> Result
             "pointers": pointer_json,
         }));
     }
-    let _ = ids;
     let linked: Vec<serde_json::Value> = project
         .linked
         .values()
@@ -518,20 +478,14 @@ pub fn plan_export(project: &Project, page_ids: &[Uuid], job_id: Uuid) -> Result
     });
     // File names are unique inside the export folder, whichever output a boundary writes.
     let mut used_files: BTreeSet<String> = BTreeSet::new();
-    used_files.insert("slides.pdf".into());
+    used_files.insert(SLIDES_FILE.into());
     let planned_pages: Vec<ExportPagePlan> = chosen
         .iter()
         .map(|page| {
-            let stem = crate::file_stem(&page.path);
             let file = match page.output {
-                crate::OutputType::Webpage | crate::OutputType::AppScreen => unique_file(
-                    &mut used_files,
-                    if page.path == "/" {
-                        "index.html".to_string()
-                    } else {
-                        format!("{stem}.html")
-                    },
-                ),
+                crate::OutputType::Webpage | crate::OutputType::AppScreen => {
+                    unique_file(&mut used_files, page_file(page))
+                }
                 crate::OutputType::Image => {
                     let png = unique_file(
                         &mut used_files,
@@ -541,13 +495,23 @@ pub fn plan_export(project: &Project, page_ids: &[Uuid], job_id: Uuid) -> Result
                     used_files.insert(format!("{svg_stem}.svg"));
                     png
                 }
-                crate::OutputType::Slide => String::new(),
+                crate::OutputType::Slide => SLIDES_FILE.into(),
             };
             ExportPagePlan {
                 page_id: page.id,
                 name: page.name.clone(),
                 path: page.path.clone(),
                 output: page.output,
+                companion_file: match page.output {
+                    crate::OutputType::Webpage | crate::OutputType::AppScreen => Some(unique_file(
+                        &mut used_files,
+                        format!("{}.css", file.trim_end_matches(".html")),
+                    )),
+                    crate::OutputType::Image => {
+                        Some(format!("{}.svg", file.trim_end_matches(".png")))
+                    }
+                    crate::OutputType::Slide => None,
+                },
                 file,
                 size_ids: page.sizes.iter().map(|size| size.id).collect(),
             }
@@ -663,17 +627,6 @@ around it or a trailing period when the old comment has none.";
         page_count: 1,
         warnings: Vec::new(),
     })
-}
-
-fn initially_hidden_ids(elements: &[crate::Element]) -> Vec<Uuid> {
-    let mut ids = Vec::new();
-    for element in elements {
-        if !element.visible {
-            ids.push(element.id);
-        }
-        ids.extend(initially_hidden_ids(&element.children));
-    }
-    ids
 }
 
 fn mode_name(mode: GenerationMode) -> &'static str {
@@ -813,17 +766,13 @@ fn reply_json(text: &str) -> Result<&str> {
 }
 
 pub fn parse_export_reply(plan: &ExportPlan, text: &str) -> Result<ExportReply> {
-    let value: ExportReply = crate::parse_structured_reply(
-        reply_json(text)?,
-        &plan.schema,
-        plan.job_id,
-        &plan.sha256,
-    )
-    .map_err(|error| {
-        Error(format!(
-            "The AI export reply did not match the expected files. {error}"
-        ))
-    })?;
+    let value: ExportReply =
+        crate::parse_structured_reply(reply_json(text)?, &plan.schema, plan.job_id, &plan.sha256)
+            .map_err(|error| {
+            Error(format!(
+                "The AI export reply did not match the expected files. {error}"
+            ))
+        })?;
     validate_export_reply(plan, &value)?;
     Ok(value)
 }
@@ -1138,7 +1087,7 @@ fn deterministic_bundle(
             warnings.push(format!("The picture {} could not be added.", asset.name));
         }
     }
-    web_codegen::render(project, plan, &behaviours, schemes, &mut files);
+    web_codegen::render(project, plan, &behaviours, schemes, &mut files)?;
     if plan.pages.iter().any(|page| page.output.needs_ai()) {
         let mut js = String::new();
         for (id, code) in &behaviours {
@@ -1148,14 +1097,12 @@ fn deterministic_bundle(
                 .iter()
                 .find(|pointer| pointer.id == *id)
                 .expect("cached pointer");
-            let source = match pointer.from {
-                PointerSource::Element { element_id, .. } => element_id,
-                PointerSource::Boundary { page_id, .. } => page_id,
-            };
+            let (page, element) = pointer.source_endpoint();
+            let source = element.unwrap_or(page);
             js.push_str(&format!("/* desegnos-pointer:{id} */\n(() => {{\nif (!document.querySelector('[data-desegnos-id=\"{source}\"]')) return;\n{}\n}})();\n/* /desegnos-pointer:{id} */\n", code.js));
         }
         if !js.is_empty() {
-            files.insert("behaviours.js".into(), js.into_bytes());
+            files.insert(BEHAVIOURS_FILE.into(), js.into_bytes());
         }
     }
     add_direct_outputs(project, plan, &mut files)?;
@@ -1214,15 +1161,16 @@ fn add_direct_outputs(
         for page in &slides {
             render.push(crate::RenderPage::new(project, page, page.base_size_id())?);
         }
-        files.insert("slides.pdf".into(), crate::slide_pdf(project, &render)?);
+        files.insert(
+            plan.pages
+                .iter()
+                .find(|page| page.output == crate::OutputType::Slide)
+                .expect("planned slides")
+                .file
+                .clone(),
+            crate::slide_pdf(project, &render)?,
+        );
     }
-    let mut used_files: BTreeSet<String> = files.keys().map(|name| name.to_lowercase()).collect();
-    used_files.extend(
-        plan.pages
-            .iter()
-            .filter(|page| !page.file.is_empty())
-            .map(|page| page.file.to_lowercase()),
-    );
     for page in plan
         .pages
         .iter()
@@ -1233,19 +1181,15 @@ fn add_direct_outputs(
             .iter()
             .find(|source| source.id == page.page_id)
             .ok_or_else(|| Error("An image boundary in this export no longer exists.".into()))?;
-        let png = if page.file.is_empty() {
-            unique_file(
-                &mut used_files,
-                format!("{}.png", crate::file_stem(&page.name)),
-            )
-        } else {
-            page.file.clone()
-        };
-        let svg = format!("{}.svg", png.trim_end_matches(".png"));
+        let png = page.file.clone();
+        let svg = page
+            .companion_file
+            .as_ref()
+            .ok_or_else(|| Error("The image export plan has no SVG file.".into()))?;
         let elements = crate::resolve_for_size(project, source, source.base_size_id());
         if crate::is_vector_representable(&elements) {
             files.insert(
-                svg,
+                svg.clone(),
                 crate::boundary_svg(project, source, source.base_size_id())?.into_bytes(),
             );
         }
@@ -1483,18 +1427,10 @@ fn is_void(name: &str) -> bool {
 }
 
 fn pointer_touches(pointer: &Pointer, page_id: Uuid) -> bool {
-    let source = match &pointer.from {
-        PointerSource::Element { page_id, .. } | PointerSource::Boundary { page_id, .. } => {
-            *page_id
-        }
-    };
-    let target = match &pointer.to {
-        PointerTarget::Element { page_id, .. } | PointerTarget::Boundary { page_id, .. } => {
-            Some(*page_id)
-        }
-        PointerTarget::Reference { .. } | PointerTarget::Url { .. } => None,
-    };
-    source == page_id || target == Some(page_id)
+    pointer.source_endpoint().0 == page_id
+        || pointer
+            .target_endpoint()
+            .is_some_and(|(page, _)| page == page_id)
 }
 
 fn collect_links(elements: &[Element], ids: &mut BTreeSet<Uuid>) {
@@ -1630,5 +1566,41 @@ pub fn export_manifest(record: &ExportRecord) -> Vec<u8> {
             "comment": pointer.comment,
         })).collect::<Vec<_>>(),
     });
-    serde_json::to_vec_pretty(&value).unwrap_or_default()
+    serde_json::to_vec_pretty(&value).expect("export manifest contains JSON values")
+}
+
+/// A safe file stem for an exported boundary.
+pub fn file_stem(value: &str) -> String {
+    let stem: String = value
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() {
+                character.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .take(64)
+        .collect();
+    let stem = stem.trim_matches('-').to_owned();
+    if stem.is_empty() {
+        "boundary".into()
+    } else {
+        stem
+    }
+}
+
+/// True when every element is a box, group, ellipse, line or text: shapes an SVG can hold
+/// without rasterising anything.
+pub fn is_vector_representable(elements: &[Element]) -> bool {
+    elements.iter().all(|element| {
+        matches!(
+            element.kind,
+            ElementKind::Box
+                | ElementKind::Group
+                | ElementKind::Ellipse
+                | ElementKind::Line
+                | ElementKind::Text
+        ) && is_vector_representable(&element.children)
+    })
 }

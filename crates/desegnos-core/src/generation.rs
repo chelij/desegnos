@@ -1,6 +1,6 @@
 use crate::{
-    Element, ElementKind, ElementLayout, ElementMeta, ElementPatch, ElementStyle, Error, Page,
-    PlayAction, Project, RequestRecord, RequirementsSnapshot, Result, Scope, digest, ensure,
+    Element, ElementKind, ElementLayout, ElementPatch, ElementStyle, Error, Page, PlayAction,
+    Project, RequestRecord, RequirementsSnapshot, Result, Scope, digest, ensure,
     model::validate_text,
 };
 use serde::{Deserialize, Serialize};
@@ -306,14 +306,16 @@ pub struct GenerationCandidate {
     pub criticism: Vec<DesignCriticism>,
 }
 
-impl GenerationCandidate {
-    pub fn from_json(source: &str) -> Result<Self> {
-        Self::from_json_expected(source, None, None)
-    }
+#[derive(Clone, Copy)]
+pub struct GenerationExpectations<'a> {
+    pub job_id: Uuid,
+    pub sha256: &'a str,
+    pub project: Option<&'a Project>,
+}
 
-    /// Restore omitted host echoes while rejecting any supplied stale or foreign identity.
-    pub fn from_json_for_job(source: &str, job_id: Uuid, sha256: &str) -> Result<Self> {
-        Self::from_json_expected(source, Some((job_id, sha256)), None)
+impl GenerationCandidate {
+    pub fn from_json(source: &str) -> GenerationResult<Self> {
+        Self::ingest(source, None, &mut Vec::new())
     }
 
     /// Repair page-targeted layer patches before typed style parsing, which otherwise requires
@@ -323,36 +325,47 @@ impl GenerationCandidate {
         snapshot: &RequirementsSnapshot,
         project: &Project,
         events: &mut Vec<ValidationEvent>,
-    ) -> Result<Self> {
-        Self::from_json_expected(
+    ) -> GenerationResult<Self> {
+        Self::ingest(
             source,
-            Some((snapshot.job_id, &snapshot.sha256)),
-            Some((project, events)),
+            Some(GenerationExpectations {
+                job_id: snapshot.job_id,
+                sha256: &snapshot.sha256,
+                project: Some(project),
+            }),
+            events,
         )
     }
 
-    fn from_json_expected(
+    pub fn ingest(
         source: &str,
-        expected: Option<(Uuid, &str)>,
-        repair: Option<(&Project, &mut Vec<ValidationEvent>)>,
-    ) -> Result<Self> {
+        expectations: Option<GenerationExpectations<'_>>,
+        events: &mut Vec<ValidationEvent>,
+    ) -> GenerationResult<Self> {
         ensure(
             source.len() <= MAX_GENERATION_BYTES,
-            "The generation result exceeds the 8 MiB response limit.",
+            format!(
+                "The generation result exceeds the {} byte response limit.",
+                MAX_GENERATION_BYTES
+            ),
         )?;
         let mut value: serde_json::Value = crate::parse_provider_json(source)
             .map_err(|error| Error(format!("The generation result is invalid: {error}")))?;
-        if let Some((job_id, sha256)) = expected {
-            crate::fill_reply_echoes(&mut value, job_id, sha256)?;
-        }
-        if let Some((project, events)) = repair {
-            normalize_raw_page_patches(&mut value, project, events);
+        let project = expectations.and_then(|expected| expected.project);
+        if let Some(expected) = expectations {
+            crate::fill_reply_echoes(&mut value, expected.job_id, expected.sha256)?;
+            if let Some(project) = expected.project {
+                normalize_raw_page_patches(&mut value, project, events);
+            }
         }
         conform_to_candidate_schema(&mut value);
         drop_null_optional_draft_fields(&mut value);
-        let candidate: Self = serde_json::from_value(value)
+        let mut candidate: Self = serde_json::from_value(value)
             .map_err(|error| Error(format!("The generation result is invalid: {error}")))?;
         candidate.validate_reply_bounds()?;
+        if let Some(project) = project {
+            candidate.normalize_boundary_anchors(project);
+        }
         Ok(candidate)
     }
 
@@ -381,7 +394,10 @@ impl GenerationCandidate {
                         .collect()
                 })
                 .unwrap_or_default();
-            if outcome.element_id.is_some_and(|id| boundary_pages.contains(&id)) {
+            if outcome
+                .element_id
+                .is_some_and(|id| boundary_pages.contains(&id))
+            {
                 outcome.element_id = None;
             }
             // `insert` names a parent layer, and a page is not one, so an insert into the
@@ -404,7 +420,7 @@ impl GenerationCandidate {
         }
     }
 
-    pub(crate) fn validate_bounds(&self) -> Result<()> {
+    pub(crate) fn validate_bounds(&self) -> GenerationResult<()> {
         self.validate_reply_bounds()?;
         let image_keys = self
             .images
@@ -412,12 +428,18 @@ impl GenerationCandidate {
             .map(|image| image.key.to_lowercase())
             .collect();
         for request in &self.requests {
-            validate_operations(&request.operations, &image_keys)?;
+            validate_operations(&request.operations, &image_keys).map_err(|error| {
+                GenerationValidationError {
+                    kind: ValidationFailureKind::Element,
+                    element_id: request.element_id,
+                    message: error.0,
+                }
+            })?;
         }
         Ok(())
     }
 
-    fn validate_reply_bounds(&self) -> Result<()> {
+    fn validate_reply_bounds(&self) -> GenerationResult<()> {
         ensure(
             !self.job_id.is_nil(),
             "The generation job identifier is required.",
@@ -438,11 +460,21 @@ impl GenerationCandidate {
         ensure(
             self.images.len() <= MAX_GENERATED_IMAGES,
             "The generation result exceeds the generated image limit.",
-        )?;
+        )
+        .map_err(|error| GenerationValidationError {
+            kind: ValidationFailureKind::Image,
+            element_id: None,
+            message: error.0,
+        })?;
         ensure(
             self.pointer_classifications.len() <= MAX_POINTER_CLASSIFICATIONS,
             "The generation result exceeds the pointer classification limit.",
-        )?;
+        )
+        .map_err(|error| GenerationValidationError {
+            kind: ValidationFailureKind::Pointer,
+            element_id: None,
+            message: error.0,
+        })?;
         ensure(
             self.decision_proposals.len() <= MAX_DECISION_PROPOSALS,
             "The generation result exceeds the decision proposal limit.",
@@ -451,20 +483,28 @@ impl GenerationCandidate {
             self.criticism.len() <= MAX_DESIGN_CRITICISMS,
             "The generation result exceeds the design feedback limit.",
         )?;
-        let mut image_keys = BTreeSet::new();
-        for image in &self.images {
-            ensure(
-                !image.key.trim().is_empty()
-                    && image.key.chars().count() <= 120
-                    && image_keys.insert(image.key.to_lowercase()),
-                "Generated image keys must be short, nonempty and unique.",
-            )?;
-            validate_text(&image.prompt, "Image prompt", 4000, true)?;
-            ensure(
-                (16..=4096).contains(&image.width) && (16..=4096).contains(&image.height),
-                "A generated image size must be between 16 and 4,096 pixels.",
-            )?;
-        }
+        (|| -> Result<()> {
+            let mut image_keys = BTreeSet::new();
+            for image in &self.images {
+                ensure(
+                    !image.key.trim().is_empty()
+                        && image.key.chars().count() <= 120
+                        && image_keys.insert(image.key.to_lowercase()),
+                    "Generated image keys must be short, nonempty and unique.",
+                )?;
+                validate_text(&image.prompt, "Image prompt", 4000, true)?;
+                ensure(
+                    (16..=4096).contains(&image.width) && (16..=4096).contains(&image.height),
+                    "A generated image size must be between 16 and 4,096 pixels.",
+                )?;
+            }
+            Ok(())
+        })()
+        .map_err(|error| GenerationValidationError {
+            kind: ValidationFailureKind::Image,
+            element_id: None,
+            message: error.0,
+        })?;
         for request in &self.requests {
             validate_text(
                 &request.explanation,
@@ -509,63 +549,33 @@ impl GenerationCandidate {
                 .map_err(|error| Error(error.to_string()))?
                 .len()
                 <= MAX_GENERATION_BYTES,
-            "The generation result exceeds the 8 MiB response limit.",
+            format!(
+                "The generation result exceeds the {} byte response limit.",
+                MAX_GENERATION_BYTES
+            ),
         )
+        .map_err(GenerationValidationError::from)
     }
 
-    fn normalize_page_patches(&mut self, project: &Project, events: &mut Vec<ValidationEvent>) {
-        for outcome in &mut self.requests {
-            let pending = pending_for(project, outcome);
-            let scope = scope_for(project, pending, None);
-            let mut operations = Vec::new();
-            for operation in std::mem::take(&mut outcome.operations) {
-                if let ElementOperation::Update { patches } = operation {
-                    let mut layers = Vec::new();
-                    for patch in patches {
-                        if !scope.boundary_pages.contains(&patch.element_id) {
-                            layers.push(patch);
-                            continue;
-                        }
-                        let background = patch
-                            .style
-                            .as_ref()
-                            .and_then(|style| style.fill.clone())
-                            .filter(|fill| crate::model::valid_swatch(fill));
-                        let recovered = background.is_some();
-                        if recovered {
-                            operations.push(ElementOperation::SetPage {
-                                page_id: patch.element_id,
-                                name: None,
-                                path: None,
-                                background,
-                            });
-                        }
-                        events.push(page_patch_event(project, patch.element_id, recovered));
-                    }
-                    if !layers.is_empty() {
-                        operations.push(ElementOperation::Update { patches: layers });
-                    }
-                } else {
-                    operations.push(operation);
-                }
-            }
-            outcome.operations = operations;
-        }
+    fn normalize(&mut self, project: &Project, events: &mut Vec<ValidationEvent>) -> Result<()> {
+        let mut value = serde_json::to_value(&*self).map_err(|error| Error(error.to_string()))?;
+        normalize_raw_page_patches(&mut value, project, events);
+        *self = serde_json::from_value(value).map_err(|error| Error(error.to_string()))?;
+        self.normalize_boundary_anchors(project);
+        Ok(())
     }
 
     /// Validate page edits first, then keep other valid operations in order, rolling back each
     /// failed operation atomically. Links resolve against the accepted page routes.
-    /// Strict validate/apply still protect all callers from unfiltered candidates.
     pub fn retain_valid_operations(
         &mut self,
         snapshot: &RequirementsSnapshot,
         project: &Project,
         events: &mut Vec<ValidationEvent>,
-    ) -> Result<()> {
+    ) -> GenerationResult<()> {
         self.validate_reply_bounds()?;
         let initial_events = events.len();
-        self.normalize_boundary_anchors(project);
-        self.normalize_page_patches(project, events);
+        self.normalize(project, events)?;
         let source: Vec<_> = self
             .requests
             .iter()
@@ -610,8 +620,8 @@ impl GenerationCandidate {
                 {
                     let mut trial = copy.clone();
                     let mut trial_sources = sources.clone();
-                    let mut element_id = None;
                     let result = validate_operations(std::slice::from_ref(operation), &image_keys)
+                        .map_err(GenerationValidationError::from)
                         .and_then(|()| {
                             apply_operations_with_sources(
                                 &mut trial,
@@ -622,7 +632,6 @@ impl GenerationCandidate {
                                     requests: &self.images,
                                     generated: &BTreeMap::new(),
                                 },
-                                &mut element_id,
                                 &mut trial_sources,
                             )
                         })
@@ -643,7 +652,7 @@ impl GenerationCandidate {
                             .and_then(|()| trial.validate());
                             trial.pointers = pointers;
                             trial.requests = requests;
-                            result
+                            result.map_err(GenerationValidationError::from)
                         });
                     match result {
                         Ok(()) => {
@@ -655,7 +664,7 @@ impl GenerationCandidate {
                         Err(error) => events.push(ValidationEvent {
                             kind: "operation".into(),
                             disposition: "dropped".into(),
-                            element_id,
+                            element_id: error.element_id,
                             message: format!(
                                 "Request {} operation {} ({}) skipped: {error}",
                                 index + 1,
@@ -705,40 +714,39 @@ impl GenerationCandidate {
 
     /// Check the reply against the frozen request: identity, coverage, operation scope,
     /// pointer coverage and bounded text.
-    pub fn validate(&self, snapshot: &RequirementsSnapshot, project: &Project) -> Result<()> {
-        self.check(snapshot, project, &mut None)
-    }
-
-    /// Which existing layer a rejected reply is about, when its failure names one.
-    pub fn rejected_element(
+    pub fn validate(
         &self,
         snapshot: &RequirementsSnapshot,
         project: &Project,
-    ) -> Option<Uuid> {
-        let mut rejected = None;
-        let _ = self.check(snapshot, project, &mut rejected);
-        rejected
+    ) -> GenerationResult<()> {
+        let mut candidate = self.clone();
+        candidate.validate_reply_bounds()?;
+        candidate.normalize(project, &mut Vec::new())?;
+        candidate.check(snapshot, project)
     }
 
-    fn check(
-        &self,
-        snapshot: &RequirementsSnapshot,
-        project: &Project,
-        rejected: &mut Option<Uuid>,
-    ) -> Result<()> {
+    fn check(&self, snapshot: &RequirementsSnapshot, project: &Project) -> GenerationResult<()> {
         self.validate_bounds()?;
         snapshot.validate_current(project)?;
         self.validate_identity(snapshot)?;
-        if let Some(capability) = snapshot
-            .capabilities
-            .as_ref()
-            .and_then(|capabilities| capabilities.image_generation.as_ref())
-        {
-            ensure(
-                self.images.len() <= usize::from(capability.max_images),
-                "The generation result asks for more pictures than this provider can make.",
-            )?;
-        }
+        (|| -> Result<()> {
+            if let Some(capability) = snapshot
+                .capabilities
+                .as_ref()
+                .and_then(|capabilities| capabilities.image_generation.as_ref())
+            {
+                ensure(
+                    self.images.len() <= usize::from(capability.max_images),
+                    "The generation result asks for more pictures than this provider can make.",
+                )?;
+            }
+            Ok(())
+        })()
+        .map_err(|error| GenerationValidationError {
+            kind: ValidationFailureKind::Image,
+            element_id: None,
+            message: error.0,
+        })?;
         let targets = snapshot.target_ids()?;
         let target_elements: BTreeSet<_> = targets.iter().map(|(_, element)| *element).collect();
         let request_ids = snapshot.request_ids()?;
@@ -818,6 +826,7 @@ impl GenerationCandidate {
                 "Design feedback refers to an unrequested layer.",
             )?;
         }
+        (|| -> Result<()> {
         let classifying: BTreeSet<Uuid> = project
             .pointers
             .iter()
@@ -855,6 +864,8 @@ impl GenerationCandidate {
             classified == classifying,
             "The generation result omitted a pointer comment to classify.",
         )?;
+            Ok(())
+        })().map_err(|error| GenerationValidationError { kind: ValidationFailureKind::Pointer, element_id: None, message: error.0 })?;
         // Run the operations on a copy so in-scope edits, ids, images and positions are checked
         // by the same code that later applies them.
         let mut copy = project.clone();
@@ -875,9 +886,7 @@ impl GenerationCandidate {
                                 .map(|(page, _)| *page)
                         })
                     });
-                apply_request(
-                    &mut copy, project, page_id, outcome, self, &generated, rejected,
-                )?;
+                apply_request(&mut copy, project, page_id, outcome, self, &generated)?;
             }
         }
         apply_pointer_classifications(&mut copy, &self.pointer_classifications)?;
@@ -899,48 +908,10 @@ impl GenerationCandidate {
         ))
     }
 
-    pub fn is_ready(&self) -> bool {
-        !self.requests.is_empty()
-            && self
-                .requests
-                .iter()
-                .all(|request| request.status == RequestStatus::Implemented)
-    }
-
-    pub fn can_apply(&self, _snapshot: &RequirementsSnapshot) -> bool {
+    pub fn can_apply(&self) -> bool {
         self.requests
             .iter()
             .any(|request| request.status == RequestStatus::Implemented)
-    }
-
-    pub fn ensure_ready(&self) -> Result<()> {
-        self.validate_bounds()?;
-        if let Some(request) = self
-            .requests
-            .iter()
-            .find(|request| request.status == RequestStatus::Conflict)
-        {
-            return Err(Error(format!(
-                "Resolve the conflict for request {} before applying: {}",
-                request
-                    .request_id
-                    .or(request.element_id)
-                    .map(|id| id.to_string())
-                    .unwrap_or_else(|| "unknown".into()),
-                request.explanation
-            )));
-        }
-        ensure(
-            self.is_ready(),
-            "Resolve every request before applying this generation.",
-        )
-    }
-
-    pub fn implemented_count(&self) -> usize {
-        self.requests
-            .iter()
-            .filter(|request| request.status == RequestStatus::Implemented)
-            .count()
     }
 }
 
@@ -948,7 +919,6 @@ fn validate_operations(
     operations: &[ElementOperation],
     image_keys: &BTreeSet<String>,
 ) -> Result<()> {
-    let mut new_ids = BTreeSet::new();
     for operation in operations {
         match operation {
             ElementOperation::SetPage {
@@ -977,7 +947,7 @@ fn validate_operations(
             }
             ElementOperation::ReplaceChildren { children } => {
                 for child in children {
-                    validate_draft(child, image_keys, &mut new_ids)?;
+                    validate_draft(child, image_keys)?;
                 }
             }
             ElementOperation::SetBehaviour {
@@ -1000,7 +970,7 @@ fn validate_operations(
                 }
             }
             ElementOperation::Insert { element, .. } => {
-                validate_draft(element, image_keys, &mut new_ids)?;
+                validate_draft(element, image_keys)?;
             }
             ElementOperation::Remove { element_id } => ensure(
                 !element_id.is_nil(),
@@ -1013,7 +983,7 @@ fn validate_operations(
                     !page_id.is_nil(),
                     "A boundary insert needs an existing boundary.",
                 )?;
-                validate_draft(element, image_keys, &mut new_ids)?;
+                validate_draft(element, image_keys)?;
             }
             ElementOperation::AddReference { item } => {
                 ensure(
@@ -1035,12 +1005,7 @@ fn validate_operations(
     Ok(())
 }
 
-fn validate_draft(
-    draft: &ElementDraft,
-    image_keys: &BTreeSet<String>,
-    new_ids: &mut BTreeSet<String>,
-) -> Result<()> {
-    let _ = new_ids;
+fn validate_draft(draft: &ElementDraft, image_keys: &BTreeSet<String>) -> Result<()> {
     ensure(
         [
             draft.rect.x,
@@ -1079,7 +1044,7 @@ fn validate_draft(
         "Only a box or a group can hold children.",
     )?;
     for child in &draft.children {
-        validate_draft(child, image_keys, new_ids)?;
+        validate_draft(child, image_keys)?;
     }
     Ok(())
 }
@@ -1135,11 +1100,7 @@ fn build_element(
         kind = ElementKind::Box;
     }
     let mut element = Element {
-        id: Uuid::new_v4(),
-        kind,
         name: draft.name.clone(),
-        link: None,
-        rect: draft.rect,
         rotation: draft.rotation,
         visible: draft.visible,
         locked: draft.locked,
@@ -1154,9 +1115,7 @@ fn build_element(
         },
         url: draft.url.clone(),
         layout: draft.layout.clone(),
-        overrides: BTreeMap::new(),
-        children: vec![],
-        meta: ElementMeta::default(),
+        ..crate::empty_element(kind, draft.rect)
     };
     if placeholder_text.is_none() {
         for child in &draft.children {
@@ -1209,7 +1168,6 @@ fn find_parent_rect(
     None
 }
 
-/// How far outside a box a rectangle may sit before it counts as leaving the box.
 const FIT_TOLERANCE: f64 = 0.5;
 
 fn fits(parent: &crate::Rect, child: &crate::Rect) -> bool {
@@ -1235,12 +1193,12 @@ fn describe_element(element: &Element) -> String {
     describe(element.name.as_deref(), &element.kind, &element.rect)
 }
 
-/// Record the layer a rejection is about, so it reaches the validation event.
-fn reject(rejected: &mut Option<Uuid>, element: Option<Uuid>, message: String) -> Error {
-    if element.is_some() {
-        *rejected = element;
+fn reject(element_id: Option<Uuid>, message: String) -> GenerationValidationError {
+    GenerationValidationError {
+        kind: ValidationFailureKind::Element,
+        element_id,
+        message,
     }
-    Error(message)
 }
 
 /// What one reply outcome may change. Element targets grant their subtree plus what their
@@ -1424,8 +1382,7 @@ fn apply_operations(
     operations: &[ElementOperation],
     candidate: &GenerationCandidate,
     generated: &BTreeMap<String, Uuid>,
-    rejected: &mut Option<Uuid>,
-) -> Result<BTreeSet<Uuid>> {
+) -> GenerationResult<BTreeSet<Uuid>> {
     apply_operations_with_sources(
         project,
         scope,
@@ -1435,7 +1392,6 @@ fn apply_operations(
             requests: &candidate.images,
             generated,
         },
-        rejected,
         &mut Vec::new(),
     )
 }
@@ -1451,9 +1407,8 @@ fn apply_operations_with_sources(
     anchor: Option<Uuid>,
     operations: &[ElementOperation],
     image_sources: OperationImages<'_>,
-    rejected: &mut Option<Uuid>,
     behaviour_sources: &mut Vec<crate::PointerSource>,
-) -> Result<BTreeSet<Uuid>> {
+) -> GenerationResult<BTreeSet<Uuid>> {
     let images: BTreeMap<String, String> = image_sources
         .requests
         .iter()
@@ -1528,7 +1483,6 @@ fn apply_operations_with_sources(
                 for element in &built {
                     if !fits(&parent_rect, &element.rect) {
                         return Err(reject(
-                            rejected,
                             Some(target),
                             format!(
                                 "A generated element must stay inside its frame: {} does not fit its {}x{} frame.",
@@ -1593,7 +1547,8 @@ fn apply_operations_with_sources(
                 } else {
                     return Err(Error(
                         "A boundary behaviour needs a request in one boundary.".into(),
-                    ));
+                    )
+                    .into());
                 };
                 let existing = project
                     .pointers
@@ -1654,7 +1609,6 @@ fn apply_operations_with_sources(
                         && !fits(&parent_rect, rect)
                     {
                         return Err(reject(
-                            rejected,
                             Some(patch.element_id),
                             format!(
                                 "A generated element must stay inside its parent: {} does not fit its {}x{} parent.",
@@ -1692,7 +1646,6 @@ fn apply_operations_with_sources(
                 let built = build_element(element, image_sources.generated, &images)?;
                 if !fits(&parent_rect, &built.rect) {
                     return Err(reject(
-                        rejected,
                         Some(*parent_id),
                         format!(
                             "A generated element must stay inside its parent: {} does not fit its {}x{} parent.",
@@ -1766,7 +1719,6 @@ fn apply_operations_with_sources(
                     && output == crate::OutputType::Webpage;
                 if outside_width || built.rect.y < 0.0 || (outside_height && !grows) {
                     return Err(reject(
-                        rejected,
                         None,
                         format!(
                             "A generated element must stay inside its boundary: {} does not fit its {}x{} boundary.",
@@ -1800,7 +1752,6 @@ fn apply_operations_with_sources(
                     && !area_allows(area, &built.rect)
                 {
                     return Err(reject(
-                        rejected,
                         None,
                         format!(
                             "A generated element must stay inside the request area: {} is outside it.",
@@ -1821,7 +1772,6 @@ fn apply_operations_with_sources(
                     })?;
                 if !area_allows(area, &item.rect) {
                     return Err(reject(
-                        rejected,
                         None,
                         format!(
                             "A generated reference item must stay inside the request area: the item at {},{} sized {}x{} is outside it.",
@@ -2084,7 +2034,7 @@ fn apply_page_operations(
     project: &mut Project,
     original: &Project,
     candidate: &GenerationCandidate,
-) -> Result<()> {
+) -> GenerationResult<()> {
     for outcome in &candidate.requests {
         if outcome.status != RequestStatus::Implemented {
             continue;
@@ -2107,7 +2057,6 @@ fn apply_page_operations(
             &operations,
             candidate,
             &BTreeMap::new(),
-            &mut None,
         )?;
     }
     Ok(())
@@ -2201,8 +2150,7 @@ fn apply_request(
     request: &RequestOutcome,
     candidate: &GenerationCandidate,
     generated: &BTreeMap<String, Uuid>,
-    rejected: &mut Option<Uuid>,
-) -> Result<()> {
+) -> GenerationResult<()> {
     if !matches!(request.status, RequestStatus::Implemented) {
         return Ok(());
     }
@@ -2232,7 +2180,6 @@ fn apply_request(
         &operations,
         candidate,
         generated,
-        rejected,
     )?;
     if let Some(pending) = &pending {
         let outcome = if request.explanation.trim().is_empty() {
@@ -2252,14 +2199,7 @@ fn apply_request(
         project.requests.retain(|item| item.id != pending.id);
         if !untouched.is_empty() && pending.boundary_retry_order.is_empty() {
             let mut remaining = pending.clone();
-            remaining.boundary_retry_order = pending
-                .targets
-                .iter()
-                .filter_map(|target| match target {
-                    crate::RequestTarget::Boundary { page, .. } => Some(*page),
-                    _ => None,
-                })
-                .collect();
+            remaining.boundary_retry_order = pending.boundary_order();
             remaining.targets.retain(|target| {
                 matches!(target,
                 crate::RequestTarget::Boundary { page, .. } if untouched.contains(page))
@@ -2304,7 +2244,11 @@ pub fn apply_generation_output(
     accepted_decision_indices: &[usize],
     generated_pictures: &BTreeMap<String, String>,
 ) -> Result<Project> {
+    let mut candidate = candidate.clone();
+    candidate.validate_reply_bounds()?;
+    candidate.normalize(project, &mut Vec::new())?;
     candidate.validate(snapshot, project)?;
+    let candidate = &candidate;
     let mut next = project.clone();
     next.store_request_pictures(&snapshot.request_ids()?)?;
     next.revision = next
@@ -2325,7 +2269,6 @@ pub fn apply_generation_output(
             .insert(picture, std::sync::Arc::from(uri.as_str()));
         generated.insert(image.key.to_lowercase(), picture);
     }
-    let targets = snapshot.target_ids()?;
     apply_page_operations(&mut next, project, candidate)?;
     for request in &candidate.requests {
         if request.status != RequestStatus::Implemented {
@@ -2340,11 +2283,8 @@ pub fn apply_generation_output(
                     .element_id
                     .and_then(|id| next.element(id).map(|(page, _)| page.id))
             });
-        apply_request(
-            &mut next, project, page_id, request, candidate, &generated, &mut None,
-        )?;
+        apply_request(&mut next, project, page_id, request, candidate, &generated)?;
     }
-    let _ = targets;
     apply_pointer_classifications(&mut next, &candidate.pointer_classifications)?;
     for index in accepted_decision_indices {
         let proposal = candidate
@@ -2382,7 +2322,7 @@ pub fn apply_generation_output(
         crate::elements::assign_default_names(&mut page.elements, &mut used);
     }
     next.validate()?;
-    crate::render::sync_fit_rects(&mut next);
+    crate::text_layout::sync_fit_rects(&mut next);
     crate::adapt::adapt_changed_pages(project, &mut next)?;
     next.validate()?;
     Ok(next)
@@ -2589,7 +2529,9 @@ fn schema_allows_empty(
         return false;
     }
     // An explicit type or literal constraint must establish that the value is safe.
-    if (schema.get("type").is_none() && schema.get("enum").is_none() && schema.get("const").is_none())
+    if (schema.get("type").is_none()
+        && schema.get("enum").is_none()
+        && schema.get("const").is_none())
         || !value_fits_type(value, schema)
     {
         return false;
@@ -2716,7 +2658,10 @@ fn value_fits_type(value: &serde_json::Value, schema: &serde_json::Value) -> boo
 /// An empty string is only substituted where the schema does not rule it out: a const, an enum
 /// without `""`, a positive minimum length or any pattern can all forbid it.
 fn empty_string_is_allowed(schema: &serde_json::Value) -> bool {
-    if schema.get("const").is_some_and(|value| value.as_str() != Some("")) {
+    if schema
+        .get("const")
+        .is_some_and(|value| value.as_str() != Some(""))
+    {
         return false;
     }
     if let Some(values) = schema.get("enum").and_then(serde_json::Value::as_array)
@@ -2908,22 +2853,55 @@ pub struct ValidationEvent {
     pub message: String,
 }
 
-/// A stable label for a validation failure message.
-pub fn validation_failure_kind(message: &str) -> &'static str {
-    let message = message.to_ascii_lowercase();
-    if message.contains("image") {
-        "image"
-    } else if message.contains("pointer") {
-        "pointer"
-    } else if message.contains("layer") || message.contains("element") {
-        "element"
-    } else {
-        "replyStructure"
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ValidationFailureKind {
+    ReplyStructure,
+    Image,
+    Pointer,
+    Element,
+}
+impl ValidationFailureKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ReplyStructure => "replyStructure",
+            Self::Image => "image",
+            Self::Pointer => "pointer",
+            Self::Element => "element",
+        }
     }
 }
+#[derive(Debug, Clone)]
+pub struct GenerationValidationError {
+    pub kind: ValidationFailureKind,
+    pub element_id: Option<Uuid>,
+    pub message: String,
+}
+impl std::fmt::Display for GenerationValidationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+impl std::error::Error for GenerationValidationError {}
+impl From<Error> for GenerationValidationError {
+    fn from(error: Error) -> Self {
+        Self {
+            kind: ValidationFailureKind::ReplyStructure,
+            element_id: None,
+            message: error.0,
+        }
+    }
+}
+impl From<GenerationValidationError> for Error {
+    fn from(error: GenerationValidationError) -> Self {
+        Self(error.message)
+    }
+}
+pub fn validation_failure_kind(error: &GenerationValidationError) -> &'static str {
+    error.kind.as_str()
+}
+type GenerationResult<T> = std::result::Result<T, GenerationValidationError>;
 
-/// The provider reply schema for a frozen request.
-pub fn result_schema(_snapshot: &RequirementsSnapshot) -> serde_json::Value {
+pub fn result_schema() -> serde_json::Value {
     let mut schema = candidate_schema();
     schema["properties"]["requests"]["description"] = serde_json::json!(
         "Deliver every requested layer exactly once. A conflict must not withhold other ready layers."

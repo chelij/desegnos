@@ -1,3 +1,7 @@
+mod web_codegen;
+mod geometry;
+mod text_layout;
+mod element_style;
 mod adapt;
 mod attachments;
 mod dossier;

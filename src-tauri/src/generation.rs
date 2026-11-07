@@ -140,7 +140,7 @@ fn candidate_status(text: &str, record: &mut JobRecord, original: &Project) -> J
     });
     match checked {
         Ok((candidate, Ok(()))) => {
-            let ready = candidate.can_apply(&record.view.requirements);
+            let ready = candidate.can_apply();
             record.view.message = if ready {
                 "Result ready to apply.".into()
             } else {
@@ -153,13 +153,13 @@ fn candidate_status(text: &str, record: &mut JobRecord, original: &Project) -> J
                 JobStatus::Blocked
             }
         }
-        Ok((candidate, Err(error))) => {
-            let element_id = candidate.rejected_element(&record.view.requirements, original);
+        Ok((_, Err(error))) => {
+            let element_id = error.element_id;
             record
                 .view
                 .validation_events
                 .push(desegnos_core::ValidationEvent {
-                    kind: desegnos_core::validation_failure_kind(&error.to_string()).into(),
+                    kind: desegnos_core::validation_failure_kind(&error).into(),
                     disposition: "conflicted".into(),
                     element_id,
                     message: error.to_string(),
@@ -174,7 +174,7 @@ fn candidate_status(text: &str, record: &mut JobRecord, original: &Project) -> J
                 .view
                 .validation_events
                 .push(desegnos_core::ValidationEvent {
-                    kind: desegnos_core::validation_failure_kind(&error.to_string()).into(),
+                    kind: desegnos_core::validation_failure_kind(&error).into(),
                     disposition: "conflicted".into(),
                     element_id: None,
                     message: error.to_string(),
@@ -1297,7 +1297,7 @@ impl GenerationService {
         };
         let view = record.view;
         if record.version != 1
-            || view.requirements.format_version().is_err()
+            || view.requirements.validate_format().is_err()
             || view.project_id != project_id
             || view.job_id != job_id
             || view.requirements.project_id != project_id
@@ -1630,7 +1630,7 @@ impl GenerationService {
             return Ok(None);
         };
         if record.version != 1
-            || record.view.requirements.format_version().is_err()
+            || record.view.requirements.validate_format().is_err()
             || record.view.project_id != project.id
             || record.view.job_id != latest.job_id
             || record.view.requirements.project_id != project.id
@@ -1712,7 +1712,7 @@ impl GenerationService {
                 .view
                 .candidate
                 .as_ref()
-                .is_some_and(|candidate| candidate.can_apply(record.view.request_requirements()))
+                .is_some_and(|candidate| candidate.can_apply())
             && resolve_current(&record.view, project).is_ok()
         {
             record.view.message = "Result ready to apply.".into();
@@ -1820,7 +1820,7 @@ impl GenerationService {
                 authentication,
                 &requirements,
                 project.generation_mode,
-                &desegnos_core::result_schema(&requirements),
+                &desegnos_core::result_schema(),
                 &settings,
             )
             .map_err(message)?
@@ -1941,7 +1941,7 @@ impl GenerationService {
                 record.view.authentication,
                 &record.view.requirements,
                 record.view.generation_mode,
-                &desegnos_core::result_schema(&record.view.requirements),
+                &desegnos_core::result_schema(),
                 &record.view.settings,
             )
             .map_err(message)?;
@@ -3290,7 +3290,7 @@ async fn submit(
                 let account_model = account_model.clone();
                 let api_model = api_model.clone();
                 async move {
-                    let schema = desegnos_core::result_schema(&requirements);
+                    let schema = desegnos_core::result_schema();
                     if let Some(model) = &account_model {
                         let estimate = client_ref.estimate(
                             request_ref.authentication,

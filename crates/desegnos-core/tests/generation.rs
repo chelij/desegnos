@@ -347,10 +347,8 @@ fn assert_strict_schema(schema: &serde_json::Value, path: &str) {
 
 #[test]
 fn reply_schemas_conform_to_strict_structured_output() {
-    let (project, ..) = setup();
-    let snapshot = project.prepare_requirements().unwrap();
     assert_strict_schema(&desegnos_core::candidate_schema(), "schema");
-    assert_strict_schema(&desegnos_core::result_schema(&snapshot), "schema");
+    assert_strict_schema(&desegnos_core::result_schema(), "schema");
 }
 
 #[test]
@@ -1171,7 +1169,7 @@ fn a_layer_that_leaves_its_parent_names_the_parent_in_the_rejection() {
         error.contains("Panel (Box) at 0,180 sized 300x100"),
         "{error}"
     );
-    assert_eq!(reply.rejected_element(&snapshot, &project), Some(target));
+    assert_eq!(reply.validate(&snapshot, &project).unwrap_err().element_id, Some(target));
 }
 
 #[test]
@@ -1282,7 +1280,7 @@ fn several_boundary_behaviours_in_one_reply_all_survive() {
 fn missing_host_echoes_and_summary_are_restored() {
     let job_id = Uuid::new_v4();
     let sha = "a".repeat(64);
-    let parsed = GenerationCandidate::from_json_for_job(
+    let parsed = parse_for_job(
         r#"{"requests":[{"status":"implemented","operations":[]}]}"#,
         job_id,
         &sha,
@@ -1305,7 +1303,7 @@ fn supplied_foreign_or_malformed_host_echoes_are_rejected() {
     ] {
         let mut reply = json!({"requests": []});
         reply[key] = value;
-        assert!(GenerationCandidate::from_json_for_job(&reply.to_string(), job_id, &sha).is_err());
+        assert!(parse_for_job(&reply.to_string(), job_id, &sha).is_err());
     }
 }
 
@@ -1313,7 +1311,7 @@ fn supplied_foreign_or_malformed_host_echoes_are_rejected() {
 fn missing_required_array_and_nullable_property_are_filled() {
     let reply = json!({"requests": [{"status":"implemented", "explanation":"Done"}]});
     let parsed =
-        GenerationCandidate::from_json_for_job(&reply.to_string(), Uuid::new_v4(), &"a".repeat(64))
+        parse_for_job(&reply.to_string(), Uuid::new_v4(), &"a".repeat(64))
             .unwrap();
     assert!(parsed.requests[0].operations.is_empty());
     assert_eq!(parsed.requests[0].element_id, None);
@@ -1326,7 +1324,7 @@ fn missing_required_number_is_not_invented() {
         "element":{"kind":"text", "rect":{"y":0,"width":200,"height":40}, "text":"Hello"}
     }]}]});
     let error =
-        GenerationCandidate::from_json_for_job(&reply.to_string(), Uuid::new_v4(), &"a".repeat(64))
+        parse_for_job(&reply.to_string(), Uuid::new_v4(), &"a".repeat(64))
             .unwrap_err()
             .to_string();
     assert!(error.contains("missing field `x`"), "{error}");
@@ -1422,7 +1420,7 @@ fn one_invalid_operation_is_dropped_while_other_operations_apply() {
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].disposition, "dropped");
     assert!(events[0].message.contains("one boundary"));
-    assert!(reply.can_apply(&snapshot));
+    assert!(reply.can_apply());
     let applied =
         apply_generation_output(&project, &snapshot, &reply, &[], &BTreeMap::new()).unwrap();
     for page_id in pages {
@@ -1648,7 +1646,7 @@ fn operation_bounds_errors_reach_recovery_instead_of_rejecting_during_json_parsi
             below_the_fold(pages[1], 0.0, 40.0, "Lineup")
         ]),
     );
-    let mut reply = GenerationCandidate::from_json_for_job(
+    let mut reply = parse_for_job(
         &serde_json::to_string(&original).unwrap(),
         snapshot.job_id,
         &snapshot.sha256,
@@ -2034,4 +2032,8 @@ fn generated_children_are_adapted_in_the_generation_undo_step() {
     session.undo(|_| Ok(())).unwrap();
     assert!(session.project().element(target).unwrap().1.children.is_empty());
     assert_eq!(session.project().pages, project.pages);
+}
+
+fn parse_for_job(source: &str, job_id: Uuid, sha256: &str) -> std::result::Result<GenerationCandidate, desegnos_core::GenerationValidationError> {
+    GenerationCandidate::ingest(source, Some(desegnos_core::GenerationExpectations { job_id, sha256, project: None }), &mut Vec::new())
 }

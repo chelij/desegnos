@@ -5,7 +5,7 @@
 //! It never fetches, writes or runs page code. Images arrive as picture ids resolved by the
 //! native layer through the ordinary project picture store.
 use crate::{
-    BoundaryKind, Element, ElementKind, ElementLayout, ElementMeta, ElementOverride, ElementShadow,
+    BoundaryKind, Element, ElementKind, ElementLayout, ElementOverride, ElementShadow,
     ElementStroke, ElementStyle, ElementTextStyle, InputType, OutputType, Page, PageSize, Pointer,
     PointerSource, PointerTarget, Project, Rect, ReferenceItem, ReferenceKind, Result, SizingMode,
     StackAlign, StackDirection, StackJustify, TextAlign, ensure,
@@ -91,78 +91,40 @@ pub struct WebAttributes {
     pub name: Option<String>,
 }
 
-fn one() -> f64 {
-    1.0
-}
-fn font_size() -> f64 {
-    16.0
-}
-fn font_weight() -> f64 {
-    400.0
-}
-fn line_height() -> f64 {
-    1.4
-}
-
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 pub struct WebStyles {
-    #[serde(default)]
     pub background: String,
-    #[serde(default)]
     pub color: String,
-    #[serde(default)]
     pub border_color: String,
-    #[serde(default)]
     pub border_width: f64,
-    #[serde(default)]
     pub radius: f64,
-    #[serde(default = "one")]
     pub opacity: f64,
-    #[serde(default)]
     pub shadow_x: f64,
-    #[serde(default)]
     pub shadow_y: f64,
-    #[serde(default)]
     pub shadow_blur: f64,
-    #[serde(default)]
     pub shadow_color: String,
-    #[serde(default)]
     pub font_family: String,
-    #[serde(default = "font_size")]
     pub font_size: f64,
-    #[serde(default = "font_weight")]
     pub font_weight: f64,
-    #[serde(default)]
     pub italic: bool,
-    #[serde(default = "line_height")]
     pub line_height: f64,
-    #[serde(default)]
     pub letter_spacing: f64,
-    #[serde(default)]
     pub align: String,
-    #[serde(default)]
     pub display: String,
-    #[serde(default)]
     pub direction: String,
-    #[serde(default)]
     pub row_gap: f64,
-    #[serde(default)]
     pub column_gap: f64,
-    #[serde(default)]
     pub padding: f64,
-    #[serde(default)]
     pub columns: u32,
-    #[serde(default)]
     pub align_items: String,
-    #[serde(default)]
     pub justify_content: String,
-    #[serde(default)]
     pub wrap: bool,
 }
 
 impl Default for WebStyles {
     fn default() -> Self {
+        let text = ElementTextStyle::default();
         Self {
             background: String::new(),
             color: String::new(),
@@ -175,10 +137,10 @@ impl Default for WebStyles {
             shadow_blur: 0.0,
             shadow_color: String::new(),
             font_family: String::new(),
-            font_size: 16.0,
-            font_weight: 400.0,
+            font_size: text.size,
+            font_weight: f64::from(text.weight),
             italic: false,
-            line_height: 1.4,
+            line_height: text.line_height,
             letter_spacing: 0.0,
             align: String::new(),
             display: String::new(),
@@ -466,7 +428,7 @@ fn text_style(styles: &WebStyles) -> ElementTextStyle {
         italic: styles.italic,
         line_height: styles.line_height.clamp(0.5, 4.0),
         letter_spacing: styles.letter_spacing.clamp(-20.0, 100.0),
-        color: parse_colour(&styles.color).unwrap_or_else(|| "#1a1a1a".into()),
+        color: parse_colour(&styles.color).unwrap_or_else(|| ElementTextStyle::default().color),
         align: text_align(&styles.align),
         decoration: None,
     }
@@ -732,7 +694,10 @@ impl Converter<'_> {
         path: &mut Vec<usize>,
         depth: usize,
     ) -> Vec<Element> {
-        if depth > 28 || self.element_count >= crate::MAX_ELEMENTS {
+        // Conversion can add wrappers around a captured DOM node.
+        if depth > crate::MAX_ELEMENT_DEPTH.saturating_sub(4)
+            || self.element_count >= crate::MAX_ELEMENTS
+        {
             return vec![];
         }
         let tag = node.tag.trim().to_ascii_lowercase();
@@ -761,21 +726,10 @@ impl Converter<'_> {
             };
             return [Element {
                 id: self.element_id(path, &tag),
-                kind: ElementKind::Image,
-                name: None,
-                link: None,
-                rect: local,
-                rotation: 0.0,
-                visible: true,
-                locked: false,
                 style: self.node_style(node, false),
                 text: clip_text(node.alt.as_deref().unwrap_or_default()),
                 image: Some(image),
-                url: None,
-                layout: ElementLayout::Free,
-                overrides: BTreeMap::new(),
-                children: vec![],
-                meta: ElementMeta::default(),
+                ..crate::empty_element(ElementKind::Image, local)
             }]
             .into();
         }
@@ -1085,21 +1039,13 @@ impl Converter<'_> {
         };
         Element {
             id: self.element_id(path, tag),
-            kind,
-            name: None,
-            link: None,
-            rect,
-            rotation: 0.0,
-            visible: true,
-            locked: false,
             style: self.node_style(node, false),
             text: clip_text(text.as_deref().unwrap_or_default()),
-            image: None,
             url,
             layout,
-            overrides: BTreeMap::new(),
+
             children,
-            meta: ElementMeta::default(),
+            ..crate::empty_element(kind, rect)
         }
     }
 
@@ -1113,13 +1059,6 @@ impl Converter<'_> {
     ) -> Element {
         Element {
             id: self.element_id(path, &format!("{tag}:text")),
-            kind: ElementKind::Text,
-            name: None,
-            link: None,
-            rect,
-            rotation: 0.0,
-            visible: true,
-            locked: false,
             style: {
                 // A single line that stands alone hugs its text, so a substitute font that runs
                 // wider than the site's own never cuts it short. Text sharing its line with a
@@ -1135,12 +1074,7 @@ impl Converter<'_> {
                 style
             },
             text: clip_text(text),
-            image: None,
-            url: None,
-            layout: ElementLayout::Free,
-            overrides: BTreeMap::new(),
-            children: vec![],
-            meta: ElementMeta::default(),
+            ..crate::empty_element(ElementKind::Text, rect)
         }
     }
 }
