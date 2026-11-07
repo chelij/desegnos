@@ -120,6 +120,65 @@ pub fn read_export_file(root: &Path, relative: &str) -> Result<Vec<u8>> {
     crate::source_files::read_exact_bounded(&mut input, metadata.len(), MAX_BYTES)
 }
 
+/// Every HTML, CSS and JavaScript file of an export folder, up to two folders deep, keyed by
+/// relative path. A file that is unreadable, replaced or larger than `max_file_bytes` fails the
+/// whole read, so a pointer clash check never reports code as missing because it was skipped.
+pub fn read_export_folder(root: &Path, max_file_bytes: usize) -> Result<BTreeMap<String, Vec<u8>>> {
+    let mut paths = Vec::new();
+    collect_text_files(root, "", &mut paths, 0)?;
+    let mut files = BTreeMap::new();
+    for path in paths {
+        let bytes = read_export_file(root, &path)?;
+        if bytes.len() > max_file_bytes {
+            return Err(Error(format!(
+                "The exported file {path} is too large to check."
+            )));
+        }
+        files.insert(path, bytes);
+    }
+    Ok(files)
+}
+
+fn collect_text_files(
+    root: &Path,
+    prefix: &str,
+    out: &mut Vec<String>,
+    depth: usize,
+) -> Result<()> {
+    if depth > 2 {
+        return Ok(());
+    }
+    let directory = if prefix.is_empty() {
+        root.to_path_buf()
+    } else {
+        root.join(prefix)
+    };
+    let entries = fs::read_dir(&directory)
+        .map_err(|error| Error(format!("The export folder could not be read: {error}")))?;
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.starts_with('.') || name.contains(['/', '\\', '\0']) {
+            continue;
+        }
+        let relative = if prefix.is_empty() {
+            name.clone()
+        } else {
+            format!("{prefix}/{name}")
+        };
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
+        if metadata.is_dir() {
+            collect_text_files(root, &relative, out, depth + 1)?;
+        } else if metadata.is_file()
+            && matches!(name.rsplit('.').next().unwrap_or_default(), "html" | "css" | "js")
+        {
+            out.push(relative);
+        }
+    }
+    Ok(())
+}
+
 /// Write an export into an existing private folder, used by preview exports. Every path is
 /// created fresh; an existing file or symbolic link is never replaced.
 pub fn write_export_into(root: &Path, export: &WebsiteExport) -> Result<()> {

@@ -207,10 +207,7 @@ fn newest_of(payloads: Vec<ReleasePayload>) -> Option<(semver::Version, Release)
 /// Reports the newest public release and its page. This performs one read-only request
 /// only when the user asks; there is no startup check and no automatic install.
 #[tauri::command]
-pub async fn check_for_updates(window: tauri::WebviewWindow) -> Result<UpdateCheck, String> {
-    if window.label() != "editor" {
-        return Err("Only the editor can check for updates.".to_owned());
-    }
+pub async fn check_for_updates() -> Result<UpdateCheck, String> {
     let current = env!("CARGO_PKG_VERSION");
     let latest = newest(&client()?).await?;
     let newer = latest

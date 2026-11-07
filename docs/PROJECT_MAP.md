@@ -125,14 +125,17 @@ test-results/                Local evidence from smoke, startup and vault runs (
 | --- | --- |
 | [main.rs](../src-tauri/src/main.rs) | Service initialization on the chosen data folder, command registry, plugins, window lifecycle and crash finish. |
 | [workspace.rs](../src-tauri/src/workspace.rs) | `Workspace`, `WorkspaceView`, active plus parked projects, tabs, untitled projects and their recovery databases, autosave, recovery, checked saves/conflicts, project folders, recents, history/alternatives and the generation/import publication seams. |
+| [ai_job.rs](../src-tauri/src/ai_job.rs) | What generation, identity and export share about a paid AI job: `ActiveJobs` (live-attempt guard), `Failure::of`, stop/sign-out/interrupted notices, poison-tolerant `lock`, and `cancel_account` across all three services. |
+| [ai_access.rs](../src-tauri/src/ai_access.rs) | The one AI access step: `Connection`, `active_account`, `resolve` (account or key, model, epoch) into an `Access` with the shared input check. |
+| [native_files.rs](../src-tauri/src/native_files.rs) | `NativeResult`, private directories, regular-file checks, size-limited JSON reads/writes and lock-file opening shared by the services. |
 | [generation.rs](../src-tauri/src/generation.rs) | `GenerationService`: provider settings/credentials/access, prepare/submit/retry/cancel/discard/apply, job persistence, dossier maintenance, usage and AI settings commands. |
 | [export.rs](../src-tauri/src/export.rs) | `ExportService`: frozen export jobs, previews, destination writes, safe commits, `RecordExport`, recheck, pointer code/comment clash commands and open-in-browser. |
 | [website_import.rs](../src-tauri/src/website_import.rs) | Fetch/read a website, install a token-served snapshot, validate captures, resolve pictures into the project store and apply an import as one undo step. |
 | [identity.rs](../src-tauri/src/identity.rs) | `IdentityService`: brand source selection/fetching, analysis lifecycle, photo descriptions and approved-context handoff. |
-| [local_site.rs](../src-tauri/src/local_site.rs) | `LocalSite` and `ImportSite`: loopback GET/HEAD static servers with token prefixes, path rules and stop control. |
+| [local_site.rs](../src-tauri/src/local_site.rs) | `LocalSite`: loopback GET/HEAD static servers with token prefixes, path rules and stop control. |
 | [chatgpt.rs](../src-tauri/src/chatgpt.rs) | `ChatgptState`: accounts, sign-in commands, epochs/revocation, secure-storage repair and usage links. |
 | [project_location.rs](../src-tauri/src/project_location.rs), [recent.rs](../src-tauri/src/recent.rs) | App settings in `project-settings.json` (default project location, show start page on launch) and the recent-project catalogue with pins and last-opened times. |
-| [clipboard.rs](../src-tauri/src/clipboard.rs), [image_drop.rs](../src-tauri/src/image_drop.rs), [request_zip.rs](../src-tauri/src/request_zip.rs) | Editor-only clipboard adapter, OS image-drop events and request-ZIP adapter. |
+| [clipboard.rs](../src-tauri/src/clipboard.rs), [image_drop.rs](../src-tauri/src/image_drop.rs), [request_zip.rs](../src-tauri/src/request_zip.rs) | Clipboard adapter, OS image-drop events and request-ZIP adapter. |
 | [system_open.rs](../src-tauri/src/system_open.rs), [file_dialogs.rs](../src-tauri/src/file_dialogs.rs), [portal.rs](../src-tauri/src/portal.rs), [linux_startup.rs](../src-tauri/src/linux_startup.rs) | OS opening with Linux fallbacks, dialog result handling, XDG desktop-portal detection and the NVIDIA/Wayland startup workaround. |
 | [data_location.rs](../src-tauri/src/data_location.rs), [crash_report.rs](../src-tauri/src/crash_report.rs), [updates.rs](../src-tauri/src/updates.rs), [usage.rs](../src-tauri/src/usage.rs), [release.rs](../src-tauri/src/release.rs) | Writable data-folder choice, opt-in crash reports, manual GitHub release check, local usage JSONL and the shared repository constant. |
 

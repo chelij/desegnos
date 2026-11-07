@@ -55,7 +55,7 @@ pub use export::{
     MAX_EXPORT_FILE_BYTES, MAX_EXPORT_FILES, WebsiteExport, ai_export_bundle,
     behaviour_fingerprint, direct_export_bundle, export_manifest, export_schema, included_pages,
     file_stem, is_vector_representable, page_file, parse_comment_reply, parse_export_reply, plan_comment, plan_export, plan_snapshot,
-    pointer_fingerprints, preview_page_ids, reused_export_behaviour_count, slide_order,
+    marked_pointer_code, pointer_fingerprints, preview_page_ids, reused_export_behaviour_count, slide_order,
     validate_behaviours, validate_export_reply,
 };
 pub use generation::{

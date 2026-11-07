@@ -861,6 +861,36 @@ fn order_targets<'a>(
 }
 
 impl RequirementsSnapshot {
+    /// The user's request for the first element, read back from the frozen requirements file.
+    /// Empty when the file has no element request.
+    pub fn first_request_text(&self) -> String {
+        let mut fence = None;
+        let mut block = String::new();
+        for line in self.markdown.lines() {
+            if let Some(end) = &fence {
+                if line == end {
+                    if let Ok(value) = serde_json::from_str::<serde_json::Value>(&block)
+                        && value.get("elementId").is_some()
+                        && let Some(prompt) = value.get("request").and_then(|value| value.as_str())
+                    {
+                        return prompt.into();
+                    }
+                    fence = None;
+                } else {
+                    block.push_str(line);
+                    block.push('\n');
+                }
+            } else if let Some(start) = line.strip_suffix("json")
+                && start.len() >= 3
+                && start.bytes().all(|byte| byte == b'`')
+            {
+                fence = Some(start.to_owned());
+                block.clear();
+            }
+        }
+        String::new()
+    }
+
     pub fn validate_format(&self) -> Result<()> {
         ensure(
             self.markdown.starts_with(&current_requirements_heading()),

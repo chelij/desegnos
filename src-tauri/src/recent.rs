@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::{
-    fs::{File, OpenOptions},
+    fs::File,
     io::Read,
     path::{Path, PathBuf},
 };
@@ -141,15 +141,7 @@ fn remember_destination(
 }
 
 fn lock(directory: &Path) -> Result<File, String> {
-    let mut options = OpenOptions::new();
-    options.create(true).truncate(false).read(true).write(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let lock = options
-        .open(directory.join("recent-projects.lock"))
+    let lock = crate::native_files::open_lock_file(&directory.join("recent-projects.lock"))
         .map_err(|error| error.to_string())?;
     // A child process forked by another thread can inherit this descriptor for the instant
     // before exec closes it, so a single try can race. Retry briefly before reporting a real
@@ -208,27 +200,19 @@ pub fn set_pinned(
 
 #[tauri::command]
 pub fn forget_recent_project(
-    window: tauri::WebviewWindow,
     state: tauri::State<'_, std::sync::Mutex<crate::workspace::Workspace>>,
     path: PathBuf,
 ) -> Result<Vec<RecentProject>, String> {
-    if window.label() != "editor" {
-        return Err("Only the editor can remove recent projects.".into());
-    }
     let state = state.lock().map_err(|error| error.to_string())?;
     forget(state.directory(), &path)
 }
 
 #[tauri::command]
 pub fn set_recent_project_pin(
-    window: tauri::WebviewWindow,
     state: tauri::State<'_, std::sync::Mutex<crate::workspace::Workspace>>,
     path: PathBuf,
     pinned: bool,
 ) -> Result<Vec<RecentProject>, String> {
-    if window.label() != "editor" {
-        return Err("Only the editor can pin recent projects.".into());
-    }
     let state = state.lock().map_err(|error| error.to_string())?;
     set_pinned(state.directory(), &path, pinned)
 }

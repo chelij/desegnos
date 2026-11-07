@@ -751,11 +751,38 @@ fn resolve_project_path(path: &Path) -> Result<PathBuf> {
     Ok(parent.join(name))
 }
 
-fn acquire_lock(path: &Path) -> Result<File> {
+fn lock_path(path: &Path) -> Result<PathBuf> {
     let name = path
         .file_name()
         .ok_or_else(|| Error("Choose a project filename.".into()))?;
-    let lock_path = path.with_file_name(format!(".{}.lock", name.to_string_lossy()));
+    Ok(path.with_file_name(format!(".{}.lock", name.to_string_lossy())))
+}
+
+/// Delete a project database with its write-ahead log, shared memory and lock files.
+/// Files that are already gone are fine.
+pub fn remove_project_files(path: &Path) -> Result<()> {
+    let name = path
+        .file_name()
+        .ok_or_else(|| Error("Choose a project filename.".into()))?
+        .to_string_lossy()
+        .into_owned();
+    for file in [
+        path.to_owned(),
+        path.with_file_name(format!("{name}-wal")),
+        path.with_file_name(format!("{name}-shm")),
+        lock_path(path)?,
+    ] {
+        match fs::remove_file(file) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(io(error)),
+        }
+    }
+    Ok(())
+}
+
+fn acquire_lock(path: &Path) -> Result<File> {
+    let lock_path = lock_path(path)?;
     let mut options = OpenOptions::new();
     options.create(true).truncate(false).read(true).write(true);
     #[cfg(unix)]
