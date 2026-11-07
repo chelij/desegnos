@@ -147,6 +147,7 @@ export type GenerationDossier = { jobId: string; attemptOrdinal: number; baseRev
 export type ElementDraft = Omit<Element, 'id' | 'meta' | 'image'> & { image?: string | null; imageRequest?: string | null; children: ElementDraft[] };
 export type ElementUpdate = { elementId: string; rect?: Rect; rotation?: number; style?: ElementStyle; text?: string; url?: string; layout?: ElementLayout; visible?: boolean; locked?: boolean; name?: string; inputType?: InputType; options?: string[]; language?: string; source?: string; sizeId?: string | null };
 export type ElementOperation =
+  | { kind: 'setPage'; pageId: string; name: string | null; path: string | null; background: string | null }
   | { kind: 'replaceChildren'; children: ElementDraft[] }
   | { kind: 'setBehaviour'; elementId: string | null; behaviour: string }
   | { kind: 'update'; patches: ElementUpdate[] }

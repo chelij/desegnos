@@ -1087,7 +1087,7 @@ pub fn broken_pointers(project: &Project) -> Vec<Uuid> {
         .collect()
 }
 
-fn valid_swatch(color: &str) -> bool {
+pub(crate) fn valid_swatch(color: &str) -> bool {
     let Some(hex) = color.strip_prefix('#') else {
         return false;
     };
@@ -1095,7 +1095,7 @@ fn valid_swatch(color: &str) -> bool {
         && hex.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
-fn normalized_swatch(color: &str) -> String {
+pub(crate) fn normalized_swatch(color: &str) -> String {
     let hex = color.trim().trim_start_matches('#').to_ascii_lowercase();
     // #rgb and #rrggbb describe the same colour; store the canonical six digits.
     let hex = if hex.len() == 3 {

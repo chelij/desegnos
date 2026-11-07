@@ -1668,3 +1668,350 @@ fn operation_bounds_errors_reach_recovery_instead_of_rejecting_during_json_parsi
         apply_generation_output(&project, &snapshot, &reply, &[], &BTreeMap::new()).unwrap();
     assert_eq!(applied.page(pages[1]).unwrap().elements.len(), 1);
 }
+
+fn set_page(
+    page: Uuid,
+    name: Option<&str>,
+    path: Option<&str>,
+    background: Option<&str>,
+) -> serde_json::Value {
+    json!({"kind":"setPage","pageId":page,"name":name,"path":path,"background":background})
+}
+
+#[test]
+fn page_properties_and_content_apply_in_one_undo_step() {
+    let (project, pages, request) = multiple_blank_boundaries();
+    let snapshot = project.prepare_requirements().unwrap();
+    let mut reply = boundary_candidate(
+        &snapshot,
+        request,
+        json!([
+            set_page(pages[0], Some("Home"), Some("/"), Some("#05060b")),
+            set_page(pages[1], Some("Lineup"), Some("/lineup"), None),
+            set_page(pages[2], Some("Tickets"), Some("/tickets"), None),
+            below_the_fold(pages[0], 0.0, 40.0, "Festival")
+        ]),
+    );
+    reply
+        .retain_valid_operations(&snapshot, &project, &mut vec![])
+        .unwrap();
+    let original_pages = project.pages.clone();
+    let mut session = Session::new(project).unwrap();
+    let before = session.history().2;
+    session
+        .apply_generation(&snapshot, &reply, &[], &BTreeMap::new(), |_| Ok(()))
+        .unwrap();
+    assert_eq!(session.history().2, before + 1);
+    assert_eq!(
+        session.project().page(pages[0]).unwrap().background,
+        "#05060b"
+    );
+    assert_eq!(session.project().page(pages[0]).unwrap().path, "/");
+    assert_eq!(session.project().page(pages[1]).unwrap().name, "Lineup");
+    assert_eq!(session.project().page(pages[1]).unwrap().path, "/lineup");
+    assert_eq!(session.project().page(pages[2]).unwrap().path, "/tickets");
+    session.undo(|_| Ok(())).unwrap();
+    assert_eq!(session.project().pages, original_pages);
+}
+
+#[test]
+fn invalid_page_edits_drop_individually_and_do_not_change_unscoped_pages() {
+    let (mut project, pages, request) = multiple_blank_boundaries();
+    project.requests[0].targets = vec![RequestTarget::Boundary {
+        page: pages[0],
+        size: None,
+    }];
+    let snapshot = project.prepare_requirements().unwrap();
+    let mut reply = boundary_candidate(
+        &snapshot,
+        request,
+        json!([
+            set_page(pages[1], Some("Forbidden"), None, None),
+            set_page(pages[0], None, Some("relative"), None),
+            set_page(
+                pages[0],
+                None,
+                Some(&project.page(pages[1]).unwrap().path),
+                None
+            ),
+            set_page(pages[0], Some("  "), None, None),
+            set_page(pages[0], None, None, Some("red")),
+            set_page(pages[0], None, Some("/home"), None),
+            set_page(pages[0], None, None, Some("#abc")),
+            below_the_fold(pages[0], 0.0, 40.0, "Home")
+        ]),
+    );
+    let mut events = vec![];
+    reply
+        .retain_valid_operations(&snapshot, &project, &mut events)
+        .unwrap();
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.disposition == "dropped")
+            .count(),
+        6
+    );
+    let applied =
+        apply_generation_output(&project, &snapshot, &reply, &[], &BTreeMap::new()).unwrap();
+    assert_eq!(applied.page(pages[0]).unwrap().path, "/");
+    assert_eq!(applied.page(pages[0]).unwrap().background, "#aabbcc");
+    assert_eq!(
+        applied.page(pages[1]).unwrap(),
+        project.page(pages[1]).unwrap()
+    );
+}
+
+#[test]
+fn an_explicit_home_route_request_can_change_the_home_path() {
+    let (mut project, pages, request) = multiple_blank_boundaries();
+    project.requests[0].text = "Set the home page URL path to /home.".into();
+    let snapshot = project.prepare_requirements().unwrap();
+    let mut reply = boundary_candidate(
+        &snapshot,
+        request,
+        json!([set_page(pages[0], None, Some("/home"), None)]),
+    );
+    reply
+        .retain_valid_operations(&snapshot, &project, &mut vec![])
+        .unwrap();
+    let applied =
+        apply_generation_output(&project, &snapshot, &reply, &[], &BTreeMap::new()).unwrap();
+    assert_eq!(applied.page(pages[0]).unwrap().path, "/home");
+}
+
+#[test]
+fn a_minimal_page_fill_patch_is_repaired_before_typed_style_parsing() {
+    let (project, page, request) = blank_page_request(None);
+    let snapshot = project.prepare_requirements().unwrap();
+    // The discarded fields deliberately cannot deserialize as layer fields.
+    let text=json!({"requests":[{"requestId":request,"status":"implemented","operations":[
+        {"kind":"update","patches":[{"elementId":page,"style":{"fill":"#05060b"},"rect":"not a layer rectangle","text":"ignore this"}]}
+    ]}]}).to_string();
+    let mut events = vec![];
+    let mut reply =
+        GenerationCandidate::from_json_for_project(&text, &snapshot, &project, &mut events)
+            .unwrap();
+    reply
+        .retain_valid_operations(&snapshot, &project, &mut events)
+        .unwrap();
+    assert!(
+        matches!(&reply.requests[0].operations[0],ElementOperation::SetPage{page_id,background:Some(fill),..} if *page_id==page && fill=="#05060b")
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.kind == "pagePatch" && event.disposition == "warning")
+            .count(),
+        1
+    );
+    let applied =
+        apply_generation_output(&project, &snapshot, &reply, &[], &BTreeMap::new()).unwrap();
+    assert_eq!(applied.page(page).unwrap().background, "#05060b");
+    assert!(applied.page(page).unwrap().elements.is_empty());
+}
+
+#[test]
+fn page_links_resolve_after_page_edits_even_in_a_later_request() {
+    let (mut project, pages, _) = multiple_blank_boundaries();
+    let old_path = project.page(pages[1]).unwrap().path.clone();
+    let old_name = project.page(pages[1]).unwrap().name.clone();
+    project.requests.clear();
+    project = add_request(
+        &project,
+        "Build the home navigation.",
+        vec![RequestTarget::Boundary {
+            page: pages[0],
+            size: None,
+        }],
+    );
+    let home_request = project.requests.last().unwrap().id;
+    project = add_request(
+        &project,
+        "Name the lineup page and set its path to /artists.",
+        vec![RequestTarget::Boundary {
+            page: pages[1],
+            size: None,
+        }],
+    );
+    let lineup_request = project.requests.last().unwrap().id;
+    let snapshot = project.prepare_requirements().unwrap();
+    let links: Vec<_> = ["Lineup", "/lineup", old_path.as_str(), old_name.as_str()]
+        .iter()
+        .enumerate()
+        .map(|(i, url)| {
+            json!({
+                "kind":"button","rect":rect(0.0,i as f64*45.0,200.0,40.0),"text":"Lineup","url":url
+            })
+        })
+        .collect();
+    let mut reply = boundary_candidate(
+        &snapshot,
+        home_request,
+        json!([
+            {"kind":"insertInBoundary","pageId":pages[0],"element":{"kind":"box","rect":rect(0.0,0.0,800.0,200.0),"children":links}}
+        ]),
+    );
+    reply.requests.extend(
+        boundary_candidate(
+            &snapshot,
+            lineup_request,
+            json!([
+                set_page(pages[1], Some("Lineup"), Some("/artists"), None),
+                below_the_fold(pages[1], 0.0, 40.0, "Artists")
+            ]),
+        )
+        .requests,
+    );
+    reply
+        .retain_valid_operations(&snapshot, &project, &mut vec![])
+        .unwrap();
+    let applied =
+        apply_generation_output(&project, &snapshot, &reply, &[], &BTreeMap::new()).unwrap();
+    let nav = &applied.page(pages[0]).unwrap().elements[0];
+    for element in &nav.children {
+        assert_eq!(element.url.as_deref(), Some("/artists"));
+    }
+    let bundle = desegnos_core::direct_export_bundle(&applied, &[]).unwrap();
+    let plan = desegnos_core::plan_export(&applied, &[], Uuid::new_v4()).unwrap();
+    let home = &plan
+        .pages
+        .iter()
+        .find(|page| page.page_id == pages[0])
+        .unwrap()
+        .file;
+    let lineup = &plan
+        .pages
+        .iter()
+        .find(|page| page.page_id == pages[1])
+        .unwrap()
+        .file;
+    let html = String::from_utf8(bundle.files[home].clone()).unwrap();
+    assert!(html.contains(&format!("href=\"{lineup}\"")), "{html}");
+}
+
+#[test]
+fn page_edit_schema_is_strict_and_has_nullable_unchanged_fields() {
+    let schema = desegnos_core::candidate_schema();
+    let operations = schema["properties"]["requests"]["items"]["properties"]["operations"]["items"]
+        ["anyOf"]
+        .as_array()
+        .unwrap();
+    let page = operations
+        .iter()
+        .find(|operation| operation["properties"]["kind"]["enum"] == json!(["setPage"]))
+        .unwrap();
+    assert_eq!(page["additionalProperties"], false);
+    assert_eq!(page["required"].as_array().unwrap().len(), 5);
+    for field in ["name", "path", "background"] {
+        assert!(
+            page["properties"][field]["anyOf"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|branch| branch["type"] == "null")
+        );
+    }
+}
+
+#[test]
+fn page_patch_repair_does_not_bypass_scope_or_accept_non_colour_fills() {
+    let (mut project, pages, request) = multiple_blank_boundaries();
+    project.requests[0].targets = vec![RequestTarget::Boundary {
+        page: pages[0],
+        size: None,
+    }];
+    let snapshot = project.prepare_requirements().unwrap();
+    let text=json!({"requests":[{"requestId":request,"status":"implemented","operations":[
+        {"kind":"update","patches":[{"elementId":pages[1],"style":{"fill":"#000"}},{"elementId":pages[0],"style":{"fill":"linear-gradient(red,blue)"}}]},
+        below_the_fold(pages[0],0.0,40.0,"Home")
+    ]}]}).to_string();
+    let mut events = vec![];
+    let mut reply =
+        GenerationCandidate::from_json_for_project(&text, &snapshot, &project, &mut events)
+            .unwrap();
+    reply
+        .retain_valid_operations(&snapshot, &project, &mut events)
+        .unwrap();
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.disposition == "dropped")
+            .count(),
+        2
+    );
+    let applied =
+        apply_generation_output(&project, &snapshot, &reply, &[], &BTreeMap::new()).unwrap();
+    assert_eq!(
+        applied.page(pages[0]).unwrap().background,
+        project.page(pages[0]).unwrap().background
+    );
+    assert_eq!(
+        applied.page(pages[1]).unwrap(),
+        project.page(pages[1]).unwrap()
+    );
+    assert_eq!(applied.page(pages[0]).unwrap().elements.len(), 1);
+}
+
+#[test]
+fn page_names_resolve_in_updates_inserts_and_replacement_children() {
+    for kind in ["update", "insert", "replaceChildren"] {
+        let (mut project, pages, request) = multiple_blank_boundaries();
+        let parent = Uuid::new_v4();
+        let child = Uuid::new_v4();
+        let mut box_element = element(parent, ElementKind::Box, rect(0.0, 0.0, 800.0, 200.0));
+        box_element.children.push(element(
+            child,
+            ElementKind::Text,
+            rect(0.0, 0.0, 200.0, 40.0),
+        ));
+        project = apply(
+            &project,
+            Command::InsertElements {
+                page_id: pages[0],
+                parent_id: None,
+                index: 0,
+                elements: vec![box_element],
+                picture_data_uri: None,
+                size_id: None,
+            },
+        );
+        project.requests[0].targets.push(RequestTarget::Element {
+            page: pages[0],
+            size: None,
+            id: parent,
+        });
+        let snapshot = project.prepare_requirements().unwrap();
+        let link =
+            json!({"kind":"text","rect":rect(0.0,50.0,200.0,40.0),"text":"Lineup","url":"Lineup"});
+        let operation = match kind {
+            "update" => json!({"kind":"update","patches":[{"elementId":child,"url":"Lineup"}]}),
+            "insert" => json!({"kind":"insert","parentId":parent,"element":link}),
+            _ => json!({"kind":"replaceChildren","children":[link]}),
+        };
+        let mut reply = boundary_candidate(
+            &snapshot,
+            request,
+            json!([
+                operation,
+                set_page(pages[1], Some("Lineup"), Some("/lineup"), None)
+            ]),
+        );
+        reply.requests[0].element_id = Some(parent);
+        reply
+            .retain_valid_operations(&snapshot, &project, &mut vec![])
+            .unwrap();
+        let applied =
+            apply_generation_output(&project, &snapshot, &reply, &[], &BTreeMap::new()).unwrap();
+        assert!(
+            applied
+                .element(parent)
+                .unwrap()
+                .1
+                .children
+                .iter()
+                .any(|element| element.url.as_deref() == Some("/lineup")),
+            "{kind}"
+        );
+    }
+}
