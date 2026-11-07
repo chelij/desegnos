@@ -695,6 +695,7 @@ mod web_search_tests {
             request_history: String::new(),
             capabilities: None,
             images: vec![],
+            layer_requests: vec![],
         }
     }
 

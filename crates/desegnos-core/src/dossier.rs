@@ -124,17 +124,16 @@ impl GenerationDossier {
         )?;
         for value in [&self.requirements_sha256, &self.candidate_sha256] {
             ensure(
-                value.len() == 64
-                    && value
-                        .bytes()
-                        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)),
+                crate::limits::is_sha256_hex(value),
                 "The generation notes have an invalid source digest.",
             )?;
         }
         validate_text(&self.summary, "Generation summary", 16_384, false)?;
         ensure(
             !self.targets.is_empty() && self.targets.len() <= MAX_GENERATION_REQUESTS,
-            "The generation notes must identify between 1 and 512 requested layers.",
+            format!(
+                "The generation notes must identify between 1 and {MAX_GENERATION_REQUESTS} requested layers."
+            ),
         )?;
         let mut targets = BTreeSet::new();
         let mut elements = BTreeSet::new();
@@ -304,10 +303,7 @@ impl Project {
         )?;
         candidate.validate(snapshot, self)?;
         let mut next = self.clone();
-        next.revision = self
-            .revision
-            .checked_add(1)
-            .ok_or_else(|| Error("Project revision limit reached.".into()))?;
+        next.revision = crate::limits::next_revision(self.revision)?;
         next.latest_generation = Some(GenerationDossier::from_candidate(
             snapshot,
             candidate,
@@ -325,5 +321,53 @@ impl Project {
         self.latest_generation
             .as_ref()
             .and_then(|dossier| dossier.relevant_context(targets))
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum HistoryTransition {
+    Undo,
+    Redo,
+    Restore,
+}
+
+impl Project {
+    pub(crate) fn carry_generation_metadata(
+        &mut self,
+        current: &Project,
+        transition: HistoryTransition,
+    ) {
+        let status = current
+            .latest_generation
+            .as_ref()
+            .map(|dossier| match transition {
+                HistoryTransition::Undo
+                    if dossier.application_status == GenerationApplicationStatus::Applied
+                        && !self.applied_job_ids.contains(&dossier.job_id) =>
+                {
+                    GenerationApplicationStatus::Undone
+                }
+                HistoryTransition::Redo
+                    if dossier.application_status == GenerationApplicationStatus::Undone
+                        && self.latest_generation.as_ref().is_some_and(|restored| {
+                            restored.application_status == GenerationApplicationStatus::Applied
+                                && restored.job_id == dossier.job_id
+                                && restored.candidate_sha256 == dossier.candidate_sha256
+                        }) =>
+                {
+                    GenerationApplicationStatus::Applied
+                }
+                _ => dossier.application_status,
+            });
+        self.applied_job_ids = current.applied_job_ids.clone();
+        self.latest_generation = current.latest_generation.clone();
+        if let (Some(dossier), Some(status)) = (&mut self.latest_generation, status) {
+            let reapplied = dossier.application_status == GenerationApplicationStatus::Undone
+                && status == GenerationApplicationStatus::Applied;
+            dossier.application_status = status;
+            if reapplied {
+                dossier.applied_at_revision = Some(self.revision);
+            }
+        }
     }
 }

@@ -1,11 +1,5 @@
-//! Files and links attached to a request ("drop a file on the box"). From requirements format
-//! 13 the AI sees a small preview of each picture; the original stays in the project and is
-//! inserted after generation, scaled to the size the page shows it at.
 use crate::{Result, ensure};
-use base64::{Engine, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Serialize};
-
-pub const ATTACHMENT_ATTRIBUTE: &str = "data-desegnos-attachment";
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -23,45 +17,12 @@ pub struct RequestAttachment {
     pub kind: AttachmentKind,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub data_uri: Option<std::sync::Arc<str>>,
-    /// The small JPEG or alpha-preserving PNG the AI sees, made once when attached (format 13).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preview: Option<std::sync::Arc<str>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
-}
-
-/// Checks the type, the file signature and the Base64 alphabet without decoding the whole
-/// picture, because this runs on every edit and pictures have no size limit.
-fn valid_image(data_uri: &str) -> bool {
-    let Some((mime, encoded)) = data_uri
-        .strip_prefix("data:")
-        .and_then(|value| value.split_once(";base64,"))
-    else {
-        return false;
-    };
-    let body = encoded.trim_end_matches('=');
-    if !matches!(
-        mime,
-        "image/png" | "image/jpeg" | "image/webp" | "image/gif"
-    ) || encoded.len() % 4 != 0
-        || encoded.len() - body.len() > 2
-        || !body
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'+' || b == b'/')
-    {
-        return false;
-    }
-    let Ok(bytes) = STANDARD.decode(&encoded[..encoded.len().min(16)]) else {
-        return false;
-    };
-    match mime {
-        "image/png" => bytes.starts_with(b"\x89PNG\r\n\x1a\n"),
-        "image/jpeg" => bytes.starts_with(&[0xff, 0xd8, 0xff]),
-        "image/gif" => bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a"),
-        _ => bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP",
-    }
 }
 
 impl RequestAttachment {
@@ -84,7 +45,7 @@ impl RequestAttachment {
         )?;
         ensure(
             !self.name.trim().is_empty()
-                && self.name.chars().count() <= 120
+                && self.name.chars().count() <= crate::limits::MAX_NAME_CHARS
                 && !self.name.chars().any(char::is_control),
             "Give the attachment a short file name.",
         )?;
@@ -92,12 +53,16 @@ impl RequestAttachment {
             AttachmentKind::Image => ensure(
                 self.text.is_none()
                     && self.url.is_none()
-                    && self.data_uri.as_deref().is_some_and(valid_image)
+                    && self.data_uri.as_deref().is_some_and(|uri| {
+                        crate::limits::decode_image_data_uri(uri)
+                            .is_ok_and(|(mime, _)| crate::limits::IMAGE_MIME_TYPES.contains(&mime))
+                    })
                     && self.preview.as_deref().is_none_or(|preview| {
                         (preview.starts_with("data:image/jpeg;base64,")
                             || preview.starts_with("data:image/png;base64,"))
-                            && preview.len() <= crate::AI_PREVIEW_BYTES.div_ceil(3) * 4 + 32
-                            && valid_image(preview)
+                            && preview.len()
+                                <= crate::limits::base64_encoded_len(crate::AI_PREVIEW_BYTES) + 32
+                            && crate::limits::decode_image_data_uri(preview).is_ok()
                     }),
                 "Attach a PNG, JPEG, WebP or GIF picture.",
             ),
@@ -115,39 +80,12 @@ impl RequestAttachment {
                 self.data_uri.is_none()
                     && self.preview.is_none()
                     && self.text.is_none()
-                    && self.url.as_ref().is_some_and(|url| {
-                        url.len() <= 2048
-                            && url::Url::parse(url).is_ok_and(|parsed| {
-                                matches!(parsed.scheme(), "https" | "http")
-                                    && parsed.host_str().is_some()
-                                    && parsed.username().is_empty()
-                                    && parsed.password().is_none()
-                            })
-                    }),
+                    && self
+                        .url
+                        .as_ref()
+                        .is_some_and(|url| crate::limits::valid_http_url(url)),
                 "Attach a web address that starts with https://.",
             ),
         }
-    }
-}
-
-impl crate::Project {
-    /// Promote the frozen requests' original pictures before validating or applying their
-    /// generated elements. The live project is unchanged until the whole reply is accepted.
-    pub(crate) fn store_request_pictures(&mut self, request_ids: &[uuid::Uuid]) -> Result<()> {
-        for request in self
-            .requests
-            .iter()
-            .filter(|request| request_ids.contains(&request.id))
-        {
-            for attachment in &request.attachments {
-                if attachment.kind == AttachmentKind::Image
-                    && let Some(uri) = &attachment.data_uri
-                {
-                    let id = crate::project_assets::store_picture_uri(uri)?;
-                    self.pictures.insert(id, uri.clone());
-                }
-            }
-        }
-        Ok(())
     }
 }

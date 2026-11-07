@@ -8,8 +8,8 @@ fn untitled(template: CanvasTemplate) -> Project {
 fn blank_untitled_has_no_boundaries_until_the_first_one_becomes_home() {
     let project = untitled(CanvasTemplate::Blank);
     assert!(project.pages.is_empty());
-    assert_eq!(project.viewport.width, 1440);
-    assert_eq!(project.viewport.height, 900);
+    assert_eq!(project.pages[0].viewport().width, 1440);
+    assert_eq!(project.pages[0].viewport().height, 900);
 }
 
 #[test]

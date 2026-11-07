@@ -383,9 +383,9 @@ fn recording_an_export_does_not_add_an_undo_step_and_survives_undo() {
             },
         )]),
     };
-    let before = session.history().2;
+    let before = session.history().position;
     session.record_export(record, |_| Ok(())).unwrap();
-    assert_eq!(session.history().2, before, "no history step was added");
+    assert_eq!(session.history().position, before, "no history step was added");
     assert!(!session.can_undo());
     assert_eq!(session.project().last_export.as_ref().unwrap().version, 4);
     let wired = session
@@ -407,7 +407,7 @@ fn recording_an_export_does_not_add_an_undo_step_and_survives_undo() {
             |_| Ok(()),
         )
         .unwrap();
-    assert_eq!(session.history().2, before + 1);
+    assert_eq!(session.history().position, before + 1);
     session.undo(|_| Ok(())).unwrap();
     assert_eq!(session.project().name, "Export");
     assert_eq!(session.project().last_export.as_ref().unwrap().version, 4);
@@ -718,7 +718,7 @@ fn importing_a_website_command_is_one_undo_step() {
     let capture = import_website_capture();
     let imported = import_website(&[capture], &BTreeMap::new(), &project).unwrap();
     let mut session = Session::new(project).unwrap();
-    let before = session.history().2;
+    let before = session.history().position;
     session
         .execute(
             session.project().revision,
@@ -731,7 +731,7 @@ fn importing_a_website_command_is_one_undo_step() {
             |_| Ok(()),
         )
         .unwrap();
-    assert_eq!(session.history().2, before + 1);
+    assert_eq!(session.history().position, before + 1);
     assert_eq!(session.project().pages.len(), 2);
     session.undo(|_| Ok(())).unwrap();
     assert_eq!(session.project().pages.len(), 1);

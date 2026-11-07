@@ -229,6 +229,7 @@ pub(super) fn snapshot(mode: GenerationMode) -> RequirementsSnapshot {
             image_generation: None,
         }),
         images: vec![],
+        layer_requests: vec![],
     }
 }
 

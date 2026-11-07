@@ -610,13 +610,13 @@ impl Workspace {
             can_undo: self.session().is_some_and(Session::can_undo),
             can_redo: self.session().is_some_and(Session::can_redo),
             history: self.session().map(|session| {
-                let (session_id, start, position, end, version) = session.history();
+                let history = session.history();
                 HistoryView {
-                    session_id,
-                    start,
-                    position,
-                    end,
-                    version,
+                    session_id: history.session_id,
+                    start: history.start,
+                    position: history.position,
+                    end: history.end,
+                    version: history.version,
                     entries: session.history_entries().to_vec(),
                 }
             }),

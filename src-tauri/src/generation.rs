@@ -1353,15 +1353,17 @@ impl GenerationService {
             })
             .unwrap_or(0);
         let outcome = match view.status {
-            JobStatus::Applied => "applied",
+            JobStatus::Applied => desegnos_core::RequestHistoryOutcome::Applied,
             JobStatus::Discarded
                 if view.failure_kind.is_some() || view.provider_error.is_some() =>
             {
-                "failed"
+                desegnos_core::RequestHistoryOutcome::Failed
             }
-            JobStatus::Discarded => "rejected by user",
-            JobStatus::Failed | JobStatus::Unknown | JobStatus::Cancelled => "failed",
-            _ => "drafted",
+            JobStatus::Discarded => desegnos_core::RequestHistoryOutcome::RejectedByUser,
+            JobStatus::Failed | JobStatus::Unknown | JobStatus::Cancelled => {
+                desegnos_core::RequestHistoryOutcome::Failed
+            }
+            _ => desegnos_core::RequestHistoryOutcome::Drafted,
         };
         let mut entries = desegnos_core::earlier_requests(
             view.request_requirements(),
@@ -1402,7 +1404,17 @@ impl GenerationService {
                     })
                 })
             {
-                desegnos_core::record_validation_rejection(entry, &event.message);
+                desegnos_core::record_validation_rejection(
+                    entry,
+                    match event.kind.as_str() {
+                        "outsideRequest" => desegnos_core::RejectionKind::OutsideRequest,
+                        "outsideFrame" | "element" => desegnos_core::RejectionKind::OutsideFrame,
+                        "pointer" => desegnos_core::RejectionKind::Pointer,
+                        "image" => desegnos_core::RejectionKind::Image,
+                        _ => desegnos_core::RejectionKind::Other,
+                    },
+                    &event.message,
+                );
             }
         }
         entries

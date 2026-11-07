@@ -3,36 +3,40 @@
 use base64::{Engine, engine::general_purpose::STANDARD};
 use image::{DynamicImage, ImageDecoder, ImageReader, imageops::FilterType};
 
+pub use crate::limits::AI_PREVIEW_BYTES;
 /// A preview this size costs one image tile on every supported provider (~85–350 tokens).
-pub const AI_PREVIEW_EDGE: u32 = 512;
-pub const AI_PREVIEW_BYTES: usize = 48 * 1024;
+pub use crate::limits::AI_PREVIEW_EDGE;
 /// Upper bound reserved per preview when estimating a request.
-pub const AI_PREVIEW_TOKEN_RESERVE: u64 = 512;
+pub use crate::limits::AI_PREVIEW_TOKEN_RESERVE;
 /// Rendered pictures keep twice their CSS size so they stay sharp on high-density screens.
 const DISPLAY_DENSITY: u32 = 2;
 
-fn decode(data_uri: &str) -> Option<DynamicImage> {
-    let (mime, encoded) = data_uri.strip_prefix("data:")?.split_once(";base64,")?;
-    if !matches!(mime, "image/png" | "image/jpeg" | "image/webp") {
-        return None;
-    }
-    let bytes = STANDARD.decode(encoded).ok()?;
+fn decode(data_uri: &str) -> crate::Result<DynamicImage> {
+    let (mime, bytes) = crate::limits::decode_image_data_uri(data_uri)?;
+    crate::ensure(
+        matches!(mime, "image/png" | "image/jpeg" | "image/webp"),
+        "This image format cannot be scaled.",
+    )?;
     let mut decoder = ImageReader::new(std::io::Cursor::new(bytes))
         .with_guessed_format()
-        .ok()?
+        .map_err(|error| crate::Error(format!("Cannot read image format: {error}")))?
         .into_decoder()
-        .ok()?;
+        .map_err(|error| crate::Error(format!("Cannot decode image: {error}")))?;
     let (width, height) = decoder.dimensions();
-    if width == 0 || height == 0 || u64::from(width) * u64::from(height) > 256_000_000 {
-        return None;
-    }
+    crate::ensure(
+        width > 0
+            && height > 0
+            && u64::from(width) * u64::from(height) <= crate::limits::MAX_IMAGE_PIXELS,
+        "The image exceeds the pixel limit.",
+    )?;
     // Browsers show camera pictures upright, so re-encoded copies must too.
     let orientation = decoder
         .orientation()
         .unwrap_or(image::metadata::Orientation::NoTransforms);
-    let mut picture = DynamicImage::from_decoder(decoder).ok()?;
+    let mut picture = DynamicImage::from_decoder(decoder)
+        .map_err(|error| crate::Error(format!("Cannot decode image: {error}")))?;
     picture.apply_orientation(orientation);
-    Some(picture)
+    Ok(picture)
 }
 
 fn encode(picture: &DynamicImage, jpeg_quality: u8) -> Option<(Vec<u8>, &'static str)> {
@@ -85,7 +89,7 @@ pub(crate) fn image_metadata(data_uri: &str) -> serde_json::Value {
     {
         metadata["storedFormat"] = serde_json::json!(mime);
     }
-    if let Some(picture) = decode(data_uri) {
+    if let Ok(picture) = decode(data_uri) {
         let share = transparent_share(&picture);
         if share > 0.005 {
             metadata["transparent"] = serde_json::json!(true);
@@ -98,7 +102,7 @@ pub(crate) fn image_metadata(data_uri: &str) -> serde_json::Value {
 /// A bounded preview for the AI. Meaningfully transparent pictures retain alpha as PNG;
 /// opaque pictures use JPEG. Undecodable pictures (GIF) travel by name only.
 pub fn ai_preview(data_uri: &str) -> Option<String> {
-    let picture = decode(data_uri)?;
+    let picture = decode(data_uri).ok()?;
     preview(picture)
 }
 
@@ -127,18 +131,23 @@ fn preview(picture: DynamicImage) -> Option<String> {
 
 /// A copy no wider than `DISPLAY_DENSITY` times the CSS width it is shown at. None when the
 /// original is already that small, cannot be decoded, or the copy would not be smaller.
-pub fn scaled_for_display(data_uri: &str, display_width: u32) -> Option<String> {
+pub fn scaled_for_display(data_uri: &str, display_width: u32) -> crate::Result<Option<String>> {
+    let (mime, _) = crate::limits::decode_image_data_uri(data_uri)?;
+    if matches!(mime, "image/gif" | "image/svg+xml") {
+        return Ok(None);
+    }
     let target = display_width.max(1).saturating_mul(DISPLAY_DENSITY);
     let picture = decode(data_uri)?;
     if picture.width() <= target {
-        return None;
+        return Ok(None);
     }
     let height = (u64::from(picture.height()) * u64::from(target) / u64::from(picture.width()))
         .max(1) as u32;
     let scaled = picture.resize_exact(target, height, FilterType::Lanczos3);
-    let (bytes, mime) = encode(&scaled, 85)?;
+    let (bytes, mime) = encode(&scaled, 85)
+        .ok_or_else(|| crate::Error("Cannot encode the resized image.".into()))?;
     let uri = format!("data:{mime};base64,{}", STANDARD.encode(bytes));
-    (uri.len() < data_uri.len()).then_some(uri)
+    Ok((uri.len() < data_uri.len()).then_some(uri))
 }
 
 #[cfg(test)]
@@ -246,9 +255,9 @@ mod tests {
     #[test]
     fn display_copies_keep_twice_the_shown_width_and_never_grow() {
         let original = png(2400, 1200);
-        let scaled = scaled_for_display(&original, 300).unwrap();
+        let scaled = scaled_for_display(&original, 300).unwrap().unwrap();
         assert_eq!(size(&scaled).0, 600);
         assert_eq!(size(&scaled).1, 300);
-        assert!(scaled_for_display(&original, 1600).is_none());
+        assert!(scaled_for_display(&original, 1600).unwrap().is_none());
     }
 }

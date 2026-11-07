@@ -411,9 +411,9 @@ fn restoring_a_version_is_one_undo_step_in_the_session() {
     let mut renamed = project.clone();
     renamed.name = "Later".into();
     let mut session = Session::new(renamed).unwrap();
-    let before = session.history().2;
+    let before = session.history().position;
     session.restore(project.clone(), |_| Ok(())).unwrap();
-    assert_eq!(session.history().2, before + 1);
+    assert_eq!(session.history().position, before + 1);
     assert_eq!(session.project().name, "Storage");
     session.undo(|_| Ok(())).unwrap();
     assert_eq!(session.project().name, "Later");

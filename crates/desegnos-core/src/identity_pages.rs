@@ -276,11 +276,6 @@ pub fn page_references_image(file: &str, text: &str, image: &str) -> bool {
     })
 }
 
-/// An asset directory supplies no evidence that a visitor can open a page there.
-pub fn folder_source_page(_image: &str) -> Option<SourcePage> {
-    None
-}
-
 pub fn validate_source_page_ref(page: &SourcePageRef) -> crate::Result<()> {
     crate::model::validate_text(&page.title, "Source page title", 240, true)?;
     crate::ensure(
@@ -288,13 +283,9 @@ pub fn validate_source_page_ref(page: &SourcePageRef) -> crate::Result<()> {
         "A source page has an invalid path.",
     )?;
     crate::ensure(
-        page.url.as_ref().is_none_or(|url| {
-            Url::parse(url).is_ok_and(|url| {
-                matches!(url.scheme(), "http" | "https")
-                    && url.username().is_empty()
-                    && url.password().is_none()
-            })
-        }),
+        page.url
+            .as_ref()
+            .is_none_or(|url| crate::limits::valid_http_url(url)),
         "A source page has an invalid URL.",
     )
 }

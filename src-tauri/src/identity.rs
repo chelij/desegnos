@@ -565,6 +565,7 @@ fn freeze(
         request_history: String::new(),
         capabilities: None,
         images: vec![],
+        layer_requests: vec![],
     };
     Ok((snapshot, images))
 }

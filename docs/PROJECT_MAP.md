@@ -44,8 +44,16 @@ test-results/                Local evidence from smoke, startup and vault runs (
 
 | Module | Owns |
 | --- | --- |
-| [model.rs](../crates/desegnos-core/src/model.rs) | `Project`, `Page` (the spec's boundary) and `PageSize`, reference items, pointers and wiring, pending requests with their targets and areas, brief, decisions, exceptions, export records, `CanvasTemplate`, the `Command` enum, `Project::apply`/`validate` and project revision. |
-| [elements.rs](../crates/desegnos-core/src/elements.rs) | `Element` tree, element kinds, styles, free/stack/grid layout, per-size overrides, linked definitions, element patches and moves, `resolve_element`/`resolve_for_size`, nested ids and outlines. |
+| [model.rs](../crates/desegnos-core/src/model.rs) | `Project`, `Page` (the spec's boundary) and `PageSize`, reference items, pointers and wiring, pending requests with their targets and areas, brief, decisions, exceptions, export records, `CanvasTemplate` and project validation. |
+| [elements.rs](../crates/desegnos-core/src/elements.rs) | `Element` tree, element kinds, styles, free/stack/grid layout, per-size overrides, linked definitions, `resolve_element`, shared style resolution and nested ids. |
+| [limits.rs](../crates/desegnos-core/src/limits.rs) | Shared limits and URL, colour, SHA-256 and embedded-image validation. |
+| [commands.rs](../crates/desegnos-core/src/commands.rs) | `Command`, labels, burst history policy and the project edit interpreter. |
+| [element_edit.rs](../crates/desegnos-core/src/element_edit.rs) | Element patches/moves, project tree editing, linked-size resolution, outlines and layer naming. |
+| [project_new.rs](../crates/desegnos-core/src/project_new.rs) | Project construction and template initialization. |
+| [project_styles.rs](../crates/desegnos-core/src/project_styles.rs) | Shared style removal and detachment. |
+| [pointer_edit.rs](../crates/desegnos-core/src/pointer_edit.rs) | Pointer mutation and validation when editing. |
+| [reference_edit.rs](../crates/desegnos-core/src/reference_edit.rs) | Reference mutation, transfers between canvas and reference, and attachment promotion. |
+| [request_edit.rs](../crates/desegnos-core/src/request_edit.rs) | Pending request mutation and one-request-per-layer normalization. |
 | [session.rs](../crates/desegnos-core/src/session.rs) | `Session`: revision checks, undo/redo, burst-step merging, version labels, export metadata outside undo, generation recording/application, context import, restore and history position. |
 | [pointers.rs](../crates/desegnos-core/src/pointers.rs) | Pointer states (unwired, needs generating/exporting, code changed, wired, contradicts, broken), contradiction detection and target descriptions. |
 | [requirements.rs](../crates/desegnos-core/src/requirements.rs) | Frozen `RequirementsSnapshot`, capabilities, request markdown, targeted requirements and `validate_current`. |
@@ -57,8 +65,7 @@ test-results/                Local evidence from smoke, startup and vault runs (
 | [identity_pages.rs](../crates/desegnos-core/src/identity_pages.rs) | Source-page kinds and portable route names for imported evidence. |
 | [project_assets.rs](../crates/desegnos-core/src/project_assets.rs) | `desegnos-asset:` references, the content-addressed picture store, `prepare_picture`, image catalogues and unused-picture cleanup. |
 | [picture_scaling.rs](../crates/desegnos-core/src/picture_scaling.rs) | AI preview size/quality and display-scaled picture copies. |
-| [image_generation.rs](../crates/desegnos-core/src/image_generation.rs) | `ImageGenerationRequest` and generated-image types. Task data cannot grant credentials or file access. |
-| [provenance.rs](../crates/desegnos-core/src/provenance.rs) | Validation for `data-desegnos-found` public HTTPS source addresses. |
+| [image_generation.rs](../crates/desegnos-core/src/image_generation.rs) | `ImageGenerationRequest`. Task data cannot grant credentials or file access. |
 | [website.rs](../crates/desegnos-core/src/website.rs) | `website_links`, `website_assets` and `css_urls`: stylesheets, logos, pages, photos, media frames and CSS references. |
 | [website_import.rs](../crates/desegnos-core/src/website_import.rs) | `WebCapture` types and the pure conversion into pages, elements, reference notes, behaviour pointers and linked-size overrides. |
 | [export.rs](../crates/desegnos-core/src/export.rs) | Export plans, exact AI request markdown, schemas, reply parsing/validation, AI and direct bundles, manifests, pointer fingerprints and `RecordExport`. |

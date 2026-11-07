@@ -1,7 +1,29 @@
+use crate::dossier::HistoryTransition;
 use crate::{
-    Command, Error, ExportRecord, GenerationApplicationStatus, GenerationCandidate, Project,
-    RequirementsSnapshot, Result, ensure,
+    Command, Error, ExportRecord, GenerationCandidate, Project, RequirementsSnapshot, Result,
+    ensure,
 };
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SessionHistory {
+    pub session_id: uuid::Uuid,
+    pub start: usize,
+    pub position: usize,
+    pub end: usize,
+    pub version: u64,
+}
+
+impl Project {
+    fn carry_metadata(&mut self, current: &Project, transition: HistoryTransition) {
+        self.carry_generation_metadata(current, transition);
+        self.last_export = current.last_export.clone();
+        for pointer in &mut self.pointers {
+            if let Some(live) = current.pointers.iter().find(|live| live.id == pointer.id) {
+                pointer.wiring = live.wiring.clone();
+            }
+        }
+    }
+}
 
 pub struct Session {
     project: Project,
@@ -12,20 +34,14 @@ pub struct Session {
     history_id: uuid::Uuid,
     history_start: usize,
     history_version: u64,
-    /// The edit key whose burst is in progress, and when it last changed: a run of edits to
-    /// one box, element, page or project setting is one history step, not one per keystroke.
-    burst: Option<(String, std::time::Instant)>,
-    /// Labels of the history steps committed since the last saved version.
+    burst: Option<(crate::commands::HistoryBurst, std::time::Instant)>,
     version_labels: Vec<String>,
-    /// The label of the edit that is about to be committed.
-    pending_label: Option<&'static str>,
 }
 
-/// Authoritative session step labels, retained across undo and redo.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct HistoryEntry {
     pub label: String,
-    pub at: u64,
+    pub at: i64,
     pub position: usize,
 }
 impl HistoryEntry {
@@ -33,17 +49,15 @@ impl HistoryEntry {
         Self {
             label: label.into(),
             position,
-            at: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis() as u64,
+            at: match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+                Ok(duration) => duration.as_millis().min(i64::MAX as u128) as i64,
+                Err(error) => -(error.duration().as_millis().min(i64::MAX as u128) as i64),
+            },
         }
     }
 }
 
-/// Edits to the same thing that pause longer than this start a new history step.
-const NEW_LAYER: &str = "new-layer:";
-const STEP_PAUSE: std::time::Duration = std::time::Duration::from_secs(5);
+const MAX_UNDO_STEPS: usize = 200;
 
 impl Session {
     pub fn new(mut project: Project) -> Result<Self> {
@@ -62,7 +76,6 @@ impl Session {
             history_version: user_revision_floor,
             burst: None,
             version_labels: vec![],
-            pending_label: None,
         })
     }
     pub fn project(&self) -> &Project {
@@ -75,20 +88,31 @@ impl Session {
         !self.redo.is_empty()
     }
 
-    /// Session-local undo coordinates. Equal project contents remain distinct edits.
-    pub fn history(&self) -> (uuid::Uuid, usize, usize, usize, u64) {
+    pub fn history(&self) -> SessionHistory {
         let position = self.history_start + self.undo.len();
-        (
-            self.history_id,
-            self.history_start,
+        SessionHistory {
+            session_id: self.history_id,
+            start: self.history_start,
             position,
-            position + self.redo.len(),
-            self.history_version,
-        )
+            end: position + self.redo.len(),
+            version: self.history_version,
+        }
     }
 
     pub fn history_entries(&self) -> &[HistoryEntry] {
         &self.history_entries
+    }
+
+    fn persist_changed(
+        &self,
+        candidate: &Project,
+        durable: impl FnOnce(&Project) -> Result<()>,
+    ) -> Result<bool> {
+        if candidate.revision == self.project.revision {
+            return Ok(false);
+        }
+        durable(candidate)?;
+        Ok(true)
     }
 
     pub fn execute(
@@ -98,78 +122,19 @@ impl Session {
         durable: impl FnOnce(&Project) -> Result<()>,
     ) -> Result<()> {
         self.assert_revision(revision)?;
-        let key = self.burst_key(&command);
-        let label = command.version_label();
+        let policy = command.history(&self.project);
         let candidate = self.project.apply(self.project.revision, command)?;
-        if candidate.revision == self.project.revision {
+        if !self.persist_changed(&candidate, durable)? {
             return Ok(());
         }
-        durable(&candidate)?;
-        self.pending_label = Some(label);
-        self.commit_or_merge(candidate, key);
+        self.commit_or_merge(candidate, policy.burst, policy.label);
         Ok(())
     }
 
-    /// The labels of the history steps since the last saved version, oldest first.
     pub fn take_version_labels(&mut self) -> Vec<String> {
         std::mem::take(&mut self.version_labels)
     }
 
-    /// Edits that land on the same thing in quick succession become one history step.
-    fn burst_key(&self, command: &Command) -> Option<String> {
-        match command {
-            Command::NudgeElements { moves, .. } => {
-                let mut targets: Vec<_> = moves
-                    .iter()
-                    .map(|movement| {
-                        format!(
-                            "{}:{:?}:{}",
-                            movement.id, movement.size_id, movement.all_sizes
-                        )
-                    })
-                    .collect();
-                targets.sort();
-                Some(format!("nudge:{}", targets.join(",")))
-            }
-            // Only the text of a request changed (its targets and attachments stayed put).
-            Command::UpdateRequest { request } => self
-                .project
-                .requests
-                .iter()
-                .find(|existing| existing.id == request.id)
-                .filter(|existing| {
-                    existing.attachments == request.attachments
-                        && existing.targets == request.targets
-                })
-                .map(|existing| format!("request:{}", existing.id)),
-            Command::UpdatePage { page_id, .. } => Some(format!("page:{page_id}")),
-            Command::UpdatePageSize {
-                page_id, size_id, ..
-            } => Some(format!("size:{page_id}:{size_id}")),
-            // Only the comment changed; endpoints stayed put.
-            Command::UpdatePointer {
-                pointer_id,
-                from: None,
-                to: None,
-                ..
-            } => Some(format!("pointer-comment:{pointer_id}")),
-            Command::RenameProject { .. } => Some("project-name".into()),
-            Command::SetGridSettings { .. } => Some("grid".into()),
-            // Placing a layer and typing its first text is one step, however long the typing.
-            Command::InsertElements { elements, .. } if elements.len() == 1 => {
-                Some(format!("{NEW_LAYER}{}", elements[0].id))
-            }
-            Command::UpdateElements { patches, .. }
-                if patches.len() == 1 && patches[0].text.is_some() =>
-            {
-                Some(format!("{NEW_LAYER}{}", patches[0].id))
-            }
-            _ => None,
-        }
-    }
-
-    /// Record a finished export without adding an undo step: it is metadata about the design,
-    /// not a design change. Undo and Redo carry the newest export record forward.
     pub fn record_export(
         &mut self,
         record: ExportRecord,
@@ -178,15 +143,13 @@ impl Session {
         let candidate = self
             .project
             .apply(self.project.revision, Command::RecordExport { record })?;
-        if candidate.revision == self.project.revision {
+        if !self.persist_changed(&candidate, durable)? {
             return Ok(());
         }
-        durable(&candidate)?;
         self.project = candidate;
         self.user_revision_floor = self.project.revision;
         self.history_version = self.project.revision;
         self.burst = None;
-        self.pending_label = None;
         Ok(())
     }
 
@@ -200,18 +163,16 @@ impl Session {
         let next = self
             .project
             .record_generation(snapshot, candidate, attempt_ordinal)?;
-        if next.revision == self.project.revision {
+        if !self.persist_changed(&next, durable)? {
             return Ok(());
         }
-        durable(&next)?;
         self.project = next;
         self.version_labels.push("AI filled frames".into());
-        // A recorded Generate result ends any step in progress.
+
         self.end_history_step();
         Ok(())
     }
 
-    /// Apply one validated generation reply as one undo step.
     pub fn apply_generation(
         &mut self,
         snapshot: &RequirementsSnapshot,
@@ -227,10 +188,11 @@ impl Session {
             accepted_decision_indices,
             generated_pictures,
         )?;
-        durable(&next)?;
-        // Applying a reply publishes layers: it is one design edit and one undo step.
-        self.pending_label = Some("AI updated layers");
-        self.commit(next);
+        if !self.persist_changed(&next, durable)? {
+            return Ok(());
+        }
+
+        self.commit(next, "AI updated layers");
         Ok(())
     }
 
@@ -244,36 +206,37 @@ impl Session {
         let candidate = self
             .project
             .import_context(self.project.revision, context)?;
-        durable(&candidate)?;
-        self.pending_label = Some("Imported brand");
-        self.commit(candidate);
+        if !self.persist_changed(&candidate, durable)? {
+            return Ok(());
+        }
+        self.commit(candidate, "Imported brand");
         Ok(())
     }
 
-    /// Commit the edit, or fold it into the step its burst key is still building, then make
-    /// it the current burst. `commit` drops the burst, so the new key is set afterwards.
-    fn commit_or_merge(&mut self, candidate: Project, key: Option<String>) {
-        self.commit_or_merge_at(candidate, key, std::time::Instant::now());
+    fn commit_or_merge(
+        &mut self,
+        candidate: Project,
+        key: Option<crate::commands::HistoryBurst>,
+        label: &str,
+    ) {
+        self.commit_or_merge_at(candidate, key, std::time::Instant::now(), label);
     }
 
     fn commit_or_merge_at(
         &mut self,
         candidate: Project,
-        key: Option<String>,
+        key: Option<crate::commands::HistoryBurst>,
         now: std::time::Instant,
+        label: &str,
     ) {
-        let first_text = key.as_deref().is_some_and(|key| key.starts_with(NEW_LAYER));
+        let first_text = key.as_ref().is_some_and(|key| key.ends_after_merge());
         let continues = key.is_some()
             && !self.undo.is_empty()
             && self.burst.as_ref().is_some_and(|(current, at)| {
                 Some(current) == key.as_ref()
-                    && (first_text
-                        || now.duration_since(*at)
-                            < if current.starts_with("nudge:") {
-                                std::time::Duration::from_millis(500)
-                            } else {
-                                STEP_PAUSE
-                            })
+                    && current
+                        .pause()
+                        .is_none_or(|pause| now.duration_since(*at) < pause)
             });
         if continues {
             self.user_revision_floor = candidate.revision;
@@ -281,47 +244,39 @@ impl Session {
             self.project = candidate;
             self.redo.clear();
         } else {
-            self.commit(candidate);
+            self.commit(candidate, label);
         }
-        // Only the first text joins the placing step; later edits are steps of their own.
+
         self.burst = if continues && first_text {
             None
         } else {
             key.map(|key| (key, now))
         };
-        self.pending_label = None;
     }
 
-    /// End the step in progress: the next edit starts a new one. Called when focus leaves an
-    /// editor, a generation result lands, or the project is saved or switched.
     pub fn end_history_step(&mut self) {
-        // Closing the editor of a just-placed layer still lets its first text join that step.
         if !self
             .burst
             .as_ref()
-            .is_some_and(|(key, _)| key.starts_with(NEW_LAYER))
+            .is_some_and(|(key, _)| key.survives_focus_change())
         {
             self.burst = None;
         }
     }
 
-    fn commit(&mut self, candidate: Project) {
+    fn commit(&mut self, candidate: Project, label: &str) {
         self.burst = None;
         let position = self.history_start + self.undo.len() + 1;
         self.history_entries
             .retain(|entry| entry.position < position);
-        self.history_entries.push(HistoryEntry::new(
-            self.pending_label.unwrap_or("Changed the project"),
-            position,
-        ));
-        if let Some(label) = self.pending_label.take() {
-            self.version_labels.push(label.to_owned());
-        }
+        self.history_entries
+            .push(HistoryEntry::new(label, position));
+        self.version_labels.push(label.to_owned());
         self.user_revision_floor = candidate.revision;
         self.history_version = candidate.revision;
         self.undo
             .push(std::mem::replace(&mut self.project, candidate));
-        if self.undo.len() > 200 {
+        if self.undo.len() > MAX_UNDO_STEPS {
             self.undo.remove(0);
             self.history_start += 1;
             self.history_entries
@@ -336,34 +291,13 @@ impl Session {
             .last()
             .cloned()
             .ok_or_else(|| Error("There is no edit to undo.".into()))?;
-        candidate.revision = self
-            .project
-            .revision
-            .checked_add(1)
-            .ok_or_else(|| Error("Project revision limit reached.".into()))?;
-        candidate.applied_job_ids = self.project.applied_job_ids.clone();
-        let generation_was_applied =
-            self.project
-                .latest_generation
-                .as_ref()
-                .is_some_and(|dossier| {
-                    dossier.application_status == GenerationApplicationStatus::Applied
-                        && !self
-                            .undo
-                            .last()
-                            .unwrap()
-                            .applied_job_ids
-                            .contains(&dossier.job_id)
-                });
-        candidate.latest_generation = self.project.latest_generation.clone();
-        self.carry_export_metadata(&mut candidate);
-        if generation_was_applied && let Some(dossier) = &mut candidate.latest_generation {
-            dossier.application_status = GenerationApplicationStatus::Undone;
-        }
+        candidate.revision = crate::limits::next_revision(self.project.revision)?;
+        candidate.carry_metadata(&self.project, HistoryTransition::Undo);
         candidate.validate()?;
-        durable(&candidate)?;
+        if !self.persist_changed(&candidate, durable)? {
+            return Ok(());
+        }
         self.burst = None;
-        self.pending_label = None;
         self.version_labels.push("Undid a change".into());
         self.user_revision_floor = candidate.revision;
         self.undo.pop();
@@ -378,37 +312,13 @@ impl Session {
             .last()
             .cloned()
             .ok_or_else(|| Error("There is no edit to redo.".into()))?;
-        candidate.revision = self
-            .project
-            .revision
-            .checked_add(1)
-            .ok_or_else(|| Error("Project revision limit reached.".into()))?;
-        candidate.applied_job_ids = self.project.applied_job_ids.clone();
-        let generation_is_restored =
-            self.project
-                .latest_generation
-                .as_ref()
-                .is_some_and(|current| {
-                    current.application_status == GenerationApplicationStatus::Undone
-                        && candidate
-                            .latest_generation
-                            .as_ref()
-                            .is_some_and(|restored| {
-                                restored.application_status == GenerationApplicationStatus::Applied
-                                    && restored.job_id == current.job_id
-                                    && restored.candidate_sha256 == current.candidate_sha256
-                            })
-                });
-        candidate.latest_generation = self.project.latest_generation.clone();
-        self.carry_export_metadata(&mut candidate);
-        if generation_is_restored && let Some(dossier) = &mut candidate.latest_generation {
-            dossier.application_status = GenerationApplicationStatus::Applied;
-            dossier.applied_at_revision = Some(candidate.revision);
-        }
+        candidate.revision = crate::limits::next_revision(self.project.revision)?;
+        candidate.carry_metadata(&self.project, HistoryTransition::Redo);
         candidate.validate()?;
-        durable(&candidate)?;
+        if !self.persist_changed(&candidate, durable)? {
+            return Ok(());
+        }
         self.burst = None;
-        self.pending_label = None;
         self.version_labels.push("Redid a change".into());
         self.user_revision_floor = candidate.revision;
         self.redo.pop();
@@ -417,24 +327,6 @@ impl Session {
         Ok(())
     }
 
-    /// Export records and the wiring they stamped are metadata: a design Undo never rolls them
-    /// back, so a clash check keeps comparing against the last real export.
-    fn carry_export_metadata(&self, candidate: &mut Project) {
-        candidate.last_export = self.project.last_export.clone();
-        for pointer in &mut candidate.pointers {
-            if let Some(current) = self
-                .project
-                .pointers
-                .iter()
-                .find(|item| item.id == pointer.id)
-            {
-                pointer.wiring = current.wiring.clone();
-            }
-        }
-    }
-
-    /// Make a saved version the current state as one undo step. The caller has already stored
-    /// it as a new version, so history is never rewritten.
     pub fn restore(
         &mut self,
         project: Project,
@@ -442,17 +334,13 @@ impl Session {
     ) -> Result<()> {
         let mut candidate = project;
         candidate.keep_one_request_per_layer();
-        candidate.revision = self
-            .project
-            .revision
-            .checked_add(1)
-            .ok_or_else(|| Error("Project revision limit reached.".into()))?;
-        candidate.applied_job_ids = self.project.applied_job_ids.clone();
-        candidate.latest_generation = self.project.latest_generation.clone();
+        candidate.revision = crate::limits::next_revision(self.project.revision)?;
+        candidate.carry_metadata(&self.project, HistoryTransition::Restore);
         candidate.validate()?;
-        durable(&candidate)?;
-        self.pending_label = Some("Restored a version");
-        self.commit(candidate);
+        if !self.persist_changed(&candidate, durable)? {
+            return Ok(());
+        }
+        self.commit(candidate, "Restored a version");
         Ok(())
     }
 
@@ -493,8 +381,8 @@ mod tests {
             .unwrap()
     }
 
-    fn key() -> Option<String> {
-        Some("project-name".into())
+    fn key() -> Option<crate::commands::HistoryBurst> {
+        Some(crate::commands::HistoryBurst::Edit("project-name".into()))
     }
 
     #[test]
@@ -523,10 +411,10 @@ mod tests {
         assert!(!first_label.is_empty());
         session.take_version_labels();
         session.undo(|_| Ok(())).unwrap();
-        assert_eq!(session.history().2, 0);
+        assert_eq!(session.history().position, 0);
         assert_eq!(session.history_entries()[1].label, first_label);
         session.redo(|_| Ok(())).unwrap();
-        assert_eq!(session.history().2, 1);
+        assert_eq!(session.history().position, 1);
         assert_eq!(session.history_entries()[1].label, first_label);
         session.undo(|_| Ok(())).unwrap();
         session
@@ -616,7 +504,7 @@ mod tests {
             },
         };
         let item_id = item.id;
-        let position = session.history().2;
+        let position = session.history().position;
         session
             .execute(
                 session.project().revision,
@@ -627,13 +515,13 @@ mod tests {
                 |_| Ok(()),
             )
             .unwrap();
-        assert_eq!(session.history().2, position + 1, "one history step");
+        assert_eq!(session.history().position, position + 1, "one history step");
         assert_eq!(session.project().reference.len(), 1);
         session.undo(|_| Ok(())).unwrap();
         assert!(session.project().reference.is_empty());
         session.redo(|_| Ok(())).unwrap();
         assert_eq!(session.project().reference.len(), 1);
-        let position = session.history().2;
+        let position = session.history().position;
         session
             .execute(
                 session.project().revision,
@@ -653,7 +541,7 @@ mod tests {
                 |_| Ok(()),
             )
             .unwrap();
-        assert_eq!(session.history().2, position + 1, "one history step");
+        assert_eq!(session.history().position, position + 1, "one history step");
         assert_eq!(
             session.project().reference[0].kind,
             crate::ReferenceKind::Note {
@@ -668,7 +556,7 @@ mod tests {
             }
         );
         assert_eq!(session.project().reference[0].rect.x, 40.0);
-        let position = session.history().2;
+        let position = session.history().position;
         session
             .execute(
                 session.project().revision,
@@ -677,7 +565,7 @@ mod tests {
             )
             .unwrap();
         assert!(session.project().reference.is_empty());
-        assert_eq!(session.history().2, position + 1, "one history step");
+        assert_eq!(session.history().position, position + 1, "one history step");
         session.undo(|_| Ok(())).unwrap();
         assert_eq!(session.project().reference.len(), 1);
         assert_eq!(
@@ -692,13 +580,23 @@ mod tests {
     fn edits_under_the_step_gap_fold_into_one_history_step() {
         let mut session = session();
         let start = std::time::Instant::now();
-        session.commit_or_merge_at(renamed(&session, "One"), key(), start);
+        session.commit_or_merge_at(
+            renamed(&session, "One"),
+            key(),
+            start,
+            "Renamed the project",
+        );
         session.commit_or_merge_at(
             renamed(&session, "Two"),
             key(),
-            start + STEP_PAUSE - std::time::Duration::from_millis(1),
+            start + std::time::Duration::from_secs(5) - std::time::Duration::from_millis(1),
+            "Renamed the project",
         );
-        assert_eq!(session.history().2, 1, "still the same history position");
+        assert_eq!(
+            session.history().position,
+            1,
+            "still the same history position"
+        );
         assert_eq!(session.undo.len(), 1);
         assert_eq!(session.project.name, "Two");
     }
@@ -707,16 +605,26 @@ mod tests {
     fn edits_after_the_step_gap_start_a_new_history_step() {
         let mut session = session();
         let start = std::time::Instant::now();
-        session.commit_or_merge_at(renamed(&session, "One"), key(), start);
+        session.commit_or_merge_at(
+            renamed(&session, "One"),
+            key(),
+            start,
+            "Renamed the project",
+        );
         let last = start + std::time::Duration::from_secs(4);
-        session.commit_or_merge_at(renamed(&session, "Two"), key(), last);
-        assert_eq!(session.history().2, 1);
+        session.commit_or_merge_at(renamed(&session, "Two"), key(), last, "Renamed the project");
+        assert_eq!(session.history().position, 1);
         session.commit_or_merge_at(
             renamed(&session, "Three"),
             key(),
-            last + STEP_PAUSE + std::time::Duration::from_millis(1),
+            last + std::time::Duration::from_secs(5) + std::time::Duration::from_millis(1),
+            "Renamed the project",
         );
-        assert_eq!(session.history().2, 2, "a pause committed a new step");
+        assert_eq!(
+            session.history().position,
+            2,
+            "a pause committed a new step"
+        );
         assert_eq!(session.undo.len(), 2);
         session.undo(|_| Ok(())).unwrap();
         assert_eq!(session.project.name, "Two");

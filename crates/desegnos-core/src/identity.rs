@@ -1,19 +1,18 @@
 use crate::{Error, Project, Result, digest, ensure, model::validate_text};
-use base64::{Engine, engine::general_purpose::STANDARD};
 use quick_xml::{Reader, events::Event};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use uuid::Uuid;
 
-pub const MAX_IDENTITY_ASSETS: usize = 4;
-pub const MAX_IDENTITY_ASSET_BYTES: usize = 512 * 1024;
+pub use crate::limits::MAX_IDENTITY_ASSET_BYTES;
+pub use crate::limits::MAX_IDENTITY_ASSETS;
+pub use crate::limits::MAX_PHOTO_DESCRIPTION_CHARS;
 /// The user's own pictures from an imported folder (portfolio photos, products, team).
-pub const MAX_PROJECT_PHOTO_BYTES: usize = 200 * 1024;
-pub const MAX_PHOTO_DESCRIPTION_CHARS: usize = 200;
+pub use crate::limits::MAX_PROJECT_PHOTO_BYTES;
 
 /// Existing work and pages found in imported sources (projects, tutorials, articles), so
 /// generation knows what exists and where to link.
-pub const MAX_IMPORTED_ITEMS: usize = 64;
+pub use crate::limits::MAX_IMPORTED_ITEMS;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -124,7 +123,7 @@ impl ProjectPhoto {
             false,
         )?;
         ensure(
-            valid_digest(&self.sha256),
+            crate::limits::is_sha256_hex(&self.sha256),
             "A project photo has an invalid fingerprint.",
         )?;
         ensure(
@@ -136,8 +135,18 @@ impl ProjectPhoto {
             .strip_prefix("data:image/jpeg;base64,")
             .ok_or_else(|| Error("A project photo must be an embedded JPEG.".into()))?;
         ensure(
-            !encoded.is_empty() && encoded.len() <= MAX_PROJECT_PHOTO_BYTES.div_ceil(3) * 4,
+            !encoded.is_empty()
+                && encoded.len() <= crate::limits::base64_encoded_len(MAX_PROJECT_PHOTO_BYTES),
             "A project photo exceeds its size limit.",
+        )?;
+        let (_, bytes) = crate::limits::decode_image_data_uri(&self.data_uri)?;
+        ensure(
+            bytes.len() <= MAX_PROJECT_PHOTO_BYTES && digest(&bytes) == self.sha256,
+            "A project photo failed its integrity check.",
+        )?;
+        ensure(
+            raster_dimensions("image/jpeg", &bytes) == Some((self.width, self.height)),
+            "A project photo's dimensions do not match its stored image.",
         )
     }
 }
@@ -167,22 +176,20 @@ pub struct ImportedIdentity {
     pub pages: Vec<ImportedPageContext>,
 }
 
-fn valid_digest(value: &str) -> bool {
-    value.len() == 64
-        && value
-            .bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-}
-
 impl IdentityAsset {
     pub fn validate(&self) -> Result<()> {
         ensure(
             !self.id.is_nil(),
             "An identity asset needs a valid identifier.",
         )?;
-        validate_text(&self.name, "Identity asset name", 120, true)?;
+        validate_text(
+            &self.name,
+            "Identity asset name",
+            crate::limits::MAX_NAME_CHARS,
+            true,
+        )?;
         ensure(
-            valid_digest(&self.sha256),
+            crate::limits::is_sha256_hex(&self.sha256),
             "An identity asset has an invalid fingerprint.",
         )?;
         ensure(
@@ -197,59 +204,24 @@ impl IdentityAsset {
             Error("An identity image must use a matching embedded base64 data URI.".into())
         })?;
         ensure(
-            !encoded.is_empty() && encoded.len() <= MAX_IDENTITY_ASSET_BYTES.div_ceil(3) * 4,
-            "An identity image exceeds the 512 KiB limit.",
+            !encoded.is_empty()
+                && encoded.len() <= crate::limits::base64_encoded_len(MAX_IDENTITY_ASSET_BYTES),
+            format!(
+                "An identity image exceeds the {} byte limit.",
+                MAX_IDENTITY_ASSET_BYTES
+            ),
         )?;
-        let bytes = STANDARD
-            .decode(encoded)
-            .map_err(|_| Error("An identity image contains invalid base64 data.".into()))?;
+        let (mime, bytes) = crate::limits::decode_image_data_uri(&self.data_uri)?;
         ensure(
-            !bytes.is_empty()
-                && bytes.len() <= MAX_IDENTITY_ASSET_BYTES
-                && STANDARD.encode(&bytes) == encoded,
-            "An identity image must use canonical base64 and fit within 512 KiB.",
+            mime == self.mime && bytes.len() <= MAX_IDENTITY_ASSET_BYTES,
+            format!(
+                "An identity image must fit within {} bytes.",
+                MAX_IDENTITY_ASSET_BYTES
+            ),
         )?;
         ensure(
             digest(&bytes) == self.sha256,
             "An identity image failed its integrity check.",
-        )?;
-        let signature_matches = match self.mime.as_str() {
-            "image/png" => {
-                bytes.len() >= 33
-                    && bytes.starts_with(b"\x89PNG\r\n\x1a\n")
-                    && &bytes[12..16] == b"IHDR"
-            }
-            "image/jpeg" => {
-                bytes.len() >= 4
-                    && bytes.starts_with(b"\xff\xd8\xff")
-                    && bytes.ends_with(b"\xff\xd9")
-            }
-            "image/webp" => {
-                bytes.len() >= 20
-                    && bytes.starts_with(b"RIFF")
-                    && &bytes[8..12] == b"WEBP"
-                    && matches!(&bytes[12..16], b"VP8 " | b"VP8L" | b"VP8X")
-                    && u32::from_le_bytes(
-                        bytes[4..8]
-                            .try_into()
-                            .map_err(|_| Error("Invalid WebP image.".into()))?,
-                    ) as usize
-                        == bytes.len() - 8
-            }
-            "image/gif" => {
-                bytes.len() >= 14
-                    && (bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a"))
-                    && bytes.ends_with(b";")
-            }
-            "image/svg+xml" => {
-                validate_svg(&bytes)?;
-                true
-            }
-            _ => false,
-        };
-        ensure(
-            signature_matches,
-            "An identity image's bytes do not match its declared format.",
         )?;
         if self.mime != "image/svg+xml" {
             ensure(
@@ -287,7 +259,7 @@ impl ImportedIdentity {
             true,
         )?;
         ensure(
-            valid_digest(&self.source_sha256),
+            crate::limits::is_sha256_hex(&self.source_sha256),
             "The imported identity has an invalid source fingerprint.",
         )?;
         ensure(
@@ -362,9 +334,7 @@ impl Project {
         )?;
         let mut next = self.clone();
         next.store_inline_images()?;
-        next.revision = revision
-            .checked_add(1)
-            .ok_or_else(|| crate::Error("Project revision limit reached.".into()))?;
+        next.revision = crate::limits::next_revision(revision)?;
         for (topic, value) in &context.findings {
             let (topic, value) = (topic.trim(), value.trim());
             let normalized = topic.to_lowercase();
@@ -449,30 +419,11 @@ impl Project {
         next.validate()?;
         Ok(next)
     }
-
-    pub fn set_initial_identity(&self, identity: ImportedIdentity) -> Result<Self> {
-        self.validate()?;
-        identity.validate()?;
-        ensure(
-            self.revision == 0
-                && self.imported_identity.is_none()
-                && self.pages.len() == 1
-                && self.pages[0].elements.is_empty()
-                && self.latest_generation.is_none()
-                && self.applied_job_ids.is_empty()
-                && self.pages[0].background == "#ffffff",
-            "Import identity into a new blank project with a white background before editing begins.",
-        )?;
-        let mut next = self.clone();
-        next.imported_identity = Some(identity);
-        next.validate()?;
-        Ok(next)
-    }
 }
 
 // Imported SVGs are portable images, not documents with scripts, external resources,
 // animation, or HTML. Attribute values are XML-decoded before reference checks.
-fn validate_svg(bytes: &[u8]) -> Result<()> {
+pub(crate) fn validate_svg(bytes: &[u8]) -> Result<()> {
     let source = std::str::from_utf8(bytes)
         .map_err(|_| Error("An SVG identity image must be UTF-8.".into()))?;
     let mut reader = Reader::from_str(source);
@@ -586,83 +537,16 @@ fn validate_svg_paint(value: &str) -> Result<()> {
 }
 
 fn raster_dimensions(mime: &str, bytes: &[u8]) -> Option<(u32, u32)> {
-    match mime {
-        "image/png" if bytes.get(8..12) == Some(&13_u32.to_be_bytes()) => Some((
-            u32::from_be_bytes(bytes.get(16..20)?.try_into().ok()?),
-            u32::from_be_bytes(bytes.get(20..24)?.try_into().ok()?),
-        )),
-        "image/gif" => Some((
+    // GIF decoding is not enabled: retain animation and inspect its logical screen size.
+    if mime == "image/gif" {
+        return Some((
             u16::from_le_bytes(bytes.get(6..8)?.try_into().ok()?) as u32,
             u16::from_le_bytes(bytes.get(8..10)?.try_into().ok()?) as u32,
-        )),
-        "image/jpeg" => {
-            let mut cursor = 2_usize;
-            while cursor < bytes.len() {
-                if *bytes.get(cursor)? != 0xff {
-                    return None;
-                }
-                while *bytes.get(cursor)? == 0xff {
-                    cursor += 1;
-                }
-                let marker = *bytes.get(cursor)?;
-                cursor += 1;
-                if marker == 0xda || marker == 0xd9 || marker == 0x00 {
-                    return None;
-                }
-                if marker == 0x01 || (0xd0..=0xd7).contains(&marker) {
-                    continue;
-                }
-                let length =
-                    u16::from_be_bytes(bytes.get(cursor..cursor + 2)?.try_into().ok()?) as usize;
-                let end = cursor.checked_add(length)?;
-                if length < 2 || end > bytes.len() {
-                    return None;
-                }
-                if matches!(marker, 0xc0..=0xc3 | 0xc5..=0xc7 | 0xc9..=0xcb | 0xcd..=0xcf) {
-                    if length < 8 {
-                        return None;
-                    }
-                    let components = *bytes.get(cursor + 7)? as usize;
-                    if !(1..=4).contains(&components) || length != 8 + 3 * components {
-                        return None;
-                    }
-                    return Some((
-                        u16::from_be_bytes(bytes.get(cursor + 5..cursor + 7)?.try_into().ok()?)
-                            as u32,
-                        u16::from_be_bytes(bytes.get(cursor + 3..cursor + 5)?.try_into().ok()?)
-                            as u32,
-                    ));
-                }
-                cursor = end;
-            }
-            None
-        }
-        "image/webp" => {
-            let length = u32::from_le_bytes(bytes.get(16..20)?.try_into().ok()?) as usize;
-            if length.checked_add(20)? > bytes.len() {
-                return None;
-            }
-            match bytes.get(12..16)? {
-                b"VP8X" if length == 10 => Some((
-                    1 + little_24(bytes.get(24..27)?),
-                    1 + little_24(bytes.get(27..30)?),
-                )),
-                b"VP8L" if length >= 5 && bytes.get(20) == Some(&0x2f) => {
-                    let bits = u32::from_le_bytes(bytes.get(21..25)?.try_into().ok()?);
-                    Some(((bits & 0x3fff) + 1, ((bits >> 14) & 0x3fff) + 1))
-                }
-                b"VP8 " if length >= 10 && bytes.get(23..26) == Some(&[0x9d, 0x01, 0x2a]) => {
-                    Some((
-                        (u16::from_le_bytes(bytes.get(26..28)?.try_into().ok()?) & 0x3fff) as u32,
-                        (u16::from_le_bytes(bytes.get(28..30)?.try_into().ok()?) & 0x3fff) as u32,
-                    ))
-                }
-                _ => None,
-            }
-        }
-        _ => None,
+        ));
     }
-}
-fn little_24(bytes: &[u8]) -> u32 {
-    bytes[0] as u32 | (bytes[1] as u32) << 8 | (bytes[2] as u32) << 16
+    image::ImageReader::new(std::io::Cursor::new(bytes))
+        .with_guessed_format()
+        .ok()?
+        .into_dimensions()
+        .ok()
 }

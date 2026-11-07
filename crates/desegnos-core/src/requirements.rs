@@ -128,6 +128,7 @@ pub struct RequirementsSnapshot {
     /// Small previews of attached pictures, sent beside the requirements file.
     #[serde(default)]
     pub images: Vec<RequestImage>,
+    pub layer_requests: Vec<crate::FrozenLayerRequest>,
 }
 
 /// A downscaled preview of one attached picture, labelled with its attachment ID.
@@ -443,7 +444,7 @@ impl Project {
         if self.imported_identity.is_some() {
             md.push_str("\n## Imported identity and project images\n\nThe project already holds these logos, colours, pictures and work. Use them as reference; never invent replacements for an available logo. Asset names describe the available variants. Current accepted decisions and creative exceptions take precedence over the initial imported identity.\n\n");
             let page_ids: Vec<_> = targets.iter().map(|(page, _)| page.id).collect();
-            if let Some(catalogue) = self.generation_page_catalogue(&page_ids) {
+            if let Some(catalogue) = self.generation_asset_catalogue() {
                 md.push_str(&fenced_json(&catalogue)?);
             }
             let mut pictures = self.generation_picture_catalogue(&page_ids);
@@ -508,7 +509,7 @@ impl Project {
                     match target {
                         crate::RequestTarget::Element { page, size, id } => {
                             let page = self.page(*page)?;
-                            let element = crate::elements::find_in(&page.elements, *id)
+                            let element = crate::elements::find_element(&page.elements, *id)
                                 .ok_or_else(|| Error("This layer no longer exists.".into()))?;
                             let resolved = crate::resolve_element(self, element);
                             targets.push(serde_json::json!({
@@ -683,6 +684,29 @@ impl Project {
             capabilities,
             reference_ids,
             images: vec![],
+            layer_requests: requests
+                .iter()
+                .flat_map(|request| {
+                    request.targets.iter().filter_map(move |target| {
+                        if let crate::RequestTarget::Element { page, id, .. } = target {
+                            Some((request, *page, *id))
+                        } else {
+                            None
+                        }
+                    })
+                })
+                .map(|(request, page, id)| {
+                    let page = self.page(page)?;
+                    let element = crate::elements::find_element(&page.elements, id)
+                        .ok_or_else(|| Error("This layer no longer exists.".into()))?;
+                    Ok(crate::FrozenLayerRequest {
+                        page_id: page.id,
+                        element_id: id,
+                        rect: element.rect,
+                        request: request.text.clone(),
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?,
         })
     }
 
@@ -906,7 +930,7 @@ impl RequirementsSnapshot {
                 Uuid::parse_str(parts[2]).map_err(|_| Error("Invalid layer dependency.".into()))?;
             let page = project.page(page_id)?;
             let element =
-                crate::elements::find_in(&page.elements, element_id).ok_or_else(|| {
+                crate::elements::find_element(&page.elements, element_id).ok_or_else(|| {
                     Error("A requested layer was removed. Generate new requirements.".into())
                 })?;
             let frozen = crate::resolve_element(project, element);
@@ -945,7 +969,7 @@ impl RequirementsSnapshot {
             .iter()
             .map(|(page_id, element_id)| {
                 let page = project.page(*page_id)?;
-                let element = crate::elements::find_in(&page.elements, *element_id)
+                let element = crate::elements::find_element(&page.elements, *element_id)
                     .ok_or_else(|| Error("A requested layer was removed.".into()))?;
                 Ok((page, element))
             })
@@ -991,5 +1015,65 @@ mod content_guidance_tests {
         assert!(site.contains("a path from `siteRoutes`: it frames that page live"));
         assert!(!site.contains("only takes web addresses"));
         assert!(!slides.contains("## Frames"));
+    }
+}
+
+impl RequirementsSnapshot {
+    pub(crate) fn set_request_history(&mut self, section: String) -> Result<()> {
+        ensure(
+            section.is_empty()
+                || ((section.starts_with(crate::request_history::HEADING)
+                    || section.starts_with(crate::request_history::RETRY_HEADING))
+                    && section.chars().count()
+                        <= crate::REQUEST_HISTORY_CHARS
+                            + crate::request_history::RETRY_HISTORY_CHARS),
+            "The request history is invalid.",
+        )?;
+        ensure(
+            self.request_history.is_empty(),
+            "Request history is already frozen.",
+        )?;
+        if !section.is_empty() {
+            let position = self
+                .markdown
+                .find("\n## Reference items\n")
+                .ok_or_else(|| crate::Error("Missing reference items.".into()))?;
+            self.markdown.insert_str(position, &section);
+            ensure(
+                self.markdown.len() <= crate::MAX_REQUIREMENTS_BYTES,
+                "The requirements file exceeds its limit.",
+            )?;
+            self.sha256 = digest(self.markdown.as_bytes());
+        }
+        self.request_history = section;
+        Ok(())
+    }
+}
+
+impl Project {
+    pub(crate) fn generation_picture_catalogue(&self, page_ids: &[Uuid]) -> serde_json::Value {
+        let mut ids = std::collections::BTreeSet::new();
+        for page in self.pages.iter().filter(|page| page_ids.contains(&page.id)) {
+            let elements = crate::resolve_elements(self, &page.elements);
+            crate::project_assets::collect_element_pictures(&elements, &mut ids);
+        }
+        serde_json::json!(
+            ids.into_iter()
+                .map(|id| serde_json::json!({"url": crate::project_asset_reference(id)}))
+                .collect::<Vec<_>>()
+        )
+    }
+
+    pub(crate) fn generation_asset_catalogue(&self) -> Option<serde_json::Value> {
+        self.imported_identity.as_ref().map(|identity| serde_json::json!({
+            "sourceName":identity.source_name,"sourceSha256":identity.source_sha256,"summary":identity.summary,
+            "assets":identity.assets.iter().map(|asset| serde_json::json!({
+                "id":asset.id,"name":asset.name,"mime":asset.mime,"sha256":asset.sha256,"url":crate::project_asset_reference(asset.id)
+            })).collect::<Vec<_>>(),
+            "photos":identity.photos.iter().map(|photo| serde_json::json!({
+                "name":photo.name,"width":photo.width,"height":photo.height,"description":photo.description,"url":crate::project_asset_reference(photo.id)
+            })).collect::<Vec<_>>(),
+            "content":identity.content
+        }))
     }
 }

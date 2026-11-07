@@ -155,7 +155,6 @@ fn check_project(project: &Project) {
             "id",
             "name",
             "revision",
-            "viewport",
             "appearance",
             "generationMode",
             "showGrid",
@@ -172,7 +171,6 @@ fn check_project(project: &Project) {
             "decisions",
             "exceptions",
             "appliedJobIds",
-            "extensions",
         ],
     );
     for (index, request) in value["requests"]
@@ -187,11 +185,10 @@ fn check_project(project: &Project) {
             &["id", "text", "attachments", "targets", "requestedAt"],
         );
     }
-    require(&value["viewport"], "project.viewport", &["width", "height"]);
     require(
         &value["gridSettings"],
         "project.gridSettings",
-        &["spacing", "unit", "snap", "rulers"],
+        &["spacing", "unit", "snap"],
     );
     require(
         &value["brief"],

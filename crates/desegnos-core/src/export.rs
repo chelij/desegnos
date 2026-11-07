@@ -118,7 +118,7 @@ pub fn behaviour_fingerprint(project: &Project, pointer: &Pointer) -> String {
             project.pages.iter().find(|page| page.id == id).map(|page| {
                 let elements = crate::resolve_for_size(project, page, page.base_size_id());
                 let elements = if let Some(id) = element_id.filter(|_| !pointer.is_behaviour()) {
-                    crate::elements::find_in(&elements, id)
+                    crate::elements::find_element(&elements, id)
                         .map(std::slice::from_ref)
                         .unwrap_or(&[])
                 } else {
@@ -790,6 +790,7 @@ pub fn plan_snapshot(project: &Project, plan: &ExportPlan) -> crate::Requirement
         }),
         reference_ids: Vec::new(),
         images: Vec::new(),
+        layer_requests: Vec::new(),
     }
 }
 

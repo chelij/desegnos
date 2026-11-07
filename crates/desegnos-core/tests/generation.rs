@@ -250,7 +250,7 @@ fn applying_a_generation_reply_is_one_undo_step() {
     let pointer = project.pointers[0].id;
     let snapshot = project.prepare_requirements().unwrap();
     let mut session = Session::new(project).unwrap();
-    let before = session.history().2;
+    let before = session.history().position;
     session
         .apply_generation(
             &snapshot,
@@ -260,7 +260,7 @@ fn applying_a_generation_reply_is_one_undo_step() {
             |_| Ok(()),
         )
         .unwrap();
-    assert_eq!(session.history().2, before + 1);
+    assert_eq!(session.history().position, before + 1);
     assert!(session.project().element(target).unwrap().1.children.len() == 1);
     assert!(!session.project().element_has_pending_request(target));
     session.undo(|_| Ok(())).unwrap();
@@ -503,11 +503,11 @@ fn set_behaviour_validates_scope_and_creates_updates_removes_in_one_undo_step() 
                 assert!(escaped.validate(&snapshot, &project).is_err());
             }
             let mut session = Session::new(project.clone()).unwrap();
-            let before = session.history().2;
+            let before = session.history().position;
             session
                 .apply_generation(&snapshot, &reply, &[0], &BTreeMap::new(), |_| Ok(()))
                 .unwrap();
-            assert_eq!(session.history().2, before + 1);
+            assert_eq!(session.history().position, before + 1);
             let applied = session.project().clone();
             session.undo(|_| Ok(())).unwrap();
             assert_eq!(session.project().pointers, project.pointers);
@@ -1697,11 +1697,11 @@ fn page_properties_and_content_apply_in_one_undo_step() {
         .unwrap();
     let original_pages = project.pages.clone();
     let mut session = Session::new(project).unwrap();
-    let before = session.history().2;
+    let before = session.history().position;
     session
         .apply_generation(&snapshot, &reply, &[], &BTreeMap::new(), |_| Ok(()))
         .unwrap();
-    assert_eq!(session.history().2, before + 1);
+    assert_eq!(session.history().position, before + 1);
     assert_eq!(
         session.project().page(pages[0]).unwrap().background,
         "#05060b"

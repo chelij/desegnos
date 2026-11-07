@@ -70,7 +70,7 @@ fn insert(project: &Project, elements: Vec<Element>) -> desegnos_core::Result<Pr
 }
 
 fn step(session: &Session) -> usize {
-    session.history().2
+    session.history().position
 }
 
 // ---------------------------------------------------------------------------

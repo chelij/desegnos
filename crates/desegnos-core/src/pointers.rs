@@ -4,7 +4,7 @@
 //! edit its target layer; a reference pointer only lets the request read it as context. Simple
 //! comments are classified into a Play action by generation.
 //! Clashes are derived from the project alone, so the canvas and the AI conversation agree.
-use crate::{Pointer, PointerSource, PointerTarget, Project};
+use crate::{Pointer, PointerSource, PointerTarget, Project, ReferenceKind};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
@@ -25,7 +25,6 @@ pub enum PointerState {
     Wired,
     /// Two pointers from the same source mark the same element with different comments.
     Contradicts,
-    /// One endpoint no longer exists.
     Broken,
 }
 
@@ -46,15 +45,6 @@ pub fn pointer_needs_classifying(pointer: &Pointer) -> bool {
         && pointer.play_comment != pointer.comment
 }
 
-/// `None` for a pointer that is already wired or classified for its current comment.
-pub fn pointer_needs_generating(pointer: &Pointer) -> bool {
-    pointer_needs_classifying(pointer)
-        && pointer
-            .wiring
-            .as_ref()
-            .is_none_or(|wiring| wiring.generated_comment != pointer.comment)
-}
-
 /// The comment, endpoints and kind may change without the id, so generation treats them as
 /// context.
 pub fn pointer_context_value(project: &Project, pointer: &Pointer) -> serde_json::Value {
@@ -69,7 +59,6 @@ pub fn pointer_context_value(project: &Project, pointer: &Pointer) -> serde_json
     })
 }
 
-/// Whether this pointer lets a request change its target.
 pub fn pointer_grants_change(pointer: &Pointer) -> bool {
     pointer.kind == crate::PointerKind::Change
 }
@@ -93,7 +82,7 @@ pub fn pointer_target_description(
             let Some(page) = project.pages.iter().find(|page| page.id == *page_id) else {
                 return "A layer on a page that no longer exists.".into();
             };
-            let Some(element) = crate::elements::find_in(&page.elements, *element_id) else {
+            let Some(element) = crate::elements::find_element(&page.elements, *element_id) else {
                 return format!(
                     "A layer on {} ({}) that no longer exists.",
                     page.name, page.path
@@ -143,7 +132,7 @@ pub fn pointer_target_value(
         } => {
             let page = project.pages.iter().find(|page| page.id == *page_id);
             let element =
-                page.and_then(|page| crate::elements::find_in(&page.elements, *element_id));
+                page.and_then(|page| crate::elements::find_element(&page.elements, *element_id));
             serde_json::json!({
                 "kind": "element",
                 "pageId": page_id,
@@ -400,7 +389,7 @@ pub fn source_description(project: &Project, source: &PointerSource) -> String {
         } => {
             let page = project.pages.iter().find(|page| page.id == *page_id);
             let element =
-                page.and_then(|page| crate::elements::find_in(&page.elements, *element_id));
+                page.and_then(|page| crate::elements::find_element(&page.elements, *element_id));
             match (page, element) {
                 (Some(page), Some(element)) => format!(
                     "layer \"{}\" on page {} ({})",
@@ -419,4 +408,72 @@ pub fn source_description(project: &Project, source: &PointerSource) -> String {
             .map(|page| format!("page boundary {} ({})", page.name, page.path))
             .unwrap_or_else(|| "a page boundary that no longer exists".into()),
     }
+}
+
+fn pointer_source_missing(project: &Project, source: &PointerSource) -> bool {
+    match source {
+        PointerSource::Element {
+            page_id,
+            element_id,
+            size_id,
+        } => project
+            .pages
+            .iter()
+            .find(|page| page.id == *page_id)
+            .is_none_or(|page| {
+                crate::elements::find_element(&page.elements, *element_id).is_none()
+                    || size_id.is_some_and(|size| page.size(size).is_none())
+            }),
+        PointerSource::Boundary { page_id, size_id } => project
+            .pages
+            .iter()
+            .find(|page| page.id == *page_id)
+            .is_none_or(|page| size_id.is_some_and(|size| page.size(size).is_none())),
+    }
+}
+
+fn pointer_target_missing(project: &Project, target: &PointerTarget) -> bool {
+    match target {
+        PointerTarget::Element {
+            page_id,
+            element_id,
+            size_id,
+        } => project
+            .pages
+            .iter()
+            .find(|page| page.id == *page_id)
+            .is_none_or(|page| {
+                crate::elements::find_element(&page.elements, *element_id).is_none()
+                    || size_id.is_some_and(|size| page.size(size).is_none())
+            }),
+        PointerTarget::Boundary { page_id, size_id } => project
+            .pages
+            .iter()
+            .find(|page| page.id == *page_id)
+            .is_none_or(|page| size_id.is_some_and(|size| page.size(size).is_none())),
+        PointerTarget::Reference { item_id } => {
+            !project.reference.iter().any(|item| item.id == *item_id)
+        }
+        // A URL is drawn on its reference card; without that card the line has no target.
+        PointerTarget::Url { url } => !project
+            .reference
+            .iter()
+            .any(|item| matches!(&item.kind, ReferenceKind::Link { url: card, .. } if card == url)),
+    }
+}
+
+/// Pure: a pointer is broken when either endpoint no longer exists. Pointers are never
+/// deleted with what they reference, so this decides how they are shown and offered.
+pub fn pointer_is_broken(project: &Project, pointer: &Pointer) -> bool {
+    pointer_source_missing(project, &pointer.from) || pointer_target_missing(project, &pointer.to)
+}
+
+/// Every pointer whose source or target is missing, in project order.
+pub fn broken_pointers(project: &Project) -> Vec<Uuid> {
+    project
+        .pointers
+        .iter()
+        .filter(|pointer| pointer.is_broken(project))
+        .map(|pointer| pointer.id)
+        .collect()
 }
