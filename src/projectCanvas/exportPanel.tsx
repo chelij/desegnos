@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import { userError, providerProblem } from '../userErrors.js';
 import type { ExportJobView, OutputType, Project } from '../types';
 
@@ -19,17 +20,20 @@ const STATUS_LABELS: Record<string, string> = {
 };
 
 /** The inline export panel the dock shows when Export is chosen. No modal dialog. */
-export function ExportPanel({ project, destination, busy, job, sending, error, chooseDestination, runExport, sendExport, cancelExport, retryExport, openFolder, openInBrowser, previewExport, selectBoundary, setIncluded, setOutput, close, openSettings }: {
+export function ExportPanel({ project, destination, busy, job, sending, error, chooseDestination, setDestination, runExport, sendExport, cancelExport, retryExport, openFolder, openInBrowser, previewExport, selectBoundary, setIncluded, setOutput, close, openSettings }: {
   openSettings: () => void;
   selectBoundary: (pageId: string) => void; setIncluded: (pageId: string, included: boolean) => void; setOutput: (pageId: string, output: OutputType) => void;
   project: Project; destination: string | null; busy: boolean;
   job: ExportJobView | null; sending: boolean; error: string;
-  chooseDestination: () => void; runExport: () => void; sendExport: () => void; cancelExport: () => void; retryExport: () => void;
+  chooseDestination: () => void; setDestination: (path: string) => void; runExport: () => void; sendExport: () => void; cancelExport: () => void; retryExport: () => void;
   openFolder: (path: string) => void; openInBrowser: () => void; previewExport: (pageId: string) => void; close: () => void;
 }) {
   const boundaries = project.pages;
   const prepared = job?.status === 'prepared';
   const running = job?.status === 'sending';
+  const [folder, setFolder] = useState(destination ?? '');
+  useEffect(() => { setFolder(destination ?? ''); }, [destination]);
+  const commitFolder = () => { if (folder.trim() && folder.trim() !== destination) setDestination(folder); };
   return <div className="dock-form export-panel">
     <div className="export-panel-heading">
       <span className="dock-field-label">Export</span>
@@ -48,7 +52,9 @@ export function ExportPanel({ project, destination, busy, job, sending, error, c
       </div>)}
     </div>
     <label className="dock-field">Folder
-      <input readOnly value={destination ?? 'Choose a folder'} onClick={chooseDestination} />
+      <input value={folder} placeholder="Choose a folder" spellCheck={false} disabled={busy || running}
+        onChange={event => setFolder(event.target.value)} onBlur={commitFolder}
+        onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); commitFolder(); } else if (event.key === 'Escape') setFolder(destination ?? ''); }} />
     </label>
     <button type="button" className="dock-action" disabled={busy || running} onClick={chooseDestination}>Choose folder…</button>
     {error && !job?.providerError && <p className="dock-error">{userError(error)}</p>}
@@ -56,7 +62,7 @@ export function ExportPanel({ project, destination, busy, job, sending, error, c
       <p><strong>{STATUS_LABELS[job.status] ?? job.status}</strong>{job.status === 'prepared' && job.estimateUsd > 0 ? ` · ${money(job.estimateUsd)} estimate` : ''}</p>
       <p>{job.providerError ? userError(job) : job.message}</p>
       {job.kind === 'code' && <p className="muted">Export {job.pages.length} {job.pages.length === 1 ? 'boundary' : 'boundaries'} · {job.sizeCount} {job.sizeCount === 1 ? 'size' : 'sizes'} · {job.pointerCount} {job.pointerCount === 1 ? 'behaviour' : 'behaviours'}{job.reusedBehaviourCount ? ` · ${job.reusedBehaviourCount} ${job.reusedBehaviourCount === 1 ? 'behaviour' : 'behaviours'} reused` : ''}</p>}
-      {job.summary && <p className="muted">{job.summary}</p>}
+      {job.summary && <details className="export-panel-notes"><summary>AI notes</summary><p className="muted">{job.summary}</p></details>}
       {job.usage && <p className="muted">{job.usage.inputTokens.toLocaleString()} in · {job.usage.outputTokens.toLocaleString()} out tokens{job.attempts.length > 1 ? ` · ${job.attempts.length} attempts` : ''}</p>}
       {job.pages.length > 0 && <details><summary>Files</summary><ul className="export-panel-files">{job.pages.map(page => <li key={page.pageId}>{page.name} → {page.file || page.output}</li>)}</ul></details>}
       {job.warnings.map(warning => <p key={warning} className="dock-warning">{warning}</p>)}

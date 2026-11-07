@@ -27,6 +27,8 @@ type Context = {
   play: PlayState;
   setPlay: import("react").Dispatch<import("react").SetStateAction<PlayState>>;
   aiConnected: boolean;
+  /** The AI spending limit; a Preview starts behaviour code by itself only within it. */
+  spendingLimitUsd: number | null;
 };
 
 const EXPORT_FOLDERS_KEY = 'desegnos.export-folders';
@@ -133,6 +135,16 @@ export function useExportJobs(input: Pick<Context, 'current' | 'view' | 'panel' 
     } catch (error) { setExportError(errorMessage(error)); }
   }
 
+  /** A typed folder. Export itself checks it is safe to write; only its shape is checked here. */
+  function setExportDestination(path: string) {
+    const project = current.current?.project;
+    const trimmed = path.trim();
+    if (!project || !trimmed) return;
+    if (!/^(\/|[A-Za-z]:[\\/]|\\\\)/.test(trimmed)) { setExportError('Use a full folder path, like /home/you/Sites.'); return; }
+    setExportError('');
+    setExportFolders(current => ({ ...current, [project.id]: trimmed.replace(/[\\/]+$/, '') || trimmed }));
+  }
+
   async function refreshWorkspace() {
     const { accept } = context();
     try { accept(await native<WorkspaceView>('get_workspace')); } catch { /* The next edit reports its own error. */ }
@@ -149,7 +161,7 @@ export function useExportJobs(input: Pick<Context, 'current' | 'view' | 'panel' 
   }
 
   async function runExport(previewPageId: string | null = null) {
-    const { settle, current, aiConnected } = context();
+    const { settle, current, aiConnected, spendingLimitUsd } = context();
     await settle();
     const project = current.current?.project;
     if (!project) return;
@@ -167,15 +179,20 @@ export function useExportJobs(input: Pick<Context, 'current' | 'view' | 'panel' 
       });
       setExportJob(job);
       showJobResult(job, previewPageId);
+      // Pressing Preview is the go-ahead: start the behaviour code straight away when it fits
+      // the spending limit. Anything else waits on the panel's button as before.
+      if (previewPageId && job.status === 'prepared' && job.kind === 'code' && aiConnected
+        && spendingLimitUsd !== null && job.estimateUsd <= spendingLimitUsd) await sendExport(job);
     } catch (error) { setExportError(errorMessage(error)); }
   }
 
-  async function sendExport() {
-
-    if (!exportJob) return;
+  async function sendExport(prepared: ExportJobView | null = null) {
+    // Buttons call this with their click event; only a prepared job overrides the shown one.
+    const target = prepared && typeof prepared === 'object' && 'jobId' in prepared ? prepared : exportJob;
+    if (!target) return;
     setExportSending(true); setExportError('');
     try {
-      const job = await native<ExportJobView>('start_export', { jobId: exportJob.jobId });
+      const job = await native<ExportJobView>('start_export', { jobId: target.jobId });
       setExportJob(job);
       showJobResult(job);
       if (job.status === 'failed' || job.status === 'cancelled') setExportError(job.message);
@@ -254,7 +271,7 @@ export function useExportJobs(input: Pick<Context, 'current' | 'view' | 'panel' 
 
   return {
     exportDestination, exportJob, exportError, exportSending, checkedStates,
-    checkedProject, preview, openExportPanel, chooseExportDestination,
+    checkedProject, preview, openExportPanel, chooseExportDestination, setExportDestination,
     runExport, sendExport, cancelExport, openExportFolder, openInBrowser, keepPointerCode, forgetExportPointer,
     previewSelectedBoundary, closePreview, refreshPreview,
   };

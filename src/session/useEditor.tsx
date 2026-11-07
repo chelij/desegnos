@@ -165,7 +165,7 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
   const generationRef = useRef<GenerationJobView | null>(null);
   const generationOwns = useRef(false);
   const briefGenerateFlight = useRef(false);
-  const { openExportPanel, chooseExportDestination, runExport, sendExport, cancelExport, openExportFolder, openInBrowser, keepPointerCode, forgetExportPointer, previewSelectedBoundary, closePreview, refreshPreview, exportDestination, exportJob, exportError, exportSending, checkedStates, checkedProject, preview } = useExportJobs({ current, view, panel, play, setPlay, openPanel, closePanel }, () => ({ current, panels, panelActions, accept, setNotice, settle, setError, setOpenFailure, openPanel, closePanel, mutate, canvasFocus, selectedElementPageId, play, setPlay, view, panel, aiConnected }));
+  const { openExportPanel, chooseExportDestination, setExportDestination, runExport, sendExport, cancelExport, openExportFolder, openInBrowser, keepPointerCode, forgetExportPointer, previewSelectedBoundary, closePreview, refreshPreview, exportDestination, exportJob, exportError, exportSending, checkedStates, checkedProject, preview } = useExportJobs({ current, view, panel, play, setPlay, openPanel, closePanel }, () => ({ current, panels, panelActions, accept, setNotice, settle, setError, setOpenFailure, openPanel, closePanel, mutate, canvasFocus, selectedElementPageId, play, setPlay, view, panel, aiConnected, spendingLimitUsd: aiCurrent.current?.settings.spendingLimitUsd ?? null }));
 
   const storeAiSettings = useCallback((value: AiSettingsView) => { aiCurrent.current = value; setAiSettings(value); setAiPollingError(''); }, []);
   const refreshAiSettings = useCallback(async (refreshModels = false) => {
@@ -957,7 +957,7 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
     unlinkCanvasElements, pasteLinkedInstances, playElement, setPlay, preview, closePreview, refreshPreview,
     showGenerationStatus, openImportDialog, editGenerationRequest,
     openGeneration, aiSettings, manageChatgptUsage, replyToGeneration, exportDestination,
-    exportJob, exportSending, exportError, chooseExportDestination, runExport, sendExport, cancelExport,
+    exportJob, exportSending, exportError, chooseExportDestination, setExportDestination, runExport, sendExport, cancelExport,
     openExportFolder, openInBrowser, historyEpoch, accept, projectLocation,
     closeUntitledSave, saveUntitledProject, selectedPointer, selectedPointerState, forgetExportPointer,
     keepPointerComment, keepPointerCode, selectedPointerOther, keepPointerThis, mergePointerClash,

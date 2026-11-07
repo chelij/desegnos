@@ -70,7 +70,7 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
     unlinkCanvasElements, pasteLinkedInstances, playElement, setPlay, preview, closePreview, refreshPreview,
     showGenerationStatus, openImportDialog, editGenerationRequest,
     openGeneration, aiSettings, manageChatgptUsage, replyToGeneration, exportDestination,
-    exportJob, exportSending, exportError, chooseExportDestination, runExport, sendExport, cancelExport,
+    exportJob, exportSending, exportError, chooseExportDestination, setExportDestination, runExport, sendExport, cancelExport,
     openExportFolder, openInBrowser, historyEpoch, accept, projectLocation,
     closeUntitledSave, saveUntitledProject, selectedPointer, selectedPointerState, forgetExportPointer,
     keepPointerComment, keepPointerCode, keepPointerThis, mergePointerClash,
@@ -207,7 +207,7 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
       <EditorDock state={panels} actions={panelActions}
         exportPanel={panel.kind === 'export' && project
           ? <ExportPanel openSettings={() => setShowAiSettings(true)} project={project} destination={exportDestination} busy={pending > 0} job={exportJob} sending={exportSending} error={exportError}
-              chooseDestination={() => run(chooseExportDestination)} runExport={() => runExport()} sendExport={() => run(sendExport)}
+              chooseDestination={() => run(chooseExportDestination)} setDestination={setExportDestination} runExport={() => runExport()} sendExport={() => run(sendExport)}
               cancelExport={() => run(cancelExport)} retryExport={() => run(sendExport)}
               openFolder={openExportFolder} openInBrowser={() => run(openInBrowser)} previewExport={pageId => runExport(pageId)}
               selectBoundary={selectCanvasBoundary} setIncluded={(pageId, included) => updateCanvasPage(pageId, { included })}
