@@ -195,6 +195,8 @@ pub struct AnalysisView {
     pub chatgpt_account_id: Option<Uuid>,
     pub candidate: Option<IdentityCandidate>,
     pub error: Option<String>,
+    pub provider_error: Option<desegnos_ai::ProviderError>,
+    pub provider: Option<ProviderId>,
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -208,6 +210,10 @@ struct AnalysisRecord {
     received_bytes: usize,
     candidate: Option<IdentityCandidate>,
     error: Option<String>,
+    #[serde(default)]
+    provider_error: Option<desegnos_ai::ProviderError>,
+    #[serde(default)]
+    provider: Option<ProviderId>,
     submitted: bool,
     authentication: Option<AuthenticationMethod>,
     account_id: Option<Uuid>,
@@ -244,6 +250,8 @@ impl AnalysisRecord {
             chatgpt_account_id: self.account_id,
             candidate: self.candidate.clone(),
             error: self.error.clone(),
+            provider_error: self.provider_error.clone(),
+            provider: self.provider,
         }
     }
 }
@@ -1025,6 +1033,8 @@ impl IdentityService {
             received_bytes: 0,
             candidate: None,
             error: None,
+            provider_error: None,
+            provider: None,
             submitted: false,
             authentication: None,
             account_id: None,
@@ -1087,6 +1097,7 @@ impl IdentityService {
         if let Some(model) = &access.api_model {
             model.validate_api_input(&access.settings, estimate.input_token_upper_bound).map_err(error)?;
         }
+        record.provider = Some(access.provider);
         record.authentication = Some(access.authentication);
         record.account_id = access.account_id;
         record.submitted = true;
@@ -1162,11 +1173,13 @@ impl IdentityService {
             Err(failure) => {
                 record.status = if failure.kind == desegnos_ai::ErrorKind::Cancelled {
                     AnalysisStatus::Cancelled
-                } else if failure.outcome == SubmissionOutcome::Unknown {
+                } else if failure.outcome == SubmissionOutcome::Unknown
+                    && !failure.http_status.is_some_and(|status| status >= 400) {
                     AnalysisStatus::Unknown
                 } else {
                     AnalysisStatus::Failed
                 };
+                record.provider_error = Some(failure.clone());
                 record.error = Some(failure.message());
                 record.response_id = failure.response_id;
                 record.usage = failure.usage;
@@ -1178,6 +1191,7 @@ impl IdentityService {
         if let Err(reason) = &saved {
             record.status = AnalysisStatus::Unknown;
             record.candidate = None;
+            record.provider_error = None;
             record.error = Some(format!("The analysis receipt could not be saved: {reason}"));
             record.message = "The analysis could not be safely retained. Restore writable storage before explicitly analyzing again; nothing will resend automatically.".into();
         }
@@ -1590,11 +1604,19 @@ pub fn analyze_identity(
     tauri::async_runtime::spawn(async move {
         let generation = app.state::<Mutex<GenerationService>>();
         let chatgpt = app.state::<ChatgptState>();
+        let provider = generation
+            .lock()
+            .ok()
+            .map(|service| service.identity_settings().0);
         let access = match identity_access(&generation, &chatgpt, &cancellation).await {
             Ok(access) => access,
             Err(reason) => {
                 if let Ok(mut service) = app.state::<Mutex<IdentityService>>().lock() {
-                    let _ = service.fail_before_send(job_id, reason);
+                    if let Some(record) = service.latest.as_mut().filter(|record| record.requirements.job_id == job_id) {
+                        record.provider = provider;
+                        record.provider_error = reason.provider_error;
+                    }
+                    let _ = service.fail_before_send(job_id, reason.message);
                 }
                 return;
             }

@@ -1,5 +1,5 @@
 import { Notice, ProblemBanner } from './ProblemBanner.js';
-import { userError } from './userErrors.js';
+import { userError, providerProblem } from './userErrors.js';
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import { native } from './api';
 import { MenuButton, type MenuItem } from './Menus';
@@ -7,7 +7,7 @@ import { Icon } from './icons';
 import { Disclosure } from './Disclosure';
 import { StatusChip } from './StatusChip';
 import './dialogs.css';
-import type { AiSettingsView, ProviderSettings } from './types';
+import type { AiSettingsView, ProviderSettings, ProviderError, ProviderId } from './types';
 
 function message(error: unknown) { return error instanceof Error ? error.message : String(error); }
 // A model that offers only some levels keeps the request as strong as the user asked for,
@@ -25,12 +25,14 @@ export type AiSettingsUpdate = (command: string, args?: Record<string, unknown>)
 // What the AI settings form is doing right now; it never does two things at once.
 type Activity = 'loading' | 'idle' | 'saving' | 'checking' | 'checkingImages' | 'managingUsage';
 // A single message slot, so a stale notice never outlives the operation that follows it.
-type Feedback = { kind: 'none' } | { kind: 'status'; message: string } | { kind: 'error'; message: string };
+type Feedback = { kind: 'none' } | { kind: 'status'; message: string } | { kind: 'error'; message: string; access?: boolean; providerError?: ProviderError; provider?: ProviderId };
 
 export function AiSettings({ current, refresh, update, manageUsage, pollingError }: {
   current: AiSettingsView | null; refresh: (refreshModels?: boolean) => Promise<AiSettingsView>; update: AiSettingsUpdate; manageUsage: () => Promise<void>; pollingError: string;
 }) {
   const accepted = useRef<AiSettingsView | null>(null);
+  const accountSettings = useRef<HTMLElement>(null);
+  const showAccountSettings = () => { accountSettings.current?.scrollIntoView({ block: 'nearest' }); accountSettings.current?.focus(); };
   const [view, setView] = useState<AiSettingsView | null>(null);
   const [settings, setSettings] = useState<ProviderSettings | null>(null);
   const [key, setKey] = useState('');
@@ -140,8 +142,13 @@ export function AiSettings({ current, refresh, update, manageUsage, pollingError
   async function testAccess() {
     await perform('checking', async () => {
       try {
-        const result = await native<{ message: string }>('test_ai_access');
-        receive(await refresh()); setFeedback({ kind: 'status', message: result.message ? 'Connection checked.' : 'Access checked.' });
+        const result = await native<{ message: string; providerError?: ProviderError }>('test_ai_access');
+        receive(await refresh());
+        if (result.providerError) {
+          setFeedback({ kind: 'error', access: true, message: result.message, providerError: result.providerError, provider: accepted.current?.provider });
+          return;
+        }
+        setFeedback({ kind: 'status', message: result.message ? 'Connection checked.' : 'Access checked.' });
       } catch (error) {
         try { receive(await refresh()); } catch {}
         throw error;
@@ -184,12 +191,13 @@ export function AiSettings({ current, refresh, update, manageUsage, pollingError
   const checkingImages = activity === 'checking' || activity === 'checkingImages';
   const canRefreshModels = !busy && !pending && !endpointDirty && !!connected && !key.trim() && (usesChatgpt ? !!account?.planEnabled && !account.storageRepairRequired : true);
   const modelsError = usesChatgpt ? view?.chatgpt.modelsError : view?.modelsError;
+  const modelsProviderError = usesChatgpt ? view?.chatgpt.modelsProviderError : view?.modelsProviderError;
   const identity = usesChatgpt ? account?.email ?? account?.label ?? 'ChatGPT' : view?.credential.maskedIdentifier ?? `${providerName} API key`;
   // An unusable switch reads as off; the saved preference returns once images are available.
   const imagesUsable = view?.imageAccess?.available === 'yes' && connectedHealthy && !(usesChatgpt && !account?.planEnabled) && !!provider?.capabilities.imageGeneration;
   const imageStatus = view?.imageAccessChecking || checkingImages || pending ? 'Checking…' : !provider?.capabilities.imageGeneration || view?.imageAccess?.available === 'no' ? 'Not available' : !connectedHealthy ? 'Not connected' : view?.imageAccess?.available === 'yes' ? 'Available' : "Couldn't check";
   return <div className="ai-settings dialog-body">
-    {feedback.kind === 'error' && <ProblemBanner message={userError(feedback.message)} dismiss={() => setFeedback({ kind: 'none' })} />}
+    {feedback.kind === 'error' && <ProblemBanner message={userError(feedback)} action={feedback.access ? { label: providerProblem(feedback.providerError, feedback.provider)?.action ?? 'Try again', disabled: busy, onClick: () => { if (providerProblem(feedback.providerError, feedback.provider)?.settings) showAccountSettings(); else void testAccess(); } } : undefined} dismiss={() => setFeedback({ kind: 'none' })} />}
     {pollingError && <ProblemBanner message={userError(pollingError)} action={{ label: 'Try again', disabled: busy, onClick: () => { void load(); } }} />}
     {loading ? <p role="status">Reading AI settings…</p> : !view || !settings ? <button onClick={() => { void load(); }}>Retry AI settings</button> : <>
       <label className="ai-provider ai-inline-field">Provider<select disabled={busy || pending || dirty} value={usesChatgpt ? 'openai-chatgpt' : view.provider} onChange={event => { setKey(''); setReplacingKey(false); setFeedback({ kind: 'none' }); void chooseProvider(event.target.value); }}>
@@ -203,7 +211,7 @@ export function AiSettings({ current, refresh, update, manageUsage, pollingError
         <button type="submit" disabled={busy}>Connect</button>
       </form>}
       {view.configurationError && <ProblemBanner message={userError(view.configurationError)} />}
-      <section className={usesChatgpt ? 'chatgpt-accounts' : 'api-key-connection'} aria-label={usesChatgpt ? 'ChatGPT account settings' : `${providerName} key connection`}>
+      <section ref={accountSettings} tabIndex={-1} className={usesChatgpt ? 'chatgpt-accounts' : 'api-key-connection'} aria-label={usesChatgpt ? 'ChatGPT account settings' : `${providerName} key connection`}>
         <div className="ai-account-card">
           <span className="ai-avatar" aria-hidden="true">{identity.charAt(0).toUpperCase()}</span>
           <div className="ai-account-copy"><span className="ai-account-identity">{identity}</span>
@@ -255,7 +263,7 @@ export function AiSettings({ current, refresh, update, manageUsage, pollingError
             {usesChatgpt && <button type="button" className="ai-usage-link" disabled={busy} onClick={() => { void usage(); }}>Usage <Icon name="external" size={14} /></button>}
           </div>
         </div>
-        {modelsError && <ProblemBanner message={userError(modelsError)} action={{ label: 'Refresh models', disabled: !canRefreshModels, onClick: () => { void action('get_ai_settings', { refreshModels: true }); } }} />}
+        {modelsError && <ProblemBanner message={userError({ message: modelsError, providerError: modelsProviderError, provider: view.provider })} action={{ label: providerProblem(modelsProviderError, view.provider)?.action ?? 'Refresh models', disabled: !canRefreshModels, onClick: () => { if (providerProblem(modelsProviderError, view.provider)?.settings) showAccountSettings(); else void action('get_ai_settings', { refreshModels: true }); } }} />}
         {!model && connectedHealthy && <ProblemBanner message="No available AI model is selected." />}
         {(!usesChatgpt || view.imageKey.configured) && <label className="ai-inline-field ai-budget">Budget per generation (USD)<input disabled={busy || pending} type="number" required min={0.01} step={0.01} aria-label="API budget per generation (USD)" value={budget ?? String(settings.spendingLimitUsd)} onChange={event => { setBudget(event.target.value); if (event.target.value.trim() && Number.isFinite(event.target.valueAsNumber)) setSettings({ ...settings, spendingLimitUsd: event.target.valueAsNumber }); }} onBlur={() => setBudget(null)} /></label>}
         {!usesChatgpt && model?.pricingRequired && <div className="field-pair ai-price-ceilings">

@@ -784,21 +784,16 @@ fn failure(kind: ErrorKind) -> ProviderError {
 fn http_error(status: u16) -> ProviderError {
     let kind = match status {
         401 | 403 => ErrorKind::Authentication,
+        402 => ErrorKind::Quota,
         404 => ErrorKind::ModelUnavailable,
         408 => ErrorKind::Deadline,
         429 => ErrorKind::RateLimited,
         300..=399 => ErrorKind::Redirect,
         400..=499 => ErrorKind::RequestRejected,
-        _ => ErrorKind::Transport,
+        500..=599 => ErrorKind::Server,
+        _ => ErrorKind::RequestRejected,
     };
-    let mut error = ProviderError::new(
-        kind,
-        if status >= 500 || status == 408 {
-            SubmissionOutcome::Unknown
-        } else {
-            SubmissionOutcome::Rejected
-        },
-    );
+    let mut error = ProviderError::new(kind, SubmissionOutcome::Rejected);
     error.http_status = Some(status);
     error
 }
@@ -823,8 +818,8 @@ async fn read_http_error(
         .map(str::to_owned);
     let body = match crate::transport::bounded_body(response, 65_536, cancel, deadline).await {
         Ok(body) => body,
-        Err(error) => {
-            return error.with_provider_metadata(
+        Err(_) => {
+            return http_error(status).with_provider_metadata(
                 key,
                 Some(status),
                 None,
@@ -842,7 +837,7 @@ async fn read_http_error(
     )
 }
 
-fn foreign_http_error(
+pub(crate) fn foreign_http_error(
     status: u16,
     body: &[u8],
     key: &ApiKey,
@@ -852,7 +847,14 @@ fn foreign_http_error(
     let value = serde_json::from_slice::<Value>(body).ok();
     let error = value.as_ref().and_then(|v| v.get("error"));
     // Anthropic uses error.type, while Google uses a numeric error.code and string status.
-    let code = error.and_then(|v| v["type"].as_str().or_else(|| v["status"].as_str()));
+    let code = error
+        .and_then(|v| {
+            v["code"]
+                .as_str()
+                .or_else(|| v["type"].as_str())
+                .or_else(|| v["status"].as_str())
+        })
+        .or_else(|| value.as_ref().and_then(|v| v["code"].as_str()));
     http_error(status)
         .with_provider_metadata(key, Some(status), code, None, request_id)
         .with_response_format(
@@ -1888,7 +1890,7 @@ mod tests {
         let result = stream.finish().unwrap();
         assert_eq!(result.text, "{\"ok\":true}");
         assert_eq!(result.usage.unwrap().total_tokens, 202);
-        assert_eq!(http_error(503).outcome, SubmissionOutcome::Unknown);
+        assert_eq!(http_error(503).outcome, SubmissionOutcome::Rejected);
         assert_eq!(http_error(401).outcome, SubmissionOutcome::Rejected);
         assert_eq!(http_error(302).kind, ErrorKind::Redirect);
     }
@@ -2023,7 +2025,7 @@ mod tests {
                     .contains(key.expose())
             );
         }
-        assert_eq!(http_error(408).outcome, SubmissionOutcome::Unknown);
+        assert_eq!(http_error(408).outcome, SubmissionOutcome::Rejected);
         assert_eq!(http_error(408).kind, ErrorKind::Deadline);
     }
 
@@ -2461,5 +2463,29 @@ mod validation_repair_tests {
         let error = interrupted.finish().unwrap_err();
         assert_ne!(error.outcome, SubmissionOutcome::Received);
         assert!(error.response_format.is_none());
+    }
+}
+
+#[cfg(test)]
+mod http_status_tests {
+    use super::*;
+
+    #[test]
+    fn every_http_error_status_is_rejected_even_without_a_readable_error_body() {
+        let key = ApiKey::new("test-provider-key".to_owned()).unwrap();
+        for status in [400, 401, 402, 403, 408, 429, 500, 502, 503, 504, 529] {
+            for body in [
+                b"".as_slice(),
+                b"not JSON",
+                br#"{"code":"internal_error"}"#,
+                br#"{"error":{"type":"overloaded_error"}}"#,
+            ] {
+                let error = foreign_http_error(status, body, &key, None, None);
+                assert_eq!(error.http_status, Some(status));
+                assert_eq!(error.outcome, SubmissionOutcome::Rejected);
+                assert!(error.response_id.is_none());
+                assert!(error.message().contains("Nothing was changed"));
+            }
+        }
     }
 }

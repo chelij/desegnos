@@ -206,7 +206,7 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
       </div>
       <EditorDock state={panels} actions={panelActions}
         exportPanel={panel.kind === 'export' && project
-          ? <ExportPanel project={project} destination={exportDestination} busy={pending > 0} job={exportJob} sending={exportSending} error={exportError}
+          ? <ExportPanel openSettings={() => setShowAiSettings(true)} project={project} destination={exportDestination} busy={pending > 0} job={exportJob} sending={exportSending} error={exportError}
               chooseDestination={() => run(chooseExportDestination)} runExport={() => runExport()} sendExport={() => run(sendExport)}
               cancelExport={() => run(cancelExport)} retryExport={() => run(sendExport)}
               openFolder={openExportFolder} openInBrowser={() => run(openInBrowser)} previewExport={pageId => runExport(pageId)}

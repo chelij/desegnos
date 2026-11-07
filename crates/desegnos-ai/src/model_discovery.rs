@@ -55,14 +55,13 @@ pub(crate) async fn list_models(
             response = request.send() => response.map_err(|_| failure(ErrorKind::Transport))?,
         };
         if !response.status().is_success() {
-            return Err(failure(match response.status().as_u16() {
-                300..=399 => ErrorKind::Redirect,
-                401 | 403 => ErrorKind::Authentication,
-                404 => ErrorKind::ModelUnavailable,
-                429 => ErrorKind::RateLimited,
-                500..=599 => ErrorKind::Transport,
-                _ => ErrorKind::RequestRejected,
-            }));
+            let status = response.status().as_u16();
+            let body = crate::transport::bounded_body(&mut response, 65_536, cancel, deadline)
+                .await
+                .unwrap_or_default();
+            return Err(crate::providers::foreign_http_error(
+                status, &body, key, None, None,
+            ));
         }
         let bytes = crate::transport::bounded_body(&mut response, 1024 * 1024, cancel, deadline)
             .await

@@ -175,6 +175,17 @@ try {
     await wait(() => document.querySelector('.connection-status').textContent === 'Not connected', 'A local server demanding a key must not read Connected');
     check(document.body.textContent.includes('This server needs an API key. Add one from the account menu.'), 'The local key requirement was not shown');
     check(!document.body.textContent.includes('No available AI model is selected.'), 'No models after an auth failure is not a missing-model banner');
+    for (const [provider, name] of Object.entries({openai:'OpenAI', anthropic:'Anthropic', google:'Google', openrouter:'OpenRouter', deepseek:'DeepSeek', local:'Your local AI server'})) {
+      current = {...current, provider, modelsAuthRequired:false, modelsError:'The provider connection failed. API key network error.',
+        modelsProviderError:{kind:'server', outcome:'rejected', httpStatus:500, code:'internal_error'}};
+      render();
+      await wait(() => document.body.textContent.includes(name + ' had a server problem.'), provider + ' server failure lost its structured message');
+      const notice = [...document.querySelectorAll('.notice-error')].find(item => item.textContent.includes(name + ' had a server problem.'));
+      check(notice.textContent.includes('Try again') && !notice.textContent.includes('AI settings') && !notice.textContent.includes('internet'), provider + ' server failure has the wrong action');
+    }
+    current = {...current, provider:'deepseek', modelsProviderError:{kind:'quota', outcome:'rejected', httpStatus:429, code:'insufficient_quota'}};
+    render();
+    await wait(() => document.body.textContent.includes('DeepSeek account is out of credit.'), 'Billing code on HTTP 429 was mistaken for a rate limit');
     document.getElementById('result').textContent = 'PASS: account/provider discovery, selection, prices, save, refresh, isolation, single-line controls, DeepSeek catalogue pricing, key-first banner, and local auth failure';  } catch (error) { document.getElementById('result').textContent = 'FAIL: ' + error.stack; }
   </script></body></html>`);
   server = await createServer({ root, cacheDir: join(folder, 'cache'),

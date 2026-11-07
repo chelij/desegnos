@@ -1,5 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type ReactElement } from 'react';
 import { Icon } from './icons';
+import { providerProblem } from './userErrors.js';
+import type { ProviderError, ProviderId } from './types';
 
 export type ProblemAction = { label: string; onClick: () => void; disabled?: boolean };
 export type NoticeProps = {
@@ -168,6 +170,8 @@ export function ProblemBanner({ variant = 'error', ...props }: ProblemBannerProp
   return <Notice {...props} variant={variant} />;
 }
 
-export function needsAiSettings(error: string): boolean {
-  return /connect|network|fetch|timed? ?out|auth|credential|API.?key|sign.?in|signed out|quota|usage limit|rate limit|too many requests|budget|spending|billing|credit|payment|model.*(?:unavailable|not available|not supported)|vault|keyring|secure storage/i.test(error);
+export function needsAiSettings(error: string, structured?: ProviderError | null, provider?: ProviderId | null): boolean {
+  const problem = providerProblem(structured, provider);
+  if (problem) return problem.settings;
+  return /auth|credential|API.?key|sign.?in|signed out|quota|usage limit|budget|spending|billing|credit|payment|model.*(?:unavailable|not available|not supported)|vault|keyring|secure storage/i.test(error);
 }

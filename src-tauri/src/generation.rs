@@ -476,6 +476,7 @@ pub struct AiSettingsView {
     credential: CredentialInfo,
     catalogue: Vec<ModelInfo>,
     models_error: Option<String>,
+    models_provider_error: Option<ProviderError>,
     models_auth_required: bool,
     configuration_error: Option<String>,
     authentication: AuthenticationMethod,
@@ -2135,7 +2136,9 @@ impl GenerationService {
                 }
                 let status = if error.kind == ErrorKind::Cancelled {
                     JobStatus::Cancelled
-                } else if error.outcome == SubmissionOutcome::Unknown {
+                } else if error.outcome == SubmissionOutcome::Unknown
+                    && !error.http_status.is_some_and(|status| status >= 400)
+                {
                     JobStatus::Unknown
                 } else {
                     JobStatus::Failed
@@ -2515,14 +2518,14 @@ pub(super) async fn settings_view(
     })
     .await
     .map_err(message)?;
-    let (api_catalogue, models_error, models_auth_required) = {
+    let (api_catalogue, models_error, models_auth_required, models_provider_error) = {
         let service = state.lock().map_err(message)?;
         match credential_id
             .as_ref()
             .and_then(|id| service.api_models.get(&(provider, id.clone())))
         {
             Some(cache) => match cache {
-                Ok(models) => (models.clone(), None, false),
+                Ok(models) => (models.clone(), None, false, None),
                 Err(error) => (
                     vec![],
                     Some(desegnos_ai::models_error(
@@ -2531,9 +2534,10 @@ pub(super) async fn settings_view(
                         error,
                     )),
                     desegnos_ai::models_need_key(provider, local_authentication, error),
+                    Some(error.clone()),
                 ),
             },
-            None => (vec![], None, false),
+            None => (vec![], None, false, None),
         }
     };
     let chatgpt = chatgpt_state.view().await;
@@ -2615,6 +2619,7 @@ pub(super) async fn settings_view(
         credential,
         catalogue,
         models_error,
+        models_provider_error,
         models_auth_required,
         configuration_error,
         authentication,
@@ -2805,7 +2810,9 @@ pub async fn remove_ai_key(
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AccessResult {
+    provider_error: Option<ProviderError>,
     message: String,
 }
 
@@ -2840,22 +2847,35 @@ pub async fn test_ai_access(
         if view.active_account_id != Some(account_id) {
             return Err("The selected ChatGPT account changed while checking access. Test the currently selected account again.".into());
         }
+        if let Some(error) = view.models_provider_error {
+            return Ok(AccessResult {
+                message: error.message(),
+                provider_error: Some(error),
+            });
+        }
         view.selected_model(&settings).map_err(message)?;
         return Ok(AccessResult {
+            provider_error: None,
             message: "Connected · ChatGPT plan and model access confirmed.".into(),
         });
     }
     let key = credential_key(&state, provider, &settings).await?;
-    api_model_for_key(&state, provider, &settings, &key, &CancellationToken::new())
-        .await
-        .map_err(message)?;
-    ProviderClient::with_settings(provider, client, &settings)
-        .map_err(message)?
-        .test_model_access(&settings, &key, &CancellationToken::new())
-        .await
-        .map_err(message)?;
-    Ok(AccessResult {
-        message: "Connected · Model access confirmed.".into(),
+    let result = async {
+        api_model_for_key(&state, provider, &settings, &key, &CancellationToken::new()).await?;
+        ProviderClient::with_settings(provider, client, &settings)?
+            .test_model_access(&settings, &key, &CancellationToken::new())
+            .await
+    }
+    .await;
+    Ok(match result {
+        Ok(_) => AccessResult {
+            provider_error: None,
+            message: "Connected · Model access confirmed.".into(),
+        },
+        Err(error) => AccessResult {
+            message: error.message(),
+            provider_error: Some(error),
+        },
     })
 }
 
@@ -3069,6 +3089,7 @@ async fn submit(
         let ordinal = request.attempts.len();
         let result = async {
             let mut account_model = None;
+            let mut discovery_error = None;
             // Keep preparation local. All credential refresh/model discovery belongs to
             // the registered, cancellable attempt, before any paid generation submission.
             let credentials = async {
@@ -3088,6 +3109,11 @@ async fn submit(
                             "The selected ChatGPT account changed. Prepare the request again."
                                 .into(),
                         );
+                    }
+                    if let Some(error) = available.models_provider_error {
+                        let reason = error.message();
+                        discovery_error = Some(error);
+                        return Err(reason);
                     }
                     account_model = Some(available.selected_model(&request.settings).cloned());
                     manager
@@ -3110,10 +3136,12 @@ async fn submit(
                     ProviderError::new(ErrorKind::Cancelled, SubmissionOutcome::NotSubmitted)
                 })?
                 .map_err(|_| {
-                    ProviderError::new(
-                        ErrorKind::MissingCredential,
-                        SubmissionOutcome::NotSubmitted,
-                    )
+                    discovery_error.unwrap_or_else(|| {
+                        ProviderError::new(
+                            ErrorKind::MissingCredential,
+                            SubmissionOutcome::NotSubmitted,
+                        )
+                    })
                 })?;
             let account_model = account_model.transpose()?;
             let api_model = if authentication == AuthenticationMethod::ApiKey {
@@ -3438,6 +3466,7 @@ pub async fn apply_generation(
 /// Native-only access binding for identity analysis. Credentials never enter an
 /// IPC view, project, source snapshot, or persisted analysis record.
 pub(super) struct IdentityAccess {
+    pub provider: ProviderId,
     pub authentication: AuthenticationMethod,
     pub account_id: Option<Uuid>,
     pub account_epoch: Option<u64>,
@@ -3454,11 +3483,37 @@ impl GenerationService {
     }
 }
 
+pub(super) struct IdentityAccessFailure {
+    pub message: String,
+    pub provider_error: Option<ProviderError>,
+}
+impl From<String> for IdentityAccessFailure {
+    fn from(message: String) -> Self {
+        Self {
+            message,
+            provider_error: None,
+        }
+    }
+}
+impl From<&str> for IdentityAccessFailure {
+    fn from(message: &str) -> Self {
+        message.to_owned().into()
+    }
+}
+impl From<ProviderError> for IdentityAccessFailure {
+    fn from(error: ProviderError) -> Self {
+        Self {
+            message: error.message(),
+            provider_error: Some(error),
+        }
+    }
+}
+
 pub(super) async fn identity_access(
     state: &Mutex<GenerationService>,
     chatgpt: &ChatgptState,
     cancellation: &CancellationToken,
-) -> NativeResult<IdentityAccess> {
+) -> Result<IdentityAccess, IdentityAccessFailure> {
     let (authentication, settings, client, credentials, provider) = {
         let service = state.lock().map_err(message)?;
         if let Some(error) = service
@@ -3466,7 +3521,7 @@ pub(super) async fn identity_access(
             .as_ref()
             .or(service.authentication_error.as_ref())
         {
-            return Err(error.clone());
+            return Err(error.clone().into());
         }
         service
             .provider
@@ -3512,6 +3567,9 @@ pub(super) async fn identity_access(
         if view.active_account_id != Some(account_id) {
             return Err("The selected ChatGPT account changed. Prepare the analysis again.".into());
         }
+        if let Some(error) = view.models_provider_error {
+            return Err(error.into());
+        }
         model = Some(view.selected_model(&settings).map_err(message)?.clone());
         let key = chatgpt
             .manager()?
@@ -3532,19 +3590,14 @@ pub(super) async fn identity_access(
         ProviderClient::with_settings(provider, client.clone(), &settings)
             .map_err(message)?
             .test_model_access(&settings, &key, cancellation)
-            .await
-            .map_err(message)?;
+            .await?;
         (None, None, key)
     };
     if cancellation.is_cancelled() {
         return Err("Identity analysis was cancelled before submission.".into());
     }
     let api_model = if authentication == AuthenticationMethod::ApiKey {
-        Some(
-            api_model_for_key(state, provider, &settings, &key, cancellation)
-                .await
-                .map_err(message)?,
-        )
+        Some(api_model_for_key(state, provider, &settings, &key, cancellation).await?)
     } else {
         None
     };
@@ -3559,6 +3612,7 @@ pub(super) async fn identity_access(
         );
     }
     Ok(IdentityAccess {
+        provider,
         authentication,
         account_id,
         account_epoch,
@@ -3734,7 +3788,11 @@ mod unreadable_reply_retry_tests {
     fn truncated_cancelled_and_over_budget_replies_are_not_retried() {
         let settings = settings();
         let malformed = response("{\"a\": 1", 100).unwrap();
-        for kind in [ErrorKind::Incomplete, ErrorKind::OutputLimit, ErrorKind::Truncated] {
+        for kind in [
+            ErrorKind::Incomplete,
+            ErrorKind::OutputLimit,
+            ErrorKind::Truncated,
+        ] {
             let truncated = Err(ProviderError::new(kind, SubmissionOutcome::Received));
             assert!(!should_retry_unreadable_reply(
                 &truncated,

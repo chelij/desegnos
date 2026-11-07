@@ -28,6 +28,7 @@ pub enum ErrorKind {
     Cancelled,
     Deadline,
     Transport,
+    Server,
     ChatgptNotEligible,
     ChatgptUsageLimit,
     ChatgptUsageUnavailable,
@@ -288,6 +289,23 @@ impl ProviderError {
     /// The message shown for this failure. Request rejections quote the provider's own bounded
     /// explanation so a rejected reply format is not blamed on the user's request.
     pub fn message(&self) -> String {
+        if self.http_status.is_some_and(|status| status >= 400) {
+            if self.http_status.is_some_and(|status| status >= 500) {
+                return "The provider had a server problem. Try again in a moment. Nothing was changed.".into();
+            }
+            if self.kind == ErrorKind::Deadline {
+                return "The provider rejected the request after a timeout. Nothing was changed. Try again.".into();
+            }
+            // Keep the diagnostic reason, but do not claim an uncertain generation outcome.
+            return format!(
+                "{} Nothing was changed.",
+                if self.kind == ErrorKind::RequestRejected {
+                    self.rejected_message()
+                } else {
+                    self.default_message().to_owned()
+                }
+            );
+        }
         if self.kind == ErrorKind::RequestRejected {
             return self.rejected_message();
         }
@@ -433,6 +451,9 @@ impl ProviderError {
             }
             ErrorKind::Deadline => {
                 "The provider stopped responding for 90 seconds or ran past 20 minutes. The request may still incur a charge; it was not retried."
+            }
+            ErrorKind::Server => {
+                "The provider had a server problem. Try again in a moment."
             }
             ErrorKind::Transport => {
                 "The provider connection failed. A submitted request may have an unknown outcome; it was not retried."

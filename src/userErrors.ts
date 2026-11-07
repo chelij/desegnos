@@ -1,3 +1,30 @@
+import type { ProviderError, ProviderId } from './types';
+
+export type ProviderProblem = { message: string; settings: boolean; action: 'AI settings' | 'Try again' };
+// Status and machine codes take precedence over diagnostic prose, including legacy transport kinds.
+export function providerProblem(error: ProviderError | null | undefined, provider?: ProviderId | null): ProviderProblem | null {
+  if (!error) return null;
+  const name = provider ? { openai: 'OpenAI', anthropic: 'Anthropic', google: 'Google', openrouter: 'OpenRouter', deepseek: 'DeepSeek', local: 'Your local AI server' }[provider] : 'The AI provider';
+  const status = error.httpStatus ?? 0;
+  const code = (error.code ?? '').toLowerCase().replace(/[ -]/g, '_');
+  const kind = error.kind;
+  const problem = (message: string, settings = false): ProviderProblem => ({ message, settings, action: settings ? 'AI settings' : 'Try again' });
+  if (kind === 'server' || status >= 500 || ['internal_error', 'server_error', 'overloaded', 'overloaded_error', 'service_unavailable', 'unavailable', 'internal'].includes(code)) return problem(`${name} had a server problem. Try again in a moment.`);
+  if (status === 402 || /(?:insufficient.*(?:balance|credit|quota|fund)|quota|billing|payment|credit_balance|out_of_credit)/.test(code) || kind === 'quota') return problem(`${name} account is out of credit.`, true);
+  if (status === 401 || status === 403 || ['invalid_api_key', 'invalid_key', 'authentication_error', 'unauthenticated', 'permission_denied'].includes(code) || ['authentication', 'invalidCredential', 'missingCredential'].includes(kind)) return problem(`${name} did not accept your key or its permissions. Check AI settings.`, true);
+  if (status === 429 || /rate_limit|too_many_requests|resource_exhausted/.test(code) || kind === 'rateLimited') return problem(`${name} is rate-limiting requests. Wait a moment and try again.`);
+  if (status >= 400) return problem(`${name} rejected the request. Try again.`);
+  if (['transport', 'deadline'].includes(kind)) return problem("Desegnos couldn't connect. Check your internet connection and try again.");
+  if (kind === 'modelUnavailable') return problem("This AI model isn't available. Choose another in AI settings.", true);
+  if (['invalidSettings', 'vaultUnavailable', 'spendingLimit', 'chatgptUsageLimit', 'chatgptPermission', 'chatgptInvalidUser'].includes(kind)) return problem('Your AI account or settings need attention. Check AI settings.', true);
+  return problem('The AI could not finish this request. Try again.');
+}
+
+export function providerFailureMessage(error: ProviderError | null | undefined, provider?: ProviderId | null): string | null {
+  const problem = providerProblem(error, provider);
+  return problem ? `${problem.message}${error?.httpStatus && error.httpStatus >= 400 ? ' Nothing was changed.' : ''}` : null;
+}
+
 // Presentation only: retain original errors in state, job records and AI requests.
 function diagnostic(error: unknown): string {
   if (error && typeof error === 'object' && 'message' in error) return String(error.message);
@@ -76,6 +103,11 @@ export function browserOpenUrl(error: unknown): string | null {
 }
 
 export function userError(error: unknown): string {
+  if (error && typeof error === 'object' && 'providerError' in error) {
+    const structured = error as { providerError?: ProviderError; provider?: ProviderId };
+    const message = providerFailureMessage(structured.providerError, structured.provider);
+    if (message) return message;
+  }
   const value = diagnostic(error).replace(/^Error:\s*/, '').trim();
   if (!value) return '';
   // A site-relative file name is the useful part of an oversized-preview message.

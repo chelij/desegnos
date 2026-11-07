@@ -136,6 +136,8 @@ pub struct ExportJobView {
     warnings: Vec<String>,
     result: Option<ExportResultView>,
     error: Option<String>,
+    provider_error: Option<desegnos_ai::ProviderError>,
+    provider: Option<ProviderId>,
 }
 
 struct ExportJob {
@@ -454,6 +456,8 @@ pub async fn prepare_export(
         warnings: plan.warnings.clone(),
         result: None,
         error: None,
+        provider_error: None,
+        provider: None,
     };
     if !has_ai {
         let bundle =
@@ -678,6 +682,8 @@ pub async fn start_export(
         }
         job.view.status = JobStatus::Sending.label();
         job.view.error = None;
+        job.view.provider_error = None;
+        job.view.provider = Some(job.provider);
         job.view.message = "Exporting…".into();
         job.cancellation = CancellationToken::new();
         (
@@ -690,6 +696,7 @@ pub async fn start_export(
             job.cancellation.clone(),
         )
     };
+    let mut provider_error = None;
     let result = async {
         let client = {
             let ai = ai.lock().map_err(message)?;
@@ -724,6 +731,10 @@ pub async fn start_export(
                     "The selected ChatGPT account changed. Prepare the export again.".into(),
                 );
             }
+            if let Some(error) = view.models_provider_error {
+                provider_error = Some(error.clone());
+                return Err(message(error));
+            }
             account_model = Some(view.selected_model(&settings).map_err(message)?.clone());
             chatgpt
                 .manager()?
@@ -746,7 +757,10 @@ pub async fn start_export(
             let model =
                 crate::generation::api_model_for_key(&ai, provider, &settings, &key, &cancellation)
                     .await
-                    .map_err(message)?;
+                    .map_err(|error| {
+                        provider_error = Some(error.clone());
+                        message(error)
+                    })?;
             let estimate = client
                 .estimate(authentication, &snapshot, mode, &plan.schema, &settings)
                 .map_err(message)?;
@@ -774,9 +788,17 @@ pub async fn start_export(
                 |_progress| {},
             )
             .await
-            .map_err(message)
+            .map_err(|error| {
+                provider_error = Some(error.clone());
+                message(error)
+            })
     }
     .await;
+    if let Some(error) = provider_error {
+        if let Some(job) = service.lock().map_err(message)?.jobs.get_mut(&job_id) {
+            job.view.provider_error = Some(error);
+        }
+    }
     finish(&workspace, &service, &site, job_id, plan, result)
 }
 
@@ -1206,6 +1228,8 @@ pub async fn keep_pointer_code(
         warnings: Vec::new(),
         result: None,
         error: None,
+        provider_error: None,
+        provider: None,
     };
     let mut service = service.lock().map_err(message)?;
     service.jobs.insert(

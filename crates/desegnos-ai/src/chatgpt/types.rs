@@ -142,6 +142,8 @@ pub struct ChatgptView {
     pub sign_in: ChatgptSignIn,
     pub models: Vec<ChatgptModel>,
     pub models_error: Option<String>,
+    #[serde(default)]
+    pub models_provider_error: Option<crate::ProviderError>,
     pub storage_error: Option<String>,
     pub show_welcome: bool,
     pub message: Option<String>,
@@ -185,6 +187,7 @@ impl ChatgptView {
             },
             models: vec![],
             models_error: None,
+            models_provider_error: None,
             storage_error: Some(message.into()),
             show_welcome: false,
             message: None,

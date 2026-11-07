@@ -1,5 +1,5 @@
 import type { Element, GenerationJobView, Page, Project, Rect, GenerationValidationEvent } from './types';
-import { generationError, outcomeReason, technicalReason, userError } from './userErrors.js';
+import { generationError, outcomeReason, technicalReason, userError, providerFailureMessage } from './userErrors.js';
 
 /// A specific place that can resolve an outcome the AI itself declared.
 export type OutcomeFix = 'aiSettings' | 'import' | 'brief';
@@ -114,6 +114,8 @@ function jobReason(job: GenerationJobView): string {
     return '';
   }
   if (!['blocked', 'failed', 'unknown'].includes(job.status)) return '';
+  const provider = providerFailureMessage(job.providerError, job.provider);
+  if (provider) return provider;
   const reply = events.find(event => event.elementId == null && event.kind === 'replyStructure');
   const message = (job.message?.trim() || reply?.message || '').replace(/^Desegnos rejected the candidate:\s*/i, '');
   if (reply || /missing field|incomplete|unexpected end|requirementsSha256/i.test(message)) return "The AI's reply was incomplete, so nothing was changed.";

@@ -743,7 +743,7 @@ async fn non_stream_error(
     let body_kind = response_body_kind(&body, json.as_ref());
     let code = json
         .as_ref()
-        .and_then(|value| value.pointer("/error/code"))
+        .and_then(|value| value.pointer("/error/code").or_else(|| value.get("code")))
         .and_then(Value::as_str);
     let param = json
         .as_ref()
@@ -780,6 +780,7 @@ async fn non_stream_error(
 pub(crate) fn provider_message(value: &Value) -> Option<&str> {
     value
         .pointer("/error/message")
+        .or_else(|| value.get("providerMessage"))
         .or_else(|| value.get("detail"))
         .and_then(Value::as_str)
 }
@@ -835,11 +836,8 @@ async fn check_status(
     if status == StatusCode::OK {
         return Ok(());
     }
-    let outcome = if status.is_server_error() || status == StatusCode::REQUEST_TIMEOUT {
-        SubmissionOutcome::Unknown
-    } else {
-        SubmissionOutcome::Rejected
-    };
+    // An HTTP rejection contains no model output, even when its error body cannot be read.
+    let outcome = SubmissionOutcome::Rejected;
     let request_id = response
         .headers()
         .get("x-request-id")
@@ -852,7 +850,11 @@ async fn check_status(
         .map(str::to_owned);
     let body = bounded_body(response, ERROR_BODY_LIMIT, cancellation, deadline)
         .await
-        .map_err(|error| {
+        .map_err(|mut error| {
+            error.outcome = SubmissionOutcome::Rejected;
+            if status.is_server_error() {
+                error.kind = ErrorKind::Server;
+            }
             error.with_provider_metadata(
                 key,
                 Some(status.as_u16()),
@@ -864,7 +866,7 @@ async fn check_status(
     let error: Option<Value> = serde_json::from_slice(&body).ok();
     let code = error
         .as_ref()
-        .and_then(|value| value.pointer("/error/code"))
+        .and_then(|value| value.pointer("/error/code").or_else(|| value.get("code")))
         .and_then(Value::as_str);
     let classified = error_code(authentication, code);
     let kind = if authentication == AuthenticationMethod::Chatgpt
@@ -874,12 +876,13 @@ async fn check_status(
     } else {
         match status {
             StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => ErrorKind::Authentication,
+            StatusCode::PAYMENT_REQUIRED => ErrorKind::Quota,
             StatusCode::NOT_FOUND => ErrorKind::ModelUnavailable,
             StatusCode::TOO_MANY_REQUESTS => match classified {
                 ErrorKind::Quota => ErrorKind::Quota,
                 _ => ErrorKind::RateLimited,
             },
-            _ if status.is_server_error() => ErrorKind::Transport,
+            _ if status.is_server_error() => ErrorKind::Server,
             _ => classified,
         }
     };

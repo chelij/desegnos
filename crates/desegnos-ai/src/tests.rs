@@ -1386,8 +1386,8 @@ async fn authentication_quota_rate_model_and_server_failures_have_redacted_typed
         (
             503,
             "server_error",
-            ErrorKind::Transport,
-            SubmissionOutcome::Unknown,
+            ErrorKind::Server,
+            SubmissionOutcome::Rejected,
         ),
     ] {
         let server = Server::start(Reply::json(
@@ -3013,14 +3013,7 @@ async fn chatgpt_structured_admission_failures_keep_safe_metadata_and_never_retr
             .await
             .unwrap_err();
         assert_eq!(error.kind, kind);
-        assert_eq!(
-            error.outcome,
-            if status >= 500 {
-                SubmissionOutcome::Unknown
-            } else {
-                SubmissionOutcome::Rejected
-            }
-        );
+        assert_eq!(error.outcome, SubmissionOutcome::Rejected);
         assert_eq!(error.authentication, AuthenticationMethod::Chatgpt);
         assert_eq!(error.http_status, Some(status));
         assert_eq!(error.code.as_deref(), Some(code));
@@ -3043,7 +3036,7 @@ async fn chatgpt_admission_detail_is_not_a_machine_code_and_metadata_cannot_echo
     for (status, kind) in [
         (401, ErrorKind::Authentication),
         (403, ErrorKind::Authentication),
-        (503, ErrorKind::Transport),
+        (503, ErrorKind::Server),
     ] {
         let mut reply = Reply::json(
             status,
@@ -4235,4 +4228,36 @@ async fn stream_accepts_absent_host_echoes_but_rejects_present_nulls() {
         let server = Server::start(Reply::sse(frame(completed(&invalid.to_string())))).await;
         assert!(generate(&server, &frozen).await.is_err());
     }
+}
+
+#[tokio::test]
+async fn http_error_statuses_are_definite_rejections_without_retry_or_output() {
+    let frozen = snapshot(GenerationMode::Strict);
+    for status in [400, 401, 402, 403, 408, 429, 500, 502, 503, 504] {
+        let server = Server::start(Reply::json(
+            status,
+            json!({"code":"internal_error", "providerMessage":"Internal Server Error (request_id: req_test)"}),
+        )).await;
+        let error = generate(&server, &frozen).await.unwrap_err();
+        assert_eq!(error.http_status, Some(status));
+        assert_eq!(error.outcome, SubmissionOutcome::Rejected);
+        assert_eq!(error.code.as_deref(), Some("internal_error"));
+        assert!(error.response_id.is_none());
+        assert!(error.message().contains("Nothing was changed"));
+        assert!(!error.message().contains("unknown outcome"));
+        assert_eq!(server.count.load(Ordering::SeqCst), 1);
+    }
+}
+
+#[tokio::test]
+async fn an_interrupted_http_error_body_does_not_make_the_generation_outcome_unknown() {
+    let frozen = snapshot(GenerationMode::Strict);
+    let mut reply = Reply::json(500, json!({"code":"internal_error"}));
+    reply.declared_length = Some(10_000);
+    let server = Server::start(reply).await;
+    let error = generate(&server, &frozen).await.unwrap_err();
+    assert_eq!(error.kind, ErrorKind::Server);
+    assert_eq!(error.outcome, SubmissionOutcome::Rejected);
+    assert_eq!(error.http_status, Some(500));
+    assert_eq!(server.count.load(Ordering::SeqCst), 1);
 }

@@ -1,3 +1,4 @@
+import { userError, providerProblem } from '../userErrors.js';
 import type { ExportJobView, OutputType, Project } from '../types';
 
 const money = (value: number) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 4 }).format(value);
@@ -18,7 +19,8 @@ const STATUS_LABELS: Record<string, string> = {
 };
 
 /** The inline export panel the dock shows when Export is chosen. No modal dialog. */
-export function ExportPanel({ project, destination, busy, job, sending, error, chooseDestination, runExport, sendExport, cancelExport, retryExport, openFolder, openInBrowser, previewExport, selectBoundary, setIncluded, setOutput, close }: {
+export function ExportPanel({ project, destination, busy, job, sending, error, chooseDestination, runExport, sendExport, cancelExport, retryExport, openFolder, openInBrowser, previewExport, selectBoundary, setIncluded, setOutput, close, openSettings }: {
+  openSettings: () => void;
   selectBoundary: (pageId: string) => void; setIncluded: (pageId: string, included: boolean) => void; setOutput: (pageId: string, output: OutputType) => void;
   project: Project; destination: string | null; busy: boolean;
   job: ExportJobView | null; sending: boolean; error: string;
@@ -49,10 +51,10 @@ export function ExportPanel({ project, destination, busy, job, sending, error, c
       <input readOnly value={destination ?? 'Choose a folder'} onClick={chooseDestination} />
     </label>
     <button type="button" className="dock-action" disabled={busy || running} onClick={chooseDestination}>Choose folder…</button>
-    {error && <p className="dock-error">{error}</p>}
+    {error && !job?.providerError && <p className="dock-error">{userError(error)}</p>}
     {job && <div className="export-panel-job" role="status">
       <p><strong>{STATUS_LABELS[job.status] ?? job.status}</strong>{job.status === 'prepared' && job.estimateUsd > 0 ? ` · ${money(job.estimateUsd)} estimate` : ''}</p>
-      <p>{job.message}</p>
+      <p>{job.providerError ? userError(job) : job.message}</p>
       {job.kind === 'code' && <p className="muted">Export {job.pages.length} {job.pages.length === 1 ? 'boundary' : 'boundaries'} · {job.sizeCount} {job.sizeCount === 1 ? 'size' : 'sizes'} · {job.pointerCount} {job.pointerCount === 1 ? 'pointer' : 'pointers'}</p>}
       {job.summary && <p className="muted">{job.summary}</p>}
       {job.usage && <p className="muted">{job.usage.inputTokens.toLocaleString()} in · {job.usage.outputTokens.toLocaleString()} out tokens{job.attempts.length > 1 ? ` · ${job.attempts.length} attempts` : ''}</p>}
@@ -68,7 +70,7 @@ export function ExportPanel({ project, destination, busy, job, sending, error, c
       {prepared && <button type="button" className="primary" disabled={sending} onClick={sendExport}>{sending ? 'Sending…' : job?.kind === 'comment' ? 'Send to rewrite the comment' : 'Generate behaviour'}</button>}
       {prepared && <button type="button" className="dock-action" disabled={sending} onClick={cancelExport}>Cancel</button>}
       {running && <button type="button" className="dock-action" onClick={cancelExport}>Cancel</button>}
-      {(job?.status === 'failed' || job?.status === 'cancelled' || job?.status === 'stale') && <button type="button" className="dock-action" disabled={sending} onClick={retryExport}>Try again</button>}
+      {(job?.status === 'failed' || job?.status === 'cancelled' || job?.status === 'stale') && <button type="button" className="dock-action" disabled={sending} onClick={providerProblem(job.providerError, job.provider)?.settings ? openSettings : retryExport}>{providerProblem(job.providerError, job.provider)?.action ?? 'Try again'}</button>}
     </div>
   </div>;
 }

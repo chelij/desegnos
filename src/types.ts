@@ -9,7 +9,7 @@ export type ImportedIdentity = { sourceName: string; sourceSha256: string; summa
 export type IdentitySource = { id: string; name: string; sha256: string; files: { id: string; name: string; textBytes: number; sourcePage?: SourcePageRef | null; asset: IdentityAsset | null }[]; skipped: string[]; photos?: { id: string; name: string; width: number; height: number; thumbnail: string; sourcePages?: SourcePageRef[] }[]; pages?: SourcePage[] };
 export type IdentitySelection = { fileIds: string[]; fits: boolean; message: string | null; needsSettings: boolean };
 export type IdentityCandidate = { jobId: string; requirementsSha256: string; summary: string; brandName: string; tone: string; findings: { topic: string; value: string; evidence: string[]; confidence: 'high' | 'medium' | 'low' }[]; logoAssetIds: string[]; warnings: string[]; photos?: { id: string; description: string }[]; content?: ImportedItem[] };
-export type IdentityAnalysis = { jobId: string; sourceId: string; source: IdentitySource; fileIds: string[]; authentication?: AuthenticationMethod | null; chatgptAccountId?: string | null; status: 'analyzing' | 'complete' | 'failed' | 'unknown' | 'cancelled'; message: string; receivedBytes: number; candidate: IdentityCandidate | null; error: string | null };
+export type IdentityAnalysis = { providerError?: ProviderError | null; provider?: ProviderId | null; jobId: string; sourceId: string; source: IdentitySource; fileIds: string[]; authentication?: AuthenticationMethod | null; chatgptAccountId?: string | null; status: 'analyzing' | 'complete' | 'failed' | 'unknown' | 'cancelled'; message: string; receivedBytes: number; candidate: IdentityCandidate | null; error: string | null };
 export type GenerationMode = 'fuzzy' | 'strict';
 export type Viewport = { width: number; height: number };
 export type GridSettings = { spacing: number; unit: 'pixels' | 'percent'; snap: boolean };
@@ -106,7 +106,7 @@ export type ExportPageView = { pageId: string; name: string; path: string; outpu
 export type ExportResultView = { label: string; path: string; fileCount: number; pageCount: number; previewUrl: string | null };
 export type ExportAttemptView = { ordinal: number; status: string; usage: TokenUsage | null };
 export type ExportStatus = 'prepared' | 'sending' | 'ready' | 'failed' | 'cancelled' | 'stale';
-export type ExportJobView = { jobId: string; projectId: string; baseRevision: number; kind: 'code' | 'comment'; status: ExportStatus;
+export type ExportJobView = { providerError?: ProviderError | null; provider?: ProviderId | null; jobId: string; projectId: string; baseRevision: number; kind: 'code' | 'comment'; status: ExportStatus;
   message: string; summary: string; estimateUsd: number; usage: TokenUsage | null; attempts: ExportAttemptView[];
   pages: ExportPageView[]; sizeCount: number; pointerCount: number; warnings: string[]; result: ExportResultView | null; error: string | null };
 export type ExportCheck = { states: PointerStateView[]; lastExport: ExportRecord | null; readable: boolean };
@@ -131,11 +131,11 @@ export type ProviderDescriptor = { id: ProviderId; name: string; available: bool
 export type ChatgptAccount = { id: string; label: string; email: string | null; connected: boolean; planEnabled: boolean; storage: 'system' | 'session' | 'none'; storageRepairRequired: boolean };
 export type ChatgptView = { accounts: ChatgptAccount[]; activeAccountId: string | null;
   signIn: { status: 'idle' | 'awaitingBrowser' | 'complete' | 'cancelled' | 'failed'; message: string | null };
-  models: { id: string; name: string }[]; modelsError: string | null; storageError: string | null; showWelcome: boolean; message: string | null };
+  models: { id: string; name: string }[]; modelsProviderError?: ProviderError | null; modelsError: string | null; storageError: string | null; showWelcome: boolean; message: string | null };
 export type ModelInfo = { id: string; name: string; inputUsdPerMillion: number; outputUsdPerMillion: number; verifiedAt: string; sourceUrl: string; reasoningEfforts: string[]; pricingRequired?: boolean; maxOutputTokens?: number; defaultPricing?: ProviderSettings['pricing'] };
 export type ImageAccess = { available: 'yes' | 'no' | 'unknown'; checkedAt: number; reason: string };
 export type AiSettingsView = { imageCredential: 'chatgpt' | 'connection' | 'imageKey' | null; imageKey: CredentialInfo; mainImageAccess: ImageAccess | null; imageKeyAccess: ImageAccess | null; imageAccess: ImageAccess | null; imageAccessChecking: boolean; provider: ProviderId; providers: ProviderDescriptor[]; settings: ProviderSettings; credential: CredentialInfo; catalogue: ModelInfo[]; configurationError: string | null;
-  authentication: AuthenticationMethod; chatgpt: ChatgptView; modelsError?: string | null; modelsAuthRequired?: boolean };
+  authentication: AuthenticationMethod; chatgpt: ChatgptView; modelsProviderError?: ProviderError | null; modelsError?: string | null; modelsAuthRequired?: boolean };
 export type TokenUsage = { inputTokens: number; outputTokens: number; totalTokens: number };
 export type GenerationStatus = 'prepared' | 'generating' | 'ready' | 'blocked' | 'failed' | 'unknown' | 'cancelled' | 'discarded' | 'applying' | 'applied';
 export type GenerationAttempt = { ordinal: number; status: string; startedAt: string; finishedAt: string | null; responseId: string | null; usage: TokenUsage | null };

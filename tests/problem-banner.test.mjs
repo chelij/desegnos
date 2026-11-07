@@ -51,8 +51,9 @@ try {
     assert.match(html, /notice-error/);
     assert.match(html, /class="primary" disabled=""/);
     assert.equal(renderToStaticMarkup(React.createElement(Notice, { message: '' })), '');
-    for (const error of ['quota', 'authentication expired', 'network timeout', 'API key missing', 'usage limit', 'secure storage']) assert.equal(needsAiSettings(error), true);
+    for (const error of ['quota', 'authentication expired', 'API key missing', 'usage limit', 'secure storage']) assert.equal(needsAiSettings(error), true);
     assert.equal(needsAiSettings('Region script affects another region'), false);
+    for (const error of ['network timeout', 'rate limit', 'too many requests']) assert.equal(needsAiSettings(error), false);
   });
   await test('primary, secondary and dismiss preserve callbacks', () => {
     const calls = [];

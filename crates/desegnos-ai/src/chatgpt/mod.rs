@@ -105,6 +105,7 @@ struct State {
     sessions: BTreeMap<Uuid, TokenRecord>,
     models: BTreeMap<Uuid, Vec<ChatgptModel>>,
     model_errors: BTreeMap<Uuid, String>,
+    model_provider_errors: BTreeMap<Uuid, crate::ProviderError>,
     epochs: BTreeMap<Uuid, Uuid>,
     pending_rotations: BTreeMap<Uuid, PendingRotation>,
     sign_in: SignIn,
@@ -171,6 +172,7 @@ impl ChatgptManager {
             sessions: BTreeMap::new(),
             models: BTreeMap::new(),
             model_errors: BTreeMap::new(),
+            model_provider_errors: BTreeMap::new(),
             epochs: BTreeMap::new(),
             pending_rotations: BTreeMap::new(),
             sign_in: SignIn::Idle,
@@ -271,6 +273,8 @@ impl ChatgptManager {
                 .and_then(|id| state.models.get(&id).cloned())
                 .unwrap_or_default(),
             models_error: active.and_then(|id| state.model_errors.get(&id).cloned()),
+            models_provider_error: active
+                .and_then(|id| state.model_provider_errors.get(&id).cloned()),
             storage_error: if !state.pending_rotations.is_empty() {
                 Some(ROTATION_STORAGE_MESSAGE.into())
             } else if metadata
@@ -465,6 +469,7 @@ impl ChatgptManager {
             &attempt.nonce,
             attempt.storage,
         );
+        let mut models_provider_error = None;
         let (models, models_error) = if tokens.plan_enabled() {
             let bearer = ApiKey::from_chatgpt_token(tokens.access_token.clone())
                 .map_err(|_| Kind::InvalidToken)?;
@@ -476,7 +481,10 @@ impl ChatgptManager {
             {
                 Ok(models) => (models, None),
                 Err(_) if attempt.cancellation.is_cancelled() => return Err(Kind::Cancelled.into()),
-                Err(error) => (vec![], Some(error.message())),
+                Err(error) => {
+                    models_provider_error = Some(error.clone());
+                    (vec![], Some(error.message()))
+                }
             }
         } else {
             (
@@ -549,7 +557,11 @@ impl ChatgptManager {
         state.metadata = metadata;
         state.models.insert(registration.id, models);
         state.model_errors.remove(&registration.id);
+        state.model_provider_errors.remove(&registration.id);
         state.epochs.insert(registration.id, Uuid::new_v4());
+        if let Some(error) = models_provider_error {
+            state.model_provider_errors.insert(registration.id, error);
+        }
         if let Some(error) = models_error {
             state.model_errors.insert(registration.id, error);
         }
@@ -835,6 +847,7 @@ impl ChatgptManager {
         state.pending_rotations.remove(&account_id);
         state.storage_error = None;
         state.model_errors.remove(&account_id);
+        state.model_provider_errors.remove(&account_id);
         state.message = Some("Secure storage repaired.".into());
         drop(state);
         drop(_lease);
@@ -865,6 +878,12 @@ impl ChatgptManager {
                     .await
                     .model_errors
                     .insert(account_id, error.message().into());
+                self.inner
+                    .state
+                    .lock()
+                    .await
+                    .model_provider_errors
+                    .remove(&account_id);
                 return Err(error);
             }
         };
@@ -885,10 +904,12 @@ impl ChatgptManager {
             Ok(models) => {
                 state.models.insert(account_id, models);
                 state.model_errors.remove(&account_id);
+                state.model_provider_errors.remove(&account_id);
             }
             Err(error) => {
                 state.models.remove(&account_id);
                 state.model_errors.insert(account_id, error.message());
+                state.model_provider_errors.insert(account_id, error);
             }
         }
         drop(state);
@@ -991,6 +1012,7 @@ impl ChatgptManager {
             state.pending_rotations.remove(&registration.id);
             state.models.remove(&registration.id);
             state.model_errors.remove(&registration.id);
+            state.model_provider_errors.remove(&registration.id);
             state.metadata = next.clone();
             state.epochs.insert(registration.id, Uuid::new_v4());
         }
@@ -1098,6 +1120,7 @@ fn discard_stale_rotations(state: &mut State, metadata: &Metadata) {
         state.sessions.remove(&id);
         state.models.remove(&id);
         state.model_errors.remove(&id);
+        state.model_provider_errors.remove(&id);
         state.epochs.insert(id, Uuid::new_v4());
     }
     if state.pending_rotations.is_empty()
