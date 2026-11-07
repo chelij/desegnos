@@ -67,6 +67,9 @@ pub(crate) async fn send(
         SubmissionOutcome::Unknown
     };
     for attempt in 1..=3 {
+        // A refused connection or failed DNS lookup won't heal in seconds: report it at once
+        // rather than making every probe (models, access checks) wait through the backoff.
+        let unreachable = std::sync::atomic::AtomicBool::new(false);
         let copy = request
             .try_clone()
             .ok_or_else(|| ProviderError::before(ErrorKind::InvalidRequirements))?;
@@ -75,7 +78,10 @@ pub(crate) async fn send(
             _ = cancel.cancelled() => return Err(ProviderError::before(ErrorKind::Cancelled)),
             _ = tokio::time::sleep_until(deadline.min(Instant::now() + idle)) => Err(ProviderError::new(ErrorKind::Deadline, outcome)),
             result = async {
-                let mut response = client.execute(copy).await.map_err(|error| network_error(error, outcome))?;
+                let mut response = client.execute(copy).await.map_err(|error| {
+                    unreachable.store(error.is_connect() && !error.is_timeout(), std::sync::atomic::Ordering::Relaxed);
+                    network_error(error, outcome)
+                })?;
                 let content_length = response.content_length();
                 if !response.status().is_success() || content_length.is_some_and(|length| length > max_body as u64) {
                     return Ok(RetryResponse { response, first: None, content_length });
@@ -108,7 +114,10 @@ pub(crate) async fn send(
                 };
                 (kind, delay)
             }
-            Err(error) if matches!(error.kind, ErrorKind::Transport | ErrorKind::Deadline) => (
+            Err(error)
+                if matches!(error.kind, ErrorKind::Transport | ErrorKind::Deadline)
+                    && !unreachable.load(std::sync::atomic::Ordering::Relaxed) =>
+            (
                 error.kind,
                 Duration::from_secs(if attempt == 1 { 2 } else { 8 }),
             ),

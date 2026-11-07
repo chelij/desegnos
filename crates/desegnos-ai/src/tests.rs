@@ -4523,3 +4523,31 @@ async fn read_only_preflight_network_failures_do_not_claim_an_unknown_generation
     assert_eq!(error.outcome, SubmissionOutcome::NotSubmitted);
     assert_eq!(server.count.load(Ordering::SeqCst), 1);
 }
+
+#[tokio::test]
+async fn an_unreachable_provider_fails_at_once_instead_of_retrying() {
+    // Bind and drop a listener so the port is closed: the connection is refused immediately.
+    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let client = OpenAiClient::for_loopback(&format!("http://127.0.0.1:{port}/v1")).unwrap();
+    let frozen = snapshot(GenerationMode::Strict);
+    let updates = Mutex::new(vec![]);
+    let started = std::time::Instant::now();
+    let error = client
+        .generate(
+            crate::GenerationRequest {
+                authentication: AuthenticationMethod::ApiKey,
+                snapshot: &frozen,
+                mode: GenerationMode::Strict,
+                schema: &schema(),
+                settings: &ProviderSettings::default(),
+                key: &ApiKey::new(KEY.into()).unwrap(),
+                cancellation: &CancellationToken::new(),
+            },
+            |update| updates.lock().unwrap().push(update),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind, ErrorKind::Transport);
+    assert!(started.elapsed() < std::time::Duration::from_secs(1), "waited {:?}", started.elapsed());
+    assert!(updates.lock().unwrap().iter().all(|update| update.retry.is_none()));
+}
