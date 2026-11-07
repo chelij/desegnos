@@ -6,6 +6,7 @@ import { ElementView } from './elements';
 import { resolveElement } from './links';
 import { applyOverrides, resolveSharedStyles } from './sizes';
 import { hostname } from './surface';
+import { MAX_PROMPT_CHARS } from '../generated/limits';
 
 export const shownReference = (item: ReferenceItem, movingItems: Record<string, Rect>): Rect => movingItems[item.id] ?? item.rect;
 
@@ -52,7 +53,7 @@ export function ReferenceNoteEditor({ item, kind, screen, autoFocus, change, clo
   const [draft, changeDraft, flushDraft] = useDraftText(kind.text, (_value, latest) => Promise.resolve(change(latest())).then(() => latest()), 400);
   useEffect(() => { if (autoFocus) text.current?.focus({ preventScroll: true }); }, [autoFocus, item.id]);
   return <div className="reference-note-editor" style={{ left: screen.left, top: screen.top, width: Math.max(160, screen.width), height: Math.min(Math.max(64, screen.height), 160) }} onPointerDown={event => event.stopPropagation()}>
-    <textarea ref={text} aria-label="Reference note" maxLength={16384} value={draft} placeholder="Reference note" spellCheck
+    <textarea ref={text} aria-label="Reference note" maxLength={MAX_PROMPT_CHARS} value={draft} placeholder="Reference note" spellCheck
       style={{ fontSize: 12 }}
       onChange={event => changeDraft(event.target.value)} onBlur={flushDraft}
       onKeyDown={event => {

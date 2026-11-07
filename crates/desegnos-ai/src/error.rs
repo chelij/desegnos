@@ -1,7 +1,7 @@
 use crate::{ApiKey, AuthenticationMethod, TokenUsage};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(ts_rs::TS, Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ErrorKind {
     InvalidSettings,
@@ -39,7 +39,7 @@ pub enum ErrorKind {
     ChatgptUserUnavailable,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(ts_rs::TS, Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum SubmissionOutcome {
     NotSubmitted,
@@ -48,7 +48,7 @@ pub enum SubmissionOutcome {
     Received,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(ts_rs::TS, Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ResponseBodyKind {
     Unavailable,
@@ -63,7 +63,7 @@ pub enum ResponseBodyKind {
     Binary,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(ts_rs::TS, Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ResponseRejection {
     EventJson,
@@ -116,7 +116,7 @@ impl ResponseRejection {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(ts_rs::TS, Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum TerminalOutput {
     NotReceived,
@@ -126,7 +126,7 @@ pub enum TerminalOutput {
     Invalid,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(ts_rs::TS, Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum CorrelationCause {
     InvalidIndex,
@@ -139,7 +139,7 @@ pub enum CorrelationCause {
     ItemChanged,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(ts_rs::TS, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ResponseCorrelation {
     pub terminal_output: TerminalOutput,
@@ -155,7 +155,7 @@ pub struct ResponseCorrelation {
     pub content_index: Option<u64>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(ts_rs::TS, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ResponseFormat {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -174,7 +174,7 @@ pub struct ResponseFormat {
     pub correlation: Option<Box<ResponseCorrelation>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(ts_rs::TS, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProviderError {
     pub kind: ErrorKind,

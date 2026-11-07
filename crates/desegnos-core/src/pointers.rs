@@ -9,7 +9,8 @@ use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
 
-#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[derive(ts_rs::TS, Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[ts(rename = "PointerStateKind")]
 #[serde(rename_all = "camelCase")]
 pub enum PointerState {
     /// A line with no comment: it only shows its target.
@@ -29,7 +30,7 @@ pub enum PointerState {
 }
 
 /// One pointer's derived state, recomputed whenever project content changes.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(ts_rs::TS, Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct PointerStateView {
     pub id: Uuid,

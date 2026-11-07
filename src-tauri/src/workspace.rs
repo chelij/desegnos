@@ -87,7 +87,7 @@ struct SessionPointer {
     untitled: bool,
 }
 
-#[derive(Clone, Serialize)]
+#[derive(ts_rs::TS, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RecoveryInfo {
     project_id: Uuid,
@@ -102,7 +102,7 @@ struct RecoveryCandidate {
     modified: SystemTime,
 }
 
-#[derive(Serialize)]
+#[derive(ts_rs::TS, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkspaceView {
     project: Option<Project>,
@@ -122,7 +122,7 @@ pub struct WorkspaceView {
     pointer_states: Vec<desegnos_core::PointerStateView>,
 }
 
-#[derive(Debug, PartialEq, Eq, Serialize)]
+#[derive(ts_rs::TS, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct HistoryView {
     session_id: Uuid,
@@ -133,7 +133,8 @@ struct HistoryView {
     entries: Vec<desegnos_core::HistoryEntry>,
 }
 
-#[derive(Serialize)]
+#[derive(ts_rs::TS, Serialize)]
+#[ts(rename = "SaveOutcome")]
 #[serde(tag = "status", rename_all = "camelCase")]
 pub enum SaveProjectOutcome {
     Saved { workspace: Box<WorkspaceView> },
@@ -141,7 +142,7 @@ pub enum SaveProjectOutcome {
     Conflict { conflict: SaveConflict },
 }
 
-#[derive(Serialize)]
+#[derive(ts_rs::TS, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SaveConflict {
     token: Uuid,
@@ -154,7 +155,7 @@ pub struct SaveConflict {
     details: SaveConflictDetails,
 }
 
-#[derive(Serialize)]
+#[derive(ts_rs::TS, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SaveConflictDetails {
     expected: Option<FileStamp>,
@@ -229,7 +230,7 @@ impl OpenProject {
     }
 }
 
-#[derive(Serialize)]
+#[derive(ts_rs::TS, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OpenProjectSummary {
     id: Uuid,
@@ -239,7 +240,7 @@ pub struct OpenProjectSummary {
     pages: Vec<OpenPageSummary>,
 }
 
-#[derive(Serialize)]
+#[derive(ts_rs::TS, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OpenPageSummary {
     id: Uuid,
@@ -1981,55 +1982,6 @@ pub async fn open_project(
     Ok(Some(OpenProjectResult::Workspace(Box::new(state.view()))))
 }
 
-#[tauri::command]
-pub async fn save_project(
-    app: AppHandle,
-    state: WorkspaceState<'_>,
-    save_as: bool,
-) -> NativeResult<Option<WorkspaceView>> {
-    let (project, choose_path) = {
-        let state = state.lock().map_err(message)?;
-        (
-            state
-                .session()
-                .ok_or("Create or open a project first.")?
-                .project()
-                .clone(),
-            save_as,
-        )
-    };
-    let picked = if choose_path {
-        let picked = tauri::async_runtime::spawn_blocking(move || {
-            crate::file_dialogs::picked(
-                app.dialog()
-                    .file()
-                    .add_filter(
-                        "Desegnos project",
-                        &desegnos_storage::PROJECT_FILE_EXTENSIONS,
-                    )
-                    .set_file_name("project.desegnos")
-                    .blocking_save_file(),
-            )
-        })
-        .await
-        .map_err(message)??;
-        let Some(picked) = picked else {
-            return Ok(None);
-        };
-        Some(picked.into_path().map_err(message)?)
-    } else {
-        None
-    };
-    let mut state = state.lock().map_err(message)?;
-    if let Some(session) = state.session_mut() {
-        session.end_history_step();
-    }
-    state.check_snapshot(&project)?;
-    let picked = copy_destination(picked)?;
-    state.save_snapshot(&project, picked)?;
-    Ok(Some(state.view()))
-}
-
 async fn choose_save_path(app: AppHandle, suggested: String) -> NativeResult<Option<PathBuf>> {
     let picked = tauri::async_runtime::spawn_blocking(move || {
         crate::file_dialogs::picked(
@@ -2077,32 +2029,6 @@ fn copy_destination(path: Option<PathBuf>) -> NativeResult<Option<PathBuf>> {
         desegnos_storage::create_project_folder(parent, name).map_err(message)
     })
     .transpose()
-}
-
-#[tauri::command]
-pub fn move_into_project_folder(state: WorkspaceState<'_>) -> NativeResult<WorkspaceView> {
-    let mut state = state.lock().map_err(message)?;
-    let project = state.project()?.clone();
-    let former = state.file().map(|file| file.path().to_owned());
-    let folder_name = desegnos_storage::sanitize_project_name(&project.name);
-    if state.file().is_some_and(|file| {
-        file.path()
-            .parent()
-            .and_then(|parent| parent.file_name())
-            .is_some_and(|name| name == folder_name.as_str())
-    }) {
-        return Ok(state.view());
-    }
-    let path = desegnos_storage::create_project_folder(&state.project_location()?, &project.name)
-        .map_err(message)?;
-    // The old file stays as a fallback. The project's current state moves into the managed
-    // folder as a new file; only the active save/recovery/recent destination changes.
-    state.save_snapshot(&project, Some(path))?;
-    if let (Some(former), Some(file)) = (former, state.file()) {
-        state.recent_error =
-            crate::recent::moved(&state.directory, file.path(), &project.name, &former).err();
-    }
-    Ok(state.view())
 }
 
 #[tauri::command]
@@ -2179,65 +2105,6 @@ pub async fn resolve_save_conflict(
 }
 
 #[tauri::command]
-pub fn prepare_requirements(
-    state: WorkspaceState<'_>,
-    generation: State<'_, Mutex<crate::generation::GenerationService>>,
-) -> NativeResult<RequirementsSnapshot> {
-    let mut state = state.lock().map_err(message)?;
-    let prepared = state
-        .session()
-        .ok_or("Create or open a project first.")?
-        .project()
-        .prepare_requirements()
-        .map_err(message)?;
-    let history = generation
-        .lock()
-        .map_err(message)?
-        .request_history(state.project()?)?;
-    let prepared = prepared
-        .with_earlier_requests(
-            state.project()?,
-            &history,
-            time::OffsetDateTime::now_utc().unix_timestamp(),
-        )
-        .map_err(message)?;
-    state.active.as_mut().expect("active project").prepared = Some(prepared.clone());
-    Ok(prepared)
-}
-
-#[tauri::command]
-pub async fn save_requirements(
-    app: AppHandle,
-    state: WorkspaceState<'_>,
-    job_id: String,
-) -> NativeResult<bool> {
-    let prepared = state
-        .lock()
-        .map_err(message)?
-        .active
-        .as_ref()
-        .and_then(|open| open.prepared.clone())
-        .filter(|p| p.job_id.to_string() == job_id)
-        .ok_or("Prepare the requirements again before saving them.")?;
-    let picked = tauri::async_runtime::spawn_blocking(move || {
-        crate::file_dialogs::picked(
-            app.dialog()
-                .file()
-                .add_filter("Markdown document", &["md"])
-                .set_file_name("REQUIREMENTS.md")
-                .blocking_save_file(),
-        )
-    })
-    .await
-    .map_err(message)??;
-    let Some(picked) = picked else {
-        return Ok(false);
-    };
-    write_markdown(&picked.into_path().map_err(message)?, &prepared.markdown).map_err(message)?;
-    Ok(true)
-}
-
-#[tauri::command]
 pub fn dismiss_recovery(
     state: WorkspaceState<'_>,
     project_id: Uuid,
@@ -2263,19 +2130,7 @@ pub fn recover_project(
     Ok(state.view())
 }
 
-#[tauri::command]
-pub fn get_project_notes(state: WorkspaceState<'_>) -> NativeResult<String> {
-    state
-        .lock()
-        .map_err(message)?
-        .session()
-        .ok_or("Create or open a project first.")?
-        .project()
-        .project_markdown()
-        .map_err(message)
-}
-
-#[derive(Serialize)]
+#[derive(ts_rs::TS, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RecentProjectsView {
     projects: Vec<crate::recent::RecentProject>,

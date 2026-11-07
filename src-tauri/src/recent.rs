@@ -5,7 +5,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(ts_rs::TS, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RecentProject {
     pub path: PathBuf,
@@ -84,10 +84,6 @@ pub fn remember(directory: &Path, path: &Path, name: &str) -> Result<(), String>
 /// A save keeps the last-opened time of an existing entry; it only refreshes the name.
 pub fn remember_saved(directory: &Path, path: &Path, name: &str) -> Result<(), String> {
     remember_destination(directory, path, name, None, false)
-}
-
-pub fn moved(directory: &Path, path: &Path, name: &str, former: &Path) -> Result<(), String> {
-    remember_destination(directory, path, name, Some(former), false)
 }
 
 fn remember_destination(
@@ -370,20 +366,6 @@ mod tests {
         let entries = read(&directory).unwrap();
         assert_eq!(entries.len(), 10);
         assert_eq!(entries[0].name, "Renamed site");
-        moved(
-            &directory,
-            &directory.join("6.desegnos"),
-            "Moved site",
-            &directory.join("5.desegnos"),
-        )
-        .unwrap();
-        let entries = read(&directory).unwrap();
-        assert_eq!(entries[0].name, "Moved site");
-        assert!(
-            !entries
-                .iter()
-                .any(|entry| entry.path == directory.join("5.desegnos"))
-        );
         let path = directory.join("recent-projects.json");
         std::fs::write(&path, b"broken catalogue").unwrap();
         assert!(read(&directory).is_err());

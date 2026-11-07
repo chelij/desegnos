@@ -46,7 +46,8 @@ pub struct PendingReport {
     pub backtrace: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(ts_rs::TS, Debug, Serialize)]
+#[ts(rename = "PendingCrash")]
 #[serde(rename_all = "camelCase")]
 pub struct CrashReportView {
     pub kind: String,
@@ -55,7 +56,7 @@ pub struct CrashReportView {
 }
 
 /// A failed open keeps the issue address so the editor can offer to copy it.
-#[derive(Debug, Serialize)]
+#[derive(ts_rs::TS, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OpenFailure {
     message: String,

@@ -38,7 +38,7 @@ pub struct Session {
     version_labels: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(ts_rs::TS, Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct HistoryEntry {
     pub label: String,
     pub at: i64,

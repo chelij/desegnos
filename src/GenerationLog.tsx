@@ -9,6 +9,7 @@ import type { GenerationController } from './useGeneration';
 import { native } from './api';
 import { scopeLabel } from './Notes';
 import { summarizePageChanges } from './noticeSummary';
+import { MAX_PROMPT_CHARS } from './generated/limits';
 
 const SERVICE = { openai: 'OpenAI', anthropic: 'Anthropic', google: 'Google', openrouter: 'OpenRouter', deepseek: 'DeepSeek', local: 'Local model' } as const;
 const kb = (bytes: number) => bytes < 1024 ? `${bytes} bytes` : `${(bytes / 1024).toFixed(1)} KB`;
@@ -138,7 +139,7 @@ export function GenerationLog({ job: currentJob, operation, error, project, cont
           </dl></Disclosure>
           {job.usage && <p className="log-meta token-footer">{job.usage.inputTokens.toLocaleString()} tokens sent · {job.usage.outputTokens.toLocaleString()} received</p>}
           {!working && targets.length > 0 && <div className="log-reply">
-            <textarea ref={replyBox} rows={1} value={replyText} aria-label="Reply to the AI" placeholder="Reply to the AI…" maxLength={16384} onChange={event => setReplyText(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) { event.preventDefault(); void sendReply(); } }} />
+            <textarea ref={replyBox} rows={1} value={replyText} aria-label="Reply to the AI" placeholder="Reply to the AI…" maxLength={MAX_PROMPT_CHARS} onChange={event => setReplyText(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) { event.preventDefault(); void sendReply(); } }} />
             <button type="button" className="primary" disabled={busy || replySending || !replyText.trim()} onClick={() => void sendReply()}>Send</button>
           </div>}
           {replyError && <ProblemBanner message={userError(replyError)} dismiss={() => setReplyError('')} />}

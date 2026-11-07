@@ -30,7 +30,7 @@ pub struct EarlierRequest {
     pub summary_targets: Vec<(Uuid, Uuid)>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(ts_rs::TS, Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct FrozenLayerRequest {
     pub page_id: Uuid,

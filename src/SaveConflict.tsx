@@ -1,10 +1,8 @@
 import { ProblemBanner } from './ProblemBanner.js';
 import { WorkspaceSurface } from './WorkspaceSurface';
-import type { WorkspaceView } from './types';
+import type { FileStamp, SaveConflict, SaveOutcome } from './types';
 
-export type FileStamp = { projectId: string; version: number };
-export type SaveConflict = { token: string; kind: 'changed' | 'differentProject' | 'unreadable'; path: string; fileName: string; message: string; defaultChoice: 'copy' | 'cancel'; canReplace: boolean; details: { expected: FileStamp | null; actual: FileStamp | null } };
-export type SaveOutcome = { status: 'saved'; workspace: WorkspaceView } | { status: 'cancelled' } | { status: 'conflict'; conflict: SaveConflict };
+export type { FileStamp, SaveConflict, SaveOutcome };
 export type SaveChoice = 'copy' | 'replace' | 'cancel';
 
 export function SaveConflictDialog({ conflict, choose }: { conflict: SaveConflict; choose: (choice: SaveChoice) => void }) {

@@ -17,7 +17,7 @@ struct Settings {
     show_start_page: Option<bool>,
 }
 
-#[derive(Serialize)]
+#[derive(ts_rs::TS, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectLocationView {
     path: PathBuf,
@@ -25,7 +25,7 @@ pub struct ProjectLocationView {
     customized: bool,
 }
 
-#[derive(Serialize)]
+#[derive(ts_rs::TS, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppSettingsView {
     show_start_page: bool,

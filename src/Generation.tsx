@@ -30,7 +30,7 @@ export function GenerationFeedback({ controller, action, openSettings, openImpor
   const cutOff = replyCutOff(job);
   const partial = job?.status === 'applied' && !!review.reason;
   const needsInput = review.blocked.length > 0 && review.retryable.length === 0 && !review.retryAll;
-  const retry = review.retryable.length > 0 || review.retryAll || review.retryBatches || (job?.retryable !== false && controller.stopped && !review.blocked.length);
+  const retry = review.retryable.length > 0 || review.retryAll || review.retryBatches || (controller.stopped && !review.blocked.length);
   const retryRequests = () => {
     if (review.retryBatches) void controller.retry();
     else void controller.prepare(review.retryable.length ? review.retryable : undefined);

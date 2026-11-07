@@ -1,5 +1,6 @@
 import { findElementIn } from './elementFacts';
 import type { Element, LinkedDefinition, Project } from '../types';
+import { kindFields } from '../types';
 
 // Linked elements: one named definition every copy shares. A copy keeps its own id, position,
 // parent, visibility and request history; the definition holds everything else. The core does
@@ -113,10 +114,11 @@ function sameContent(first: Element, second: Element): boolean {
 }
 
 function content(element: Element) {
+  const fields = kindFields(element);
   return {
     kind: element.kind, style: element.style, text: element.text, image: element.image, url: element.url,
-    layout: element.layout, rotation: element.rotation, inputType: element.inputType,
-    options: element.options, language: element.language, source: element.source,
+    layout: element.layout, rotation: element.rotation, inputType: fields.inputType,
+    options: fields.options, language: fields.language, source: fields.source,
   };
 }
 

@@ -1,5 +1,6 @@
 import type { BoundaryKind, OutputType, Page, Project } from '../types';
 import type { IconName } from '../icons';
+import { SIZE_PRESETS } from '../generated/limits';
 import { BOUNDARY_GAP } from '../projectCanvasGeometry';
 
 export type BoundaryToolKind = 'page' | 'slide' | 'image';
@@ -17,8 +18,8 @@ export function projectKind(project: Project): BoundaryToolKind {
 export function boundaryDefaults(project: Project, kind: BoundaryToolKind) {
   const pages = project.pages.filter(page => pageKind(page) === kind);
   const first = pages[0]?.sizes[0];
-  const width = kind === 'slide' ? 1920 : kind === 'image' ? 1080 : first?.width ?? (project.template === 'appScreen' ? 390 : 1440);
-  const height = kind === 'slide' ? 1080 : kind === 'image' ? 1080 : first?.height ?? (project.template === 'appScreen' ? 844 : 900);
+  const width = kind === 'slide' ? 1920 : kind === 'image' ? 1080 : first?.width ?? (project.template === 'appScreen' ? SIZE_PRESETS.phone.width : SIZE_PRESETS.desktop.width);
+  const height = kind === 'slide' ? 1080 : kind === 'image' ? 1080 : first?.height ?? (project.template === 'appScreen' ? SIZE_PRESETS.phone.height : SIZE_PRESETS.desktop.height);
   const last = [...pages].sort((a, b) => Math.max(...a.sizes.map(size => size.x + size.width)) - Math.max(...b.sizes.map(size => size.x + size.width))).at(-1);
   return { x: last ? Math.max(...last.sizes.map(size => size.x + size.width)) + BOUNDARY_GAP : 0, y: last?.sizes[0].y ?? 0, width, height };
 }

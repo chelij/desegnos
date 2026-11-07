@@ -1,7 +1,8 @@
 import type { NativeFile } from './surface';
+import { MAX_PROMPT_CHARS } from '../generated/limits';
 
 /** Text dropped from the file manager is stored as a note or layer, so keep it readable. */
-export const MAX_DROPPED_TEXT = 16_384;
+export const MAX_DROPPED_TEXT = MAX_PROMPT_CHARS;
 
 export type DroppedFileKind = 'image' | 'text' | 'other';
 

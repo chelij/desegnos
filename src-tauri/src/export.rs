@@ -55,7 +55,8 @@ fn now() -> String {
         .unwrap_or_else(|_| "0".into())
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(ts_rs::TS, Debug, Clone, Copy, PartialEq, Eq)]
+#[ts(rename = "ExportStatus", rename_all = "lowercase")]
 enum JobStatus {
     Prepared,
     Sending,
@@ -89,7 +90,8 @@ impl JobStatus {
     }
 }
 
-#[derive(Clone, Serialize)]
+#[derive(ts_rs::TS, Clone, Serialize)]
+#[ts(rename = "ExportAttemptView")]
 #[serde(rename_all = "camelCase")]
 pub struct ExportAttempt {
     ordinal: usize,
@@ -97,7 +99,7 @@ pub struct ExportAttempt {
     usage: Option<TokenUsage>,
 }
 
-#[derive(Clone, Serialize)]
+#[derive(ts_rs::TS, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExportPageView {
     page_id: Uuid,
@@ -107,7 +109,7 @@ pub struct ExportPageView {
     file: String,
 }
 
-#[derive(Clone, Serialize)]
+#[derive(ts_rs::TS, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExportResultView {
     label: String,
@@ -117,13 +119,15 @@ pub struct ExportResultView {
     preview_url: Option<String>,
 }
 
-#[derive(Clone, Serialize)]
+#[derive(ts_rs::TS, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExportJobView {
     job_id: Uuid,
     project_id: Uuid,
     base_revision: u64,
+    #[ts(type = "'code' | 'comment'")]
     kind: &'static str,
+    #[ts(as = "JobStatus")]
     status: &'static str,
     message: String,
     summary: String,
@@ -281,7 +285,7 @@ impl ExportService {
     }
 }
 
-#[derive(Serialize)]
+#[derive(ts_rs::TS, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PickDestination {
     path: String,
@@ -1068,7 +1072,7 @@ pub fn get_export_job(
 
 /// Recompute pointer fingerprints from the last export's folder, so code changed outside a
 /// pointer shows as a clash. A missing or replaced folder simply reports no new fingerprints.
-#[derive(Serialize)]
+#[derive(ts_rs::TS, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExportCheck {
     states: Vec<desegnos_core::PointerStateView>,

@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { steppedZoom, wheelZoom, clamp, MIN_ZOOM } from '../projectCanvasGeometry';
 import { MAX_ZOOM, fitCamera, panCamera, unionBounds, zoomCameraAt, type Boundary, type CanvasCamera, type Point } from '../projectCanvasGeometry';
-import type { Rect } from '../types';
+import type { NativeDrag, NativeFile, Rect } from '../types';
+
+export type { NativeDrag, NativeFile };
 
 export type ScreenRect = { left: number; top: number; width: number; height: number };
-export type NativeFile = { name: string; mime: string; data: string };
-export type NativeDrag = { phase: string; id: string; position: { x: number; y: number } | null; picture: NativeFile | null; files: NativeFile[]; fileErrors: string[]; message: string | null };
 
 // A canvas target's identity, shared by selection, drags and Layers.
 export const centre = (rect: Rect): Point => ({ x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 });

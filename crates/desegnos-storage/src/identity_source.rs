@@ -73,7 +73,7 @@ pub struct IdentitySourceFile {
     pub source_page: Option<desegnos_core::SourcePageRef>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(ts_rs::TS, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct IdentitySourceAsset {
     pub id: Uuid,

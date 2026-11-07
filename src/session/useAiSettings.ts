@@ -1,3 +1,4 @@
+import type { CommandName } from '../generated/commands';
 import { usePoll } from '../usePoll';
 import { errorMessage } from '../editorShared';
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -20,7 +21,7 @@ export function useAiSettings() {
     if (epoch === aiEpoch.current && read === aiRead.current) { storeAiSettings(value); return value; }
     return aiCurrent.current ?? value;
   }, [storeAiSettings]);
-  const updateAiSettings = useCallback((command: string, args?: Record<string, unknown>) => {
+  const updateAiSettings = useCallback((command: CommandName, args?: Record<string, unknown>) => {
     const result = aiTail.current.then(async () => {
       aiEpoch.current += 1; aiRead.current += 1;
       const value = await native<AiSettingsView>(command, args);

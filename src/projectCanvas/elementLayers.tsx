@@ -2,9 +2,11 @@ import { linkedName } from './links';
 import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { Icon, type IconName } from '../icons';
 import type { Element, ElementKind, ElementPatch, Project } from '../types';
+import { kindFields } from '../types';
 import { elementLabel, holdsChildren } from './elementGeometry';
 import { nestedLayerIds } from './links';
 import { behaviourLayerKeys } from './behaviours';
+import { MAX_NAME_CHARS } from '../generated/limits';
 
 const KIND_ICONS: Record<ElementKind, IconName> = {
   box: 'rectangle', group: 'group', text: 'text', ellipse: 'ellipse', line: 'line', image: 'image',
@@ -105,7 +107,7 @@ const LayerRow = memo(function LayerRow({ linkedName, pageId, sizeId, element, p
         </button>
         : <span className="dock-tree-spacer" aria-hidden="true" />}
       {draft !== null
-        ? <input className="dock-inline-name" aria-label={`Rename ${label}`} maxLength={120} autoFocus value={draft}
+        ? <input className="dock-inline-name" aria-label={`Rename ${label}`} maxLength={MAX_NAME_CHARS} autoFocus value={draft}
           onChange={event => setDraft(event.target.value)} onBlur={commitName}
           onKeyDown={event => {
             if (event.key === 'Enter') { event.preventDefault(); commitName(); }
@@ -127,7 +129,7 @@ const LayerRow = memo(function LayerRow({ linkedName, pageId, sizeId, element, p
 }, (before, after) => {
   // Resolved trees are cloned after edits. Rows only depend on these presentation fields.
   const { element: a, ...aProps } = before, { element: b, ...bProps } = after;
-  return a.id === b.id && a.kind === b.kind && a.name === b.name && a.text === b.text && a.language === b.language
+  return a.id === b.id && a.kind === b.kind && a.name === b.name && a.text === b.text && kindFields(a).language === kindFields(b).language
     && a.visible === b.visible && a.locked === b.locked && a.children.length === b.children.length
     && Object.keys(aProps).every(key => Object.is(aProps[key as keyof typeof aProps], bProps[key as keyof typeof bProps]));
 });

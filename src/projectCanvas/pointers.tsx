@@ -5,6 +5,7 @@ import { POINTER_ARROW_PX, POINTER_BREAK_PX, POINTER_COMMENT_ZOOM, POINTER_HIT_P
 import type { Pointer, PointerStateView, Project, Rect } from '../types';
 import { elementBoxes } from './requests';
 import { isBehaviour, type BehaviourEntry } from './behaviours';
+import { MAX_PROMPT_CHARS } from '../generated/limits';
 
 export type PointerEntry = { pointer: Pointer; route: PointerRoute };
 
@@ -120,7 +121,7 @@ function PointerCommentEditor({ pointer, screen, autoFocus, change, changeKind, 
       <button type="button" aria-pressed={kind === 'reference'} onClick={() => void changeKind('reference')}>Reference</button>
       <button type="button" aria-pressed={kind === 'change'} onClick={() => void changeKind('change')}>Change</button>
     </div>
-    <textarea ref={text} aria-label="Pointer comment" maxLength={16384} value={draft} placeholder="What should this pointer do?" spellCheck style={{ flex: 'none', width: '100%', height: 56 }}
+    <textarea ref={text} aria-label="Pointer comment" maxLength={MAX_PROMPT_CHARS} value={draft} placeholder="What should this pointer do?" spellCheck style={{ flex: 'none', width: '100%', height: 56 }}
       onChange={event => changeDraft(event.target.value)} onBlur={flushDraft}
       onKeyDown={event => {
         if (event.key !== 'Escape') return;

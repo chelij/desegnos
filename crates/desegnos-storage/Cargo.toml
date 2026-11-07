@@ -13,6 +13,7 @@ desegnos-core = { path = "../desegnos-core" }
 serde.workspace = true
 serde_json.workspace = true
 uuid.workspace = true
+ts-rs.workspace = true
 base64 = "=0.22.1"
 # The project file is one SQLite database; bundling SQLite means users install nothing.
 rusqlite = { version = "0.41", features = ["bundled"] }

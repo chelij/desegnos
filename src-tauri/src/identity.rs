@@ -12,7 +12,7 @@ use desegnos_core::{
     IdentityAsset, RequirementsSnapshot, digest, fenced_json, parse_structured_reply,
 };
 use desegnos_storage::{
-    IdentitySource, IdentitySourceAsset, collect_identity_source, write_markdown,
+    IdentitySource, IdentitySourceAsset, write_markdown,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -24,7 +24,6 @@ use std::{
     sync::Mutex,
 };
 use tauri::{AppHandle, Manager, State, WebviewWindow};
-use tauri_plugin_dialog::DialogExt;
 use uuid::Uuid;
 
 type NativeResult<T> = Result<T, String>;
@@ -70,7 +69,8 @@ fn portable(asset: &IdentitySourceAsset) -> IdentityAsset {
     }
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(ts_rs::TS, Clone, Debug, Serialize)]
+#[ts(rename = "IdentitySource")]
 #[serde(rename_all = "camelCase")]
 pub struct IdentitySourceManifest {
     id: Uuid,
@@ -81,7 +81,7 @@ pub struct IdentitySourceManifest {
     photos: Vec<IdentityPhotoManifest>,
     pages: Vec<desegnos_core::SourcePage>,
 }
-#[derive(Clone, Debug, Serialize)]
+#[derive(ts_rs::TS, Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct IdentityPhotoManifest {
     id: Uuid,
@@ -91,7 +91,7 @@ struct IdentityPhotoManifest {
     thumbnail: String,
     source_pages: Vec<desegnos_core::SourcePageRef>,
 }
-#[derive(Clone, Debug, Serialize)]
+#[derive(ts_rs::TS, Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct IdentityFileManifest {
     id: Uuid,
@@ -135,7 +135,7 @@ impl From<&IdentitySource> for IdentitySourceManifest {
     }
 }
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(ts_rs::TS, Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum AnalysisStatus {
     Analyzing,
@@ -144,14 +144,14 @@ pub enum AnalysisStatus {
     Unknown,
     Cancelled,
 }
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(ts_rs::TS, Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum Confidence {
     High,
     Medium,
     Low,
 }
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(ts_rs::TS, Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct IdentityFinding {
     pub topic: String,
@@ -159,7 +159,7 @@ pub struct IdentityFinding {
     pub evidence: Vec<Uuid>,
     pub confidence: Confidence,
 }
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(ts_rs::TS, Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct IdentityCandidate {
     pub job_id: Uuid,
@@ -175,13 +175,14 @@ pub struct IdentityCandidate {
     /// The user's existing work and pages found in the sources, so generation knows what to link.
     pub content: Vec<desegnos_core::ImportedItem>,
 }
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(ts_rs::TS, Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PhotoDescription {
     pub id: Uuid,
     pub description: String,
 }
-#[derive(Clone, Debug, Serialize)]
+#[derive(ts_rs::TS, Clone, Debug, Serialize)]
+#[ts(rename = "IdentityAnalysis")]
 #[serde(rename_all = "camelCase")]
 pub struct AnalysisView {
     pub job_id: Uuid,
@@ -570,7 +571,7 @@ fn freeze(
     Ok((snapshot, images))
 }
 
-#[derive(Debug, Serialize)]
+#[derive(ts_rs::TS, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IdentitySelection {
     file_ids: Vec<Uuid>,
@@ -978,16 +979,6 @@ impl IdentityService {
         }
         let view = (&source).into();
         self.sources.insert(source.id, source);
-        Ok(view)
-    }
-    fn retain_website_source(
-        &mut self,
-        source: IdentitySource,
-        files: BTreeMap<String, Vec<u8>>,
-    ) -> NativeResult<IdentitySourceManifest> {
-        let id = source.id;
-        let view = self.retain_source(source)?;
-        self.website_files.insert(id, files);
         Ok(view)
     }
     /// Reuse the native page snapshot; the renderer never supplies filesystem paths.
@@ -1457,124 +1448,6 @@ impl IdentityService {
     }
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum IdentitySourceKind {
-    File,
-    Folder,
-}
-#[tauri::command]
-pub async fn pick_identity_source(
-    app: AppHandle,
-    window: WebviewWindow,
-    state: IdentityState<'_>,
-    kind: IdentitySourceKind,
-) -> NativeResult<Option<IdentitySourceManifest>> {
-    trusted(&window)?;
-    let selection = tauri::async_runtime::spawn_blocking(move || {
-        let dialog = app.dialog().file();
-        let picked = crate::file_dialogs::picked(match kind {
-            IdentitySourceKind::File => dialog
-                .add_filter(
-                    "Project, ZIP or HTML files",
-                    &["desegnos", "zip", "html", "htm"],
-                )
-                .blocking_pick_files(),
-            IdentitySourceKind::Folder => dialog.blocking_pick_folder().map(|path| vec![path]),
-        })?;
-        let Some(picked) = picked else {
-            return Ok(None);
-        };
-        let paths = picked
-            .into_iter()
-            .map(|path| path.into_path().map_err(error))
-            .collect::<NativeResult<Vec<_>>>()?;
-        let project = paths.len() == 1 && paths[0].extension().is_some_and(|ext| ext == "desegnos");
-        if project {
-            return Ok::<_, String>(Some((
-                normalize_source(collect_identity_source(&paths[0]).map_err(error)?)?,
-                BTreeMap::new(),
-            )));
-        }
-        let name = paths[0].file_name().unwrap_or_default().to_string_lossy();
-        let mut selected_files = Vec::new();
-        let source = if paths.len() == 1
-            && (paths[0].is_dir()
-                || paths[0]
-                    .extension()
-                    .is_some_and(|ext| ext.eq_ignore_ascii_case("zip")))
-        {
-            normalize_source(collect_identity_source(&paths[0]).map_err(error)?)?
-        } else {
-            // Read the chosen files as brand evidence only; nothing becomes a project page.
-            for path in &paths {
-                let size = std::fs::metadata(path).map_err(error)?.len();
-                if size > 4 * 1024 * 1024 {
-                    return Err("Each chosen file must be at most 4 MiB.".into());
-                }
-                selected_files.push((
-                    path.file_name()
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                        .into_owned(),
-                    std::fs::read(path).map_err(error)?,
-                ));
-            }
-            normalize_source(
-                desegnos_storage::identity_source_from_files(&name, selected_files, vec![])
-                    .map_err(error)?,
-            )?
-        };
-        Ok(Some((source, BTreeMap::new())))
-    })
-    .await
-    .map_err(error)??;
-    selection
-        .map(|(source, files)| {
-            state
-                .lock()
-                .map_err(error)?
-                .retain_website_source(source, files)
-        })
-        .transpose()
-}
-/// Brand import from a website address. Fetching follows the same public-network rules as
-/// generation image downloads; the snapshot then goes through the folder/ZIP importer's limits.
-#[tauri::command]
-pub async fn fetch_identity_source(
-    window: WebviewWindow,
-    state: IdentityState<'_>,
-    url: String,
-) -> NativeResult<IdentitySourceManifest> {
-    trusted(&window)?;
-    let fetcher = desegnos_ai::WebsiteFetcher::new();
-    #[cfg(feature = "native-tests")]
-    let fetcher = match std::env::var("DESEGNOS_NATIVE_TEST_WEBSITE_ORIGIN") {
-        Ok(origin) => desegnos_ai::WebsiteFetcher::for_fixture(
-            &desegnos_ai::WebUrl::parse(&origin).map_err(|error| error.to_string())?,
-        )?,
-        Err(std::env::VarError::NotPresent) => fetcher,
-        Err(error) => return Err(error.to_string()),
-    };
-    let site = fetcher.fetch_website(&url).await?;
-    let files = site.files.clone().into_iter().collect();
-    let source = tauri::async_runtime::spawn_blocking(move || {
-        desegnos_storage::identity_source_from_files_attributed(
-            &site.name,
-            site.files,
-            site.skipped,
-            site.photo_pages,
-        )
-        .map_err(error)
-        .and_then(normalize_source)
-    })
-    .await
-    .map_err(error)??;
-    state
-        .lock()
-        .map_err(error)?
-        .retain_website_source(source, files)
-}
 #[tauri::command]
 pub fn get_identity_analysis(
     window: WebviewWindow,

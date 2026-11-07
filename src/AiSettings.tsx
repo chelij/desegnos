@@ -1,3 +1,4 @@
+import type { CommandName } from './generated/commands';
 import { Notice, ProblemBanner } from './ProblemBanner.js';
 import { userError, providerProblem } from './userErrors.js';
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
@@ -7,7 +8,8 @@ import { Icon } from './icons';
 import { Disclosure } from './Disclosure';
 import { StatusChip } from './StatusChip';
 import './dialogs.css';
-import type { AiSettingsView, ProviderSettings, ProviderError, ProviderId } from './types';
+import type { AccessResult, AiSettingsView, ProviderSettings, ProviderError, ProviderId } from './types';
+import { MAX_HTTP_URL_BYTES } from './generated/limits';
 
 function message(error: unknown) { return error instanceof Error ? error.message : String(error); }
 // A model that offers only some levels keeps the request as strong as the user asked for,
@@ -21,7 +23,7 @@ function nearestReasoningEffort(offered: string[], current: string): string {
   // On a tie the stronger effort wins, so raising a model's ceiling never weakens the request.
   return offered.reduce((best, level) => distance(level) < distance(best) || (distance(level) === distance(best) && reasoningOrder.indexOf(level) > reasoningOrder.indexOf(best)) ? level : best);
 }
-export type AiSettingsUpdate = (command: string, args?: Record<string, unknown>) => Promise<AiSettingsView>;
+export type AiSettingsUpdate = (command: CommandName, args?: Record<string, unknown>) => Promise<AiSettingsView>;
 // What the AI settings form is doing right now; it never does two things at once.
 type Activity = 'loading' | 'idle' | 'saving' | 'checking' | 'checkingImages' | 'managingUsage';
 // A single message slot, so a stale notice never outlives the operation that follows it.
@@ -83,7 +85,7 @@ export function AiSettings({ current, refresh, update, manageUsage, pollingError
   }, []);
   const load = useCallback(() => perform('loading', async () => { receive(await refresh(true)); }), [perform, receive, refresh]);
   useEffect(() => { void load(); }, [load]);
-  async function action(command: string, args?: Record<string, unknown>) {
+  async function action(command: CommandName, args?: Record<string, unknown>) {
     // These commands re-probe image access, so the image status reads "Checking…" while they run.
     const probesImages = ['set_ai_key', 'select_chatgpt_account', 'set_ai_authentication', 'set_ai_provider'].includes(command);
     return perform(probesImages ? 'checkingImages' : 'saving', async () => {
@@ -114,7 +116,7 @@ export function AiSettings({ current, refresh, update, manageUsage, pollingError
   function setPrice(field: 'inputUsdPerMillion' | 'outputUsdPerMillion' | 'requestUsd' | 'imageUsd', text: string) {
     setSettings(current => current ? { ...current, pricing: {
       model: current.model, inputUsdPerMillion: null, outputUsdPerMillion: null,
-      ...current.pricing, [field]: text === '' ? null : Number(text) } } : current);
+      ...current.pricing, [field]: text === '' ? null : Number(text) } as ProviderSettings['pricing'] } : current);
   }
   async function saveKey(event: FormEvent) {
     event.preventDefault();
@@ -141,7 +143,7 @@ export function AiSettings({ current, refresh, update, manageUsage, pollingError
   async function testAccess() {
     await perform('checking', async () => {
       try {
-        const result = await native<{ message: string; providerError?: ProviderError }>('test_ai_access');
+        const result = await native<AccessResult>('test_ai_access');
         receive(await refresh());
         if (result.providerError) {
           setFeedback({ kind: 'error', access: true, message: result.message, providerError: result.providerError, provider: accepted.current?.provider });
@@ -206,7 +208,7 @@ export function AiSettings({ current, refresh, update, manageUsage, pollingError
         ] : [<option key={item.id} value={item.id} disabled={!item.available}>{item.name}{!item.available ? ' — coming soon' : ''}</option>])}
       </select></label>
       {usesLocal && <form className="ai-key-form" onSubmit={connectServer}>
-        <label>Server URL<input type="url" aria-label="Local server URL" required maxLength={2048} disabled={busy} value={endpoint ?? view.settings.endpoint ?? 'http://127.0.0.1:11434/v1'} onChange={event => setEndpoint(event.target.value)} /></label>
+        <label>Server URL<input type="url" aria-label="Local server URL" required maxLength={MAX_HTTP_URL_BYTES} disabled={busy} value={endpoint ?? view.settings.endpoint ?? 'http://127.0.0.1:11434/v1'} onChange={event => setEndpoint(event.target.value)} /></label>
         <button type="submit" disabled={busy}>Connect</button>
       </form>}
       {view.configurationError && <ProblemBanner message={userError(view.configurationError)} />}

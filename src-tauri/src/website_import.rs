@@ -78,7 +78,7 @@ impl WebsiteImportState {
     }
 }
 
-#[derive(Clone, Serialize)]
+#[derive(ts_rs::TS, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WebsiteImportPageView {
     route: String,
@@ -86,7 +86,8 @@ pub struct WebsiteImportPageView {
     url: String,
 }
 
-#[derive(Clone, Serialize)]
+#[derive(ts_rs::TS, Clone, Serialize)]
+#[ts(rename = "WebsiteImportSourceView")]
 #[serde(rename_all = "camelCase")]
 pub struct WebsiteImportView {
     id: Uuid,
@@ -100,7 +101,7 @@ pub struct WebsiteImportView {
     skipped: Vec<String>,
 }
 
-#[derive(Serialize)]
+#[derive(ts_rs::TS, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WebsiteImportResultView {
     workspace: crate::workspace::WorkspaceView,

@@ -131,9 +131,9 @@ export function jobOutcome(job: GenerationJobView | null, promptOf: (elementId: 
   }
   // A batched job keeps its finished parts; a failed part is retried on its own.
   const retryBatches = (job.batches ?? []).some(batch => ['failed', 'unknown', 'cancelled', 'blocked'].includes(batch.status));
-  return { reason: jobReason(job), retryable: job.retryable === false ? [] : retryable, blocked,
-    retryAll: job.retryable !== false && ids.size === 0 && !blocked.length && ['blocked', 'failed', 'unknown', 'cancelled'].includes(job.status),
-    retryBatches: job.retryable !== false && retryBatches };
+  return { reason: jobReason(job), retryable, blocked,
+    retryAll: ids.size === 0 && !blocked.length && ['blocked', 'failed', 'unknown', 'cancelled'].includes(job.status),
+    retryBatches };
 }
 
 /// The AI declared a scope conflict for this request: its fix belongs outside the area.

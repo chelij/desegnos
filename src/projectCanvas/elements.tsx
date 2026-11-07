@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react';
 import type { Element, ElementKind, Project, Rect } from '../types';
+import { kindFields } from '../types';
 import type { Boundary, CanvasCamera, ElementTarget } from '../projectCanvasGeometry';
 import type { ElementCorner } from './elementGeometry';
 import { elementPadding, elementPath, intrinsicElementSize, isTextKind, measureText, pictureUri } from './elementGeometry';
@@ -174,10 +175,10 @@ function MediaCard({ element }: { element: Element }) {
 }
 
 function CodeCard({ element }: { element: Element }) {
-  const source = element.source ?? '';
+  const source = kindFields(element).source ?? '';
   const shown = source.length > 4000 ? `${source.slice(0, 4000)}\n…` : source;
   return <div className="canvas-code-card">
-    <span className="canvas-code-language">{element.language || 'code'}</span>
+    <span className="canvas-code-language">{kindFields(element).language || 'code'}</span>
     <pre>{shown}</pre>
   </div>;
 }

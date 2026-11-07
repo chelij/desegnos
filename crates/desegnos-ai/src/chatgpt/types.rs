@@ -105,7 +105,7 @@ impl From<ChatgptErrorKind> for ChatgptError {
 }
 pub type ChatgptResult<T> = std::result::Result<T, ChatgptError>;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(ts_rs::TS, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ChatgptAccount {
     pub id: Uuid,
@@ -117,7 +117,7 @@ pub struct ChatgptAccount {
     pub storage_repair_required: bool,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(ts_rs::TS, Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum ChatgptSignInStatus {
     Idle,
@@ -127,14 +127,14 @@ pub enum ChatgptSignInStatus {
     Failed,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(ts_rs::TS, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ChatgptSignIn {
     pub status: ChatgptSignInStatus,
     pub message: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(ts_rs::TS, Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ChatgptView {
     pub accounts: Vec<ChatgptAccount>,

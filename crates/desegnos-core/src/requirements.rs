@@ -94,7 +94,7 @@ fn content_guidance(outputs: &[crate::OutputType], web_search: bool) -> String {
     md
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(ts_rs::TS, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct GenerationCapabilities {
     pub web_search: bool,
@@ -103,7 +103,7 @@ pub struct GenerationCapabilities {
     pub image_generation: Option<ImageGenerationCapability>,
 }
 /// Native post-processing, never a tool granted by task data.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(ts_rs::TS, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ImageGenerationCapability {
     pub max_images: u8,
@@ -146,7 +146,7 @@ impl GenerationCapabilities {
 
 /// A frozen request. The markdown and hashes are fixed when the job is prepared, so a retry
 /// sends exactly the same task; canvas changes make the snapshot stale instead.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(ts_rs::TS, Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RequirementsSnapshot {
     pub job_id: Uuid,
@@ -176,7 +176,7 @@ pub struct RequirementsSnapshot {
 }
 
 /// A downscaled preview of one attached picture, labelled with its attachment ID.
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(ts_rs::TS, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RequestImage {
     pub attachment_id: String,

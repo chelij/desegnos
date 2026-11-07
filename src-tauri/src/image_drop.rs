@@ -5,21 +5,25 @@ use serde::Serialize;
 use std::{fs::File, io::Read, path::Path};
 use tauri::{DragDropEvent, Emitter, Window, WindowEvent};
 
-#[derive(Clone, Serialize)]
+#[derive(ts_rs::TS, Clone, Serialize)]
+#[ts(rename = "NativeFile")]
 #[serde(rename_all = "camelCase")]
 struct Picture {
     name: String,
     mime: &'static str,
     data: String,
 }
-#[derive(Clone, Serialize)]
+#[derive(ts_rs::TS, Clone, Serialize)]
 struct Position {
     x: f64,
     y: f64,
 }
-#[derive(Clone, Serialize)]
+pub(crate) const IMAGE_DRAG_EVENT: &str = "desegnos://image-drag";
+
+#[derive(ts_rs::TS, Clone, Serialize)]
+#[ts(rename = "NativeDrag")]
 #[serde(rename_all = "camelCase")]
-struct ImageDrag {
+pub(crate) struct ImageDrag {
     phase: &'static str,
     id: String,
     position: Option<Position>,
@@ -138,7 +142,7 @@ pub fn handle(window: &Window, event: &WindowEvent) {
         _ => "over",
     };
     let _ = window.emit(
-        "desegnos://image-drag",
+        IMAGE_DRAG_EVENT,
         ImageDrag {
             phase,
             id: id.clone(),
@@ -180,7 +184,7 @@ pub fn handle(window: &Window, event: &WindowEvent) {
                 Err(message) => (None, Some(message)),
             };
             let _ = window.emit(
-                "desegnos://image-drag",
+                IMAGE_DRAG_EVENT,
                 ImageDrag {
                     phase: "drop",
                     id,

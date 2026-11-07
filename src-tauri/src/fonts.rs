@@ -9,7 +9,7 @@ fn faces() -> &'static Mutex<HashMap<String, ResolvedFont>> {
     FACES.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-#[derive(Serialize)]
+#[derive(ts_rs::TS, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CanvasFont {
     id: String,

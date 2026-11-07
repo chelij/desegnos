@@ -1,3 +1,4 @@
+import { SIZE_PRESETS } from './generated/limits';
 // The extraction wrapper runs inside the local static server's origin. The page itself is
 // rendered in a nested, script-disabled frame; this script only reads its DOM and posts a
 // compact tree back to the editor.
@@ -7,8 +8,8 @@ export const EXTRACTOR_SCRIPT = String.raw`
   var params = new URLSearchParams(location.search);
   var id = params.get('id') || '';
   var pagePath = params.get('url') || '/';
-  var width = Math.max(320, Number(params.get('width')) || 1440);
-  var height = width >= 700 ? 900 : 844;
+  var width = Math.max(320, Number(params.get('width')) || ${SIZE_PRESETS.desktop.width});
+  var height = width >= 700 ? ${SIZE_PRESETS.desktop.height} : ${SIZE_PRESETS.phone.height};
   function post(type, payload) {
     var message = { type: type, id: id };
     if (payload) { for (var key in payload) { if (Object.prototype.hasOwnProperty.call(payload, key)) message[key] = payload[key]; } }

@@ -1,4 +1,5 @@
 import { invoke, isTauri } from '@tauri-apps/api/core';
+import type { CommandName } from './generated/commands';
 
 // Local usage log: which controls, shortcuts and commands are used, never what is typed.
 // Events are batched to the native `record_usage` command (see src-tauri/src/usage.rs).
@@ -6,7 +7,7 @@ type UsageEvent = { t: number; kind: 'click' | 'key' | 'typing' | 'command' | 's
 
 const queue: UsageEvent[] = [];
 // Reads and polling say nothing about what the user did.
-const QUIET = /^(get_|list_|refresh_|inspect_|autosave_project$|record_usage$|test_ai_access$)/;
+const QUIET = /^(get_|list_|autosave_project$|record_usage$|test_ai_access$)/;
 let typing: { name: string; detail?: string; count: number; started: number } | null = null;
 
 function clean(value: string | null | undefined, limit: number) {
@@ -31,7 +32,7 @@ function flush() {
   finishTyping();
   if (!queue.length || !isTauri()) return;
   const events = queue.splice(0, queue.length);
-  void invoke('record_usage', { events }).catch(error => console.warn('Could not record editor activity', error));
+  void invoke('record_usage' satisfies CommandName, { events }).catch(error => console.warn('Could not record editor activity', error));
 }
 
 function area(element: Element) {

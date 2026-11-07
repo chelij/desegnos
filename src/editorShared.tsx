@@ -6,6 +6,7 @@ import { MAX_ZOOM, type Boundary, type CanvasTarget } from './projectCanvasGeome
 import { elementWorldRect, findElementIn, unionRects } from './projectCanvas/elementGeometry';
 import { type PaletteCommand } from './CommandPalette';
 import type { GridSettings, Project, Rect, RecoveryInfo } from './types';
+import { MAX_NAME_CHARS } from './generated/limits';
 
 export type Theme = 'system' | 'light' | 'dark';
 
@@ -18,7 +19,7 @@ export type ActionEvent = { preventDefault: () => void; key: string; code?: stri
 export const NO_ACTION_EVENT: ActionEvent = { preventDefault: () => {}, key: '' };
 
 export const PROJECT_COLOURS = ['#2f6fde', '#c2410c', '#267a36', '#ae3ec9', '#0e7490', '#b35c00'];
-export const PROJECT_NAME_MAX_LENGTH = 120;
+export const PROJECT_NAME_MAX_LENGTH = MAX_NAME_CHARS;
 
 export function errorMessage(error: unknown) { if (error && typeof error === 'object' && 'message' in error) return String((error as { message: unknown }).message); return String(error ?? ''); }
 

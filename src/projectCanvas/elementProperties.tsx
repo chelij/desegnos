@@ -13,8 +13,10 @@ import { ChoiceRow, PropsSection, BehaviourField, type BehaviourProperty } from 
 import { Icon } from '../icons';
 import { projectCodeSource } from '../editorHtml';
 import type { Element, ElementPadding, ElementPatch, ElementStyle, InputType, Page, PendingRequest, Project, Rect, RequestAttachment } from '../types';
+import { kindFields } from '../types';
 import { elementKindLabel, elementPadding, inputTypes, isTextKind, pictureName, pictureUri as projectPictureUri, rememberColour, uniformPadding } from './elementGeometry';
 import { EditScopeChoice, requestEditScope } from './selectionBar';
+import { MAX_PROMPT_CHARS, MAX_VIEWPORT_SIDE } from '../generated/limits';
 
 const validNumber = (value: string) => Number.isFinite(Number(value));
 const validUrl = (value: string) => {
@@ -69,7 +71,7 @@ function OpacityField({ value, disabled, commit }: { value: number | undefined; 
 
 function LongTextField({ label, placeholder, value, commit, rows }: { label: string; placeholder?: string; value: string; commit: (value: string) => void; rows?: number }) {
   const state = useFieldDraft(value, commit);
-  return <textarea className="props-textarea" value={state.draft} rows={rows ?? 3} maxLength={16384} aria-label={label} placeholder={placeholder ?? label}
+  return <textarea className="props-textarea" value={state.draft} rows={rows ?? 3} maxLength={MAX_PROMPT_CHARS} aria-label={label} placeholder={placeholder ?? label}
     onChange={event => state.setDraft(event.target.value)}
     onBlur={state.settle}
     onKeyDown={fieldKeys(state.settle, state.cancel)} />;
@@ -125,7 +127,7 @@ function RequestArea({ element, project, request, setRequest, error }: {
         <button type="button" className="icon-button sm" aria-label="Attach files" title="Attach pictures or text files" onClick={() => files.current?.click()}><Icon name="paperclip" /></button>
       </div>
       <input ref={files} type="file" hidden multiple accept={ATTACHMENT_ACCEPT} onChange={event => { const chosen = Array.from(event.target.files ?? []); event.target.value = ''; if (chosen.length) void attach(chosen); }} />
-      {(request?.attachments.length ?? 0) > 0 ? <ul className="request-attachments">{request!.attachments.map(attachment => <li key={attachment.id} title={attachment.kind === 'link' ? attachment.url : attachment.name}>
+      {(request?.attachments.length ?? 0) > 0 ? <ul className="request-attachments">{request!.attachments.map(attachment => <li key={attachment.id} title={attachment.kind === 'link' ? attachment.url ?? undefined : attachment.name}>
         {attachment.kind === 'image' && attachment.dataUri ? <img src={attachment.dataUri} alt="" /> : <span className="attachment-icon" aria-hidden="true"><Icon name={attachment.kind === 'link' ? 'link' : 'text'} size={12} /></span>}
         <span className="attachment-name">{attachment.name}</span>
         <button type="button" className="icon-button sm" aria-label={`Remove ${attachment.name}`} title={`Remove ${attachment.name}`} onClick={() => save(request!.attachments.filter(item => item.id !== attachment.id))}><Icon name="close" /></button>
@@ -316,8 +318,8 @@ export function ElementProperties({ project, page, sizeId, elements, busy, updat
           const minimum = axis === 'height' && single?.kind === 'line' ? 0 : 1;
           const value = axis === 'width' ? width : height;
           return <div key={axis} style={{ display: 'flex', minWidth: 0, gap: 2 }}>
-            <CompactNumberField prefix={axis === 'width' ? 'W' : 'H'} label={axis === 'width' ? 'Width' : 'Height'} min={minimum} max={100_000}
-              value={value ?? ''} placeholder={mixed(value) ? 'Mixed' : undefined} disabled={busy} valid={draft => Number(draft) >= minimum && Number(draft) <= 100_000}
+            <CompactNumberField prefix={axis === 'width' ? 'W' : 'H'} label={axis === 'width' ? 'Width' : 'Height'} min={minimum} max={MAX_VIEWPORT_SIDE}
+              value={value ?? ''} placeholder={mixed(value) ? 'Mixed' : undefined} disabled={busy} valid={draft => Number(draft) >= minimum && Number(draft) <= MAX_VIEWPORT_SIDE}
               commit={draft => commitRects(rect => ({ ...rect, [axis]: Number(draft) }))} />
             {single && <select aria-label={`${axis} sizing`} style={{ width: 55, minWidth: 0 }} value={single.style.sizing?.[axis] ?? 'fixed'} disabled={busy} onChange={event => commitSizing({ [axis]: event.target.value })}>
               <option value="fixed">Fixed</option><option value="fit">Hug</option><option value="fill">Fill</option>
@@ -414,15 +416,15 @@ export function ElementProperties({ project, page, sizeId, elements, busy, updat
       <label className="check-label"><input type="checkbox" disabled={busy} checked={!!textStyle?.italic} onChange={event => commitStyle(style => { style.textStyle.italic = event.target.checked; })} />Italic</label>
       <div className="props-choice"><ChoiceRow label="Align" value={textStyle?.align ?? 'left'} choices={[['left', 'Left'], ['center', 'Center'], ['right', 'Right']]} disabled={busy}
         choose={align => commitStyle(style => { style.textStyle.align = align; })} /></div>
-      {kind === 'input' && <div className="props-choice"><ChoiceRow label="Input type" value={elements[0].inputType ?? 'text'} choices={inputTypes.map(type => [type, type[0].toUpperCase() + type.slice(1)] as [InputType, string])} disabled={busy}
+      {kind === 'input' && <div className="props-choice"><ChoiceRow label="Input type" value={kindFields(elements[0]).inputType ?? 'text'} choices={inputTypes.map(type => [type, type[0].toUpperCase() + type.slice(1)] as [InputType, string])} disabled={busy}
         choose={input_type => update(elements.map(element => ({ id: element.id, input_type })))} /></div>}
-      {kind === 'select' && <LongTextField label="Options" placeholder="One option per line" rows={5} value={(elements[0].options ?? []).join('\n')}
+      {kind === 'select' && <LongTextField label="Options" placeholder="One option per line" rows={5} value={(kindFields(elements[0]).options ?? []).join('\n')}
         commit={value => { const options = value.split('\n').map(option => option.trim()).filter(Boolean); if (options.length) update(elements.map(element => ({ id: element.id, options }))); }} />}
       <LongTextField label="Text" placeholder="Text" value={text ?? ''} commit={value => update(elements.map(element => ({ id: element.id, text: value })))} />
     </PropsSection>}
     {codeKind && single && <PropsSection id="props-code" title="Code">
-      <CompactTextField label="Language" value={single.language ?? ''} disabled={busy} valid={value => value.trim().length > 0} commit={value => update([{ id: single.id, language: value.trim() }])} />
-      <CodeField language={single.language ?? ''} source={single.source ?? ''} commit={source => update([{ id: single.id, source }])} />
+      <CompactTextField label="Language" value={kindFields(single).language ?? ''} disabled={busy} valid={value => value.trim().length > 0} commit={value => update([{ id: single.id, language: value.trim() }])} />
+      <CodeField language={kindFields(single).language ?? ''} source={kindFields(single).source ?? ''} commit={source => update([{ id: single.id, source }])} />
     </PropsSection>}
     {visual && <PropsSection id="props-shadow" title="Shadow">
         <ColourField label="Shadow colour" value={shadowColour ?? ''} mixed={mixed(shadowColour)} fallback="#000000" disabled={busy}

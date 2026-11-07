@@ -348,9 +348,8 @@ pub fn open_chatgpt_usage(app: AppHandle, window: WebviewWindow) -> NativeResult
     }
     #[cfg(feature = "native-tests")]
     {
-        use tauri::Emitter;
-        app.emit("desegnos-test-usage-opened", USAGE_URL)
-            .map_err(|_| "The isolated usage event could not be recorded.".into())
+        let _ = (app, USAGE_URL);
+        Ok(())
     }
 }
 

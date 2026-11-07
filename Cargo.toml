@@ -14,6 +14,7 @@ serde = { version = "1", features = ["derive", "rc"] }
 serde_json = { version = "1", features = ["raw_value", "float_roundtrip"] }
 sha2 = "0.10"
 uuid = { version = "1", features = ["v4", "serde"] }
+ts-rs = { version = "=12.0.1", default-features = false, features = ["serde-compat", "no-serde-warnings", "uuid-impl", "serde-json-impl"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

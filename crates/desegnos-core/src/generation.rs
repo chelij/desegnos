@@ -31,7 +31,7 @@ fn default_style() -> ElementStyle {
 }
 
 /// A new element the AI wants in a layer. The core assigns its id.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(ts_rs::TS, Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ElementDraft {
     /// Flat kind and its kind-specific fields, matching the editor's element type.
@@ -69,7 +69,7 @@ fn default_true() -> bool {
 }
 
 /// A patch to one existing element in a requested layer's subtree.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(ts_rs::TS, Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ElementUpdate {
     pub element_id: Uuid,
@@ -131,7 +131,7 @@ impl ElementUpdate {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(ts_rs::TS, Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(
     tag = "kind",
     rename_all = "camelCase",
@@ -177,7 +177,7 @@ pub enum ElementOperation {
 }
 
 /// A reference item the AI may add outside every boundary.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(ts_rs::TS, Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReferenceDraft {
     pub rect: crate::Rect,
@@ -186,7 +186,7 @@ pub struct ReferenceDraft {
 
 /// A picture the AI asks for. Generated when the provider supports it; otherwise a Box
 /// placeholder carries the prompt as its text.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(ts_rs::TS, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct GeneratedImage {
     pub key: String,
@@ -201,14 +201,14 @@ fn default_image_size() -> u32 {
     1024
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(ts_rs::TS, Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum RequestStatus {
     Implemented,
     Conflict,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(ts_rs::TS, Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RequestOutcome {
     /// The request this outcome answers. Absent on older replies, which name only a layer.
@@ -226,7 +226,7 @@ pub struct RequestOutcome {
 
 /// The simple action the AI found in a pointer comment. `exportOnly` is stored as no Play
 /// action; everything else runs visually in Play.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(ts_rs::TS, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(
     tag = "kind",
     rename_all = "camelCase",
@@ -263,7 +263,7 @@ impl ClassifiedAction {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(ts_rs::TS, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PointerClassification {
     pub pointer_id: Uuid,
@@ -271,7 +271,7 @@ pub struct PointerClassification {
     pub action: ClassifiedAction,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(ts_rs::TS, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DecisionProposal {
     pub topic: String,
@@ -280,7 +280,7 @@ pub struct DecisionProposal {
     pub rationale: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(ts_rs::TS, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DesignCriticism {
     #[serde(default, deserialize_with = "crate::required_nullable")]
@@ -289,7 +289,7 @@ pub struct DesignCriticism {
     pub suggestion: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(ts_rs::TS, Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct GenerationCandidate {
     pub job_id: Uuid,
@@ -2844,7 +2844,8 @@ pub fn candidate_schema() -> serde_json::Value {
 
 /// One observation about a reply: normalised, repaired or conflicted. Labels are fixed
 /// vocabulary, never user text or selectors.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(ts_rs::TS, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[ts(rename = "GenerationValidationEvent")]
 #[serde(rename_all = "camelCase")]
 pub struct ValidationEvent {
     pub kind: String,

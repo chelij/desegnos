@@ -938,7 +938,7 @@ impl Project {
 }
 
 /// A patch changes only the fields it names; every other setting stays as it was.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(ts_rs::TS, Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ElementPatch {
     pub id: Uuid,
@@ -998,6 +998,7 @@ pub struct ElementPatch {
     pub size_id: Option<Uuid>,
     /// Double-click editing: change base values and clear the same fields from every override.
     #[serde(default)]
+    #[ts(optional = nullable)]
     pub all_sizes: bool,
     /// Keeps a layer hidden in one size without a placeholder (Dismiss).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1287,7 +1288,7 @@ fn write_rect(element: &mut Element, rect: Rect, target: SizeTarget) {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(ts_rs::TS, Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ElementMove {
     pub id: Uuid,
@@ -1300,6 +1301,7 @@ pub struct ElementMove {
     pub size_id: Option<Uuid>,
     /// Double-click editing: move in base values and clear every size's position override.
     #[serde(default)]
+    #[ts(optional = nullable)]
     pub all_sizes: bool,
 }
 

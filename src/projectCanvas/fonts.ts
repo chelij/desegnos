@@ -1,10 +1,9 @@
 import { useEffect, useState, useSyncExternalStore } from 'react';
 import { native } from '../api';
-import type { Element } from '../types';
+import type { CanvasFont, Element } from '../types';
 
 type TextStyle = Element['style']['textStyle'];
-type Face = { id: string; bundled: boolean; fellBack: boolean; italic: boolean };
-type LoadedFont = Face & { family: string };
+type LoadedFont = CanvasFont & { family: string };
 const requests = new Map<string, Promise<LoadedFont>>();
 const loaded = new Map<string, LoadedFont>();
 const faces = new Map<string, Promise<string>>();
@@ -21,7 +20,7 @@ export function loadCanvasFont(style: TextStyle): Promise<LoadedFont> {
   const requestKey = key(style);
   let request = requests.get(requestKey);
   if (!request) {
-    request = native<Face>('resolve_canvas_font', { family: style.fontFamily, weight: style.weight, italic: style.italic }).then(async face => {
+    request = native<CanvasFont>('resolve_canvas_font', { family: style.fontFamily, weight: style.weight, italic: style.italic }).then(async face => {
       let loading = faces.get(face.id);
       if (!loading) {
         loading = (async () => {

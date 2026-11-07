@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { native } from './api';
 import type { BranchSummary, ProjectHistoryView, VersionSummary, WorkspaceView } from './types';
+import { MAX_BRANCH_CHARS } from './generated/limits';
 
 function editedAgo(createdAt: number) {
   const elapsed = Date.now() - createdAt;
@@ -81,7 +82,7 @@ export function HistoryPanel({ projectId, refreshKey, apply, notice, error, comp
           if (!value) return;
           act(() => native<WorkspaceView>('rename_alternative', { from: branch.name, to: value }), `Renamed the alternative to “${value}”.`);
         }}>
-          <input autoFocus aria-label="Alternative name" maxLength={60} value={mode.name} onChange={event => setMode({ kind: 'renaming', branch: mode.branch, name: event.target.value })} />
+          <input autoFocus aria-label="Alternative name" maxLength={MAX_BRANCH_CHARS} value={mode.name} onChange={event => setMode({ kind: 'renaming', branch: mode.branch, name: event.target.value })} />
           <button className="primary" disabled={busy || !mode.name.trim()}>Rename</button>
           <button type="button" onClick={() => setMode({ kind: 'idle' })}>Cancel</button>
         </form>
@@ -111,7 +112,7 @@ export function HistoryPanel({ projectId, refreshKey, apply, notice, error, comp
           if (!value) return;
           act(() => native<WorkspaceView>('create_alternative', { name: value }), `Created “${value}”.`);
         }}>
-          <input autoFocus aria-label="Alternative name" maxLength={60} placeholder="Alternative name" value={mode.name} onChange={event => setMode({ kind: 'creating', name: event.target.value })} />
+          <input autoFocus aria-label="Alternative name" maxLength={MAX_BRANCH_CHARS} placeholder="Alternative name" value={mode.name} onChange={event => setMode({ kind: 'creating', name: event.target.value })} />
           <button className="primary" disabled={busy || !mode.name.trim()}>Create</button>
           <button type="button" onClick={() => setMode({ kind: 'idle' })}>Cancel</button>
         </form>

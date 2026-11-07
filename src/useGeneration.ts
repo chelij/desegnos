@@ -1,10 +1,11 @@
+import type { CommandName } from './generated/commands';
 import { usePoll } from './usePoll';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { native } from './api';
 import { ownsJob, type OwnedJob } from './generationSession.js';
 import type { GenerationJobView, GenerationStatus, WorkspaceView } from './types';
 
-export type GenerationCall = <T>(command: string, args?: Record<string, unknown>, signal?: AbortSignal) => Promise<T>;
+export type GenerationCall = <T>(command: CommandName, args?: Record<string, unknown>, signal?: AbortSignal) => Promise<T>;
 
 const activeStatuses: readonly GenerationStatus[] = ['generating', 'applying'];
 // A restored job in one of these states can still finish on its own and be applied automatically.
@@ -112,7 +113,7 @@ export function useGeneration(projectId: string | null, call: GenerationCall, ap
     try { const value = await native<GenerationJobView | null>('get_generation', { projectId }); if (context.current === projectId && version === epoch.current) { setJob(value); setError(''); } }
     catch (error) { if (context.current === projectId && version === epoch.current) setError(describe(error)); }
   }, [projectId]);
-  async function perform(command: string, next: GenerationPhase, args?: Record<string, unknown>, signal?: AbortSignal) {
+  async function perform(command: CommandName, next: GenerationPhase, args?: Record<string, unknown>, signal?: AbortSignal) {
     const id = projectId;
     const version = ++epoch.current;
     const token = ++action.current; setOperationStartedAt(Date.now()); setPhase(next); setError('');
@@ -164,7 +165,7 @@ export function useGeneration(projectId: string | null, call: GenerationCall, ap
     } catch (error) { if (context.current === id) setError(describe(error)); }
     finally { if (context.current === id && token === action.current) setPhase(settled); }
   }
-  async function launch(command: string, next: GenerationPhase) {
+  async function launch(command: CommandName, next: GenerationPhase) {
     let finish!: () => void;
     const current = { controller: new AbortController(), jobId: job!.jobId, done: new Promise<void>(resolve => { finish = resolve; }) };
     flow.current = current; automatic.current = current.jobId;

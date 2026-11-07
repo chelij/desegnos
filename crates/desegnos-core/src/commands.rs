@@ -4,7 +4,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(ts_rs::TS, Debug, Clone, Deserialize, Serialize)]
+#[ts(optional_fields = nullable)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Command {
     AddColourStyle {
@@ -69,8 +70,10 @@ pub enum Command {
         kind: Option<BoundaryKind>,
         /// Neighbours a grown size pushes aside, in the same undo step.
         #[serde(default)]
+        #[ts(optional = nullable)]
         moves: Vec<CanvasPlacement>,
         #[serde(default)]
+        #[ts(optional = nullable)]
         reference: Vec<ReferencePlacement>,
     },
     /// Add a page and place it on the project canvas in one step. `moves` carries the
@@ -78,10 +81,13 @@ pub enum Command {
     CreateBoundary {
         page: Page,
         #[serde(default)]
+        #[ts(optional = nullable)]
         after_page_id: Option<Uuid>,
         #[serde(default)]
+        #[ts(optional = nullable)]
         moves: Vec<CanvasPlacement>,
         #[serde(default)]
+        #[ts(optional = nullable)]
         reference: Vec<ReferencePlacement>,
     },
     AddCanvasPage {
@@ -89,9 +95,11 @@ pub enum Command {
         path: String,
         size: PageSize,
         #[serde(default)]
+        #[ts(optional = nullable)]
         moves: Vec<CanvasPlacement>,
         /// Reference items the new boundary pushes aside, in the same undo step.
         #[serde(default)]
+        #[ts(optional = nullable)]
         reference: Vec<ReferencePlacement>,
     },
     /// Add a linked size to a page, placed to the right of it, with the neighbours it pushes.
@@ -99,8 +107,10 @@ pub enum Command {
         page_id: Uuid,
         size: PageSize,
         #[serde(default)]
+        #[ts(optional = nullable)]
         moves: Vec<CanvasPlacement>,
         #[serde(default)]
+        #[ts(optional = nullable)]
         reference: Vec<ReferencePlacement>,
     },
     /// Remove a linked size. The base size cannot be removed.
@@ -113,6 +123,7 @@ pub enum Command {
         placements: Vec<CanvasPlacement>,
         /// Reference items the moved or drawn boundaries push aside, in the same undo step.
         #[serde(default)]
+        #[ts(optional = nullable)]
         reference: Vec<ReferencePlacement>,
     },
     /// Save the current camera as a named view.
@@ -208,6 +219,7 @@ pub enum Command {
         element_id: Uuid,
         rect: Rect,
         #[serde(default)]
+        #[ts(optional = nullable)]
         size_id: Option<Uuid>,
     },
     /// A note, link, colour or picture dragged into a boundary becomes a layer there.
@@ -216,6 +228,7 @@ pub enum Command {
         page_id: Uuid,
         rect: Rect,
         #[serde(default)]
+        #[ts(optional = nullable)]
         size_id: Option<Uuid>,
     },
     /// Selected reference items travel with these requests as context, through the same
@@ -291,18 +304,25 @@ pub enum Command {
     /// requests, boundaries, linked sizes and linked definitions, in one undo step.
     DeleteItems {
         #[serde(default)]
+        #[ts(optional = nullable)]
         elements: Vec<(Uuid, Uuid)>,
         #[serde(default)]
+        #[ts(optional = nullable)]
         reference_ids: Vec<Uuid>,
         #[serde(default)]
+        #[ts(optional = nullable)]
         pointer_ids: Vec<Uuid>,
         #[serde(default)]
+        #[ts(optional = nullable)]
         request_ids: Vec<Uuid>,
         #[serde(default)]
+        #[ts(optional = nullable)]
         page_ids: Vec<Uuid>,
         #[serde(default)]
+        #[ts(optional = nullable)]
         size_ids: Vec<(Uuid, Uuid)>,
         #[serde(default)]
+        #[ts(optional = nullable)]
         linked_ids: Vec<Uuid>,
     },
     GroupElements {

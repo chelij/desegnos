@@ -7,6 +7,7 @@ import type { PendingRequest, Project, Rect, ReferenceItem, RequestArea, Request
 
 import { elementParents, findElementIn } from './elementGeometry';
 import { requestAreaContains, requestShapeBounds, requestShapePath } from './requestGeometry';
+import { MAX_PROMPT_CHARS } from '../generated/limits';
 
 export { requestAreaContains, requestShapeBounds, requestShapePath } from './requestGeometry';
 
@@ -247,7 +248,7 @@ export function RequestBoxEditor({ screen, text, ask, submit, close }: {
   useEffect(() => { area.current?.focus({ preventScroll: true }); area.current?.select(); }, []);
   const send = ask ?? submit;
   return <div className="request-box-editor" style={{ left: screen.left, top: screen.top, width: screen.width, minHeight: screen.height }} onPointerDown={event => event.stopPropagation()}>
-    <textarea ref={area} aria-label="Describe the request" maxLength={16384} value={draft} placeholder="What should happen here?" spellCheck
+    <textarea ref={area} aria-label="Describe the request" maxLength={MAX_PROMPT_CHARS} value={draft} placeholder="What should happen here?" spellCheck
       onChange={event => setDraft(event.target.value)}
       onKeyDown={event => {
         if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); close(); return; }

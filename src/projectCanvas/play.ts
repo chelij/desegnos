@@ -116,7 +116,7 @@ export function playElements(project: Project, elements: Element[], play: PlaySt
       ...content,
       visible: hidden === undefined ? element.visible : !hidden,
       children: source && source.children.length ? swappedChildren(source, element.id) : walk(element.children),
-    };
+    } as Element;
   });
   return walk(elements);
 }

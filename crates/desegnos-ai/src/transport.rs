@@ -83,7 +83,7 @@ pub struct ProviderProgress {
     pub text_delta: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(ts_rs::TS, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderRetry {
     pub attempt: u8,

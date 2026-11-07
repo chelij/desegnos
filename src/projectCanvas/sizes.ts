@@ -1,15 +1,13 @@
 import type { Element, Page, PageSize, Project, SizePreset } from '../types';
 import { resolveElements } from './links';
+import { SIZE_PRESETS as PRESETS } from '../generated/limits';
 
 // Linked sizes: one element tree per page drawn as one boundary per size. The first size is the
 // base size; its values are what every other size inherits. The core resolves the same way in
 // `crates/desegnos-core/src/elements.rs`; both sides must agree.
 
-export const SIZE_PRESETS: { preset: SizePreset; label: string; width: number; height: number }[] = [
-  { preset: 'phone', label: 'Phone', width: 390, height: 844 },
-  { preset: 'tablet', label: 'Tablet', width: 820, height: 1180 },
-  { preset: 'desktop', label: 'Desktop', width: 1440, height: 900 },
-];
+export const SIZE_PRESETS: { preset: SizePreset; label: string; width: number; height: number }[] = (['phone', 'tablet', 'desktop'] as const)
+  .map(preset => ({ preset, label: PRESETS[preset].name, width: PRESETS[preset].width, height: PRESETS[preset].height }));
 
 export const baseSizeId = (page: Page): string => page.sizes[0].id;
 export const hasManySizes = (page: Page): boolean => page.sizes.length > 1;

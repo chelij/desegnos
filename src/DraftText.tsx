@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ChangeEvent } from 'react';
+import { MAX_PROMPT_CHARS } from './generated/limits';
 
 // commit also gets the newest draft, for saves that run after later keystrokes were typed.
 // A delay batches keystrokes into one save; the pending text is flushed on blur or unmount.
@@ -43,7 +44,7 @@ export function useDraftText(value: string, commit: (value: string, latest: () =
   return [draft, change, flush] as const;
 }
 
-export function DraftText({ label, value, commit, multiline = false, autoFocus = false, maxLength = 16384 }: {
+export function DraftText({ label, value, commit, multiline = false, autoFocus = false, maxLength = MAX_PROMPT_CHARS }: {
   label: string; value: string; commit: (value: string) => Promise<string>; multiline?: boolean; autoFocus?: boolean; maxLength?: number;
 }) {
   const [draft, change] = useDraftText(value, commit);

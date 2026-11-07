@@ -89,7 +89,7 @@ pub use model::{
     PlayAction, Pointer, PointerKind, PointerSource, PointerTarget, PointerWiring, Project,
     ProjectStyles, Rect, ReferenceItem, ReferenceKind, ReferencePlacement, RequestArea,
     RequestPoint, RequestShape, RequestTarget, SCHEMA_VERSION, Scope, SizePreset, TextStyle,
-    Viewport, size_label,
+    TEMPLATE_GAP, Viewport, size_label,
 };
 pub use picture_scaling::{
     AI_PREVIEW_BYTES, AI_PREVIEW_EDGE, AI_PREVIEW_TOKEN_RESERVE, ai_preview, scaled_for_display,

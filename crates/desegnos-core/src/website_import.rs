@@ -15,7 +15,7 @@ use uuid::Uuid;
 
 /// A page rendered at one width. `url` is the absolute local-static-server URL the browser
 /// loaded, so image sources are already absolute and can be mapped back to snapshot files.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[derive(ts_rs::TS, Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WebCapture {
     pub url: String,
@@ -33,7 +33,7 @@ pub struct WebCapture {
     pub scripts: Vec<WebScript>,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Default)]
+#[derive(ts_rs::TS, Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Default)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WebScript {
     #[serde(default)]
@@ -42,7 +42,7 @@ pub struct WebScript {
     pub text: Option<String>,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[derive(ts_rs::TS, Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WebNode {
     pub tag: String,
@@ -72,7 +72,8 @@ pub struct WebNode {
     pub children: Vec<WebNode>,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Default)]
+#[derive(ts_rs::TS, Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Default)]
+#[ts(rename = "WebNodeAttributes")]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WebAttributes {
     #[serde(default)]
@@ -91,7 +92,8 @@ pub struct WebAttributes {
     pub name: Option<String>,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[derive(ts_rs::TS, Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[ts(rename = "WebNodeStyles")]
 #[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 pub struct WebStyles {
     pub background: String,

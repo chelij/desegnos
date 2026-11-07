@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { native } from './api';
 import { Notice } from './ProblemBanner.js';
+import { SIZE_PRESETS } from './generated/limits';
 import { EXTRACTOR_SCRIPT } from './websiteImportExtract';
 import type { WebCapture, WebsiteImportPageView, WebsiteImportResultView, WebsiteImportSourceView } from './types';
 
@@ -114,13 +115,13 @@ export function useWebsiteImport(busy: boolean, onImported: (result: WebsiteImpo
     const pages = source.pages.slice(0, 30);
     const total = pages.length * 2;
     const report = (progress: Progress) => setPhase(current => current.kind === 'rendering' ? { ...current, progress } : current);
-    setPhase({ kind: 'rendering', progress: { done: 0, total, label: 'Rendering pages at 1440 px and 390 px…' }, capture: null });
+    setPhase({ kind: 'rendering', progress: { done: 0, total, label: `Rendering pages at ${SIZE_PRESETS.desktop.width} px and ${SIZE_PRESETS.phone.width} px…` }, capture: null });
     try {
       for (const [index, page] of pages.entries()) {
         if (stopped.current) throw new Error('The import was stopped.');
         report({ done: index * 2, total, label: `Rendering ${page.title || page.route}…` });
         try {
-          captures.push(await capturePage(page, 1440));
+          captures.push(await capturePage(page, SIZE_PRESETS.desktop.width));
         } catch (reason) {
           if (stopped.current) throw reason;
           const note = `${page.title || page.route} (${page.route}): skipped because it could not render. ${messageOf(reason)}`;
@@ -131,7 +132,7 @@ export function useWebsiteImport(busy: boolean, onImported: (result: WebsiteImpo
         if (stopped.current) throw new Error('The import was stopped.');
         report({ done: index * 2 + 1, total, label: `Rendering ${page.title || page.route} on a phone…` });
         try {
-          captures.push(await capturePage(page, 390));
+          captures.push(await capturePage(page, SIZE_PRESETS.phone.width));
         } catch (reason) {
           if (stopped.current) throw reason;
           // A page that cannot render at phone width still imports at its base size.

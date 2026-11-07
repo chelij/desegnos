@@ -17,7 +17,7 @@ pub use crate::limits::MAX_ELEMENT_REQUESTS;
 pub use crate::limits::MAX_ELEMENTS;
 pub use crate::limits::MAX_LINKED_DEFINITIONS;
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(ts_rs::TS, Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum InputType {
     Text,
@@ -34,14 +34,14 @@ pub enum InputType {
     File,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(ts_rs::TS, Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum StackDirection {
     Row,
     Column,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(ts_rs::TS, Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum StackAlign {
     Start,
@@ -50,7 +50,7 @@ pub enum StackAlign {
     Stretch,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(ts_rs::TS, Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum StackJustify {
     Start,
@@ -59,7 +59,7 @@ pub enum StackJustify {
     SpaceBetween,
 }
 
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(ts_rs::TS, Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum TextAlign {
     #[default]
@@ -69,7 +69,7 @@ pub enum TextAlign {
 }
 
 /// CSS text decoration, shared by canvas and exports. Missing means undecorated.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(ts_rs::TS, Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum TextDecoration {
     None,
@@ -79,7 +79,7 @@ pub enum TextDecoration {
 
 /// What a visual element is. Kind-specific settings live on the variant, so an input always
 /// carries its type, a select its options and a code block its language and source.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(ts_rs::TS, Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(
     tag = "kind",
     rename_all = "camelCase",
@@ -179,7 +179,7 @@ impl ElementKind {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(ts_rs::TS, Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ElementStroke {
     /// `None` draws no stroke.
@@ -187,7 +187,7 @@ pub struct ElementStroke {
     pub width: f64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(ts_rs::TS, Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ElementShadow {
     pub x: f64,
@@ -197,7 +197,7 @@ pub struct ElementShadow {
     pub color: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(ts_rs::TS, Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ElementTextStyle {
     pub font_family: String,
@@ -230,7 +230,7 @@ impl Default for ElementTextStyle {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(ts_rs::TS, Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum SizingMode {
     #[default]
@@ -239,7 +239,8 @@ pub enum SizingMode {
     Fill,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[derive(ts_rs::TS, Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[ts(optional_fields = nullable)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ElementSizing {
     #[serde(default)]
@@ -282,7 +283,8 @@ impl ElementSizing {
         Ok(())
     }
 }
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[derive(ts_rs::TS, Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[ts(optional_fields = nullable)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct StyleReferences {
     pub fill: Option<Uuid>,
@@ -293,7 +295,7 @@ pub struct StyleReferences {
 
 /// Content inset for a stack or grid box, one value per side. The layout keeps its own
 /// all-sides `padding` as the fallback for files and renderers that predate per-side insets.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[derive(ts_rs::TS, Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ElementPadding {
     pub top: f64,
@@ -313,19 +315,23 @@ impl ElementPadding {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(ts_rs::TS, Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ElementStyle {
     #[serde(default)]
+    #[ts(optional = nullable)]
     pub flip_x: bool,
     #[serde(default)]
+    #[ts(optional = nullable)]
     pub flip_y: bool,
     #[serde(default)]
+    #[ts(optional = nullable)]
     pub sizing: ElementSizing,
     /// Stack or grid padding per side; `None` uses the layout's all-sides padding.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub padding: Option<ElementPadding>,
     #[serde(default)]
+    #[ts(optional = nullable)]
     pub references: StyleReferences,
     /// `None` fills nothing.
     pub fill: Option<String>,
@@ -336,7 +342,7 @@ pub struct ElementStyle {
     pub text_style: ElementTextStyle,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(ts_rs::TS, Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(
     tag = "kind",
     rename_all = "camelCase",
@@ -406,7 +412,7 @@ impl ElementLayout {
 
 /// One past request on a layer. Outcome and job arrive with the AI step; until then a manual
 /// Ask AI records the prompt and leaves them empty.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(ts_rs::TS, Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RequestRecord {
     pub id: Uuid,
@@ -453,7 +459,7 @@ impl RequestRecord {
     }
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[derive(ts_rs::TS, Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ElementMeta {
     /// Newest last on disk; Properties lists them newest first.
@@ -484,11 +490,12 @@ impl ElementMeta {
 /// What one linked size changes about an element. Missing fields inherit the base values, so a
 /// size only stores what it overrides. `hidden` removes the element from that size and draws a
 /// placeholder where it would go; `dismissed` keeps it hidden without the placeholder.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[derive(ts_rs::TS, Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ElementOverride {
     /// True only for overrides owned by deterministic responsive adaptation.
     #[serde(default)]
+    #[ts(optional = nullable)]
     pub automatic: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rect: Option<Rect>,
@@ -548,7 +555,7 @@ impl ElementOverride {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(ts_rs::TS, Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Element {
     pub id: Uuid,
@@ -575,6 +582,7 @@ pub struct Element {
     pub layout: ElementLayout,
     /// Per-size changes, keyed by the page size they apply to. Text and kind are never per size.
     #[serde(default)]
+    #[ts(optional = nullable)]
     pub overrides: BTreeMap<Uuid, ElementOverride>,
     pub children: Vec<Element>,
     pub meta: ElementMeta,
@@ -873,7 +881,7 @@ pub(crate) fn validate_element(
 
 /// One named element every copy shares. The master holds no position: its root sits at the
 /// origin and children keep rects relative to their parent.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(ts_rs::TS, Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct LinkedDefinition {
     pub id: Uuid,
@@ -1225,7 +1233,7 @@ pub(crate) fn collect_nested_ids(
 }
 
 /// A new copy of a linked element, placed by the caller.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(ts_rs::TS, Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct LinkedPasteInstance {
     pub id: Uuid,

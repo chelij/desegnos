@@ -105,7 +105,7 @@ export function defaultStyle(kind: ElementKind): ElementStyle {
 }
 
 export function createElement(kind: ElementKind, rect: Rect, patch: Partial<Element> = {}): Element {
-  const base: Element = {
+  const base = {
     id: crypto.randomUUID(),
     kind,
     name: null,
@@ -121,11 +121,11 @@ export function createElement(kind: ElementKind, rect: Rect, patch: Partial<Elem
     children: [],
     meta: { requests: [], context: [] },
   };
-  if (kind === 'input') return { ...base, inputType: 'text', ...patch };
-  if (kind === 'select') return { ...base, options: ['Option 1', 'Option 2', 'Option 3'], ...patch };
-  if (kind === 'code') return { ...base, language: 'html', source: '<div>\n  \n</div>', ...patch };
-  if (kind === 'link' || kind === 'video' || kind === 'audio' || kind === 'embed') return { ...base, url: 'https://example.com', ...patch };
-  return { ...base, ...patch };
+  if (kind === 'input') return { ...base, inputType: 'text', ...patch } as Element;
+  if (kind === 'select') return { ...base, options: ['Option 1', 'Option 2', 'Option 3'], ...patch } as Element;
+  if (kind === 'code') return { ...base, language: 'html', source: '<div>\n  \n</div>', ...patch } as Element;
+  if (kind === 'link' || kind === 'video' || kind === 'audio' || kind === 'embed') return { ...base, url: 'https://example.com', ...patch } as Element;
+  return { ...base, ...patch } as Element;
 }
 
 export function createTextElement(rect: Rect, text = '', output?: OutputType): Element {

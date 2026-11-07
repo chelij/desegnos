@@ -20,6 +20,7 @@ import {
   automaticLinks, boundaryAt, boundaryNear, canvasTargetKey, dotGrid, fitCamera, nearestEdgeAnchors, selectedPointers,
   textEditingCamera, viewportWorldRect, type Boundary, type CanvasCamera, type CanvasTarget, type Point, type ReferenceBox, type RequestBox,
 } from '../projectCanvasGeometry';
+import { IMAGE_DRAG_EVENT } from '../generated/commands';
 import type { Element, NamedView, Page, Project, Rect, ReferenceItem, RequestArea, RequestShape, RequestTarget } from '../types';
 import { onEditScope, type EditScope } from './selectionBar';
 import { elementBoxes, elementBoxesNow, pendingRequests, requestAreaContains } from './requests';
@@ -41,6 +42,7 @@ import {
   elementParents, findElementIn, drawRectWithKeys, rectFromPoints,
 } from './elementGeometry';
 import type { ForwardedRef } from 'react';
+import { MAX_NAME_CHARS } from '../generated/limits';
 
 const EMPTY_RECTS: Record<string, Rect> = {};
 
@@ -415,7 +417,7 @@ export function useProjectCanvas({
             const picture = droppedDataUri(item.file);
             const size = await droppedImageSize(picture);
             const rect = pastedImageRect({ x: point.x + offset, y: point.y + offset }, size.width, size.height);
-            await state.addReference({ id, rect, kind: { kind: 'image', picture: NIL_UUID, name: item.file.name.slice(0, 120) } }, picture);
+            await state.addReference({ id, rect, kind: { kind: 'image', picture: NIL_UUID, name: item.file.name.slice(0, MAX_NAME_CHARS) } }, picture);
           } else {
             const rect = { ...pastedNoteRect(point), x: Math.round(point.x + offset), y: Math.round(point.y + offset) };
             await state.addReference({ id, rect, kind: { kind: 'note', text: droppedText(item.file) } });
@@ -459,7 +461,7 @@ export function useProjectCanvas({
       void dropFiles(point, { x: last.x, y: last.y }, value);
     }
 
-    void getCurrentWindow().listen<NativeDrag>('desegnos://image-drag', event => handle(event.payload)).then(unlisten => { if (disposed) unlisten(); else stop = unlisten; });
+    void getCurrentWindow().listen<NativeDrag>(IMAGE_DRAG_EVENT, event => handle(event.payload)).then(unlisten => { if (disposed) unlisten(); else stop = unlisten; });
     return () => { disposed = true; stop?.(); };
   }, []);
 

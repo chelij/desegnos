@@ -1,101 +1,58 @@
+//! `commands.txt` is the one list of native commands. From it this script writes the
+//! `registered_commands!` macro that `main.rs` hands to Tauri, the permission manifest and the
+//! editor window's capability.
+use std::{env, fs, path::PathBuf};
+
+const EDITOR_PERMISSIONS: &[&str] = &["core:default", "core:window:allow-destroy", "dialog:allow-confirm"];
+
 fn main() {
-    tauri_build::try_build(tauri_build::Attributes::new().app_manifest(
-        tauri_build::AppManifest::new().commands(&[
-            "resolve_canvas_font",
-            "list_canvas_fonts",
-            "load_canvas_font",
-            "prepare_export",
-            "start_export",
-            "cancel_export",
-            "get_export_job",
-            "recheck_export",
-            "keep_pointer_code",
-            "open_in_browser",
-            "pick_export_destination",
-            "open_export_folder",
-            "close_preview",
-            "record_usage",
-            "open_preview_link",
-            "pick_identity_source",
-            "fetch_identity_source",
-            "prepare_website_import_url",
-            "pick_website_import_source",
-            "cancel_website_import",
-            "import_website_pages",
-            "prepare_identity_selection",
-            "close_project",
-            "switch_project",
-            "import_context",
-            "analyze_identity",
-            "get_identity_analysis",
-            "cancel_identity_analysis",
-            "get_workspace",
-            "get_project_location",
-            "get_app_settings",
-            "set_show_start_page",
-            "pick_project_location",
-            "set_project_location",
-            "move_into_project_folder",
-            "get_recent_projects",
-            "forget_recent_project",
-            "set_recent_project_pin",
-            "open_recent_project",
-            "new_untitled_project",
-            "save_untitled_project",
-            "pick_project_save_path",
-            "edit_project",
-            "undo_project",
-            "redo_project",
-            "end_history_step",
-            "open_project",
-            "save_project",
-            "save_project_checked",
-            "resolve_save_conflict",
-            "save_project_copy",
-            "compact_history",
-            "autosave_project",
-            "get_project_history",
-            "restore_version",
-            "switch_alternative",
-            "create_alternative",
-            "rename_alternative",
-            "delete_alternative",
-            "prepare_requirements",
-            "save_requirements",
-            "recover_project",
-            "dismiss_recovery",
-            "get_project_notes",
-            "get_ai_settings",
-            "save_ai_settings",
-            "set_ai_provider",
-            "set_ai_key",
-            "remove_ai_key",
-            "set_ai_authentication",
-            "begin_chatgpt_sign_in",
-            "cancel_chatgpt_sign_in",
-            "select_chatgpt_account",
-            "retry_chatgpt_secure_storage",
-            "sign_out_chatgpt",
-            "acknowledge_chatgpt_welcome",
-            "open_chatgpt_usage",
-            "test_ai_access",
-            "prepare_generation",
-            "get_generation",
-            "list_generations",
-            "get_past_generation",
-            "start_generation",
-            "retry_generation",
-            "cancel_generation",
-            "discard_generation",
-            "apply_generation",
-            "copy_text",
-            "unpack_request_zip",
-            "pending_crash_report",
-            "open_crash_report",
-            "dismiss_crash_report",
-            "record_frontend_crash",
-            "check_for_updates",
-        ]),
-    ))
+    println!("cargo:rerun-if-changed=commands.txt");
+    // Tauri wants 'static names and the script exits right after, so leaking is harmless.
+    let list: &'static str = Box::leak(fs::read_to_string("commands.txt").expect("commands.txt must be readable").into_boxed_str());
+    let paths: Vec<&str> = list.lines().map(str::trim).filter(|line| !line.is_empty()).collect();
+    let names: &'static [&'static str] = Vec::leak(
+        paths
+            .iter()
+            .map(|path| path.rsplit("::").next().expect("a command path has a name"))
+            .collect(),
+    );
+
+    let out = PathBuf::from(env::var("OUT_DIR").expect("cargo sets OUT_DIR"));
+    fs::write(
+        out.join("registered_commands.rs"),
+        format!(
+            "macro_rules! registered_commands {{ () => {{ tauri::generate_handler![{}] }}; }}\n",
+            paths.join(", ")
+        ),
+    )
+    .expect("the command macro must be writable");
+
+    let permissions: Vec<String> = EDITOR_PERMISSIONS
+        .iter()
+        .map(|permission| format!("\"{permission}\""))
+        .chain(names.iter().map(|name| format!("\"allow-{}\"", name.replace('_', "-"))))
+        .collect();
+    let capabilities = out.join("capabilities");
+    fs::create_dir_all(&capabilities).expect("the capability folder must be writable");
+    fs::write(
+        capabilities.join("editor.json"),
+        format!(
+            "{{\"identifier\":\"editor\",\"description\":\"The trusted editor can use explicit project commands.\",\"windows\":[\"editor\"],\"permissions\":[{}]}}",
+            permissions.join(",")
+        ),
+    )
+    .expect("the editor capability must be writable");
+    let pattern: &'static str =
+        Box::leak(format!("{}/*.json", glob_escape(&capabilities.to_string_lossy())).into_boxed_str());
+
+    tauri_build::try_build(
+        tauri_build::Attributes::new()
+            .capabilities_path_pattern(pattern)
+            .app_manifest(tauri_build::AppManifest::new().commands(names)),
+    )
     .expect("Desegnos's command permission manifest must be valid");
+}
+
+fn glob_escape(path: &str) -> String {
+    path.replace('[', "[[]")
 }

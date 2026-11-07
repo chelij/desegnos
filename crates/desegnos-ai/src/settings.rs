@@ -27,7 +27,7 @@ pub const CONTEXT_WINDOW_TOKENS: u64 = 1_050_000;
 pub const WINDOW_BYTES_PER_TOKEN: u64 = 2;
 pub const MAX_SCHEMA_BYTES: usize = 256 * 1024;
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(ts_rs::TS, Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum AuthenticationMethod {
     #[default]
@@ -35,7 +35,7 @@ pub enum AuthenticationMethod {
     Chatgpt,
 }
 
-#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(ts_rs::TS, Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ChatgptModel {
     pub id: String,
@@ -48,7 +48,8 @@ pub struct ChatgptModel {
     pub max_output_tokens: Option<u32>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(ts_rs::TS, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[ts(type = "string")]
 #[serde(try_from = "String", into = "String")]
 pub enum ReasoningEffort {
     Low,
@@ -143,7 +144,7 @@ impl ChatgptModel {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(ts_rs::TS, Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProviderSettings {
     pub model: String,
@@ -163,7 +164,7 @@ fn is_false(value: &bool) -> bool {
     !value
 }
 
-#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(ts_rs::TS, Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ModelPricing {
     pub model: String,
@@ -241,7 +242,7 @@ impl ProviderSettings {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(ts_rs::TS, Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ModelInfo {
     pub id: String,
@@ -347,7 +348,7 @@ pub fn chatgpt_model_catalogue(available: &[ChatgptModel]) -> Vec<ModelInfo> {
         .collect()
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(ts_rs::TS, Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TokenUsage {
     pub input_tokens: u64,

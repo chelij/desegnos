@@ -19,28 +19,28 @@ pub use crate::limits::MAX_REFERENCE_ITEMS;
 pub use crate::limits::MAX_REQUEST_TARGETS;
 pub use crate::limits::MAX_REQUESTS;
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(ts_rs::TS, Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum Appearance {
     Light,
     Dark,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(ts_rs::TS, Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum GenerationMode {
     Fuzzy,
     Strict,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(ts_rs::TS, Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum GridUnit {
     Pixels,
     Percent,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[derive(ts_rs::TS, Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct GridSettings {
     pub spacing: f64,
@@ -83,7 +83,7 @@ impl GridSettings {
 /// The widest or highest a viewport or a boundary size may be; `PageSize::validate` shares it.
 pub use crate::limits::MAX_VIEWPORT_SIDE;
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(ts_rs::TS, Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Viewport {
     pub width: u32,
@@ -102,7 +102,7 @@ impl Viewport {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[derive(ts_rs::TS, Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Rect {
     pub x: f64,
@@ -138,7 +138,7 @@ impl Rect {
 }
 
 /// A point in canvas coordinates, used by request-area outlines.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[derive(ts_rs::TS, Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RequestPoint {
     pub x: f64,
@@ -156,7 +156,7 @@ impl RequestPoint {
 
 /// What a pending request may change. A request keeps its targets until it is applied or
 /// removed, so the request box can be edited without losing its scope.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(ts_rs::TS, Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
 pub enum RequestTarget {
     Element {
@@ -204,7 +204,7 @@ impl RequestTarget {
 }
 
 /// The outline of a request area. Coverage uses the real outline, not the bounding box.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(ts_rs::TS, Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
 pub enum RequestShape {
     Rect { rect: Rect },
@@ -266,7 +266,7 @@ impl RequestShape {
 }
 
 /// Where a request area sits: inside one boundary size, or free on the canvas.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(ts_rs::TS, Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RequestArea {
     /// The boundary page the area was drawn in; absent means canvas coordinates outside every
@@ -290,7 +290,7 @@ impl RequestArea {
 
 /// A request waiting for Generate. Requests belong to the project, so they can target any mix
 /// of layers, boundaries, reference items and pointers, with or without a drawn area.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(ts_rs::TS, Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PendingRequest {
     pub id: Uuid,
@@ -352,7 +352,7 @@ impl PendingRequest {
 }
 
 /// How a page behaves inside its canvas boundary.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(ts_rs::TS, Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub enum BoundaryKind {
     /// Fixed width, grows taller as content is added.
@@ -363,7 +363,7 @@ pub enum BoundaryKind {
 
 /// What a boundary ships as. Websites and apps are built by the AI from the element tree;
 /// slides and images are rendered directly from it.
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(ts_rs::TS, Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum OutputType {
     #[default]
@@ -392,7 +392,7 @@ impl OutputType {
 /// One screen size of a page boundary. A page has one or more sizes drawn side by side on the
 /// canvas; the first is the base size, whose element values every other size inherits unless it
 /// overrides them.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(ts_rs::TS, Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PageSize {
     pub id: Uuid,
@@ -421,7 +421,7 @@ impl PageSize {
 }
 
 /// A common size offered when adding a linked size to a boundary.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(ts_rs::TS, Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum SizePreset {
     Phone,
@@ -443,7 +443,7 @@ impl SizePreset {
 }
 
 /// The starter boundaries a new untitled project can begin with.
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(ts_rs::TS, Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum CanvasTemplate {
     #[default]
@@ -455,7 +455,7 @@ pub enum CanvasTemplate {
 }
 
 /// Space between the starter boundaries of a template, matching the canvas layout gap.
-const TEMPLATE_GAP: u32 = 160;
+pub const TEMPLATE_GAP: u32 = 160;
 
 impl CanvasTemplate {
     fn size(width: u32, height: u32, kind: BoundaryKind, x: u32) -> PageSize {
@@ -544,7 +544,7 @@ pub fn size_label(width: u32) -> &'static str {
 
 /// One size's spot on the project canvas, as sent by a layout command. Field names stay
 /// snake_case like every other command argument.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[derive(ts_rs::TS, Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct CanvasPlacement {
     pub page_id: Uuid,
@@ -572,7 +572,7 @@ impl CanvasPlacement {
 
 /// A saved camera position, so the user can return to a part of the canvas. Views belong to
 /// the project file and never affect what ships.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(ts_rs::TS, Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct NamedView {
     pub id: Uuid,
@@ -598,7 +598,7 @@ impl NamedView {
 }
 
 /// One reference item's spot on the project canvas, moved when a boundary pushes it aside.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[derive(ts_rs::TS, Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct ReferencePlacement {
     pub item_id: Uuid,
@@ -608,7 +608,7 @@ pub struct ReferencePlacement {
 
 /// A reference item's content. Reference items are material the AI may read, and
 /// nothing outside every boundary ever ships.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(ts_rs::TS, Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(
     tag = "kind",
     rename_all = "camelCase",
@@ -641,7 +641,7 @@ pub enum ReferenceKind {
     },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(ts_rs::TS, Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReferenceItem {
     pub id: Uuid,
@@ -692,7 +692,7 @@ impl ReferenceItem {
 
 /// Where a pointer starts: a layer inside a page, or the page boundary itself. `size_id` names
 /// the linked size the endpoint was drawn in, when the page has more than one.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(ts_rs::TS, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(
     tag = "kind",
     rename_all = "camelCase",
@@ -715,7 +715,7 @@ pub enum PointerSource {
 
 /// Where a pointer goes. A change pointer grants edit permission; a reference pointer only
 /// reads its target. Reference items and URLs are always read only.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(ts_rs::TS, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(
     tag = "kind",
     rename_all = "camelCase",
@@ -743,7 +743,7 @@ pub enum PointerTarget {
 }
 
 /// What Play can do with a simple pointer. Everything else exports only.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(ts_rs::TS, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(
     tag = "kind",
     rename_all = "camelCase",
@@ -760,7 +760,7 @@ pub enum PlayAction {
 
 /// The generated code a pointer produced: a fingerprint of its marked fragments and the comment
 /// it was generated from.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(ts_rs::TS, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PointerWiring {
     pub fingerprint: String,
@@ -768,7 +768,7 @@ pub struct PointerWiring {
 }
 
 /// One boundary as an export wrote it.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(ts_rs::TS, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ExportedPage {
     pub page_id: Uuid,
@@ -778,7 +778,7 @@ pub struct ExportedPage {
 
 /// The code one pointer produced: a fingerprint of its marked fragments and the comment the
 /// export was written for. A pointer with no marked fragments is not recorded.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(ts_rs::TS, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ExportedPointer {
     pub fingerprint: String,
@@ -787,7 +787,7 @@ pub struct ExportedPointer {
 
 /// What the last export produced. Kept in the project so the canvas can compare its comments
 /// and recompute pointer fingerprints from the destination folder.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(ts_rs::TS, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ExportRecord {
     pub id: Uuid,
@@ -853,7 +853,7 @@ impl ExportRecord {
 }
 
 /// What a pointer lets a request do with its target.
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(ts_rs::TS, Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum PointerKind {
     /// The AI may read the target as context, never change it.
@@ -865,7 +865,7 @@ pub enum PointerKind {
 
 /// A line from a frame or boundary to what it grants the AI permission to read or change.
 /// The comment is the spec; a missing endpoint leaves the pointer in place and broken.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(ts_rs::TS, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Pointer {
     pub id: Uuid,
@@ -989,7 +989,7 @@ pub(crate) fn reference_picture_name(picture: Uuid, name: &str) -> String {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(ts_rs::TS, Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Page {
     pub id: Uuid,
@@ -1055,7 +1055,7 @@ impl Page {
     }
 }
 
-#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(ts_rs::TS, Debug, Default, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Brief {
     pub purpose: String,
@@ -1064,7 +1064,7 @@ pub struct Brief {
     pub tone: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(ts_rs::TS, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(
     tag = "kind",
     content = "id",
@@ -1077,7 +1077,7 @@ pub enum Scope {
     Element(Uuid),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(ts_rs::TS, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Decision {
     pub id: Uuid,
@@ -1088,7 +1088,7 @@ pub struct Decision {
     pub accepted_at_revision: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(ts_rs::TS, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DesignException {
     pub id: Uuid,
@@ -1098,14 +1098,14 @@ pub struct DesignException {
     pub accepted_at_revision: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(ts_rs::TS, Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ColourStyle {
     pub id: Uuid,
     pub name: String,
     pub value: String,
 }
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(ts_rs::TS, Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TextStyle {
     pub id: Uuid,
@@ -1117,7 +1117,7 @@ pub struct TextStyle {
     pub letter_spacing: f64,
     pub italic: bool,
 }
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[derive(ts_rs::TS, Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProjectStyles {
     pub colours: Vec<ColourStyle>,
@@ -1209,7 +1209,7 @@ impl ProjectStyles {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(ts_rs::TS, Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Project {
     #[serde(default)]

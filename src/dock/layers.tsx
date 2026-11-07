@@ -9,6 +9,7 @@ import { nestedLayerIds } from '../projectCanvas/links';
 import { ElementLayers, matchingLayerIds } from '../projectCanvas/elementLayers';
 import { resolveForSize } from '../projectCanvas/sizes';
 import { SectionHeader, useSectionOpen, PropsSection, useCollapsedSections, setSectionCollapsed } from './sections';
+import { MAX_NAMED_VIEW_NAME_CHARS } from '../generated/limits';
 function ViewRow({ view, jump, rename, remove }: { view: NamedView; jump: () => void; rename: (name: string) => void; remove: () => void }) {
   const [draft, setDraft] = useState<string | null>(null);
   // Enter commits and removes the input; the blur that follows must not rename twice.
@@ -25,7 +26,7 @@ function ViewRow({ view, jump, rename, remove }: { view: NamedView; jump: () => 
       ? <button type="button" className="dock-tree-select dock-tree-item" title={`Go to ${view.name} · double-click to rename`} onClick={jump} onDoubleClick={() => { editing.current = true; setDraft(view.name); }}>
         <Icon name="canvas" size={12} /><span>{view.name}</span>
       </button>
-      : <input className="dock-inline-name" aria-label={`Rename ${view.name}`} maxLength={80} autoFocus value={draft}
+      : <input className="dock-inline-name" aria-label={`Rename ${view.name}`} maxLength={MAX_NAMED_VIEW_NAME_CHARS} autoFocus value={draft}
         onChange={event => setDraft(event.target.value)} onBlur={commit}
         onKeyDown={event => {
           if (event.key === 'Enter') { event.preventDefault(); commit(); }

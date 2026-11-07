@@ -1,3 +1,4 @@
+import type { CommandName } from '../generated/commands';
 import { useBoundaryCommands } from './useBoundaryCommands';
 import { propertySelection } from '../dock/selection';
 import { useAiSettings } from './useAiSettings';
@@ -423,7 +424,7 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
   const effectivePointerStates = checkedStates && checkedProject === project?.id ? checkedStates : pointerStates;
   const clashPointers = effectivePointerStates.filter(item => item.state === 'contradicts' || item.state === 'broken' || item.state === 'codeChanged');
   const activeProjectId = project?.id ?? null;
-  const generationCall = useCallback(<T,>(command: string, args?: Record<string, unknown>, signal?: AbortSignal) => Promise.resolve().then(() => queue(async workspace => {
+  const generationCall = useCallback(<T,>(command: CommandName, args?: Record<string, unknown>, signal?: AbortSignal) => Promise.resolve().then(() => queue(async workspace => {
     signal?.throwIfAborted();
     if (!activeProjectId || workspace?.project?.id !== activeProjectId) throw new Error('Return to the project that owns this generation request.');
     if (command === 'prepare_generation') {

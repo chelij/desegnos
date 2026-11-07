@@ -4,6 +4,8 @@
 compile_error!("Release builds must embed the frontend: enable the custom-protocol feature.");
 
 mod chatgpt;
+#[cfg(test)]
+mod contract;
 mod clipboard;
 mod crash_report;
 mod data_location;
@@ -21,13 +23,14 @@ mod portal;
 mod project_location;
 mod recent;
 mod release;
-mod request_zip;
 mod shutdown;
 mod system_open;
 mod updates;
 mod usage;
 mod website_import;
 mod workspace;
+
+include!(concat!(env!("OUT_DIR"), "/registered_commands.rs"));
 
 use generation::*;
 use tauri::Manager;
@@ -91,102 +94,7 @@ fn main() {
             window.show()?;
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![
-            fonts::resolve_canvas_font,
-            fonts::list_canvas_fonts,
-            fonts::load_canvas_font,
-            request_zip::unpack_request_zip,
-            export::prepare_export,
-            export::start_export,
-            export::cancel_export,
-            export::get_export_job,
-            export::recheck_export,
-            export::keep_pointer_code,
-            export::open_in_browser,
-            export::pick_export_destination,
-            export::open_export_folder,
-            export::close_preview,
-            usage::record_usage,
-            workspace::open_preview_link,
-            identity::pick_identity_source,
-            identity::fetch_identity_source,
-            website_import::prepare_website_import_url,
-            website_import::pick_website_import_source,
-            website_import::cancel_website_import,
-            website_import::import_website_pages,
-            identity::prepare_identity_selection,
-            workspace::close_project,
-            workspace::switch_project,
-            workspace::import_context,
-            identity::analyze_identity,
-            identity::get_identity_analysis,
-            identity::cancel_identity_analysis,
-            get_workspace,
-            project_location::get_project_location,
-            project_location::get_app_settings,
-            project_location::set_show_start_page,
-            project_location::pick_project_location,
-            project_location::set_project_location,
-            move_into_project_folder,
-            get_recent_projects,
-            recent::forget_recent_project,
-            recent::set_recent_project_pin,
-            open_recent_project,
-            new_untitled_project,
-            save_untitled_project,
-            pick_project_save_path,
-            edit_project,
-            clipboard::copy_text,
-            undo_project,
-            redo_project,
-            end_history_step,
-            open_project,
-            save_project,
-            save_project_checked,
-            resolve_save_conflict,
-            save_project_copy,
-            compact_history,
-            autosave_project,
-            get_project_history,
-            restore_version,
-            switch_alternative,
-            create_alternative,
-            rename_alternative,
-            delete_alternative,
-            prepare_requirements,
-            save_requirements,
-            recover_project,
-            dismiss_recovery,
-            get_project_notes,
-            get_ai_settings,
-            save_ai_settings,
-            set_ai_provider,
-            set_ai_key,
-            remove_ai_key,
-            chatgpt::set_ai_authentication,
-            chatgpt::begin_chatgpt_sign_in,
-            chatgpt::cancel_chatgpt_sign_in,
-            chatgpt::select_chatgpt_account,
-            chatgpt::retry_chatgpt_secure_storage,
-            chatgpt::sign_out_chatgpt,
-            chatgpt::acknowledge_chatgpt_welcome,
-            chatgpt::open_chatgpt_usage,
-            test_ai_access,
-            prepare_generation,
-            get_generation,
-            list_generations,
-            get_past_generation,
-            start_generation,
-            retry_generation,
-            cancel_generation,
-            discard_generation,
-            apply_generation,
-            crash_report::pending_crash_report,
-            crash_report::open_crash_report,
-            crash_report::dismiss_crash_report,
-            crash_report::record_frontend_crash,
-            updates::check_for_updates
-        ])
+        .invoke_handler(registered_commands!())
         .build(tauri::generate_context!())
         .expect("Desegnos could not start its native application")
         .run(|_app, event| {

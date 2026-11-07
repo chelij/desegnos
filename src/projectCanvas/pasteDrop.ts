@@ -16,6 +16,7 @@ import {
   ElementEntry, ClipboardEntry, PasteTarget, PasteChoice, LinkDecision, NIL_UUID, DuplicateRepeat,
   isElementTarget, elementAt, targetKey, entryTargetKey,
 } from './interactionTypes';
+import { MAX_NAME_CHARS, MAX_PROMPT_CHARS } from '../generated/limits';
 
 type Context = {
   elementEntries: (targets: CanvasTarget[]) => ElementEntry[];
@@ -228,7 +229,7 @@ export function createPasteDrop(context: () => Context) {
     if (!boundary) {
       if (createReference(text, point)) return;
       const id = crypto.randomUUID();
-      await addReference({ id, rect: pastedNoteRect(point), kind: { kind: 'note', text: text.slice(0, 16384) } })
+      await addReference({ id, rect: pastedNoteRect(point), kind: { kind: 'note', text: text.slice(0, MAX_PROMPT_CHARS) } })
         .then(() => selectReference(id));
       return;
     }
@@ -258,7 +259,7 @@ export function createPasteDrop(context: () => Context) {
       return;
     }
     const id = crypto.randomUUID();
-    await addReference({ id, rect, kind: { kind: 'image', picture: NIL_UUID, name: image.name.slice(0, 120) } }, image.uri)
+    await addReference({ id, rect, kind: { kind: 'image', picture: NIL_UUID, name: image.name.slice(0, MAX_NAME_CHARS) } }, image.uri)
       .then(() => selectReference(id));
   }
 

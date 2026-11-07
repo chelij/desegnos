@@ -31,7 +31,7 @@ pub struct WebsiteExport {
 }
 
 /// Cached code is keyed by intent and the structural hooks, never by text or visual styling.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(ts_rs::TS, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ExportBehaviour {
     /// Distinguishes a new acceptance after Keep comment from the forgotten cache entry.

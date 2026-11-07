@@ -1,4 +1,0 @@
-[[permission]]
-identifier = "allow-unpack-request-zip"
-description = "Unpack bounded request ZIP bytes without filesystem access."
-commands.allow = ["unpack_request_zip"]

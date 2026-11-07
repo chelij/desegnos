@@ -29,7 +29,7 @@ pub const AUTOSAVE_BRANCH: &str = "__autosave";
 /// Saves this close together amend the previous version instead of adding one.
 pub const AMEND_WINDOW_MS: i64 = 5_000;
 const MAX_LABEL_CHARS: usize = 120;
-const MAX_BRANCH_CHARS: usize = 60;
+pub const MAX_BRANCH_CHARS: usize = 60;
 const DAY_MS: i64 = 86_400_000;
 
 const SCHEMA: &str = "
@@ -68,14 +68,14 @@ fn project_extension(path: &Path) -> bool {
 }
 
 /// What was read from the database at open or after the last save.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(ts_rs::TS, Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FileStamp {
     pub project_id: Uuid,
     pub version: i64,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(ts_rs::TS, Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum SaveFailureKind {
     Changed,
@@ -129,7 +129,7 @@ pub struct AutosaveProject {
     pub created_at: i64,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(ts_rs::TS, Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VersionSummary {
     pub id: i64,
@@ -140,7 +140,7 @@ pub struct VersionSummary {
     pub head: bool,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(ts_rs::TS, Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BranchSummary {
     pub name: String,
@@ -149,7 +149,7 @@ pub struct BranchSummary {
     pub primary: bool,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(ts_rs::TS, Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectHistoryView {
     pub branch: String,
@@ -158,7 +158,7 @@ pub struct ProjectHistoryView {
     pub versions: Vec<VersionSummary>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(ts_rs::TS, Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CompactReport {
     pub removed_versions: usize,

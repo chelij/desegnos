@@ -334,7 +334,8 @@ fn trusted(window: &WebviewWindow) -> NativeResult<()> {
     }
 }
 
-#[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(ts_rs::TS, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[ts(rename = "GenerationStatus")]
 #[serde(rename_all = "camelCase")]
 pub enum JobStatus {
     Prepared,
@@ -364,7 +365,7 @@ impl JobStatus {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(ts_rs::TS, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct GenerationAttempt {
     ordinal: usize,
@@ -375,7 +376,7 @@ pub struct GenerationAttempt {
     usage: Option<TokenUsage>,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(ts_rs::TS, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct GenerationTarget {
     page_id: Uuid,
@@ -383,7 +384,7 @@ struct GenerationTarget {
 }
 
 /// One sequential part of a request whose editable documents exceed the source budget.
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(ts_rs::TS, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct GenerationBatch {
     part: usize,
@@ -396,7 +397,7 @@ struct GenerationBatch {
     repair_rounds: usize,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(ts_rs::TS, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct GenerationJobView {
     job_id: Uuid,
@@ -457,7 +458,7 @@ impl GenerationJobView {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(ts_rs::TS, Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ValidationExchange {
     summary: String,
@@ -565,7 +566,7 @@ struct AuthenticationPreference {
     authentication: AuthenticationMethod,
 }
 
-#[derive(Serialize)]
+#[derive(ts_rs::TS, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AiSettingsView {
     image_credential: Option<String>,
@@ -763,7 +764,7 @@ fn regular_directory(path: &Path) -> NativeResult<()> {
     Ok(())
 }
 
-#[derive(Serialize)]
+#[derive(ts_rs::TS, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GenerationJobSummary {
     job_id: Uuid,
@@ -773,7 +774,7 @@ pub struct GenerationJobSummary {
     summary: String,
     first_request: String,
 }
-#[derive(Serialize)]
+#[derive(ts_rs::TS, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GenerationHistory {
     jobs: Vec<GenerationJobSummary>,
@@ -2922,7 +2923,7 @@ pub async fn remove_ai_key(
     settings_view(&state, &chatgpt).await
 }
 
-#[derive(Serialize)]
+#[derive(ts_rs::TS, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AccessResult {
     provider_error: Option<ProviderError>,

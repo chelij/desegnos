@@ -11,6 +11,7 @@ import { behaviourStateLabel } from '../projectCanvas/behaviours';
 import { PROJECT_NAME_MAX_LENGTH } from '../editorShared';
 import { PropsSection } from './sections';
 import { PropertyField } from './controls';
+import { MAX_PROMPT_CHARS, MAX_VIEWPORT_SIDE } from '../generated/limits';
 
 function wholeSize(draft: string, min: number, max: number) {
   const value = Number(draft);
@@ -37,7 +38,7 @@ export function BoundaryProperties({ page, commit, updateSize, adaptSize, addSiz
   const [customWidth, setCustomWidth] = useState('1280');
   const [customHeight, setCustomHeight] = useState('800');
   const [customOpen, setCustomOpen] = useState(false);
-  const customValid = wholeSize(customWidth, 1, 100000) && wholeSize(customHeight, 1, 100000);
+  const customValid = wholeSize(customWidth, 1, MAX_VIEWPORT_SIDE) && wholeSize(customHeight, 1, MAX_VIEWPORT_SIDE);
   const presets = page.output === 'slide'
     ? [{ label: '16:9', width: 1920, height: 1080 }, { label: '4:3', width: 1024, height: 768 }]
     : page.output === 'image' ? [{ label: 'Square', width: 1080, height: 1080 }, { label: 'Portrait', width: 1080, height: 1350 }, { label: 'Story', width: 1080, height: 1920 }, { label: 'Landscape', width: 1200, height: 630 }] : null;
@@ -73,10 +74,10 @@ export function BoundaryProperties({ page, commit, updateSize, adaptSize, addSiz
         {index === 0
           ? page.sizes.length > 1 && <span className="dock-size-tag">Base</span>
           : <span className="dock-size-name" title={labelForSize(size)}>{labelForSize(size)}</span>}
-        <CompactNumberField prefix="W" label={`Width of ${labelForSize(size)}`} min={1} max={100000} unit="px" value={size.width} disabled={busy} valid={width => wholeSize(width, 1, 100000)}
-          commit={width => { const value = Math.round(Number(width)); if (value >= 1 && value <= 100000) updateSize(size.id, { width: value }); }} />
-        <CompactNumberField prefix="H" label={`Height of ${labelForSize(size)}`} min={1} max={100000} unit="px" value={size.height} disabled={busy} valid={height => wholeSize(height, 1, 100000)}
-          commit={height => { const value = Math.round(Number(height)); if (value >= 1 && value <= 100000) updateSize(size.id, { height: value }); }} />
+        <CompactNumberField prefix="W" label={`Width of ${labelForSize(size)}`} min={1} max={MAX_VIEWPORT_SIDE} unit="px" value={size.width} disabled={busy} valid={width => wholeSize(width, 1, MAX_VIEWPORT_SIDE)}
+          commit={width => { const value = Math.round(Number(width)); if (value >= 1 && value <= MAX_VIEWPORT_SIDE) updateSize(size.id, { width: value }); }} />
+        <CompactNumberField prefix="H" label={`Height of ${labelForSize(size)}`} min={1} max={MAX_VIEWPORT_SIDE} unit="px" value={size.height} disabled={busy} valid={height => wholeSize(height, 1, MAX_VIEWPORT_SIDE)}
+          commit={height => { const value = Math.round(Number(height)); if (value >= 1 && value <= MAX_VIEWPORT_SIDE) updateSize(size.id, { height: value }); }} />
         <div className="dock-size-tail">
           {!presets && <select className="dock-kind" value={size.kind} disabled={busy} title="Height behaviour" aria-label={`Height behaviour of ${labelForSize(size)}`} onChange={event => updateSize(size.id, { kind: event.target.value as BoundaryKind })}>
             <option value="page">Grow</option><option value="screen">Fixed</option>
@@ -100,8 +101,8 @@ export function BoundaryProperties({ page, commit, updateSize, adaptSize, addSiz
         {customOpen && !presets && <div className="boundary-add-row">{SIZE_PRESETS.map(preset => <button key={preset.preset} type="button" className="dock-action" disabled={busy}
           title={`${preset.width} × ${preset.height}`} onClick={() => { addSize(preset.preset); setCustomOpen(false); }}>Add {preset.label}</button>)}</div>}
         {customOpen && <div className="boundary-custom-row">
-          <CompactNumberField prefix="W" label="Custom width" min={1} max={100000} unit="px" value={customWidth} disabled={busy} valid={width => wholeSize(width, 1, 100000)} commit={setCustomWidth} />
-          <CompactNumberField prefix="H" label="Custom height" min={1} max={100000} unit="px" value={customHeight} disabled={busy} valid={height => wholeSize(height, 1, 100000)} commit={setCustomHeight} />
+          <CompactNumberField prefix="W" label="Custom width" min={1} max={MAX_VIEWPORT_SIDE} unit="px" value={customWidth} disabled={busy} valid={width => wholeSize(width, 1, MAX_VIEWPORT_SIDE)} commit={setCustomWidth} />
+          <CompactNumberField prefix="H" label="Custom height" min={1} max={MAX_VIEWPORT_SIDE} unit="px" value={customHeight} disabled={busy} valid={height => wholeSize(height, 1, MAX_VIEWPORT_SIDE)} commit={setCustomHeight} />
           <button type="button" className="dock-action" aria-label="Add custom size" title="Add custom size" disabled={busy || !customValid} onClick={() => addSize('custom', Math.round(Number(customWidth)), Math.round(Number(customHeight)))}>Add</button>
         </div>}
       </div>
@@ -124,7 +125,7 @@ export function ReferenceProperties({ item, update, remove, busy }: {
   const [draft, changeDraft, flushDraft] = useDraftText(noteText, (_value, latest) => Promise.resolve(update({ text: latest() })).then(() => latest()), 400);
   return <div className="dock-form">
     {item.kind.kind === 'note' && <label className="dock-field">Note
-      <textarea value={draft} rows={4} maxLength={16384} placeholder="Reference note"
+      <textarea value={draft} rows={4} maxLength={MAX_PROMPT_CHARS} placeholder="Reference note"
         onChange={event => changeDraft(event.target.value)} onBlur={flushDraft}
         onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); flushDraft(); event.currentTarget.blur(); } }} />
     </label>}
@@ -210,7 +211,7 @@ export function RequestProperties({ request, project, busy, update, remove, atta
   return <div className="dock-form">
     <div className="dock-layer-title"><strong>Request</strong></div>
     <label className="dock-field">What to make or change
-      <textarea value={draft} rows={4} maxLength={16384} placeholder="Describe what should happen here"
+      <textarea value={draft} rows={4} maxLength={MAX_PROMPT_CHARS} placeholder="Describe what should happen here"
         onChange={event => changeDraft(event.target.value)} onBlur={flushDraft}
         onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); flushDraft(); event.currentTarget.blur(); } }} />
     </label>
@@ -218,7 +219,7 @@ export function RequestProperties({ request, project, busy, update, remove, atta
       {request.targets.length ? <ul className="dock-request-targets">{request.targets.map((target, index) => <li key={`${target.kind}:${index}`}>{target.kind === 'element' ? 'Layer · ' : target.kind === 'boundary' ? 'Boundary · ' : target.kind === 'reference' ? 'Reference · ' : 'Pointer · '}{requestTargetLabel(project, target)}</li>)}</ul>
         : <p className="dock-hint">No targets: this request makes new reference outside every boundary.</p>}
     </div>
-    <p className="dock-hint">{requestAreaLabel(request.area)}</p>
+    <p className="dock-hint">{requestAreaLabel(request.area ?? null)}</p>
     {attachable.length > 0 && <div className="dock-field"><span className="dock-field-label">Attach reference</span>
       <ul className="dock-request-targets">{attachable.map(item => <li key={item.id}><button type="button" className="dock-action" disabled={busy} onClick={() => attach([request.id], [item.id])}>Attach {requestTargetLabel(project, { kind: 'reference', id: item.id })}</button></li>)}</ul>
     </div>}
@@ -281,7 +282,7 @@ export function BehaviourField({ project, pointer, state, commit, focusToken, bu
   const clash = !!pointer && (pointerBroken(pointer, project) || state?.state === 'codeChanged' || state?.state === 'contradicts');
   return <>
     <label className="dock-field">
-      <textarea ref={field} data-behaviour-field aria-label="Behaviour" value={draft} rows={3} maxLength={16384} disabled={busy}
+      <textarea ref={field} data-behaviour-field aria-label="Behaviour" value={draft} rows={3} maxLength={MAX_PROMPT_CHARS} disabled={busy}
         placeholder="Describe what it does, like follows the mouse"
         onChange={event => setDraft(event.target.value)}
         onBlur={save}
@@ -308,7 +309,7 @@ export function PointerProperties({ pointer, project, state, change, aiConnected
       <div><dt>To</dt><dd>{pointerEndpointName(pointer.to, project, 'target')}</dd></div>
     </dl>
     <label className="dock-field">Comment
-      <textarea value={draft} rows={4} maxLength={16384} placeholder="What should this pointer do?"
+      <textarea value={draft} rows={4} maxLength={MAX_PROMPT_CHARS} placeholder="What should this pointer do?"
         onChange={event => changeDraft(event.target.value)} onBlur={flushDraft}
         onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); flushDraft(); event.currentTarget.blur(); } }} />
     </label>

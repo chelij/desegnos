@@ -49,7 +49,7 @@ pub fn local_endpoint(settings: &ProviderSettings) -> Result<String> {
     Ok(url.as_str().trim_end_matches('/').into())
 }
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(ts_rs::TS, Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ProviderId {
     #[default]
@@ -245,7 +245,7 @@ impl ProviderId {
         }]
     }
 }
-#[derive(Serialize)]
+#[derive(ts_rs::TS, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderDescriptor {
     pub id: ProviderId,

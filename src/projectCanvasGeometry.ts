@@ -20,6 +20,7 @@ export function snapValue(value: number, spacing = GRID_SPACING): number {
   return Number.isFinite(value) ? Math.round(value / step) * step : 0;
 }
 import { resolveForSize, sizeLabel } from './projectCanvas/sizes';
+import { TEMPLATE_GAP } from './generated/limits';
 import type { BoundaryKind, PageSize, Pointer, PointerSource, PointerTarget, Project, Rect, Viewport } from './types';
 
 export type Point = { x: number; y: number };
@@ -32,7 +33,7 @@ type BoundarySize = PageSize & { height: number };
 type BoundaryPage = { id: string; sizes: BoundarySize[] };
 export type Boundary = { pageId: string; sizeId: string; label: string; rect: Rect; kind: BoundaryKind };
 export type BoundaryMove = { pageId: string; sizeId: string; x: number; y: number; kind: BoundaryKind };
-export const BOUNDARY_GAP = 160;
+export const BOUNDARY_GAP = TEMPLATE_GAP;
 export const BOUNDARY_PUSH_GAP = 40;
 export const MAX_BOUNDARY_HEIGHT = 6000;
 export const MAX_ZOOM = ZOOM_LEVELS[ZOOM_LEVELS.length - 1];

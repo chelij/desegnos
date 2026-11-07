@@ -24,6 +24,7 @@ zeroize = { version = "=1.8.2", default-features = false, features = ["alloc"] }
 jsonwebtoken = { version = "=11.1.0", default-features = false, features = ["aws_lc_rs"] }
 sha2.workspace = true
 uuid.workspace = true
+ts-rs.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 keyring = { version = "=3.6.3", default-features = false, features = ["sync-secret-service", "crypto-rust"] }

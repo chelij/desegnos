@@ -14,7 +14,7 @@ pub use crate::limits::MAX_PROJECT_PHOTO_BYTES;
 /// generation knows what exists and where to link.
 pub use crate::limits::MAX_IMPORTED_ITEMS;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(ts_rs::TS, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SourcePageRef {
     pub path: String,
@@ -23,7 +23,7 @@ pub struct SourcePageRef {
     pub url: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(ts_rs::TS, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SourcePage {
     pub path: String,
@@ -45,7 +45,7 @@ impl SourcePage {
 }
 
 /// The content reviewed for an actual Desegnos page. Photo bytes remain shared in identity.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(ts_rs::TS, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ImportedPageContext {
     pub page_id: Uuid,
@@ -54,7 +54,7 @@ pub struct ImportedPageContext {
     pub content: Vec<ImportedItem>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(ts_rs::TS, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ImportedItem {
     pub kind: String,
@@ -92,7 +92,7 @@ impl ImportedItem {
 }
 
 /// A photo kept with the project. Bytes are shared, so undo history does not copy them.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(ts_rs::TS, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProjectPhoto {
     pub id: Uuid,
@@ -151,7 +151,7 @@ impl ProjectPhoto {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(ts_rs::TS, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct IdentityAsset {
     pub id: Uuid,
@@ -161,7 +161,7 @@ pub struct IdentityAsset {
     pub sha256: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(ts_rs::TS, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ImportedIdentity {
     pub source_name: String,

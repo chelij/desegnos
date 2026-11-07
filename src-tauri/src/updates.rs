@@ -14,7 +14,7 @@ const UNREACHABLE: &str = "Couldn't reach GitHub. Check your connection and try 
 const RATE_LIMITED: &str = "GitHub is limiting requests. Try again later.";
 const FAILED: &str = "Couldn't check for updates.";
 
-#[derive(Debug, Serialize)]
+#[derive(ts_rs::TS, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateCheck {
     pub current: String,
@@ -23,7 +23,8 @@ pub struct UpdateCheck {
     pub newer: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(ts_rs::TS, Debug, Clone, PartialEq, Serialize)]
+#[ts(rename = "UpdateRelease")]
 #[serde(rename_all = "camelCase")]
 pub struct Release {
     /// The parsed version without its optional `v` prefix.

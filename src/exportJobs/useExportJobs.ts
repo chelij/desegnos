@@ -2,7 +2,7 @@ import { readJsonPreference, writePreference } from '../preferences';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { defaultExportFolder } from './exportFolder';
 import { native } from '../api';
-import type { Command, PointerStateView, Project, WorkspaceView, ExportCheck, ExportJobView } from '../types';
+import type { Command, PointerStateView, Project, WorkspaceView, ExportCheck, ExportJobView, PickDestination } from '../types';
 import { idlePlay, playIsActive, type PlayState } from '../projectCanvas/play';
 import type { PreviewState } from '../ProjectCanvas';
 import { errorMessage } from '../editorShared';
@@ -114,7 +114,7 @@ export function useExportJobs(context: Context) {
     const project = current.current?.project;
     if (!project) return;
     try {
-      const picked = await native<{ path: string } | null>('pick_export_destination');
+      const picked = await native<PickDestination | null>('pick_export_destination');
       if (!picked) return;
       setExportFolders(current => ({ ...current, [project.id]: picked.path }));
     } catch (error) { setExportError(errorMessage(error)); }
