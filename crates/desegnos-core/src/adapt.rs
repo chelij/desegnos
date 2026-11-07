@@ -115,6 +115,14 @@ fn decoration(e: &Element, siblings: &[Element], base_width: f64) -> bool {
         })
 }
 
+fn has_text(e: &Element) -> bool {
+    !e.text.trim().is_empty() || e.children.iter().any(|c| c.visible && has_text(c))
+}
+
+fn intersects(a: &Rect, b: &Rect) -> bool {
+    a.x + 2.0 < b.x + b.width && b.x + 2.0 < a.x + a.width && a.y + 2.0 < b.y + b.height && b.y + 2.0 < a.y + a.height
+}
+
 fn effective(e: &Element, id: Uuid) -> Rect {
     e.overrides.get(&id).and_then(|o| o.rect).unwrap_or(e.rect)
 }
@@ -157,9 +165,17 @@ fn place(
         } else {
             14.0
         };
-        style.text_style.size = (original * ratio)
-            .max(minimum)
-            .min((rect.width / 4.0).max(14.0));
+        style.text_style.size = (original * ratio).max(minimum);
+        // Shrink only as far as the longest word needs to fit the box; never below 14 px.
+        let longest = e.text.split_whitespace().max_by_key(|word| word.chars().count()).unwrap_or("");
+        if !longest.is_empty() {
+            let mut word = e.clone();
+            word.text = longest.to_owned();
+            let needed = measure.natural_width(&word, &style);
+            if needed > rect.width {
+                style.text_style.size = (style.text_style.size * rect.width / needed).max(14.0);
+            }
+        }
         rect.height = measure.height(e, &style, rect.width).max(
             if matches!(e.kind, ElementKind::Button | ElementKind::Link) {
                 40.0
@@ -486,7 +502,7 @@ fn children(
         let mut next_x = gutter;
         // Overlapping desktop text boxes (a price and its suffix, for example)
         // can share a line when their distinct left edges leave enough space.
-        let widths: Vec<_> = row
+        let mut widths: Vec<_> = row
             .iter()
             .enumerate()
             .map(|(column, &i)| {
@@ -505,6 +521,24 @@ fn children(
                         );
                     }
                 }
+                // Short text in a shared row (a price and its "/ MO", an icon label) packs at
+                // the width its words need, so a wide desktop text box does not push its
+                // neighbour across the line.
+                let short = |e: &Element| {
+                    matches!(e.kind, ElementKind::Text) && e.children.is_empty() && e.text.chars().count() <= 24
+                };
+                // Only text that sits together at the base size packs together: touching or
+                // overlapping boxes. A label and an icon pushed to the far edge stay apart.
+                let paired = row.len() == 2
+                    && row.iter().all(|&i| short(&elements[i]))
+                    && elements[row[1]].rect.x - (elements[row[0]].rect.x + elements[row[0]].rect.width) <= 24.0;
+                if paired {
+                    let mut style = measure.resolve_style(&e.style);
+                    let original = style.text_style.size;
+                    let minimum = if original >= 28.0 { (original * 0.6).clamp(22.0, 40.0) } else { 14.0 };
+                    style.text_style.size = (original * ratio).max(minimum);
+                    w = w.max(1.0).min(available).min(measure.natural_width(e, &style).max(1.0));
+                }
                 if let Some(&next) = row.get(column + 1) {
                     let distance = elements[next].rect.x - e.rect.x;
                     if e.children.is_empty() && distance > 0.0 && distance < e.rect.width {
@@ -516,6 +550,36 @@ fn children(
             .collect();
         let packed = widths.iter().sum::<f64>() + gap * row.len().saturating_sub(1) as f64;
         let fits = packed <= available;
+        // A header that cannot fit on one line keeps its nav links together on a line of
+        // their own, after the logo and call to action, instead of splitting them.
+        let plain_link = |e: &Element| {
+            matches!(e.kind, ElementKind::Link)
+                && e.text.chars().count() <= 16
+                && e.style.fill.as_deref().is_none_or(|fill| {
+                    fill == "transparent" || (fill.len() == 9 && fill.ends_with("00"))
+                })
+        };
+        let mut links_from = usize::MAX;
+        let link_count = row.iter().filter(|&&i| plain_link(&elements[i])).count();
+        if !fits && !similar && link_count >= 2 && link_count < row.len() {
+            let mut order: Vec<usize> = (0..row.len()).collect();
+            order.sort_by_key(|&k| plain_link(&elements[row[k]]));
+            row = order.iter().map(|&k| row[k]).collect();
+            widths = order.iter().map(|&k| widths[k]).collect();
+            links_from = row.iter().position(|&i| plain_link(&elements[i])).unwrap_or(usize::MAX);
+            // Header text (logo, links) packs at the width its words need at its final size.
+            for (column, &i) in row.iter().enumerate() {
+                let e = &elements[i];
+                // Filled links are buttons: they keep their designed padding.
+                if (matches!(e.kind, ElementKind::Text) || plain_link(e)) && e.children.is_empty() && !e.text.is_empty() {
+                    let mut style = measure.resolve_style(&e.style);
+                    let original = style.text_style.size;
+                    let minimum = if original >= 28.0 { (original * 0.6).clamp(22.0, 40.0) } else { 14.0 };
+                    style.text_style.size = (original * ratio).max(minimum);
+                    widths[column] = widths[column].min(measure.natural_width(e, &style).max(1.0));
+                }
+            }
+        }
         let raw_gaps: Vec<_> = row
             .windows(2)
             .map(|pair| {
@@ -545,15 +609,26 @@ fn children(
             } else {
                 widths[column]
             };
-            if !similar && next_x > gutter && next_x + w > width - right_gutter + 0.5 {
+            if !similar && next_x > gutter && (column == links_from || next_x + w > width - right_gutter + 0.5) {
                 line_y = line_bottom + gap;
                 line_top = e.rect.y;
                 next_x = gutter;
             }
+            let left_margin = e.rect.x;
+            let right_margin = base_width - e.rect.x - e.rect.width;
+            // Content centred in its parent stays centred (stat digits, centred headings).
+            // Left-aligned text in an evenly inset box is not centred content.
+            let centred = row.len() == 1
+                && left_margin > 1.0
+                && (left_margin - right_margin).abs() <= (base_width * 0.02).max(4.0)
+                && (e.text.is_empty() || e.style.text_style.align == crate::TextAlign::Center);
+            let placed = (e.rect.x * ratio).clamp(gutter, (width - right_gutter - w).max(gutter));
             let x = if full_bleed {
                 0.0
+            } else if centred && (((width - w) / 2.0) - placed).abs() > 1.0 {
+                ((width - w) / 2.0).max(0.0)
             } else if row.len() == 1 {
-                (e.rect.x * ratio).clamp(gutter, (width - right_gutter - w).max(gutter))
+                placed
             } else {
                 next_x
             };
@@ -590,6 +665,14 @@ fn children(
         .iter()
         .enumerate()
         .filter(|(i, _)| !decor[*i] && !duplicates[*i])
+        .map(|(_, e)| (e.rect, effective(e, id)))
+        .collect();
+    // Readable content: text-bearing foreground boxes. Art that stayed clear of one at the
+    // base size must stay clear of it here too.
+    let readable: Vec<_> = elements
+        .iter()
+        .enumerate()
+        .filter(|(i, e)| !decor[*i] && !duplicates[*i] && e.visible && has_text(e))
         .map(|(_, e)| (e.rect, effective(e, id)))
         .collect();
     let map_y = |y: f64| {
@@ -644,6 +727,18 @@ fn children(
                 }
             }
             let art_width = (e.rect.width * ratio).min((width - x).max(1.0));
+            let scaled_height = e.rect.height * art_width / e.rect.width.max(1.0);
+            let art = Rect { x, y, width: art_width, height: if e.children.is_empty() && !matches!(e.kind, ElementKind::Ellipse) { height } else { scaled_height } };
+            let covers_new_text = !(e.rect.x.abs() < 1.0 && e.rect.width >= base_width - 1.0)
+                && readable.iter().any(|(base, adapted)| !intersects(&e.rect, base) && intersects(&art, adapted));
+            if covers_new_text || art_width < e.rect.width * ratio * 0.35 {
+                // No clear room left beside the text at this size: drop the ornament here.
+                e.overrides.insert(
+                    id,
+                    ElementOverride { automatic: true, hidden: true, ..Default::default() },
+                );
+                continue;
+            }
             scale(e, id, art_width / e.rect.width.max(1.0));
             let over = e.overrides.get_mut(&id).unwrap().rect.as_mut().unwrap();
             over.x = x;

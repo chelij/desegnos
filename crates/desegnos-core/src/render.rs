@@ -2408,6 +2408,15 @@ impl ResponsiveTextMeasure {
         wrap_text(&mut self.0, &element.text, &style.text_style, content.width, wraps(&element.kind))
             .len().max(1) as f64 * line_height(&style.text_style) + 4.0
     }
+    /// The width the text needs on one line at this style, padding included.
+    pub(crate) fn natural_width(&mut self, element: &Element, style: &crate::ElementStyle) -> f64 {
+        let mut measured = element.clone();
+        measured.style = style.clone();
+        let (content, _) = text_box(&measured, Rect { x: 0.0, y: 0.0, width: 100_000.0, height: 1.0 });
+        let padding = 100_000.0 - content.width;
+        element.text.lines().map(|line| line_width(&mut self.0, line, &style.text_style)).fold(0.0, f64::max)
+            + padding + 2.0
+    }
 }
 
 #[cfg(test)]
