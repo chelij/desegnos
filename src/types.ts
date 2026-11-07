@@ -57,7 +57,7 @@ export type RequestShape =
   | { kind: 'polygon'; points: RequestPoint[] }
   | { kind: 'freehand'; points: RequestPoint[] };
 export type RequestArea = { page?: string | null; size?: string | null; shape: RequestShape };
-export type PendingRequest = { id: string; text: string; attachments: RequestAttachment[]; targets: RequestTarget[]; area: RequestArea | null; requestedAt: string };
+export type PendingRequest = { boundaryRetryOrder?: string[]; id: string; text: string; attachments: RequestAttachment[]; targets: RequestTarget[]; area: RequestArea | null; requestedAt: string };
 export type RequestRecord = { id: string; prompt: string; attachments: RequestAttachment[]; createdAt: string; outcome: string | null; jobId: string | null };
 export type ElementMeta = { requests: RequestRecord[]; context: RequestAttachment[] };
 export type Element = {
@@ -163,9 +163,10 @@ export type GenerationCandidate = {
   decisionProposals: DecisionProposal[];
   criticism: DesignCriticism[];
 };
+export type GenerationValidationEvent = { kind: string; disposition: string; elementId: string | null; message: string };
 export type GenerationBatch = { part: number; requirements: RequirementsSnapshot; estimateUsd: number; candidate?: GenerationCandidate | null; status: GenerationStatus;
-  message: string; validationEvents?: { kind: string; disposition: string; elementId: string | null; message: string }[]; repairRounds: number };
-export type GenerationJobView = { batches?: GenerationBatch[]; mergedRequirements?: RequirementsSnapshot | null; jobId: string; projectId: string; baseRevision: number; requirements: RequirementsSnapshot; context?: RequirementsSnapshot | null; earlierContexts?: RequirementsSnapshot[]; firstExchange?: { summary: string; requests: GenerationCandidate['requests']; usage: TokenUsage | null } | null; repairRounds?: number; repairAreaCount?: number; validationEvents?: { kind: string; disposition: string; elementId: string | null; message: string }[]; rawReply?: string | null; createdAt?: string | null; areas: { pageId: string; elementId: string }[]; generationMode: GenerationMode;
+  message: string; validationEvents?: GenerationValidationEvent[]; repairRounds: number };
+export type GenerationJobView = { batches?: GenerationBatch[]; mergedRequirements?: RequirementsSnapshot | null; jobId: string; projectId: string; baseRevision: number; requirements: RequirementsSnapshot; context?: RequirementsSnapshot | null; earlierContexts?: RequirementsSnapshot[]; firstExchange?: { summary: string; requests: GenerationCandidate['requests']; usage: TokenUsage | null } | null; repairRounds?: number; repairAreaCount?: number; validationEvents?: GenerationValidationEvent[]; rawReply?: string | null; createdAt?: string | null; areas: { pageId: string; elementId: string }[]; generationMode: GenerationMode;
   settings: ProviderSettings; status: GenerationStatus; estimateUsd: number; receivedBytes: number; message: string; candidate: GenerationCandidate | null;
   usage: TokenUsage | null; attempts: GenerationAttempt[]; acceptedDecisionIndices: number[]; recommendedDecisionIndices: number[];
   provider?: ProviderId; authentication: AuthenticationMethod; chatgptAccountId: string | null; failureKind: string | null; dossierError: string | null; providerError: ProviderError | null };

@@ -917,6 +917,7 @@ fn reference_keeps_linked_size_overrides_and_existing_requests() {
     .unwrap();
     let original = project.page(page).unwrap().elements[0].clone();
     let request = PendingRequest {
+        boundary_retry_order: Vec::new(),
         id: Uuid::new_v4(),
         text: "Make the text larger".into(),
         attachments: vec![],

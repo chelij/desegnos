@@ -61,6 +61,7 @@ fn setup() -> (Project, Uuid, Uuid, Uuid) {
         &project,
         Command::AddRequest {
             request: PendingRequest {
+                boundary_retry_order: Vec::new(),
                 id: Uuid::new_v4(),
                 text: "Fill this box with a headline".into(),
                 attachments: vec![],
@@ -625,6 +626,7 @@ fn set_behaviour_rejects_boundary_without_a_boundary_request_and_oversized_text(
 fn a_layer_keeps_one_pending_request() {
     let (project, page, target, _) = setup();
     let ask = |text: &str| PendingRequest {
+        boundary_retry_order: Vec::new(),
         id: Uuid::new_v4(),
         text: text.into(),
         attachments: vec![],
@@ -657,6 +659,7 @@ fn add_request(project: &Project, text: &str, targets: Vec<RequestTarget>) -> Pr
         project,
         Command::AddRequest {
             request: PendingRequest {
+                boundary_retry_order: Vec::new(),
                 id: Uuid::new_v4(),
                 text: text.into(),
                 attachments: vec![],
@@ -998,6 +1001,7 @@ fn a_boundary_behaviour_from_a_generation_reply_is_planned_for_export() {
     let page = project.pages[0].clone();
     let request = Uuid::new_v4();
     project.requests.push(PendingRequest {
+        boundary_retry_order: Vec::new(),
         id: request,
         text: "Build the full home page and make every interactive part work.".into(),
         attachments: vec![],
@@ -1047,7 +1051,7 @@ fn a_boundary_behaviour_from_a_generation_reply_is_planned_for_export() {
 // The model can echo the boundary's page id where null means the request boundary. A page is
 // not a layer, so it means the same page-wide behaviour instead of rejecting the reply.
 #[test]
-fn a_boundary_behaviour_that_names_its_page_id_is_normalized_to_the_boundary() {
+fn a_boundary_behaviour_that_names_its_page_id_targets_the_boundary() {
     let (project, page, request) = blank_page_request(None);
     let snapshot = project.prepare_requirements().unwrap();
     let mut reply = boundary_candidate(
@@ -1055,15 +1059,15 @@ fn a_boundary_behaviour_that_names_its_page_id_is_normalized_to_the_boundary() {
         request,
         json!([{"kind": "setBehaviour", "elementId": page, "behaviour": "Tick every second"}]),
     );
-    assert!(reply.validate(&snapshot, &project).is_err());
+    reply.validate(&snapshot, &project).unwrap();
 
     reply.normalize_boundary_anchors(&project);
     assert!(matches!(
         reply.requests[0].operations.as_slice(),
         [ElementOperation::SetBehaviour {
-            element_id: None,
+            element_id: Some(id),
             ..
-        }]
+        }] if *id == page
     ));
     reply.validate(&snapshot, &project).unwrap();
     let applied =
@@ -1254,6 +1258,7 @@ fn several_boundary_behaviours_in_one_reply_all_survive() {
     // A later generation still replaces the page's behaviour rather than piling onto it.
     let mut next = applied.clone();
     next.requests.push(PendingRequest {
+        boundary_retry_order: Vec::new(),
         id: Uuid::new_v4(),
         text: "Rework the interactions.".into(),
         attachments: vec![],
@@ -1277,8 +1282,12 @@ fn several_boundary_behaviours_in_one_reply_all_survive() {
 fn missing_host_echoes_and_summary_are_restored() {
     let job_id = Uuid::new_v4();
     let sha = "a".repeat(64);
-    let parsed =
-        GenerationCandidate::from_json_for_job(r#"{"requests":[]}"#, job_id, &sha).unwrap();
+    let parsed = GenerationCandidate::from_json_for_job(
+        r#"{"requests":[{"status":"implemented","operations":[]}]}"#,
+        job_id,
+        &sha,
+    )
+    .unwrap();
     assert_eq!(parsed.job_id, job_id);
     assert_eq!(parsed.requirements_sha256, sha);
     assert_eq!(parsed.summary, "");
@@ -1321,4 +1330,341 @@ fn missing_required_number_is_not_invented() {
             .unwrap_err()
             .to_string();
     assert!(error.contains("missing field `x`"), "{error}");
+}
+
+fn multiple_blank_boundaries() -> (Project, Vec<Uuid>, Uuid) {
+    let mut project = Project::new(
+        "Festival".into(),
+        Viewport {
+            width: 800,
+            height: 600,
+        },
+        Appearance::Light,
+    )
+    .unwrap();
+    for (index, name) in ["Lineup", "Tickets"].iter().enumerate() {
+        project = apply(
+            &project,
+            Command::AddCanvasPage {
+                name: (*name).into(),
+                path: format!("/{name}"),
+                size: PageSize {
+                    id: Uuid::new_v4(),
+                    label: "Desktop".into(),
+                    width: 800,
+                    height: 600,
+                    kind: BoundaryKind::Page,
+                    x: 0.0,
+                    y: 1000.0 * (index + 1) as f64,
+                },
+                moves: vec![],
+                reference: vec![],
+            },
+        );
+    }
+    let pages: Vec<_> = project.pages.iter().map(|page| page.id).collect();
+    project = add_request(
+        &project,
+        "Build page 1 Home, page 2 Lineup, page 3 Tickets.",
+        pages
+            .iter()
+            .map(|page| RequestTarget::Boundary {
+                page: *page,
+                size: None,
+            })
+            .collect(),
+    );
+    let request = project.requests[0].id;
+    (project, pages, request)
+}
+
+#[test]
+fn page_id_behaviours_select_their_boundary_in_a_multi_boundary_request() {
+    let (project, pages, request) = multiple_blank_boundaries();
+    let snapshot = project.prepare_requirements().unwrap();
+    let mut reply = boundary_candidate(
+        &snapshot,
+        request,
+        json!([
+            {"kind":"setBehaviour", "elementId":pages[0], "behaviour":"Animate the home page"},
+            {"kind":"setBehaviour", "elementId":pages[1], "behaviour":"Filter the lineup"}
+        ]),
+    );
+    reply.normalize_boundary_anchors(&project);
+    reply.validate(&snapshot, &project).unwrap();
+    let applied =
+        apply_generation_output(&project, &snapshot, &reply, &[], &BTreeMap::new()).unwrap();
+    for page_id in &pages[..2] {
+        assert!(applied.pointers.iter().any(|pointer| matches!(pointer.from,
+            PointerSource::Boundary { page_id: id, .. } if id == *page_id)));
+    }
+}
+
+#[test]
+fn one_invalid_operation_is_dropped_while_other_operations_apply() {
+    let (project, pages, request) = multiple_blank_boundaries();
+    let snapshot = project.prepare_requirements().unwrap();
+    let mut reply = boundary_candidate(
+        &snapshot,
+        request,
+        json!([
+            below_the_fold(pages[0], 0.0, 40.0, "Home"),
+            {"kind":"setBehaviour", "elementId":null, "behaviour":"Ambiguous boundary"},
+            below_the_fold(pages[1], 0.0, 40.0, "Lineup"),
+            below_the_fold(pages[2], 0.0, 40.0, "Tickets")
+        ]),
+    );
+    let mut events = vec![];
+    reply
+        .retain_valid_operations(&snapshot, &project, &mut events)
+        .unwrap();
+    assert_eq!(reply.requests[0].operations.len(), 3);
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].disposition, "dropped");
+    assert!(events[0].message.contains("one boundary"));
+    assert!(reply.can_apply(&snapshot));
+    let applied =
+        apply_generation_output(&project, &snapshot, &reply, &[], &BTreeMap::new()).unwrap();
+    for page_id in pages {
+        assert_eq!(applied.page(page_id).unwrap().elements.len(), 1);
+    }
+    assert!(applied.requests.is_empty());
+}
+
+#[test]
+fn untouched_boundaries_get_one_narrowed_follow_up_then_stop_on_an_empty_answer() {
+    let (project, pages, request) = multiple_blank_boundaries();
+    let snapshot = project.prepare_requirements().unwrap();
+    let mut reply = boundary_candidate(
+        &snapshot,
+        request,
+        json!([below_the_fold(pages[0], 0.0, 40.0, "Home")]),
+    );
+    let mut events = vec![];
+    reply
+        .retain_valid_operations(&snapshot, &project, &mut events)
+        .unwrap();
+    assert!(
+        events
+            .iter()
+            .any(|event| event.message.contains("Lineup") && event.message.contains("Tickets"))
+    );
+    let next = apply_generation_output(&project, &snapshot, &reply, &[], &BTreeMap::new()).unwrap();
+    assert_eq!(next.requests.len(), 1);
+    assert_eq!(next.requests[0].boundary_retry_order, pages);
+    assert_eq!(
+        next.requests[0].targets,
+        vec![
+            RequestTarget::Boundary {
+                page: pages[1],
+                size: None
+            },
+            RequestTarget::Boundary {
+                page: pages[2],
+                size: None
+            },
+        ]
+    );
+    // The retry marker and original page numbering survive saving and reopening.
+    let next: Project = serde_json::from_str(&serde_json::to_string(&next).unwrap()).unwrap();
+    let retry_snapshot = next.prepare_requirements().unwrap();
+    assert!(retry_snapshot.markdown.contains("boundaryOrder"));
+    let mut empty = boundary_candidate(&retry_snapshot, request, json!([]));
+    let mut events = vec![];
+    empty
+        .retain_valid_operations(&retry_snapshot, &next, &mut events)
+        .unwrap();
+    assert!(
+        events
+            .iter()
+            .any(|event| event.message.contains("Stopped retrying"))
+    );
+    let applied =
+        apply_generation_output(&next, &retry_snapshot, &empty, &[], &BTreeMap::new()).unwrap();
+    assert!(applied.requests.is_empty());
+    assert_eq!(applied.page(pages[0]).unwrap().elements.len(), 1);
+    assert!(applied.page(pages[1]).unwrap().elements.is_empty());
+    assert!(applied.page(pages[2]).unwrap().elements.is_empty());
+}
+
+#[test]
+fn a_follow_up_cannot_duplicate_content_on_an_already_completed_boundary() {
+    let (project, pages, request) = multiple_blank_boundaries();
+    let snapshot = project.prepare_requirements().unwrap();
+    let first = boundary_candidate(
+        &snapshot,
+        request,
+        json!([below_the_fold(pages[0], 0.0, 40.0, "Home")]),
+    );
+    let next = apply_generation_output(&project, &snapshot, &first, &[], &BTreeMap::new()).unwrap();
+    let snapshot = next.prepare_requirements().unwrap();
+    let mut reply = boundary_candidate(
+        &snapshot,
+        request,
+        json!([
+            below_the_fold(pages[0], 0.0, 40.0, "Duplicate home"),
+            below_the_fold(pages[1], 0.0, 40.0, "Lineup"),
+            below_the_fold(pages[2], 0.0, 40.0, "Tickets")
+        ]),
+    );
+    let mut events = vec![];
+    reply
+        .retain_valid_operations(&snapshot, &next, &mut events)
+        .unwrap();
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.disposition == "dropped")
+            .count(),
+        1
+    );
+    let applied = apply_generation_output(&next, &snapshot, &reply, &[], &BTreeMap::new()).unwrap();
+    assert_eq!(applied.page(pages[0]).unwrap().elements.len(), 1);
+    assert!(applied.requests.is_empty());
+}
+
+#[test]
+fn a_failed_multi_patch_update_rolls_back_all_its_patches() {
+    // Use an existing scoped layer and a separate unknown patch target.
+    let (project_with_layer, page, target, outsider) = setup();
+    let snapshot = project_with_layer.prepare_requirements().unwrap();
+    let mut reply = candidate(&snapshot, target, page, project_with_layer.pointers[0].id);
+    reply.requests[0].operations = serde_json::from_value(json!([
+        {"kind":"update", "patches":[{"elementId":target,"text":"Must roll back"},{"elementId":outsider,"text":"Out of scope"}]},
+        {"kind":"setBehaviour", "elementId":target,"behaviour":"Animate"}
+    ])).unwrap();
+    let mut events = vec![];
+    reply
+        .retain_valid_operations(&snapshot, &project_with_layer, &mut events)
+        .unwrap();
+    let applied = apply_generation_output(
+        &project_with_layer,
+        &snapshot,
+        &reply,
+        &[],
+        &BTreeMap::new(),
+    )
+    .unwrap();
+    assert_eq!(
+        applied.element(target).unwrap().1.text,
+        project_with_layer.element(target).unwrap().1.text
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.disposition == "dropped")
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn operations_depending_on_a_missing_parent_are_dropped_without_losing_other_content() {
+    let (mut project, pages, request) = multiple_blank_boundaries();
+    let parent = Uuid::new_v4();
+    project = apply(
+        &project,
+        Command::InsertElements {
+            page_id: pages[0],
+            parent_id: None,
+            index: 0,
+            elements: vec![element(
+                parent,
+                ElementKind::Box,
+                rect(0.0, 0.0, 800.0, 200.0),
+            )],
+            picture_data_uri: None,
+            size_id: None,
+        },
+    );
+    let snapshot = project.prepare_requirements().unwrap();
+    let mut reply = boundary_candidate(
+        &snapshot,
+        request,
+        json!([
+            {"kind":"remove", "elementId":parent},
+            {"kind":"insert", "parentId":parent, "element":{"kind":"text","rect":rect(0.0,0.0,100.0,40.0),"text":"Missing parent"}},
+            below_the_fold(pages[1],0.0,40.0,"Lineup")
+        ]),
+    );
+    let mut events = vec![];
+    reply
+        .retain_valid_operations(&snapshot, &project, &mut events)
+        .unwrap();
+    assert_eq!(reply.requests[0].operations.len(), 2);
+    assert!(
+        events
+            .iter()
+            .any(|event| event.disposition == "dropped"
+                && event.message.contains("no longer exists"))
+    );
+    let applied =
+        apply_generation_output(&project, &snapshot, &reply, &[], &BTreeMap::new()).unwrap();
+    assert!(applied.element(parent).is_none());
+    assert_eq!(applied.page(pages[1]).unwrap().elements.len(), 1);
+}
+
+#[test]
+fn recovery_still_rejects_foreign_replies_and_replies_with_no_valid_operations() {
+    let (project, pages, request) = multiple_blank_boundaries();
+    let snapshot = project.prepare_requirements().unwrap();
+    let mut wrong = boundary_candidate(
+        &snapshot,
+        request,
+        json!([below_the_fold(pages[0], 0.0, 40.0, "Home")]),
+    );
+    wrong.job_id = Uuid::new_v4();
+    assert!(
+        wrong
+            .retain_valid_operations(&snapshot, &project, &mut vec![])
+            .is_err()
+    );
+    let mut invalid = boundary_candidate(
+        &snapshot,
+        request,
+        json!([
+            {"kind":"setBehaviour", "elementId":null, "behaviour":"Ambiguous"}
+        ]),
+    );
+    let mut events = vec![];
+    assert!(
+        invalid
+            .retain_valid_operations(&snapshot, &project, &mut events)
+            .is_err()
+    );
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].disposition, "dropped");
+}
+
+#[test]
+fn operation_bounds_errors_reach_recovery_instead_of_rejecting_during_json_parsing() {
+    let (project, pages, request) = multiple_blank_boundaries();
+    let snapshot = project.prepare_requirements().unwrap();
+    let original = boundary_candidate(
+        &snapshot,
+        request,
+        json!([
+            below_the_fold(pages[0], 0.0, -40.0, "Invalid size"),
+            below_the_fold(pages[1], 0.0, 40.0, "Lineup")
+        ]),
+    );
+    let mut reply = GenerationCandidate::from_json_for_job(
+        &serde_json::to_string(&original).unwrap(),
+        snapshot.job_id,
+        &snapshot.sha256,
+    )
+    .unwrap();
+    let mut events = vec![];
+    reply
+        .retain_valid_operations(&snapshot, &project, &mut events)
+        .unwrap();
+    assert_eq!(reply.requests[0].operations.len(), 1);
+    assert!(
+        events
+            .iter()
+            .any(|event| event.disposition == "dropped" && event.message.contains("non-negative"))
+    );
+    let applied =
+        apply_generation_output(&project, &snapshot, &reply, &[], &BTreeMap::new()).unwrap();
+    assert_eq!(applied.page(pages[1]).unwrap().elements.len(), 1);
 }

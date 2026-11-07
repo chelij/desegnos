@@ -1,6 +1,6 @@
 import { ProblemBanner } from './ProblemBanner.js';
 import { userError, generationError } from './userErrors.js';
-import { areaOutcome, declaredConflict, fixLabel, jobOutcome, jsonBlocks, staleResult, staleResultMessage } from './generationProblems.js';
+import { areaOutcome, declaredConflict, fixLabel, generationWarnings, jobOutcome, jsonBlocks, staleResult, staleResultMessage } from './generationProblems.js';
 import { useEffect, useRef, useState } from 'react';
 import { WorkspaceSurface } from './WorkspaceSurface';
 import { Disclosure } from './Disclosure';
@@ -111,6 +111,7 @@ export function GenerationLog({ job: currentJob, operation, error, project, cont
           </div>}
           {!past && !working && !stale && (review.retryable.length > 0 || review.retryAll) && <button disabled={!!operation} onClick={() => { void controller.prepare(review.retryable.length ? review.retryable : undefined).catch(() => {}); }}>Try again</button>}
           {candidate && <p className="log-text">{candidate.summary}</p>}
+          {generationWarnings(job).length > 0 && <section aria-label="Generation warnings"><ul>{generationWarnings(job).map((warning, index) => <li key={index}><p className="log-text">{warning}</p></li>)}</ul></section>}
           {candidate?.requests.flatMap((request, requestIndex) => request.operations.map((operation, operationIndex) => operation.kind === 'setBehaviour' ? <p className="log-text" key={`${requestIndex}-${operationIndex}`}>Behaviour: {operation.behaviour}</p> : null))}
           {candidate && candidate.criticism.length > 0 && <Disclosure className="generation-feedback" summary={`Design feedback (${candidate.criticism.length})`}><ul>{candidate.criticism.map((item, index) => <li key={index}><p className="log-text">{humanText(item.message)}</p><p className="log-meta">{humanText(item.suggestion)}</p></li>)}</ul></Disclosure>}
           {!past && review.blocked.length > 0 && <section className="log-needs-input" aria-label="Needs your input">

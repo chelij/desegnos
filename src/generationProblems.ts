@@ -168,3 +168,10 @@ export function placeCallouts(items: Callout[], areas: Rect[], origin: { x: numb
   }
   return placed;
 }
+
+/// Recoverable model mistakes remain visible after the valid operations have applied.
+export function generationWarnings(job: GenerationJobView | null): string[] {
+  return (job?.validationEvents ?? [])
+    .filter(event => event.disposition === 'dropped' || event.disposition === 'warning')
+    .map(event => event.message);
+}

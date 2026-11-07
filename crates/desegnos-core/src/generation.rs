@@ -323,7 +323,7 @@ impl GenerationCandidate {
         drop_null_optional_draft_fields(&mut value);
         let candidate: Self = serde_json::from_value(value)
             .map_err(|error| Error(format!("The generation result is invalid: {error}")))?;
-        candidate.validate_bounds()?;
+        candidate.validate_reply_bounds()?;
         Ok(candidate)
     }
 
@@ -361,23 +361,12 @@ impl GenerationCandidate {
                 .into_iter()
                 .map(|operation| match operation {
                     ElementOperation::Insert {
-                        parent_id,
-                        element,
-                        ..
-                    } if boundary_pages.contains(&parent_id) => ElementOperation::InsertInBoundary {
-                        page_id: parent_id,
-                        size_id: None,
-                        element,
-                    },
-                    // The same echo in a behaviour: null is how it targets the request boundary,
-                    // and a page id is not a layer, so it means the same boundary behaviour.
-                    ElementOperation::SetBehaviour {
-                        element_id,
-                        behaviour,
-                    } if element_id.is_some_and(|id| boundary_pages.contains(&id)) => {
-                        ElementOperation::SetBehaviour {
-                            element_id: None,
-                            behaviour,
+                        parent_id, element, ..
+                    } if boundary_pages.contains(&parent_id) => {
+                        ElementOperation::InsertInBoundary {
+                            page_id: parent_id,
+                            size_id: None,
+                            element,
                         }
                     }
                     other => other,
@@ -387,6 +376,19 @@ impl GenerationCandidate {
     }
 
     pub(crate) fn validate_bounds(&self) -> Result<()> {
+        self.validate_reply_bounds()?;
+        let image_keys = self
+            .images
+            .iter()
+            .map(|image| image.key.to_lowercase())
+            .collect();
+        for request in &self.requests {
+            validate_operations(&request.operations, &image_keys)?;
+        }
+        Ok(())
+    }
+
+    fn validate_reply_bounds(&self) -> Result<()> {
         ensure(
             !self.job_id.is_nil(),
             "The generation job identifier is required.",
@@ -445,7 +447,6 @@ impl GenerationCandidate {
                 request.operations.len() <= 2048,
                 "A request supports at most 2,048 operations.",
             )?;
-            validate_operations(&request.operations, &image_keys)?;
         }
         for classification in &self.pointer_classifications {
             validate_text(&classification.comment, "Pointer comment", 16_384, false)?;
@@ -481,6 +482,138 @@ impl GenerationCandidate {
                 <= MAX_GENERATION_BYTES,
             "The generation result exceeds the 8 MiB response limit.",
         )
+    }
+
+    /// Keep valid operations in order, rolling back every failed operation atomically.
+    /// Strict validate/apply still protect all callers from unfiltered candidates.
+    pub fn retain_valid_operations(
+        &mut self,
+        snapshot: &RequirementsSnapshot,
+        project: &Project,
+        events: &mut Vec<ValidationEvent>,
+    ) -> Result<()> {
+        self.validate_reply_bounds()?;
+        let mut envelope = self.clone();
+        for outcome in &mut envelope.requests {
+            outcome.operations.clear();
+        }
+        envelope.validate(snapshot, project)?;
+        let image_keys = self
+            .images
+            .iter()
+            .map(|image| image.key.to_lowercase())
+            .collect();
+        let mut copy = project.clone();
+        copy.store_request_pictures(&snapshot.request_ids()?)?;
+        let initial_events = events.len();
+        let mut retained_count = 0;
+        let fulfilled: BTreeSet<_> = self
+            .requests
+            .iter()
+            .filter(|outcome| outcome.status == RequestStatus::Implemented)
+            .filter_map(|outcome| pending_for(project, outcome).map(|pending| pending.id))
+            .collect();
+        for index in 0..self.requests.len() {
+            let outcome = &self.requests[index];
+            if outcome.status != RequestStatus::Implemented {
+                continue;
+            }
+            let pending = pending_for(project, outcome);
+            let anchor_page = outcome
+                .element_id
+                .and_then(|id| project.element(id).map(|(page, _)| page.id));
+            let scope = scope_for(&copy, pending, anchor_page);
+            let mut sources = Vec::new();
+            let mut retained = Vec::new();
+            for (ordinal, operation) in outcome.operations.iter().enumerate() {
+                let mut trial = copy.clone();
+                let mut trial_sources = sources.clone();
+                let mut element_id = None;
+                let result = validate_operations(std::slice::from_ref(operation), &image_keys)
+                    .and_then(|()| {
+                        apply_operations_with_sources(
+                            &mut trial,
+                            &scope,
+                            outcome.element_id,
+                            std::slice::from_ref(operation),
+                            self,
+                            &BTreeMap::new(),
+                            &mut element_id,
+                            &mut trial_sources,
+                        )
+                    })
+                    .and_then(|_| {
+                        // Applying the candidate consumes these requests. Their old targets must
+                        // not make an otherwise valid remove look like a broken project.
+                        let requests = std::mem::take(&mut trial.requests);
+                        trial.requests = requests
+                            .iter()
+                            .filter(|request| !fulfilled.contains(&request.id))
+                            .cloned()
+                            .collect();
+                        let pointers = trial.pointers.clone();
+                        let result = apply_pointer_classifications(
+                            &mut trial,
+                            &self.pointer_classifications,
+                        )
+                        .and_then(|()| trial.validate());
+                        trial.pointers = pointers;
+                        trial.requests = requests;
+                        result
+                    });
+                match result {
+                    Ok(()) => {
+                        copy = trial;
+                        sources = trial_sources;
+                        retained.push(operation.clone());
+                        retained_count += 1;
+                    }
+                    Err(error) => events.push(ValidationEvent {
+                        kind: "operation".into(),
+                        disposition: "dropped".into(),
+                        element_id,
+                        message: format!(
+                            "Request {} operation {} ({}) skipped: {error}",
+                            index + 1,
+                            ordinal + 1,
+                            operation_kind(operation)
+                        ),
+                    }),
+                }
+            }
+            self.requests[index].operations = retained;
+        }
+        ensure(
+            events.len() == initial_events
+                || retained_count > 0
+                || !self.pointer_classifications.is_empty()
+                || !self.decision_proposals.is_empty(),
+            format!(
+                "No valid operations remain. {}",
+                events
+                    .iter()
+                    .map(|event| event.message.as_str())
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            ),
+        )?;
+        self.validate(snapshot, project)?;
+        for outcome in &self.requests {
+            if outcome.status == RequestStatus::Implemented
+                && let Some(pending) = pending_for(project, outcome)
+            {
+                let untouched = untouched_boundaries(project, pending, outcome);
+                if !untouched.is_empty() {
+                    events.push(ValidationEvent {
+                        kind: "boundaryCoverage".into(),
+                        disposition: "warning".into(),
+                        element_id: None,
+                        message: boundary_coverage_message(project, pending, &untouched),
+                    });
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Check the reply against the frozen request: identity, coverage, operation scope,
@@ -657,6 +790,7 @@ impl GenerationCandidate {
                 apply_request(&mut copy, page_id, outcome, self, &generated, rejected)?;
             }
         }
+        apply_pointer_classifications(&mut copy, &self.pointer_classifications)?;
         copy.validate()?;
         Ok(())
     }
@@ -1168,14 +1302,34 @@ fn apply_operations(
     generated: &BTreeMap<String, Uuid>,
     rejected: &mut Option<Uuid>,
 ) -> Result<BTreeSet<Uuid>> {
+    apply_operations_with_sources(
+        project,
+        scope,
+        anchor,
+        operations,
+        candidate,
+        generated,
+        rejected,
+        &mut Vec::new(),
+    )
+}
+
+fn apply_operations_with_sources(
+    project: &mut Project,
+    scope: &RequestScope,
+    anchor: Option<Uuid>,
+    operations: &[ElementOperation],
+    candidate: &GenerationCandidate,
+    generated: &BTreeMap<String, Uuid>,
+    rejected: &mut Option<Uuid>,
+    behaviour_sources: &mut Vec<crate::PointerSource>,
+) -> Result<BTreeSet<Uuid>> {
     let images: BTreeMap<String, String> = candidate
         .images
         .iter()
         .map(|image| (image.key.to_lowercase(), image.prompt.clone()))
         .collect();
     let mut touched = BTreeSet::new();
-    // Behaviours this reply already wrote; later ones on the same source add to them.
-    let mut behaviour_sources: Vec<crate::PointerSource> = Vec::new();
     for operation in operations {
         match operation {
             ElementOperation::ReplaceChildren { children } => {
@@ -1192,7 +1346,7 @@ fn apply_operations(
                 let parent_rect = project
                     .element(target)
                     .map(|(_, element)| element.rect)
-                    .expect("the anchor exists");
+                    .ok_or_else(|| Error("This layer no longer exists.".into()))?;
                 for element in &built {
                     if !fits(&parent_rect, &element.rect) {
                         return Err(reject(
@@ -1220,7 +1374,24 @@ fn apply_operations(
                 element_id,
                 behaviour,
             } => {
-                let (from, to) = if let Some(id) = element_id {
+                let boundary = match element_id {
+                    Some(id) if scope.boundary_pages.contains(id) => Some(*id),
+                    None => scope.behaviour_page,
+                    _ => None,
+                };
+                let (from, to) = if let Some(page_id) = boundary {
+                    project.page(page_id)?;
+                    (
+                        crate::PointerSource::Boundary {
+                            page_id,
+                            size_id: None,
+                        },
+                        crate::PointerTarget::Boundary {
+                            page_id,
+                            size_id: None,
+                        },
+                    )
+                } else if let Some(id) = element_id {
                     ensure(
                         scope.allowed.contains(id),
                         "The generation result changed a layer outside its request.",
@@ -1242,19 +1413,9 @@ fn apply_operations(
                         },
                     )
                 } else {
-                    let page_id = scope.behaviour_page.ok_or_else(|| {
-                        Error("A boundary behaviour needs a request in one boundary.".into())
-                    })?;
-                    (
-                        crate::PointerSource::Boundary {
-                            page_id,
-                            size_id: None,
-                        },
-                        crate::PointerTarget::Boundary {
-                            page_id,
-                            size_id: None,
-                        },
-                    )
+                    return Err(Error(
+                        "A boundary behaviour needs a request in one boundary.".into(),
+                    ));
                 };
                 let existing = project
                     .pointers
@@ -1527,9 +1688,125 @@ fn record_request_history(
             prompt: request.text.clone(),
             attachments: request.attachments.clone(),
             created_at: request.requested_at.clone(),
-            outcome: Some(outcome.to_string()),
+            outcome: Some(outcome.chars().take(MAX_EXPLANATION_CHARS).collect()),
             job_id: Some(job_id.to_string()),
         });
+    }
+}
+
+fn pending_for<'a>(
+    project: &'a Project,
+    outcome: &RequestOutcome,
+) -> Option<&'a crate::PendingRequest> {
+    outcome
+        .request_id
+        .and_then(|id| project.requests.iter().find(|item| item.id == id))
+        .or_else(|| {
+            outcome.element_id.and_then(|id| {
+                project.requests.iter().find(|item| {
+                    item.targets.iter().any(|target| {
+                        matches!(target,
+                crate::RequestTarget::Element { id: target_id, .. } if *target_id == id)
+                    })
+                })
+            })
+        })
+}
+
+fn operation_kind(operation: &ElementOperation) -> &'static str {
+    match operation {
+        ElementOperation::ReplaceChildren { .. } => "replaceChildren",
+        ElementOperation::SetBehaviour { .. } => "setBehaviour",
+        ElementOperation::Update { .. } => "update",
+        ElementOperation::Insert { .. } => "insert",
+        ElementOperation::Remove { .. } => "remove",
+        ElementOperation::InsertInBoundary { .. } => "insertInBoundary",
+        ElementOperation::AddReference { .. } => "addReference",
+    }
+}
+
+fn untouched_boundaries(
+    project: &Project,
+    pending: &crate::PendingRequest,
+    outcome: &RequestOutcome,
+) -> Vec<Uuid> {
+    let scope = scope_for(project, Some(pending), None);
+    let owner = |id| project.element(id).map(|(page, _)| page.id);
+    let mut received = BTreeSet::new();
+    for operation in &outcome.operations {
+        match operation {
+            ElementOperation::InsertInBoundary { page_id, .. } => {
+                received.insert(*page_id);
+            }
+            ElementOperation::SetBehaviour { element_id, .. } => {
+                received.extend(
+                    element_id
+                        .and_then(|id| {
+                            if scope.boundary_pages.contains(&id) {
+                                Some(id)
+                            } else {
+                                owner(id)
+                            }
+                        })
+                        .or_else(|| {
+                            element_id
+                                .is_none()
+                                .then_some(scope.behaviour_page)
+                                .flatten()
+                        }),
+                );
+            }
+            ElementOperation::ReplaceChildren { .. } => {
+                received.extend(outcome.element_id.and_then(owner));
+            }
+            ElementOperation::Update { patches } => {
+                received.extend(patches.iter().filter_map(|patch| owner(patch.element_id)));
+            }
+            ElementOperation::Insert { parent_id, .. } => {
+                received.extend(owner(*parent_id));
+            }
+            ElementOperation::Remove { element_id } => {
+                received.extend(owner(*element_id));
+            }
+            ElementOperation::AddReference { .. } => {}
+        }
+    }
+    pending
+        .targets
+        .iter()
+        .filter_map(|target| match target {
+            crate::RequestTarget::Boundary { page, .. }
+                if !received.contains(page)
+                    && project
+                        .page(*page)
+                        .is_ok_and(|page| page.elements.is_empty()) =>
+            {
+                Some(*page)
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+fn boundary_coverage_message(
+    project: &Project,
+    pending: &crate::PendingRequest,
+    untouched: &[Uuid],
+) -> String {
+    let names = untouched
+        .iter()
+        .filter_map(|id| project.page(*id).ok())
+        .map(|page| page.name.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    if pending.boundary_retry_order.is_empty() {
+        format!(
+            "No operations received for {names}. Kept a request for only these boundaries; Generate again to fill them."
+        )
+    } else {
+        format!(
+            "No operations received again for {names}. Stopped retrying these boundaries; the request was not completed."
+        )
     }
 }
 
@@ -1546,20 +1823,11 @@ fn apply_request(
     }
     // The reply may name the pending request; older replies name one layer. Either way the
     // request is read before it is changed so its text can become layer history.
-    let pending = request
-        .request_id
-        .and_then(|id| project.requests.iter().find(|item| item.id == id))
-        .or_else(|| {
-            request.element_id.and_then(|id| {
-                project.requests.iter().find(|item| {
-                    item.targets.iter().any(|target| match target {
-                        crate::RequestTarget::Element { id: target_id, .. } => *target_id == id,
-                        _ => false,
-                    })
-                })
-            })
-        })
-        .cloned();
+    let pending = pending_for(project, request).cloned();
+    let untouched = pending
+        .as_ref()
+        .map(|pending| untouched_boundaries(project, pending, request))
+        .unwrap_or_default();
     let anchor_page = page_id.or_else(|| {
         request
             .element_id
@@ -1581,9 +1849,57 @@ fn apply_request(
         } else {
             request.explanation.clone()
         };
+        let outcome = if untouched.is_empty() {
+            outcome
+        } else {
+            format!(
+                "{} {outcome}",
+                boundary_coverage_message(project, pending, &untouched)
+            )
+        };
         record_request_history(project, &touched, pending, &outcome, candidate.job_id);
-        // A pending request is fulfilled once its reply is applied.
         project.requests.retain(|item| item.id != pending.id);
+        if !untouched.is_empty() && pending.boundary_retry_order.is_empty() {
+            let mut remaining = pending.clone();
+            remaining.boundary_retry_order = pending
+                .targets
+                .iter()
+                .filter_map(|target| match target {
+                    crate::RequestTarget::Boundary { page, .. } => Some(*page),
+                    _ => None,
+                })
+                .collect();
+            remaining.targets.retain(|target| {
+                matches!(target,
+                crate::RequestTarget::Boundary { page, .. } if untouched.contains(page))
+            });
+            // The narrowed targets define the follow-up; an old area must not grant more scope.
+            remaining.area = None;
+            project.requests.push(remaining);
+        }
+    }
+    Ok(())
+}
+
+fn apply_pointer_classifications(
+    project: &mut Project,
+    classifications: &[PointerClassification],
+) -> Result<()> {
+    for classification in classifications {
+        let pointer = project
+            .pointers
+            .iter_mut()
+            .find(|pointer| pointer.id == classification.pointer_id)
+            .ok_or_else(|| Error("This pointer no longer exists.".into()))?;
+        if !crate::pointer_needs_classifying(pointer) {
+            continue;
+        }
+        ensure(
+            pointer.comment == classification.comment,
+            "A pointer comment changed before this result was applied.",
+        )?;
+        pointer.play = classification.action.play_action();
+        pointer.play_comment = classification.comment.clone();
     }
     Ok(())
 }
@@ -1637,22 +1953,7 @@ pub fn apply_generation_output(
         )?;
     }
     let _ = targets;
-    for classification in &candidate.pointer_classifications {
-        let pointer = next
-            .pointers
-            .iter_mut()
-            .find(|pointer| pointer.id == classification.pointer_id)
-            .ok_or_else(|| Error("This pointer no longer exists.".into()))?;
-        if !crate::pointer_needs_classifying(pointer) {
-            continue;
-        }
-        ensure(
-            pointer.comment == classification.comment,
-            "A pointer comment changed before this result was applied.",
-        )?;
-        pointer.play = classification.action.play_action();
-        pointer.play_comment = classification.comment.clone();
-    }
+    apply_pointer_classifications(&mut next, &candidate.pointer_classifications)?;
     for index in accepted_decision_indices {
         let proposal = candidate
             .decision_proposals

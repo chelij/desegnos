@@ -139,6 +139,7 @@ fn generated_attachment_picture_survives_acceptance_save_reopen_and_export() {
     let element = project.pages[0].elements[0].id;
     let request_id = Uuid::new_v4();
     project.requests.push(PendingRequest {
+        boundary_retry_order: Vec::new(),
         id: request_id,
         text: "Use my attached picture".into(),
         attachments: vec![RequestAttachment {

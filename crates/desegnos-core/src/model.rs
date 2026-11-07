@@ -300,6 +300,9 @@ pub struct PendingRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub area: Option<RequestArea>,
     pub requested_at: String,
+    /// Original boundary order on the single follow-up for untouched empty boundaries.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub boundary_retry_order: Vec<Uuid>,
 }
 
 impl PendingRequest {
@@ -334,6 +337,11 @@ impl PendingRequest {
         for target in &self.targets {
             target.validate()?;
         }
+        ensure(
+            self.boundary_retry_order.len() <= MAX_REQUEST_TARGETS
+                && self.boundary_retry_order.iter().all(|id| !id.is_nil()),
+            "A boundary follow-up needs at most 64 valid original boundaries.",
+        )?;
         if let Some(area) = &self.area {
             area.validate()?;
         }
@@ -2552,6 +2560,7 @@ impl Project {
         }
         if let Some((text, attachments)) = request {
             let request = PendingRequest {
+                boundary_retry_order: Vec::new(),
                 id: Uuid::new_v4(),
                 text,
                 attachments,

@@ -1,4 +1,5 @@
 import type { GenerationJobView } from './types';
+import { generationWarnings } from './generationProblems.js';
 
 // Automatic notices describe a generation this app session started. A job restored from the
 // saved latest generation (opening or switching to a project) stays silent; it is still in the
@@ -14,5 +15,5 @@ const statusNotices = ['prepared', 'blocked', 'failed', 'unknown', 'cancelled'];
 /// Whether the editor banner should describe this job automatically.
 export function announcesStatus(job: GenerationJobView | null, state: { owns: boolean; stopped: boolean; working: boolean }): boolean {
   if (!state.owns) return false;
-  return state.stopped || state.working || !!job && (statusNotices.includes(job.status) || !!job.candidate?.requests.some(item => item.status === 'conflict'));
+  return state.stopped || state.working || !!job && (statusNotices.includes(job.status) || (job.status === 'applied' && generationWarnings(job).length > 0) || !!job.candidate?.requests.some(item => item.status === 'conflict'));
 }

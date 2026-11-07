@@ -442,6 +442,7 @@ fn populated(mut project: Project) -> Project {
     }
     let request_target = project.pages[0].elements[0].id;
     project.requests.push(PendingRequest {
+        boundary_retry_order: Vec::new(),
         id: Uuid::new_v4(),
         text: "Make a card".into(),
         attachments: vec![],
