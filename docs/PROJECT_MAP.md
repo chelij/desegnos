@@ -69,8 +69,11 @@ test-results/                Local evidence from smoke, startup and vault runs (
 | [website.rs](../crates/desegnos-core/src/website.rs) | `website_links`, `website_assets` and `css_urls`: stylesheets, logos, pages, photos, media frames and CSS references. |
 | [website_import.rs](../crates/desegnos-core/src/website_import.rs) | `WebCapture` types and the pure conversion into pages, elements, reference notes, behaviour pointers and linked-size overrides. |
 | [export.rs](../crates/desegnos-core/src/export.rs) | Export plans, exact AI request markdown, schemas, reply parsing/validation, AI and direct bundles, manifests, pointer fingerprints and `RecordExport`. |
-| [web_codegen.rs](../crates/desegnos-core/src/web_codegen.rs) | Deterministic HTML/CSS from resolved element trees and linked sizes, packaged assets and behaviour hooks; private submodule of export. |
-| [render.rs](../crates/desegnos-core/src/render.rs) | Direct SVG/PNG/PDF rendering from the resolved tree, bundled Archivo glyph outlines and raster limits. |
+| [web_codegen.rs](../crates/desegnos-core/src/web_codegen.rs) | Deterministic HTML/CSS from resolved element trees and linked sizes, packaged assets and behaviour hooks and DOM fingerprints. |
+| [element_style.rs](../crates/desegnos-core/src/element_style.rs) | Shared element padding, clipping, text/control metrics, input hooks and font fallback policy for Rust emitters. |
+| [text_layout.rs](../crates/desegnos-core/src/text_layout.rs) | Font resolution, glyph measurement, wrapping, intrinsic sizing and persisted fit geometry. |
+| [geometry.rs](../crates/desegnos-core/src/geometry.rs) | Shared paths, points and colour parsing for layout and render emitters. |
+| [render.rs](../crates/desegnos-core/src/render.rs) | Direct SVG/PNG/PDF scene painting from resolved trees and shared text layout, with raster limits. |
 | [render/pdf.rs](../crates/desegnos-core/src/render/pdf.rs) | Minimal vector/raster PDF deck writer. No embedded font program. |
 
 ## `desegnos-storage`

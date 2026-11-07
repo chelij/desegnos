@@ -1,340 +1,19 @@
-//! Direct rendering from the resolved element tree: SVG, PNG and a slide PDF deck.
-//!
-//! Websites and app screens are built by the AI export job, but slides and images are written
-//! here without any network or browser. One scene of paths, pictures, text outlines and shadows
-//! is built once and written three ways: a standalone SVG, a PNG rasterised from that SVG, and
-//! vector paths in a PDF. Text becomes glyph outlines from the bundled Archivo, or from a system
-//! face through fontdb, so exported files never depend on a font being installed.
-//!
-//! # The rendering contract
-//!
-//! `src/projectCanvas/elements.tsx` draws the same element tree on the canvas, so both sides
-//! follow one contract. A mismatch is a bug on whichever side disagrees, and neither side may
-//! invent a look the other does not show. The canvas is the reference for interaction; this file
-//! is the reference for the numbers.
-//!
-//! **Box.** An element's rect is its border box in page pixels, measured from the top-left of the
-//! boundary. A fill covers that box and a stroke is drawn inside it, the way a CSS border is: the
-//! outline runs on the centre line of the border and the outer half is clipped away. A group
-//! draws nothing of its own; its rect is only where its children sit.
-//!
-//! **Layout.** Children are laid out by the parent's layout, in document order, inside the
-//! parent's content box (the border box inset by the drawn border width):
-//!
-//! - free: a child sits at its own rect offset from the content box.
-//! - stack: children keep their own width and height and are packed along the row or column from
-//!   the content box inset by `padding`, `gap` apart, wrapped onto a new line only when `wrap` is
-//!   set, then justified along the line and aligned across it. `stretch` behaves like `start`
-//!   because children always carry an explicit size, as they do in the canvas.
-//! - grid: children fill `columns` equal columns of the content box minus `padding`; each row is
-//!   as tall as its tallest child, never stretched to the container height.
-//!
-//! Children that do not fit overflow the parent. An element with no explicit width or height and
-//! text of its own takes the size that text needs, matching the canvas's `max-content` width and
-//! automatic height.
-//!
-//! **Typography.** Text is laid out like a run of CSS inline boxes: the family's ascent and
-//! descent fill a line box of `line-height`, with the leftover split evenly above and below, so
-//! the first baseline sits at `(lineHeight - (ascent + descent)) / 2 + ascent` below the top of
-//! the box. `font-family` is read as a CSS list: each name in turn, then a generic keyword, and
-//! `fontdb` resolves both; `sans-serif`, `system-ui` and `ui-sans-serif` mean the system sans
-//! face, `serif` and `ui-serif` the system serif, `monospace` and `ui-monospace` the system
-//! monospace, `cursive` and `fantasy` their system faces. Archivo is bundled, so the name
-//! `Archivo` always resolves to the file that ships with the app, and an unresolvable family
-//! falls back to Archivo instead of to an arbitrary installed font. Size, weight, italic, line
-//! height, letter spacing and alignment are applied as the canvas applies them: weight selects
-//! the closest face and sets the `wght` variation axis; italic selects an italic face or shears
-//! an upright fallback,
-//! letter spacing follows every character including the last, and alignment positions each line
-//! inside the text box. Text wraps at the content box width, except for the single-line controls
-//! the canvas gives `white-space: nowrap` (button, link, select, checkbox, radio). Buttons and
-//! checkbox/radio labels, links, inputs, text areas and selects follow the element's alignment.
-//!
-//! **Transforms.** `rotation` in degrees turns the element clockwise about the centre of its
-//! rect, and everything the element draws turns with it, children included; nested rotations
-//! compose. The origin is the rect's centre, which is also where CSS puts `transform-origin`.
-//!
-//! **Clipping.** Every element clips its own content to its rounded box, except boxes and groups,
-//! which let children overflow: that is the canvas's `overflow` rule. The boundary itself clips
-//! to its size. A picture fills its box like `object-fit: cover`, so it is centred and cropped,
-//! never stretched.
-//!
-//! **Effects.** `opacity` multiplies down the tree: an element's own paint, its shadow and its
-//! children are composited together and then faded as one, as CSS does. A shadow is the
-//! element's silhouette, offset by `x` and `y`, filled with its colour, softened by its blur and
-//! shaped like the element (a rounded box, or an ellipse). Blur is a CSS blur radius: the
-//! silhouettes are Gaussian blurred with a standard deviation of `blur / 2` in PNG and SVG
-//! `feGaussianBlur`. PDF has no blur primitive, so the PDF writer stands in for one with six
-//! nested silhouettes growing outwards, each at a fixed alpha, whose overlap adds back up to the
-//! shadow's colour: a soft ramp rather than a true Gaussian.
+//! Direct SVG, PNG and PDF scene painting. The canvas uses CSS border boxes, inside strokes,
+//! centred line boxes and cover-cropped images; exported scenes follow those conventions.
+//! Text becomes glyph outlines so exported documents need no installed font.
 mod pdf;
+use crate::element_style::{padding as effective_padding, text_of, wraps};
 
+pub use crate::geometry::Rgba;
+use crate::geometry::*;
+use crate::text_layout::*;
+pub use crate::text_layout::{ResolvedFont, font_families, resolve_font, standalone_face};
 use crate::{
     Element, ElementKind, ElementLayout, ElementStyle, ElementTextStyle, Error, Page, Project,
     Rect, Result, StackAlign, StackJustify, TextAlign,
 };
-use fontdb::{Database, Family, Query, Stretch, Style, Weight};
-use std::collections::BTreeMap;
-use ttf_parser::{Face, OutlineBuilder};
 
-/// Bundled Archivo, the brand typeface. SIL OFL; the notice sits beside the file.
-const ARCHIVO: &[u8] = include_bytes!("../assets/Archivo-variable.ttf");
-/// Cap raster output so a large boundary cannot exhaust memory.
-pub const MAX_RENDER_EDGE: u32 = 16_384;
-pub const MAX_RENDER_PIXELS: u64 = 64_000_000;
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Rgba {
-    pub r: u8,
-    pub g: u8,
-    pub b: u8,
-    pub a: f64,
-}
-
-impl Rgba {
-    const BLACK: Self = Self {
-        r: 0,
-        g: 0,
-        b: 0,
-        a: 1.0,
-    };
-
-    /// `#rgb`, `#rrggbb`, `#rrggbbaa` or `transparent`; the editor validates the same forms.
-    pub(crate) fn parse(value: &str) -> Option<Self> {
-        if value.eq_ignore_ascii_case("transparent") {
-            return Some(Self {
-                a: 0.0,
-                ..Self::BLACK
-            });
-        }
-        let hex = value.strip_prefix('#')?;
-        let digit = |index: usize| -> Option<u8> {
-            let byte = *hex.as_bytes().get(index)?;
-            (byte as char).to_digit(16).map(|value| value as u8)
-        };
-        let (r, g, b, a) = match hex.len() {
-            3 => (digit(0)? * 17, digit(1)? * 17, digit(2)? * 17, 1.0),
-            6 => (
-                digit(0)? * 16 + digit(1)?,
-                digit(2)? * 16 + digit(3)?,
-                digit(4)? * 16 + digit(5)?,
-                1.0,
-            ),
-            8 => (
-                digit(0)? * 16 + digit(1)?,
-                digit(2)? * 16 + digit(3)?,
-                digit(4)? * 16 + digit(5)?,
-                f64::from(digit(6)? * 16 + digit(7)?) / 255.0,
-            ),
-            _ => return None,
-        };
-        Some(Self { r, g, b, a })
-    }
-
-    pub fn svg_colour(self) -> String {
-        if self.a >= 1.0 {
-            format!("#{:02x}{:02x}{:02x}", self.r, self.g, self.b)
-        } else {
-            format!("rgba({},{},{},{:.3})", self.r, self.g, self.b, self.a)
-        }
-    }
-
-    pub fn components(self) -> (f64, f64, f64) {
-        (
-            f64::from(self.r) / 255.0,
-            f64::from(self.g) / 255.0,
-            f64::from(self.b) / 255.0,
-        )
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) struct Point {
-    pub x: f64,
-    pub y: f64,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub(crate) enum Segment {
-    Move(Point),
-    Line(Point),
-    Quad(Point, Point),
-    Cubic(Point, Point, Point),
-    Close,
-}
-
-#[derive(Debug, Clone, Default)]
-pub(crate) struct Path {
-    pub segments: Vec<Segment>,
-}
-
-impl Path {
-    fn move_to(&mut self, point: Point) -> &mut Self {
-        self.segments.push(Segment::Move(point));
-        self
-    }
-
-    fn line_to(&mut self, point: Point) -> &mut Self {
-        self.segments.push(Segment::Line(point));
-        self
-    }
-
-    fn quad_to(&mut self, control: Point, point: Point) -> &mut Self {
-        self.segments.push(Segment::Quad(control, point));
-        self
-    }
-
-    fn cubic_to(&mut self, first: Point, second: Point, point: Point) -> &mut Self {
-        self.segments.push(Segment::Cubic(first, second, point));
-        self
-    }
-
-    fn close(&mut self) -> &mut Self {
-        self.segments.push(Segment::Close);
-        self
-    }
-
-    fn svg_data(&self) -> String {
-        let mut data = String::new();
-        for segment in &self.segments {
-            match segment {
-                Segment::Move(point) => data.push_str(&format!("M{:.3} {:.3}", point.x, point.y)),
-                Segment::Line(point) => data.push_str(&format!("L{:.3} {:.3}", point.x, point.y)),
-                Segment::Quad(control, point) => data.push_str(&format!(
-                    "Q{:.3} {:.3} {:.3} {:.3}",
-                    control.x, control.y, point.x, point.y
-                )),
-                Segment::Cubic(first, second, point) => data.push_str(&format!(
-                    "C{:.3} {:.3} {:.3} {:.3} {:.3} {:.3}",
-                    first.x, first.y, second.x, second.y, point.x, point.y
-                )),
-                Segment::Close => data.push('Z'),
-            }
-        }
-        data
-    }
-
-    fn rect(rect: Rect, radius: f64) -> Self {
-        let mut path = Path::default();
-        let x = rect.x;
-        let y = rect.y;
-        let width = rect.width.max(0.0);
-        let height = rect.height.max(0.0);
-        let radius = clamp_radius(rect, radius);
-        if radius <= 0.01 || width <= 0.02 || height <= 0.02 {
-            path.move_to(Point { x, y })
-                .line_to(Point { x: x + width, y })
-                .line_to(Point {
-                    x: x + width,
-                    y: y + height,
-                })
-                .line_to(Point { x, y: y + height })
-                .close();
-            return path;
-        }
-        // Each corner is one quadratic curve through the sharp corner, matching the canvas's
-        // CSS corner radius closely enough for exported output.
-        path.move_to(Point { x: x + radius, y })
-            .line_to(Point {
-                x: x + width - radius,
-                y,
-            })
-            .quad_to(
-                Point { x: x + width, y },
-                Point {
-                    x: x + width,
-                    y: y + radius,
-                },
-            )
-            .line_to(Point {
-                x: x + width,
-                y: y + height - radius,
-            })
-            .quad_to(
-                Point {
-                    x: x + width,
-                    y: y + height,
-                },
-                Point {
-                    x: x + width - radius,
-                    y: y + height,
-                },
-            )
-            .line_to(Point {
-                x: x + radius,
-                y: y + height,
-            })
-            .quad_to(
-                Point { x, y: y + height },
-                Point {
-                    x,
-                    y: y + height - radius,
-                },
-            )
-            .line_to(Point { x, y: y + radius })
-            .quad_to(Point { x, y }, Point { x: x + radius, y });
-        path.close();
-        path
-    }
-
-    fn ellipse(rect: Rect) -> Self {
-        const KAPPA: f64 = 0.552_284_749_831;
-        let mut path = Path::default();
-        let cx = rect.x + rect.width / 2.0;
-        let cy = rect.y + rect.height / 2.0;
-        let rx = rect.width / 2.0;
-        let ry = rect.height / 2.0;
-        let ox = rx * KAPPA;
-        let oy = ry * KAPPA;
-        path.move_to(Point { x: cx + rx, y: cy })
-            .cubic_to(
-                Point {
-                    x: cx + rx,
-                    y: cy + oy,
-                },
-                Point {
-                    x: cx + ox,
-                    y: cy + ry,
-                },
-                Point { x: cx, y: cy + ry },
-            )
-            .cubic_to(
-                Point {
-                    x: cx - ox,
-                    y: cy + ry,
-                },
-                Point {
-                    x: cx - rx,
-                    y: cy + oy,
-                },
-                Point { x: cx - rx, y: cy },
-            )
-            .cubic_to(
-                Point {
-                    x: cx - rx,
-                    y: cy - oy,
-                },
-                Point {
-                    x: cx - ox,
-                    y: cy - ry,
-                },
-                Point { x: cx, y: cy - ry },
-            )
-            .cubic_to(
-                Point {
-                    x: cx + ox,
-                    y: cy - ry,
-                },
-                Point {
-                    x: cx + rx,
-                    y: cy - oy,
-                },
-                Point { x: cx + rx, y: cy },
-            )
-            .close();
-        path
-    }
-}
+pub use crate::limits::{MAX_RENDER_EDGE, MAX_RENDER_PIXELS};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Shape {
@@ -451,43 +130,6 @@ impl<'a> RenderPage<'a> {
     }
 }
 
-/// A safe file stem for an exported boundary.
-pub fn file_stem(value: &str) -> String {
-    let stem: String = value
-        .chars()
-        .map(|character| {
-            if character.is_ascii_alphanumeric() {
-                character.to_ascii_lowercase()
-            } else {
-                '-'
-            }
-        })
-        .take(64)
-        .collect();
-    let stem = stem.trim_matches('-').to_owned();
-    if stem.is_empty() {
-        "boundary".into()
-    } else {
-        stem
-    }
-}
-
-/// True when every element is a box, group, ellipse, line or text: shapes an SVG can hold
-/// without rasterising anything.
-pub fn is_vector_representable(elements: &[Element]) -> bool {
-    elements.iter().all(|element| {
-        matches!(
-            element.kind,
-            ElementKind::Box
-                | ElementKind::Group
-                | ElementKind::Ellipse
-                | ElementKind::Line
-                | ElementKind::Text
-        ) && is_vector_representable(&element.children)
-    })
-}
-
-/// A boundary as a standalone SVG document.
 pub fn boundary_svg(project: &Project, page: &Page, size_id: uuid::Uuid) -> Result<String> {
     let render = RenderPage::new(project, page, size_id)?;
     let scene = build_scene(project, &render);
@@ -501,7 +143,6 @@ pub fn boundary_png(project: &Project, page: &Page, size_id: uuid::Uuid) -> Resu
     rasterize(&scene_svg(&scene), scene.width, scene.height)
 }
 
-/// One PDF deck with one page per slide, in the order given.
 pub fn slide_pdf(project: &Project, slides: &[RenderPage<'_>]) -> Result<Vec<u8>> {
     if slides.is_empty() {
         return Err(Error("No slide boundaries are included.".into()));
@@ -510,7 +151,7 @@ pub fn slide_pdf(project: &Project, slides: &[RenderPage<'_>]) -> Result<Vec<u8>
     for slide in slides {
         scenes.push(build_scene(project, slide));
     }
-    Ok(pdf::deck(&scenes))
+    pdf::deck(&scenes)
 }
 
 fn rasterize(svg: &str, width: f64, height: f64) -> Result<Vec<u8>> {
@@ -611,7 +252,7 @@ fn paint_element(
     let radius = layer_radius(element);
     let stroke = stroke_of(style);
     // The canvas lays children out in the content box, inside the element's border.
-    let content = inset(at, stroke.map_or(0.0, |(_, width)| width));
+    let content = inset(at, crate::element_style::border_width(element));
     let mut items: Vec<Item> = Vec::new();
     if let Some(shadow) = shadow_of(style, &element.kind, at, radius) {
         items.push(shadow);
@@ -675,7 +316,8 @@ fn paint_element(
     }
     if !content_items.is_empty() {
         // Boxes, groups and lines let content overflow, matching the canvas.
-        let clip = clips_content(&element.kind).then_some(Clip { rect: at, radius });
+        let clip =
+            crate::element_style::clips_content(&element.kind).then_some(Clip { rect: at, radius });
         items.push(Item::Group(Group {
             clip,
             transform: None,
@@ -687,16 +329,15 @@ fn paint_element(
         return;
     }
     let degrees = element.rotation % 360.0;
-    let transform = (degrees.abs() > 0.000_001 || element.style.flip_x || element.style.flip_y)
-        .then_some(LayerTransform {
-            sx: if element.style.flip_x { -1.0 } else { 1.0 },
-            sy: if element.style.flip_y { -1.0 } else { 1.0 },
-            degrees,
-            cx: at.x + at.width / 2.0,
-            cy: at.y + at.height / 2.0,
-            tx: 0.0,
-            ty: 0.0,
-        });
+    let transform = crate::element_style::transformed(element).then_some(LayerTransform {
+        sx: if element.style.flip_x { -1.0 } else { 1.0 },
+        sy: if element.style.flip_y { -1.0 } else { 1.0 },
+        degrees,
+        cx: at.x + at.width / 2.0,
+        cy: at.y + at.height / 2.0,
+        tx: 0.0,
+        ty: 0.0,
+    });
     out.push(Item::Group(Group {
         clip: None,
         transform,
@@ -724,7 +365,7 @@ fn paint_embedded_page(
     else {
         return;
     };
-    if stack.len() >= 3 || stack.contains(&page.id) {
+    if stack.len() >= crate::element_style::MAX_EMBED_DEPTH || stack.contains(&page.id) {
         return;
     }
     let size = page
@@ -777,7 +418,6 @@ fn paint_embedded_page(
     }));
 }
 
-/// The corner radius this layer is painted and clipped with.
 fn layer_radius(element: &Element) -> f64 {
     if element.kind == ElementKind::Ellipse {
         0.0
@@ -786,16 +426,8 @@ fn layer_radius(element: &Element) -> f64 {
     }
 }
 
-/// Whether an element's own content is cut to its box, matching the canvas's `overflow` rule.
-fn clips_content(kind: &ElementKind) -> bool {
-    !matches!(
-        kind,
-        ElementKind::Box | ElementKind::Group | ElementKind::Line
-    )
-}
-
 fn shadow_of(style: &ElementStyle, kind: &ElementKind, at: Rect, radius: f64) -> Option<Item> {
-    if matches!(kind, ElementKind::Line | ElementKind::Group) {
+    if !crate::element_style::draws_border(kind) {
         return None;
     }
     let colour = style.shadow.color.as_deref().and_then(Rgba::parse)?;
@@ -838,7 +470,7 @@ fn paint_line(scene: &mut Scene, style: &ElementStyle, at: Rect, out: &mut Vec<I
     out.push(Item::Shape(Shape {
         path_ref,
         fill: None,
-        stroke: Some((colour, style.stroke.width.max(1.0))),
+        stroke: Some((colour, crate::element_style::line_width(style.stroke.width))),
     }));
 }
 
@@ -856,7 +488,7 @@ fn paint_picture(project: &Project, element: &Element, at: Rect, out: &mut Vec<I
     }));
 }
 
-fn stroke_of(style: &ElementStyle) -> Option<(Rgba, f64)> {
+pub(crate) fn stroke_of(style: &ElementStyle) -> Option<(Rgba, f64)> {
     style
         .stroke
         .color
@@ -898,17 +530,6 @@ fn paint_ellipse(scene: &mut Scene, style: &ElementStyle, at: Rect, out: &mut Ve
     }
 }
 
-fn sized_in(fonts: &mut FontSet, element: &Element, parent: Rect) -> Rect {
-    let mut rect = element.rect;
-    if element.style.sizing.width == crate::SizingMode::Fill {
-        rect.width = (parent.width - rect.x).max(0.0);
-    }
-    if element.style.sizing.height == crate::SizingMode::Fill {
-        rect.height = (parent.height - rect.y).max(0.0);
-    }
-    resolve_auto_size(fonts, element, rect, (parent.width - rect.x).max(0.0))
-}
-
 fn paint_children(
     project: &Project,
     scene: &mut Scene,
@@ -944,13 +565,13 @@ fn paint_children(
         ElementLayout::Stack {
             direction,
             gap,
-            padding,
+            padding: _,
             align,
             justify,
             wrap,
         } => {
             let row = matches!(direction, crate::StackDirection::Row);
-            let inner = inset_sides(content, effective_padding(element, *padding));
+            let inner = inset_sides(content, effective_padding(element));
             let extent = if row { inner.width } else { inner.height };
             let cross_extent = if row { inner.height } else { inner.width };
             let mut rects: Vec<_> = children
@@ -1067,12 +688,11 @@ fn paint_children(
         ElementLayout::Grid {
             columns,
             gap,
-            padding,
+            padding: _,
         } => {
-            let inner = inset_sides(content, effective_padding(element, *padding));
+            let inner = inset_sides(content, effective_padding(element));
             let columns = *columns as usize;
-            let width =
-                ((inner.width - gap * columns.saturating_sub(1) as f64) / columns as f64).max(0.0);
+            let width = crate::element_style::grid_column_width(inner.width, columns as u32, *gap);
             let natural: Vec<f64> = children
                 .chunks(columns)
                 .map(|row| {
@@ -1113,459 +733,9 @@ fn paint_children(
     }
 }
 
-/// A rect placed at its own offset inside the parent's content box.
-fn offset(content: Rect, rect: Rect) -> Rect {
-    Rect {
-        x: content.x + rect.x,
-        y: content.y + rect.y,
-        width: rect.width,
-        height: rect.height,
-    }
-}
-
-/// The content inset a stack or grid applies: the four sides when the layer names them, else the
-/// layout's all-sides value that older projects carry.
-fn effective_padding(element: &Element, fallback: f64) -> crate::ElementPadding {
-    element.style.padding.unwrap_or(crate::ElementPadding {
-        top: fallback,
-        right: fallback,
-        bottom: fallback,
-        left: fallback,
-    })
-}
-
-/// Space offered to children, including borders, layout padding and grid column widths.
-fn child_content_rect(element: &Element, at: Rect) -> Rect {
-    let content = inset(
-        at,
-        stroke_of(&element.style).map_or(0.0, |(_, width)| width),
-    );
-    match element.layout {
-        ElementLayout::Free => content,
-        ElementLayout::Stack { padding, .. } => {
-            inset_sides(content, effective_padding(element, padding))
-        }
-        ElementLayout::Grid {
-            columns,
-            gap,
-            padding,
-        } => {
-            let mut inner = inset_sides(content, effective_padding(element, padding));
-            inner.width =
-                ((inner.width - gap * columns.saturating_sub(1) as f64) / columns as f64).max(0.0);
-            inner
-        }
-    }
-}
-
-/// A rect shrunk by each named side, never below zero.
-fn inset_sides(rect: Rect, padding: crate::ElementPadding) -> Rect {
-    let left = padding.left.max(0.0);
-    let right = padding.right.max(0.0);
-    let top = padding.top.max(0.0);
-    let bottom = padding.bottom.max(0.0);
-    Rect {
-        x: rect.x + left,
-        y: rect.y + top,
-        width: (rect.width - left - right).max(0.0),
-        height: (rect.height - top - bottom).max(0.0),
-    }
-}
-
-/// A rect shrunk by the same amount on every side.
-fn inset(rect: Rect, amount: f64) -> Rect {
-    let amount = amount.max(0.0);
-    Rect {
-        x: rect.x + amount,
-        y: rect.y + amount,
-        width: (rect.width - amount * 2.0).max(0.0),
-        height: (rect.height - amount * 2.0).max(0.0),
-    }
-}
-
-/// A rect grown by the same amount on every side.
-fn inflate(rect: Rect, amount: f64) -> Rect {
-    let amount = amount.max(0.0);
-    Rect {
-        x: rect.x - amount,
-        y: rect.y - amount,
-        width: rect.width + amount * 2.0,
-        height: rect.height + amount * 2.0,
-    }
-}
-
-fn clamp_radius(rect: Rect, radius: f64) -> f64 {
-    radius
-        .max(0.0)
-        .min(rect.width.max(0.0) / 2.0)
-        .min(rect.height.max(0.0) / 2.0)
-        .min(40_000.0)
-}
-
 // ---------------------------------------------------------------------------
 // Text
 // ---------------------------------------------------------------------------
-
-/// The text a visual element draws, if it draws any.
-fn text_of(element: &Element) -> Option<&str> {
-    match element.kind {
-        ElementKind::Text
-        | ElementKind::Button
-        | ElementKind::Link
-        | ElementKind::Input { .. }
-        | ElementKind::Textarea
-        | ElementKind::Select { .. }
-        | ElementKind::Checkbox
-        | ElementKind::Radio => Some(element.text.as_str()),
-        _ => None,
-    }
-}
-
-/// Whether a text line may wrap; the canvas gives single-line controls `white-space: nowrap`.
-fn wraps(kind: &ElementKind) -> bool {
-    !matches!(
-        kind,
-        ElementKind::Input { .. }
-            | ElementKind::Button
-            | ElementKind::Link
-            | ElementKind::Select { .. }
-            | ElementKind::Checkbox
-            | ElementKind::Radio
-    )
-}
-
-/// The height of one line box.
-fn line_height(style: &ElementTextStyle) -> f64 {
-    (style.size * style.line_height).max(style.size)
-}
-
-/// Hug text takes its natural width up to the available container space, then wraps before
-/// measuring automatic height. Fixed widths keep their editing intent.
-fn resolve_auto_size(
-    fonts: &mut FontSet,
-    element: &Element,
-    mut at: Rect,
-    available_width: f64,
-) -> Rect {
-    let sizing = &element.style.sizing;
-    let fit_width = sizing.width == crate::SizingMode::Fit;
-    let fit_height = sizing.height == crate::SizingMode::Fit;
-    if let Some(text) = text_of(element) {
-        let style = &element.style.text_style;
-        if at.width <= 0.0 || fit_width {
-            at.width = text
-                .split('\n')
-                .map(|line| line_width(fonts, line, style))
-                .fold(0.0, f64::max)
-                .max(1.0);
-        }
-        at.width = sizing.constrain(at.width, at.height).0;
-        if fit_width {
-            at.width = at.width.min(available_width.max(0.0));
-        }
-        if at.height <= 0.0 || fit_height {
-            let width = if fit_width {
-                let content = inset(
-                    at,
-                    stroke_of(&element.style).map_or(0.0, |(_, width)| width),
-                );
-                text_box(element, content).0.width
-            } else {
-                at.width
-            };
-            at.height = (wrap_text(fonts, text, style, width, wraps(&element.kind))
-                .len()
-                .max(1) as f64
-                * line_height(style))
-            .max(1.0);
-        }
-    } else if fit_width || fit_height {
-        // A Hug parent has no definite width yet: use its containing space rather than its
-        // previous stored width, so edits can both grow and shrink the intrinsic content.
-        let offered = if fit_width {
-            Rect {
-                width: sizing
-                    .max_width
-                    .map_or(available_width, |max| max.min(available_width)),
-                ..at
-            }
-        } else {
-            at
-        };
-        let inner = child_content_rect(element, offered);
-        let children: Vec<_> = element
-            .children
-            .iter()
-            .filter(|c| c.visible)
-            .map(|c| {
-                let offset = if element.layout.is_free() {
-                    c.rect.x
-                } else {
-                    0.0
-                };
-                resolve_auto_size(fonts, c, c.rect, (inner.width - offset).max(0.0))
-            })
-            .collect();
-        let (width, height) = match &element.layout {
-            ElementLayout::Free => (
-                children.iter().map(|r| r.x + r.width).fold(0.0, f64::max),
-                children.iter().map(|r| r.y + r.height).fold(0.0, f64::max),
-            ),
-            ElementLayout::Stack {
-                direction,
-                gap,
-                padding,
-                ..
-            } => {
-                let padding = effective_padding(element, *padding);
-                let sides = padding.left + padding.right;
-                let ends = padding.top + padding.bottom;
-                let gaps = gap * children.len().saturating_sub(1) as f64;
-                if *direction == crate::StackDirection::Row {
-                    (
-                        children.iter().map(|r| r.width).sum::<f64>() + gaps + sides,
-                        children.iter().map(|r| r.height).fold(0.0, f64::max) + ends,
-                    )
-                } else {
-                    (
-                        children.iter().map(|r| r.width).fold(0.0, f64::max) + sides,
-                        children.iter().map(|r| r.height).sum::<f64>() + gaps + ends,
-                    )
-                }
-            }
-            ElementLayout::Grid {
-                columns,
-                gap,
-                padding,
-            } => {
-                let padding = effective_padding(element, *padding);
-                let columns = *columns as usize;
-                (
-                    children.iter().map(|r| r.width).fold(0.0, f64::max) * columns as f64
-                        + gap * columns.saturating_sub(1) as f64
-                        + padding.left
-                        + padding.right,
-                    children
-                        .chunks(columns)
-                        .map(|row| row.iter().map(|r| r.height).fold(0.0, f64::max))
-                        .sum::<f64>()
-                        + gap * children.len().div_ceil(columns).saturating_sub(1) as f64
-                        + padding.top
-                        + padding.bottom,
-                )
-            }
-        };
-        let border = element
-            .style
-            .stroke
-            .color
-            .as_ref()
-            .map_or(0.0, |_| element.style.stroke.width * 2.0);
-        if fit_width {
-            at.width = width + border;
-        }
-        if fit_height {
-            at.height = height + border;
-        }
-    }
-    (at.width, at.height) = sizing.constrain(at.width, at.height);
-    if fit_width && text_of(element).is_some() {
-        at.width = at.width.min(available_width.max(0.0));
-    }
-    at
-}
-
-/// Persist Hug dimensions in the same transaction as content, typography and layout changes.
-/// Resolve shared styles and linked sizes before measuring, just as rendering does. Only Hug
-/// axes are written; fixed dimensions and every layer's position remain editing intent.
-/// Returns whether measurement ran, requiring validation of the resulting geometry.
-pub(crate) fn sync_fit_rects(project: &mut Project) -> bool {
-    fn has_fit(elements: &[Element]) -> bool {
-        elements.iter().any(|element| {
-            let fits = |style: &crate::ElementStyle| {
-                style.sizing.width == crate::SizingMode::Fit
-                    || style.sizing.height == crate::SizingMode::Fit
-            };
-            fits(&element.style)
-                || element
-                    .overrides
-                    .values()
-                    .any(|over| over.style.as_ref().is_some_and(fits))
-                || has_fit(&element.children)
-        })
-    }
-
-    // Fixed-only projects cannot change here. Avoid resolving/cloning every size and loading
-    // font resources on ordinary moves, inserts and unrelated project edits.
-    if !project.pages.iter().any(|page| has_fit(&page.elements))
-        && !project
-            .linked
-            .values()
-            .any(|definition| has_fit(std::slice::from_ref(&definition.master)))
-    {
-        return false;
-    }
-    fn measure_tree(fonts: &mut FontSet, elements: &mut [Element], parent: Rect, flow: bool) {
-        for element in elements {
-            let available = (parent.width - if flow { 0.0 } else { element.rect.x }).max(0.0);
-            let mut rect = if flow {
-                resolve_auto_size(fonts, element, element.rect, available)
-            } else {
-                sized_in(fonts, element, parent)
-            };
-            let inner = child_content_rect(element, rect);
-            measure_tree(
-                fonts,
-                &mut element.children,
-                inner,
-                !element.layout.is_free(),
-            );
-            // Children may have grown taller after wrapping; remeasure Hug parents afterwards.
-            rect = resolve_auto_size(fonts, element, rect, available);
-            if element.style.sizing.width == crate::SizingMode::Fit {
-                element.rect.width = rect.width;
-            }
-            if element.style.sizing.height == crate::SizingMode::Fit {
-                element.rect.height = rect.height;
-            }
-        }
-    }
-
-    fn write_tree(stored: &mut [Element], measured: &[Element], size_id: Option<uuid::Uuid>) {
-        for (element, measured) in stored.iter_mut().zip(measured) {
-            let fit_width = measured.style.sizing.width == crate::SizingMode::Fit;
-            let fit_height = measured.style.sizing.height == crate::SizingMode::Fit;
-            if fit_width || fit_height {
-                let mut rect = size_id
-                    .and_then(|id| element.overrides.get(&id).and_then(|over| over.rect))
-                    .unwrap_or(element.rect);
-                let previous = rect;
-                if fit_width {
-                    rect.width = measured.rect.width;
-                }
-                if fit_height {
-                    rect.height = measured.rect.height;
-                }
-                if rect != previous {
-                    if let Some(id) = size_id {
-                        element.overrides.entry(id).or_default().rect = Some(rect);
-                    } else {
-                        element.rect = rect;
-                    }
-                }
-            }
-            if element.link.is_none() {
-                write_tree(&mut element.children, &measured.children, size_id);
-            }
-        }
-    }
-
-    // Keep resolved font faces across edit transactions, as the canvas does.
-    thread_local! {
-        static FONTS: std::cell::RefCell<FontSet> = std::cell::RefCell::new(FontSet::new());
-    }
-    FONTS.with_borrow_mut(|fonts| {
-        let definitions: Vec<_> = project
-            .linked
-            .iter()
-            .map(|(id, definition)| {
-                let mut elements = crate::elements::resolve_elements(
-                    project,
-                    std::slice::from_ref(&definition.master),
-                );
-                crate::elements::resolve_shared_styles(project, &mut elements);
-                measure_tree(
-                    fonts,
-                    &mut elements,
-                    Rect {
-                        x: 0.0,
-                        y: 0.0,
-                        width: f64::INFINITY,
-                        height: f64::INFINITY,
-                    },
-                    false,
-                );
-                (*id, elements)
-            })
-            .collect();
-        for (id, elements) in definitions {
-            if let Some(definition) = project.linked.get_mut(&id) {
-                write_tree(
-                    std::slice::from_mut(&mut definition.master),
-                    &elements,
-                    None,
-                );
-            }
-        }
-        for index in 0..project.pages.len() {
-            let page = &project.pages[index];
-            let mut base = crate::elements::resolve_elements(project, &page.elements);
-            crate::elements::resolve_shared_styles(project, &mut base);
-            measure_tree(
-                fonts,
-                &mut base,
-                Rect {
-                    x: 0.0,
-                    y: 0.0,
-                    width: page.base_size().width as f64,
-                    height: page.base_size().height as f64,
-                },
-                false,
-            );
-            let sizes: Vec<_> = page
-                .sizes
-                .iter()
-                .map(|size| {
-                    let mut elements = crate::elements::resolve_for_size(project, page, size.id);
-                    measure_tree(
-                        fonts,
-                        &mut elements,
-                        Rect {
-                            x: 0.0,
-                            y: 0.0,
-                            width: size.width as f64,
-                            height: size.height as f64,
-                        },
-                        false,
-                    );
-                    (size.id, elements)
-                })
-                .collect();
-            let stored = &mut project.pages[index].elements;
-            write_tree(stored, &base, None);
-            for (id, elements) in sizes {
-                write_tree(stored, &elements, Some(id));
-            }
-        }
-    });
-    true
-}
-
-/// Where a text-bearing element's first line box starts, and how its lines align.
-fn text_box(element: &Element, content: Rect) -> (Rect, TextAlign) {
-    let style = &element.style.text_style;
-    let padding = match element.kind {
-        ElementKind::Textarea | ElementKind::Input { .. } | ElementKind::Select { .. } => 8.0,
-        ElementKind::Button | ElementKind::Link | ElementKind::Checkbox | ElementKind::Radio => 1.0,
-        _ => 0.0,
-    };
-    let align = style.align;
-    let height = line_height(style);
-    let top = match element.kind {
-        ElementKind::Text => content.y,
-        ElementKind::Textarea => content.y + 8.0,
-        _ => content.y + ((content.height - height) / 2.0).max(0.0),
-    };
-    (
-        Rect {
-            x: content.x + padding,
-            y: top,
-            width: (content.width - padding * 2.0).max(1.0),
-            height: content.height,
-        },
-        align,
-    )
-}
 
 fn paint_text(
     scene: &mut Scene,
@@ -1581,7 +751,9 @@ fn paint_text(
         return;
     }
     let style = &element.style.text_style;
-    let colour = Rgba::parse(&style.color).unwrap_or(Rgba::BLACK);
+    let colour = Rgba::parse(&style.color).unwrap_or_else(|| {
+        Rgba::parse(&ElementTextStyle::default().color).expect("default text colour")
+    });
     let run = Run::of(style);
     let (boxed, align) = text_box(element, content);
     let lines = wrap_text(fonts, text, style, boxed.width, wraps(&element.kind));
@@ -1635,553 +807,6 @@ fn paint_text(
     }
 }
 
-fn line_width(fonts: &mut FontSet, line: &str, style: &ElementTextStyle) -> f64 {
-    let run = Run::of(style);
-    line.chars()
-        .map(|character| fonts.advance(run, character) + style.letter_spacing)
-        .sum()
-}
-
-/// Greedy word wrapping with long words broken up, matching the canvas's `pre-wrap` text.
-fn wrap_text(
-    fonts: &mut FontSet,
-    text: &str,
-    style: &ElementTextStyle,
-    width: f64,
-    wrap: bool,
-) -> Vec<String> {
-    let run = Run::of(style);
-    let mut lines = Vec::new();
-    for paragraph in text.split('\n') {
-        if !wrap || width <= 1.0 {
-            lines.push(paragraph.to_owned());
-            continue;
-        }
-        let mut line = String::new();
-        let mut line_len = 0.0;
-        for word in paragraph.split(' ') {
-            let mut word = word.to_owned();
-            let mut word_len = line_width(fonts, &word, style);
-            let space = fonts.advance(run, ' ');
-            if line_len > 0.0 && line_len + space + word_len > width {
-                lines.push(std::mem::take(&mut line));
-                line_len = 0.0;
-            }
-            while word_len > width && word.chars().count() > 1 {
-                let mut fitting = String::new();
-                let mut fitting_len = 0.0;
-                let mut rest = String::new();
-                let mut overflowed = false;
-                for character in word.chars() {
-                    if overflowed {
-                        rest.push(character);
-                        continue;
-                    }
-                    let advance = fonts.advance(run, character);
-                    if !fitting.is_empty() && fitting_len + advance > width {
-                        overflowed = true;
-                        rest.push(character);
-                    } else {
-                        fitting.push(character);
-                        fitting_len += advance;
-                    }
-                }
-                if rest.is_empty() {
-                    word = fitting;
-                    word_len = fitting_len;
-                    break;
-                }
-                if !line.is_empty() {
-                    lines.push(std::mem::take(&mut line));
-                    line_len = 0.0;
-                }
-                lines.push(fitting);
-                word = rest;
-                word_len = line_width(fonts, &word, style);
-            }
-            if line.is_empty() {
-                line = word;
-                line_len = word_len;
-            } else {
-                line.push(' ');
-                line.push_str(&word);
-                line_len += space + word_len;
-            }
-        }
-        lines.push(line);
-    }
-    lines
-}
-
-// ---------------------------------------------------------------------------
-// Fonts
-// ---------------------------------------------------------------------------
-
-/// The exact primary face used by exports and the canvas. The ID identifies file contents
-/// and collection index, so aliases and styles selecting one face share a browser load.
-#[derive(Clone)]
-pub struct ResolvedFont {
-    pub id: String,
-    pub bytes: std::sync::Arc<Vec<u8>>,
-    pub index: u32,
-    pub bundled: bool,
-    pub fell_back: bool,
-    pub italic: bool,
-}
-
-/// Family names the editor can offer: the bundled face first, then installed families.
-/// Generic CSS families resolve through `resolve_font` and are not repeated here.
-pub fn font_families() -> Vec<String> {
-    use std::sync::{Mutex, OnceLock};
-    static FAMILIES: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
-    let families = FAMILIES.get_or_init(|| {
-        let mut database = Database::new();
-        database.load_system_fonts();
-        let mut names: Vec<String> = database
-            .faces()
-            .flat_map(|face| face.families.iter().map(|(name, _)| name.clone()))
-            .filter(|name| {
-                let name = name.trim();
-                !name.is_empty() && !name.eq_ignore_ascii_case("Archivo")
-            })
-            .collect();
-        names.sort_by_key(|name| name.to_lowercase());
-        names.dedup_by(|first, second| first.eq_ignore_ascii_case(second));
-        let mut result = vec!["Archivo".to_string()];
-        result.extend(names);
-        Mutex::new(result)
-    });
-    families
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .clone()
-}
-
-/// Resolve a CSS family list with the same database and fallback policy as the renderer.
-pub fn resolve_font(family: &str, weight: u16, italic: bool) -> ResolvedFont {
-    use std::sync::{Mutex, OnceLock};
-    type Requests = BTreeMap<(String, u16, bool), ResolvedFont>;
-    static REQUESTS: OnceLock<Mutex<Requests>> = OnceLock::new();
-    let mut requests = REQUESTS
-        .get_or_init(|| Mutex::new(BTreeMap::new()))
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    requests
-        .entry((family.to_owned(), weight, italic))
-        .or_insert_with(|| resolve_font_uncached(family, weight, italic))
-        .clone()
-}
-
-fn resolve_font_uncached(family: &str, weight: u16, italic: bool) -> ResolvedFont {
-    use sha2::{Digest, Sha256};
-    use std::sync::{Mutex, OnceLock};
-    static DATABASE: OnceLock<Mutex<(Database, BTreeMap<fontdb::ID, ResolvedFont>)>> =
-        OnceLock::new();
-    let mut database = DATABASE
-        .get_or_init(|| Mutex::new((system_fonts(), BTreeMap::new())))
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    // A missing serif or monospace family keeps its kind through the installed generic face,
-    // the same kind the web export names as its fallback.
-    let inferred = crate::export::generic_fallback(family);
-    let candidates = family
-        .split(',')
-        .chain((inferred != "sans-serif").then_some(inferred));
-    for requested in candidates {
-        let name = requested.trim().trim_matches(['"', '\'']).trim();
-        if name.eq_ignore_ascii_case("Archivo") {
-            return bundled_font(false);
-        }
-        if name.is_empty() {
-            continue;
-        }
-        let query = Query {
-            families: &[generic_family(name)],
-            weight: Weight(weight),
-            stretch: Stretch::Normal,
-            style: if italic { Style::Italic } else { Style::Normal },
-        };
-        let Some(id) = database.0.query(&query) else {
-            continue;
-        };
-        if let Some(face) = database.1.get(&id) {
-            return face.clone();
-        }
-        if let Some(face) = database.0.with_face_data(id, |bytes, index| {
-            let mut hash = Sha256::new();
-            hash.update(bytes);
-            hash.update(index.to_be_bytes());
-            ResolvedFont {
-                id: format!("{:x}", hash.finalize()),
-                bytes: std::sync::Arc::new(bytes.to_vec()),
-                index,
-                bundled: false,
-                fell_back: false,
-                italic: Face::parse(bytes, index).is_ok_and(|face| face.is_italic()),
-            }
-        }) {
-            database.1.insert(id, face.clone());
-            return face;
-        }
-    }
-    bundled_font(true)
-}
-
-/// Installed fonts with the CSS generic families pointed at real installed faces. fontdb
-/// defaults to Windows names such as Times New Roman; where those are missing it can land on
-/// a symbol font that draws Latin letters as Greek. A generic family with no installed match
-/// resolves to nothing, so the bundled Archivo stands in.
-fn system_fonts() -> Database {
-    let mut database = Database::new();
-    database.load_system_fonts();
-    let installed = |name: &str| {
-        database.faces().any(|face| {
-            face.families
-                .iter()
-                .any(|(family, _)| family.eq_ignore_ascii_case(name))
-        })
-    };
-    let pick = |candidates: &[&str]| {
-        candidates
-            .iter()
-            .find(|name| installed(name))
-            .map_or("Desegnos no generic font", |name| *name)
-            .to_owned()
-    };
-    let sans = pick(&[
-        "Arial",
-        "Helvetica",
-        "Liberation Sans",
-        "Arimo",
-        "DejaVu Sans",
-        "Noto Sans",
-        "Nimbus Sans",
-        "Cantarell",
-        "Roboto",
-        "Ubuntu",
-    ]);
-    let serif = pick(&[
-        "Times New Roman",
-        "Times",
-        "Liberation Serif",
-        "Tinos",
-        "DejaVu Serif",
-        "Noto Serif",
-        "Nimbus Roman",
-        "Georgia",
-    ]);
-    let mono = pick(&[
-        "Courier New",
-        "Menlo",
-        "Consolas",
-        "Liberation Mono",
-        "Cousine",
-        "DejaVu Sans Mono",
-        "Noto Sans Mono",
-        "Nimbus Mono PS",
-        "Ubuntu Mono",
-    ]);
-    database.set_sans_serif_family(sans.clone());
-    database.set_serif_family(serif);
-    database.set_monospace_family(mono);
-    database.set_cursive_family(sans.clone());
-    database.set_fantasy_family(sans);
-    database
-}
-
-fn bundled_font(fell_back: bool) -> ResolvedFont {
-    ResolvedFont {
-        id: "archivo".into(),
-        bytes: std::sync::Arc::new(ARCHIVO.to_vec()),
-        index: 0,
-        bundled: true,
-        fell_back,
-        italic: false,
-    }
-}
-
-/// A standalone SFNT copy of one face from a TrueType/OpenType collection. A file that is not a
-/// collection is already standalone. Browsers load only a collection's first face, so an export
-/// needs the selected member's table directory rewritten to point at its own tables.
-pub fn standalone_face(bytes: &[u8], index: u32) -> Option<Vec<u8>> {
-    if bytes.get(..4)? != b"ttcf" {
-        return Some(bytes.to_vec());
-    }
-    let read_u32 = |at| Some(u32::from_be_bytes(bytes.get(at..at + 4)?.try_into().ok()?));
-    let offset = read_u32(12 + index as usize * 4)? as usize;
-    let count = u16::from_be_bytes(bytes.get(offset + 4..offset + 6)?.try_into().ok()?) as usize;
-    let header_len = 12 + count * 16;
-    let mut result = bytes.get(offset..offset + header_len)?.to_vec();
-    for table in 0..count {
-        let at = 12 + table * 16 + 8;
-        let original = read_u32(offset + at)?;
-        result[at..at + 4].copy_from_slice(&original.checked_add(header_len as u32)?.to_be_bytes());
-    }
-    result.extend_from_slice(bytes);
-    Some(result)
-}
-
-struct FaceData {
-    bytes: Vec<u8>,
-    index: u32,
-}
-
-/// One text style's font choice: everything about a run of glyphs that does not change per
-/// character.
-#[derive(Debug, Clone, Copy)]
-struct Run<'a> {
-    family: &'a str,
-    weight: u16,
-    italic: bool,
-    size: f64,
-}
-
-impl<'a> Run<'a> {
-    fn of(style: &'a ElementTextStyle) -> Self {
-        Self {
-            family: &style.font_family,
-            weight: style.weight,
-            italic: style.italic,
-            size: style.size,
-        }
-    }
-}
-
-/// A CSS generic family keyword as the face fontdb resolves it to.
-fn generic_family(name: &str) -> Family<'_> {
-    match name.to_ascii_lowercase().as_str() {
-        "sans-serif" | "system-ui" | "ui-sans-serif" | "ui-rounded" | "-apple-system"
-        | "blinkmacsystemfont" => Family::SansSerif,
-        "serif" | "ui-serif" => Family::Serif,
-        "monospace" | "ui-monospace" => Family::Monospace,
-        "cursive" => Family::Cursive,
-        "fantasy" => Family::Fantasy,
-        _ => Family::Name(name),
-    }
-}
-
-struct FontSet {
-    faces: Vec<FaceData>,
-    database: Option<Database>,
-    /// The face each `font-family` value resolves to, in request order.
-    families: BTreeMap<(String, u16, bool), usize>,
-    resolved: BTreeMap<String, usize>,
-    /// The face that covers a character the primary face does not.
-    fallbacks: BTreeMap<(usize, char), usize>,
-}
-
-impl FontSet {
-    fn new() -> Self {
-        Self {
-            faces: vec![FaceData {
-                bytes: ARCHIVO.to_vec(),
-                index: 0,
-            }],
-            database: None,
-            families: BTreeMap::new(),
-            resolved: BTreeMap::from([("archivo".into(), 0)]),
-            fallbacks: BTreeMap::new(),
-        }
-    }
-
-    fn database(&mut self) -> &Database {
-        self.database.get_or_insert_with(|| {
-            let mut database = Database::new();
-            database.load_system_fonts();
-            database
-        })
-    }
-
-    /// The face a `font-family` value asks for: each comma-separated family in turn, generic
-    /// keywords through fontdb, and the bundled Archivo when nothing else is available.
-    fn primary(&mut self, family: &str, weight: u16, italic: bool) -> usize {
-        let key = (family.trim().to_ascii_lowercase(), weight, italic);
-        if let Some(index) = self.families.get(&key) {
-            return *index;
-        }
-        let resolved = resolve_font(family, weight, italic);
-        let index = if let Some(index) = self.resolved.get(&resolved.id) {
-            *index
-        } else {
-            self.faces.push(FaceData {
-                bytes: resolved.bytes.as_ref().clone(),
-                index: resolved.index,
-            });
-            let index = self.faces.len() - 1;
-            self.resolved.insert(resolved.id, index);
-            index
-        };
-        self.families.insert(key, index);
-        index
-    }
-
-    /// The face that draws one character: the family's own face, else a system face with the
-    /// glyph, else the family's face again so the character keeps its place in the line.
-    fn face_for(&mut self, character: char, primary: usize) -> usize {
-        if let Some(index) = self.fallbacks.get(&(primary, character)) {
-            return *index;
-        }
-        if covers(&self.faces[primary], character) {
-            return primary;
-        }
-        let database = self.database();
-        for family in [
-            Family::SansSerif,
-            Family::Serif,
-            Family::Monospace,
-            Family::Cursive,
-            Family::Fantasy,
-        ] {
-            let query = Query {
-                families: &[family],
-                weight: Weight::NORMAL,
-                stretch: Stretch::Normal,
-                style: Style::Normal,
-            };
-            let Some(id) = database.query(&query) else {
-                continue;
-            };
-            let mut found = None;
-            let _ = database.with_face_data(id, |bytes, index| {
-                let candidate = FaceData {
-                    bytes: bytes.to_vec(),
-                    index,
-                };
-                if covers(&candidate, character) {
-                    found = Some(candidate);
-                }
-            });
-            if let Some(face) = found {
-                self.faces.push(face);
-                let index = self.faces.len() - 1;
-                self.fallbacks.insert((primary, character), index);
-                return index;
-            }
-        }
-        self.fallbacks.insert((primary, character), primary);
-        primary
-    }
-
-    /// The family's ascent and its ascent plus descent in pixels: how a CSS line box measures it.
-    fn line_metrics(&mut self, run: Run<'_>) -> (f64, f64) {
-        let primary = self.primary(run.family, run.weight, run.italic);
-        let data = &self.faces[primary];
-        let Ok(face) = Face::parse(&data.bytes, data.index) else {
-            return (run.size * 0.8, run.size);
-        };
-        let units = f64::from(face.units_per_em().max(1));
-        let ascent = f64::from(face.ascender()) / units * run.size;
-        let descent = f64::from(face.descender()) / units * run.size;
-        (ascent, (ascent - descent).max(run.size * 0.5))
-    }
-
-    fn advance(&mut self, run: Run<'_>, character: char) -> f64 {
-        let primary = self.primary(run.family, run.weight, run.italic);
-        let face_index = self.face_for(character, primary);
-        let data = &self.faces[face_index];
-        let Ok(mut face) = Face::parse(&data.bytes, data.index) else {
-            return run.size * 0.5;
-        };
-        let _ = face.set_variation(ttf_parser::Tag::from_bytes(b"wght"), f32::from(run.weight));
-        let units = f64::from(face.units_per_em().max(1));
-        let advance = face
-            .glyph_index(character)
-            .and_then(|glyph| face.glyph_hor_advance(glyph))
-            .map_or(units / 2.0, f64::from);
-        advance / units * run.size
-    }
-
-    fn glyph(
-        &mut self,
-        run: Run<'_>,
-        character: char,
-        pen: f64,
-        baseline: f64,
-    ) -> (f64, Option<Path>) {
-        let primary = self.primary(run.family, run.weight, run.italic);
-        let face_index = self.face_for(character, primary);
-        let data = &self.faces[face_index];
-        let Ok(mut face) = Face::parse(&data.bytes, data.index) else {
-            return (run.size * 0.5, None);
-        };
-        let _ = face.set_variation(ttf_parser::Tag::from_bytes(b"wght"), f32::from(run.weight));
-        let units = f64::from(face.units_per_em().max(1));
-        let Some(glyph) = face.glyph_index(character) else {
-            return (run.size * 0.5, None);
-        };
-        let advance =
-            face.glyph_hor_advance(glyph).map_or(units / 2.0, f64::from) / units * run.size;
-        let mut builder = PathBuilder {
-            path: Path::default(),
-            pen,
-            baseline,
-            scale: run.size / units,
-            italic: run.italic && !face.is_italic(),
-        };
-        let outline = face.outline_glyph(glyph, &mut builder).is_some();
-        (advance, if outline { Some(builder.path) } else { None })
-    }
-}
-
-fn covers(face: &FaceData, character: char) -> bool {
-    Face::parse(&face.bytes, face.index).is_ok_and(|face| face.glyph_index(character).is_some())
-}
-
-struct PathBuilder {
-    path: Path,
-    pen: f64,
-    baseline: f64,
-    scale: f64,
-    italic: bool,
-}
-
-impl PathBuilder {
-    fn map(&self, x: f32, y: f32) -> Point {
-        let x = f64::from(x) * self.scale;
-        let y = f64::from(y) * self.scale;
-        let screen_y = self.baseline - y;
-        let shear = if self.italic { 0.2 * y } else { 0.0 };
-        Point {
-            x: self.pen + x + shear,
-            y: screen_y,
-        }
-    }
-}
-
-impl OutlineBuilder for PathBuilder {
-    fn move_to(&mut self, x: f32, y: f32) {
-        let point = self.map(x, y);
-        self.path.move_to(point);
-    }
-
-    fn line_to(&mut self, x: f32, y: f32) {
-        let point = self.map(x, y);
-        self.path.line_to(point);
-    }
-
-    fn quad_to(&mut self, x1: f32, y1: f32, x: f32, y: f32) {
-        let control = self.map(x1, y1);
-        let point = self.map(x, y);
-        self.path.quad_to(control, point);
-    }
-
-    fn curve_to(&mut self, x1: f32, y1: f32, x2: f32, y2: f32, x: f32, y: f32) {
-        let first = self.map(x1, y1);
-        let second = self.map(x2, y2);
-        let point = self.map(x, y);
-        self.path.cubic_to(first, second, point);
-    }
-
-    fn close(&mut self) {
-        self.path.close();
-    }
-}
-
-// ---------------------------------------------------------------------------
-// SVG
-// ---------------------------------------------------------------------------
-
-/// A shadow filter's region and its Gaussian standard deviation.
 struct Blur {
     region: Rect,
     sigma: f64,
@@ -2390,45 +1015,12 @@ fn write_items(svg: &mut String, scene: &Scene, items: &[Item], ids: &mut SvgIds
     }
 }
 
-/// Uses exactly the same font advances and word wrapping as canvas fit-text.
-pub(crate) struct ResponsiveTextMeasure(FontSet, crate::ProjectStyles, f64);
-impl ResponsiveTextMeasure {
-    pub(crate) fn new(styles: crate::ProjectStyles) -> Self {
-        Self(FontSet::new(), styles, f64::INFINITY)
-    }
-    /// The width of the size being adapted; display text never grows past a share of it.
-    pub(crate) fn set_viewport(&mut self, width: f64) {
-        self.2 = width;
-    }
-    pub(crate) fn viewport(&self) -> f64 {
-        self.2
-    }
-    pub(crate) fn resolve_style(&self, base: &crate::ElementStyle) -> crate::ElementStyle {
-        let mut style = base.clone();
-        self.1.resolve(&mut style);
-        style
-    }
-    pub(crate) fn height(&mut self, element: &Element, style: &crate::ElementStyle, width: f64) -> f64 {
-        let mut measured = element.clone();
-        measured.style = style.clone();
-        let content = text_box(&measured, Rect { x: 0.0, y: 0.0, width, height: 1.0 }).0;
-        wrap_text(&mut self.0, &element.text, &style.text_style, content.width, wraps(&element.kind))
-            .len().max(1) as f64 * line_height(&style.text_style) + 4.0
-    }
-    /// The width the text needs on one line at this style, padding included.
-    pub(crate) fn natural_width(&mut self, element: &Element, style: &crate::ElementStyle) -> f64 {
-        let mut measured = element.clone();
-        measured.style = style.clone();
-        let (content, _) = text_box(&measured, Rect { x: 0.0, y: 0.0, width: 100_000.0, height: 1.0 });
-        let padding = 100_000.0 - content.width;
-        element.text.lines().map(|line| line_width(&mut self.0, line, &style.text_style)).fold(0.0, f64::max)
-            + padding + 2.0
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fontdb::{Family, Query, Stretch, Style, Weight};
+    use ttf_parser::Face;
+    const ARCHIVO: &[u8] = include_bytes!("../assets/Archivo-variable.ttf");
 
     #[test]
     fn boundary_background_is_painted_in_svg_png_and_pdf() {
@@ -2697,7 +1289,7 @@ mod tests {
             alpha: 0.5,
             items: vec![child],
         }));
-        let pdf = pdf::deck(&[page]);
+        let pdf = pdf::deck(&[page]).unwrap();
         assert!(pdf.starts_with(b"%PDF-1."));
         assert!(pdf.windows(6).any(|window| window == b"%%EOF\n"));
         let content = String::from_utf8_lossy(&pdf);
@@ -3010,7 +1602,10 @@ mod tests {
             control.kind = kind;
             let measured = sized_in(&mut fonts, &control, rect(0.0, 0.0, 390.0, 844.0));
             assert_eq!(measured.width, 286.0);
-            assert_eq!(measured.height, line_height(&control.style.text_style));
+            assert_eq!(
+                measured.height,
+                line_height(&control.style.text_style).ceil() + 1.0
+            );
         }
         let mut fixed = project.pages[0].elements[0].children[0].clone();
         fixed.style.sizing.width = crate::SizingMode::Fixed;

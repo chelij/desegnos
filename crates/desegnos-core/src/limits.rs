@@ -150,3 +150,7 @@ pub const MAX_IMPORTED_ITEMS: usize = 64;
 pub const AI_PREVIEW_BYTES: usize = 48 * 1024;
 pub const AI_PREVIEW_TOKEN_RESERVE: u64 = 512;
 pub const AI_PREVIEW_EDGE: u32 = 512;
+
+pub const MAX_REQUIREMENTS_BYTES: usize = 8 * 1024 * 1024;
+pub const MAX_RENDER_EDGE: u32 = 16_384;
+pub const MAX_RENDER_PIXELS: u64 = 64_000_000;

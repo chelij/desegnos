@@ -1,3 +1,7 @@
+mod web_codegen;
+mod geometry;
+mod text_layout;
+mod element_style;
 mod adapt;
 mod attachments;
 mod commands;
@@ -50,12 +54,13 @@ pub use export::{
     ExportReplyPage, ExportReplyPointer, ExportReplyShared, MAX_EXPORT_BYTES,
     MAX_EXPORT_FILE_BYTES, MAX_EXPORT_FILES, WebsiteExport, ai_export_bundle,
     behaviour_fingerprint, direct_export_bundle, export_manifest, export_schema, included_pages,
-    page_file, parse_comment_reply, parse_export_reply, plan_comment, plan_export, plan_snapshot,
+    file_stem, is_vector_representable, page_file, parse_comment_reply, parse_export_reply, plan_comment, plan_export, plan_snapshot,
     pointer_fingerprints, preview_page_ids, reused_export_behaviour_count, slide_order,
     validate_behaviours, validate_export_reply,
 };
 pub use generation::{
     ClassifiedAction, DecisionProposal, DesignCriticism, ElementDraft, ElementOperation,
+    GenerationExpectations, GenerationValidationError, ValidationFailureKind,
     ElementUpdate, GeneratedImage, GenerationCandidate, MAX_APPLIED_JOBS, MAX_DECISION_PROPOSALS,
     MAX_DESIGN_CRITICISMS, MAX_GENERATED_IMAGES, MAX_GENERATION_BYTES, MAX_GENERATION_REQUESTS,
     MAX_POINTER_CLASSIFICATIONS, MAX_REQUIREMENTS_BYTES, PointerClassification, ReferenceDraft,
@@ -97,7 +102,7 @@ pub use pointers::{
 pub use project_assets::{PROJECT_ASSET_SCHEME, project_asset_reference};
 pub use render::{
     MAX_RENDER_EDGE, MAX_RENDER_PIXELS, RenderPage, ResolvedFont, Rgba, Scene, boundary_png,
-    boundary_svg, file_stem, font_families, is_vector_representable, resolve_font, slide_pdf,
+    boundary_svg, font_families, resolve_font, slide_pdf,
     standalone_face,
 };
 pub use request_history::{

@@ -12,20 +12,24 @@ pub struct WebsiteLinks {
 const MAX_STYLESHEETS: usize = 4;
 const MAX_LOGOS: usize = 6;
 
+const MAX_PHOTOS: usize = 32;
+const MAX_PAGES: usize = 128;
+fn push_url(list: &mut Vec<String>, value: Option<&str>, limit: usize, fragments: bool) {
+    if let Some(value) = value.map(str::trim).filter(|value| {
+        !value.is_empty() && !value.starts_with("data:") && (fragments || !value.starts_with('#'))
+    }) && list.len() < limit
+        && !list.iter().any(|existing| existing == value)
+    {
+        list.push(value.to_owned());
+    }
+}
+
 /// Logo-like images first (by name, alt text, class or id), then icons and the social preview image.
 pub fn website_links(html: &str) -> WebsiteLinks {
     let doc = Document::from(html);
     let mut links = WebsiteLinks::default();
-    let push = |list: &mut Vec<String>, value: Option<&str>, limit: usize| {
-        if let Some(value) = value
-            .map(str::trim)
-            .filter(|value| !value.is_empty() && !value.starts_with("data:"))
-            && list.len() < limit
-            && !list.iter().any(|existing| existing == value)
-        {
-            list.push(value.to_owned());
-        }
-    };
+    let push =
+        |list: &mut Vec<String>, value: Option<&str>, limit| push_url(list, value, limit, true);
     for node in doc.select("link[href]").nodes() {
         let rel = node
             .attr("rel")
@@ -45,10 +49,11 @@ pub fn website_links(html: &str) -> WebsiteLinks {
             .filter_map(|name| node.attr(name).map(|value| value.to_ascii_lowercase()))
             .collect::<Vec<_>>()
             .join(" ");
-        if !hint.contains("logo") && !hint.contains("brand") {
-            push(&mut links.photos, node.attr("src").as_deref(), 32);
+        let logo = hint.contains("logo") || hint.contains("brand");
+        if !logo {
+            push(&mut links.photos, node.attr("src").as_deref(), MAX_PHOTOS);
         }
-        if hint.contains("logo") || hint.contains("brand") {
+        if logo {
             push(&mut links.logos, node.attr("src").as_deref(), MAX_LOGOS);
         }
     }
@@ -68,7 +73,7 @@ pub fn website_links(html: &str) -> WebsiteLinks {
         push(&mut links.logos, node.attr("content").as_deref(), MAX_LOGOS);
     }
     for node in doc.select("a[href]").nodes() {
-        push(&mut links.pages, node.attr("href").as_deref(), 128);
+        push(&mut links.pages, node.attr("href").as_deref(), MAX_PAGES);
     }
     links
 }
@@ -89,14 +94,8 @@ pub struct WebsiteAssets {
 pub fn website_assets(html: &str) -> WebsiteAssets {
     let doc = Document::from(html);
     let mut assets = WebsiteAssets::default();
-    let push = |list: &mut Vec<String>, value: Option<&str>| {
-        if let Some(value) = value.map(str::trim).filter(|value| {
-            !value.is_empty() && !value.starts_with("data:") && !value.starts_with('#')
-        }) && !list.iter().any(|existing| existing == value)
-        {
-            list.push(value.to_owned());
-        }
-    };
+    let push =
+        |list: &mut Vec<String>, value: Option<&str>| push_url(list, value, usize::MAX, false);
     for node in doc.select("link[href]").nodes() {
         let rel = node
             .attr("rel")
@@ -176,13 +175,7 @@ pub fn css_urls(css: &str) -> Vec<String> {
         rest = &rest[index + 4..];
         let Some(end) = rest.find(')') else { break };
         let value = rest[..end].trim().trim_matches(['\'', '"']).trim();
-        if !value.is_empty()
-            && !value.starts_with("data:")
-            && !value.starts_with('#')
-            && !urls.iter().any(|existing| existing == value)
-        {
-            urls.push(value.to_owned());
-        }
+        push_url(&mut urls, Some(value), usize::MAX, false);
         rest = &rest[end + 1..];
     }
     let mut rest = css;
@@ -199,9 +192,7 @@ pub fn css_urls(css: &str) -> Vec<String> {
         let quoted = &rest_trimmed[1..];
         let Some(end) = quoted.find(quote) else { break };
         let value = quoted[..end].trim();
-        if !value.is_empty() && !urls.iter().any(|existing| existing == value) {
-            urls.push(value.to_owned());
-        }
+        push_url(&mut urls, Some(value), usize::MAX, false);
         rest = &quoted[end + 1..];
     }
     urls

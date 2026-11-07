@@ -1,9 +1,46 @@
 //! Pure, deterministic website rendering. Tree order is paint order; CSS order is ID order.
-use super::*;
+use crate::element_style::generic_fallback;
+use crate::export::{
+    BEHAVIOURS_FILE, ExportBehaviour, ExportPagePlan, ExportPlan, ExportReplyPage,
+};
+use crate::{Element, Error, Project, Result};
 use crate::{
     ElementKind, ElementLayout, StackAlign, StackDirection, StackJustify, TextAlign, resolve_font,
     standalone_face,
 };
+use std::collections::{BTreeMap, BTreeSet};
+use uuid::Uuid;
+
+pub(crate) fn behaviour_structure(elements: &[Element]) -> serde_json::Value {
+    serde_json::Value::Array(
+            elements
+                .iter()
+                .map(|e| {
+                    let mut hook = serde_json::json!({
+                        "id": e.id, "kind": e.kind.label(),
+                        "inputType": match &e.kind { crate::ElementKind::Input { input_type } => Some(crate::element_style::input_type_name(input_type)), _ => None },
+                        "optionCount": match &e.kind { crate::ElementKind::Select { options } => Some(options.len()), _ => None },
+                        "children": behaviour_structure(&e.children),
+                    });
+                                    if matches!(e.kind, crate::ElementKind::Checkbox | crate::ElementKind::Radio) {
+                        hook["controlHook"] = serde_json::json!("label");
+                    }
+                    hook
+                })
+                .collect(),
+        )
+}
+
+pub(crate) fn initially_hidden_ids(elements: &[crate::Element]) -> Vec<Uuid> {
+    let mut ids = Vec::new();
+    for element in elements {
+        if !element.visible {
+            ids.push(element.id);
+        }
+        ids.extend(initially_hidden_ids(&element.children));
+    }
+    ids
+}
 
 fn escape(value: &str) -> String {
     value
@@ -30,11 +67,10 @@ fn font_family(value: &str) -> String {
         .split(',')
         .map(|family| {
             let family = family.trim().trim_matches(['\'', '"']);
-            match family.to_ascii_lowercase().as_str() {
-                "serif" | "sans-serif" | "monospace" | "system-ui" | "ui-serif"
-                | "ui-sans-serif" | "ui-monospace" | "cursive" | "fantasy" | "emoji" | "math"
-                | "fangsong" => family.to_owned(),
-                _ => css_string(family),
+            if crate::element_style::generic_keyword(family).is_some() {
+                family.to_owned()
+            } else {
+                css_string(family)
             }
         })
         .collect::<Vec<_>>()
@@ -52,47 +88,11 @@ fn fallback_family_list(family: &str) -> String {
     }
 }
 
-/// The generic family a font list falls back to when nothing in it is installed. Serif and
-/// monospace names keep their look; everything else ends as the browser's sans-serif.
-pub(crate) fn generic_fallback(family: &str) -> &'static str {
-    let lower = family.to_ascii_lowercase();
-    let without_sans = lower
-        .replace("sans-serif", "")
-        .replace("sans serif", "")
-        .replace("sansserif", "");
-    let hints = |needles: &[&str]| needles.iter().any(|needle| lower.contains(needle));
-    if hints(&["mono", "courier", "consolas", "menlo"]) {
-        "monospace"
-    } else if hints(&["times", "georgia", "garamond", "baskerville", "roman"])
-        || without_sans.contains("serif")
-    {
-        "serif"
-    } else {
-        "sans-serif"
-    }
-}
-
 /// Whether a formatted font list already ends in a concrete generic family.
 fn ends_with_generic(list: &str) -> bool {
-    list.split(',')
-        .next_back()
-        .map(|last| {
-            matches!(
-                last.trim()
-                    .trim_matches(['\'', '"'])
-                    .to_ascii_lowercase()
-                    .as_str(),
-                "serif"
-                    | "sans-serif"
-                    | "monospace"
-                    | "cursive"
-                    | "fantasy"
-                    | "emoji"
-                    | "math"
-                    | "fangsong"
-            )
-        })
-        .unwrap_or(false)
+    list.split(',').next_back().is_some_and(|last| {
+        crate::element_style::generic_keyword(last.trim().trim_matches(['\'', '"'])).is_some()
+    })
 }
 
 /// The CSS family name an embedded face publishes. It never matches an installed family, so the
@@ -170,33 +170,20 @@ fn length(value: f64) -> String {
     format!("calc({value} * var(--desegnos-unit))")
 }
 
-/// A stack or grid content inset: the four sides when the layer names them, else the layout's
-/// all-sides value that older projects and the direct renderer carry. The flag reports an inset
-/// that paints nothing, so the shared reset rule can carry it instead.
 fn padding_css(element: &Element) -> (String, bool) {
-    match &element.style.padding {
-        Some(padding) => (
-            format!(
-                "{} {} {} {}",
-                length(padding.top),
-                length(padding.right),
-                length(padding.bottom),
-                length(padding.left)
-            ),
-            [padding.top, padding.right, padding.bottom, padding.left]
-                .iter()
-                .all(|side| *side == 0.0),
+    let padding = crate::element_style::padding(element);
+    (
+        format!(
+            "{} {} {} {}",
+            length(padding.top),
+            length(padding.right),
+            length(padding.bottom),
+            length(padding.left)
         ),
-        None => {
-            let base = match &element.layout {
-                ElementLayout::Stack { padding, .. } | ElementLayout::Grid { padding, .. } => {
-                    *padding
-                }
-                ElementLayout::Free => 0.0,
-            };
-            (length(base), base == 0.0)
-        }
-    }
+        [padding.top, padding.right, padding.bottom, padding.left]
+            .iter()
+            .all(|side| *side == 0.0),
+    )
 }
 fn class(id: Uuid) -> String {
     format!("d-{}", id.simple())
@@ -248,7 +235,8 @@ fn tag_name(element: &Element) -> &'static str {
         Image => "img",
         Button => "button",
         Link => "a",
-        Input { .. } | Checkbox | Radio => "input",
+        Input { .. } => "input",
+        Checkbox | Radio => "label",
         Textarea => "textarea",
         Select { .. } => "select",
         Video => "video",
@@ -314,21 +302,13 @@ fn markup(
         Button if tag != "a" => out.push_str(" type=\"button\""),
         Link => {}
         Input { input_type } => {
-            let input = serde_json::to_value(input_type).unwrap_or_default();
+            let input = crate::element_style::input_type_name(input_type);
             out.push_str(&format!(
                 " type=\"{}\" placeholder=\"{}\" aria-label=\"{label}\"",
-                input.as_str().unwrap_or("text"),
+                input,
                 escape(&element.text)
             ));
         }
-        Checkbox | Radio => out.push_str(&format!(
-            " type=\"{}\" aria-label=\"{label}\"",
-            if matches!(element.kind, Checkbox) {
-                "checkbox"
-            } else {
-                "radio"
-            }
-        )),
         Video | Audio => out.push_str(&format!(
             " controls src=\"{}\"",
             safe_url(element.url.as_deref())
@@ -340,19 +320,21 @@ fn markup(
                 out.push_str(&format!(" sandbox=\"\" title=\"{label}\""));
             } else {
                 // A project page frames its exported file as trusted output, so its behaviours run.
-                let own = page_target(url, plan).is_some();
-                out.push_str(&format!(
-                    " sandbox=\"{}\" title=\"{label}\" src=\"{}\"",
-                    if own { "allow-scripts" } else { "" },
-                    link_href(element, plan)
-                ));
+                if let Some(page) = page_target(url, plan) {
+                    out.push_str(&format!(" sandbox=\"allow-scripts\" title=\"{label}\" data-desegnos-embed-page=\"{}\" data-desegnos-embed-src=\"{}\"", page.page_id, link_href(element, plan)));
+                } else {
+                    out.push_str(&format!(
+                        " sandbox=\"\" title=\"{label}\" src=\"{}\"",
+                        link_href(element, plan)
+                    ));
+                }
             }
         }
         Textarea | Select { .. } => out.push_str(&format!(" aria-label=\"{label}\"")),
         _ => {}
     }
     out.push('>');
-    if matches!(element.kind, Image | Input { .. } | Checkbox | Radio) {
+    if matches!(element.kind, Image | Input { .. }) {
         out.push('\n');
         return;
     }
@@ -386,7 +368,7 @@ fn markup(
                     .as_deref()
                     .unwrap_or(&element.style.text_style.color),
             );
-            out.push_str(&format!("<svg width=\"100%\" height=\"100%\" viewBox=\"0 0 {width} {height}\" preserveAspectRatio=\"none\" aria-hidden=\"true\" style=\"display:block;overflow:visible\"><line x1=\"0\" y1=\"{}\" x2=\"{width}\" y2=\"{}\" stroke=\"{colour}\" stroke-width=\"{}\"/></svg>", height / 2.0, height / 2.0, element.style.stroke.width.max(1.0)));
+            out.push_str(&format!("<svg width=\"100%\" height=\"100%\" viewBox=\"0 0 {width} {height}\" preserveAspectRatio=\"none\" aria-hidden=\"true\" style=\"display:block;overflow:visible\"><line x1=\"0\" y1=\"{}\" x2=\"{width}\" y2=\"{}\" stroke=\"{colour}\" stroke-width=\"{}\"/></svg>", height / 2.0, height / 2.0, crate::element_style::line_width(element.style.stroke.width)));
         }
         Code { language, source } => out.push_str(&format!(
             "<code data-language=\"{}\">{}</code>",
@@ -405,12 +387,58 @@ fn markup(
 /// place: the common rule already sets it, so a size restates it only to undo a base size.
 struct Declarations {
     entries: Vec<(String, String, bool)>,
+    defaults: BTreeMap<String, String>,
+}
+
+fn common_declarations(fonts: &mut Fonts) -> BTreeMap<String, String> {
+    let text = crate::ElementTextStyle::default();
+    let mut defaults: BTreeMap<String, String> = [
+        ("box-sizing", "border-box"),
+        ("display", "block"),
+        ("margin", "0"),
+        ("padding", "0"),
+        ("min-width", "0"),
+        ("flex", "0 0 auto"),
+        ("white-space", "pre-wrap"),
+        ("overflow-wrap", "break-word"),
+        ("position", "relative"),
+        ("transform-origin", "center"),
+        ("background", "transparent"),
+        ("border", "0 solid transparent"),
+        ("opacity", "1"),
+        ("transform", "none"),
+        ("box-shadow", "none"),
+        ("font-style", "normal"),
+        ("text-align", "left"),
+        ("flex-direction", "row"),
+        ("justify-content", "flex-start"),
+        ("flex-wrap", "nowrap"),
+        ("grid-auto-rows", "auto"),
+        ("overflow", "visible"),
+    ]
+    .into_iter()
+    .map(|(key, value)| (key.into(), value.into()))
+    .collect();
+    for key in ["left", "top", "border-radius", "gap"] {
+        defaults.insert(key.into(), length(0.0));
+    }
+    defaults.insert("color".into(), text.color);
+    defaults.insert(
+        "font-family".into(),
+        fonts.family(&text.font_family, text.weight, text.italic),
+    );
+    defaults.insert("font-size".into(), length(text.size));
+    defaults.insert("font-weight".into(), text.weight.to_string());
+    defaults.insert("line-height".into(), text.line_height.to_string());
+    defaults.insert("letter-spacing".into(), length(text.letter_spacing));
+    defaults
 }
 
 impl Declarations {
     fn new() -> Self {
         Self {
             entries: Vec::new(),
+            defaults: BTreeMap::new(),
         }
     }
 
@@ -419,10 +447,12 @@ impl Declarations {
     }
 
     fn reset(&mut self, property: impl Into<String>, value: impl Into<String>) {
-        self.entries.push((property.into(), value.into(), true));
+        let property = property.into();
+        let value = value.into();
+        let shared = self.defaults.get(&property) == Some(&value);
+        self.entries.push((property, value, shared));
     }
 
-    /// The last value of every property, in declaration order.
     fn effective(&self) -> Vec<(&str, &str, bool)> {
         let mut out: Vec<(&str, &str, bool)> = Vec::new();
         let mut slots: BTreeMap<&str, usize> = BTreeMap::new();
@@ -472,35 +502,14 @@ impl Declarations {
     }
 }
 
-/// Whether a colour paints anything; a missing, transparent or zero-alpha colour draws nothing.
 fn paints(colour: Option<&str>) -> bool {
     colour
         .and_then(crate::Rgba::parse)
         .is_some_and(|colour| colour.a > 0.0)
 }
 
-/// Whether a layer paints its own text; only then do its font and colour declarations matter.
 fn renders_text(element: &Element) -> bool {
-    match &element.kind {
-        // The canvas paints these kinds with the layer's text style, and an empty string still
-        // reserves the line box, so an edit never has to rewrite the stylesheet.
-        ElementKind::Text
-        | ElementKind::Button
-        | ElementKind::Link
-        | ElementKind::Input { .. }
-        | ElementKind::Textarea
-        | ElementKind::Select { .. }
-        | ElementKind::Checkbox
-        | ElementKind::Radio
-        | ElementKind::Code { .. } => true,
-        // A box, group or ellipse only paints the text it carries.
-        ElementKind::Box | ElementKind::Group | ElementKind::Ellipse => !element.text.is_empty(),
-        ElementKind::Image
-        | ElementKind::Line
-        | ElementKind::Video
-        | ElementKind::Audio
-        | ElementKind::Embed => false,
-    }
+    crate::element_style::text_of(element).is_some()
 }
 
 /// Everything one layer sets, including the values the common rule shares.
@@ -511,7 +520,6 @@ fn declarations(element: &Element, parent: &ElementLayout, fonts: &mut Fonts) ->
     let style = &element.style;
     let text = &style.text_style;
     let line = matches!(element.kind, ElementKind::Line);
-    let group = matches!(element.kind, ElementKind::Group);
     let control = matches!(element.kind, ElementKind::Checkbox | ElementKind::Radio);
     // A button or link is a text control on the canvas: a centred row rather than a block.
     let text_control = matches!(element.kind, ElementKind::Button | ElementKind::Link);
@@ -541,7 +549,15 @@ fn declarations(element: &Element, parent: &ElementLayout, fonts: &mut Fonts) ->
         "auto".into()
     };
     let mut css = Declarations::new();
-    // The common rule carries the resets, so a layer states only what differs from them.
+    css.defaults = common_declarations(fonts);
+    css.set(
+        "overflow",
+        if crate::element_style::clips_content(&element.kind) {
+            "hidden"
+        } else {
+            "visible"
+        },
+    );
     if display == "block" && matches!(tag_name(element), "div" | "pre") {
         css.reset("display", display);
     } else {
@@ -655,14 +671,16 @@ fn declarations(element: &Element, parent: &ElementLayout, fonts: &mut Fonts) ->
     if main_fill {
         css.set("flex", "1 1 0");
     } else {
-        // `flex-shrink:0` in the common rule is everything `flex:0 0 auto` sets.
         css.reset("flex", "0 0 auto");
     }
     match style.fill.as_deref().filter(|value| paints(Some(value))) {
         Some(fill) => css.set("background", fill),
         None => css.reset("background", "transparent"),
     }
-    if !line && !group && style.stroke.width > 0.0 && paints(style.stroke.color.as_deref()) {
+    if crate::element_style::draws_border(&element.kind)
+        && style.stroke.width > 0.0
+        && paints(style.stroke.color.as_deref())
+    {
         css.set(
             "border",
             format!(
@@ -687,7 +705,7 @@ fn declarations(element: &Element, parent: &ElementLayout, fonts: &mut Fonts) ->
         css.set("opacity", format!("{}", style.opacity));
     }
     let flipped = style.flip_x || style.flip_y;
-    if (element.rotation % 360.0).abs() > 0.000_001 || flipped {
+    if crate::element_style::transformed(element) {
         let mut transform = format!("rotate({}deg)", element.rotation);
         if flipped {
             transform.push_str(&format!(
@@ -700,7 +718,7 @@ fn declarations(element: &Element, parent: &ElementLayout, fonts: &mut Fonts) ->
     } else {
         css.reset("transform", "none");
     }
-    if !line && !group && paints(style.shadow.color.as_deref()) {
+    if crate::element_style::draws_border(&element.kind) && paints(style.shadow.color.as_deref()) {
         css.set(
             "box-shadow",
             format!(
@@ -780,6 +798,27 @@ fn declarations(element: &Element, parent: &ElementLayout, fonts: &mut Fonts) ->
     }
     if matches!(element.kind, ElementKind::Link) || element.url.is_some() {
         css.set("cursor", "pointer");
+    }
+    if crate::element_style::text_of(element).is_some() {
+        let padding = crate::element_style::control_padding(&element.kind);
+        css.set(
+            "padding",
+            format!(
+                "{} {} {} {}",
+                length(padding.top),
+                length(padding.right),
+                length(padding.bottom),
+                length(padding.left)
+            ),
+        );
+        css.set(
+            "white-space",
+            if crate::element_style::wraps(&element.kind) {
+                "pre-wrap"
+            } else {
+                "nowrap"
+            },
+        );
     }
     if control {
         css.set("align-items", "center");
@@ -919,10 +958,7 @@ fn page_declarations(
         size.height as f64
     };
     let mut css = Declarations::new();
-    css.set(
-        "--desegnos-unit",
-        format!("calc(100cqw / {})", size.width),
-    );
+    css.set("--desegnos-unit", format!("calc(100cqw / {})", size.width));
     css.set("height", length(height));
     if matches!(size.kind, crate::BoundaryKind::Screen) {
         css.set("overflow", "auto");
@@ -963,7 +999,6 @@ fn color_scheme<'a>(page: &crate::Page, ai: Option<&'a str>) -> &'a str {
     }
 }
 
-/// Request every family a subtree paints text with.
 fn collect_fonts(element: &Element, fonts: &mut Fonts) {
     let text = &element.style.text_style;
     fonts.family(&text.font_family, text.weight, text.italic);
@@ -978,20 +1013,11 @@ pub(super) fn render(
     behaviours: &BTreeMap<Uuid, ExportBehaviour>,
     schemes: &[ExportReplyPage],
     files: &mut BTreeMap<String, Vec<u8>>,
-) {
+) -> Result<()> {
     let mut markers: BTreeMap<Uuid, Vec<Uuid>> = BTreeMap::new();
     for id in behaviours.keys() {
         if let Some(pointer) = project.pointers.iter().find(|pointer| pointer.id == *id) {
-            let source = match pointer.from {
-                PointerSource::Element { element_id, .. } => element_id,
-                PointerSource::Boundary { page_id, .. } => page_id,
-            };
-            let target = match pointer.to {
-                PointerTarget::Element { element_id, .. } => Some(element_id),
-                PointerTarget::Boundary { page_id, .. } => Some(page_id),
-                _ => None,
-            };
-            for endpoint in std::iter::once(source).chain(target) {
+            for endpoint in pointer.hook_endpoints() {
                 let ids = markers.entry(endpoint).or_default();
                 if !ids.contains(id) {
                     ids.push(*id);
@@ -1004,7 +1030,7 @@ pub(super) fn render(
             .pages
             .iter()
             .find(|page| page.id == planned.page_id)
-            .expect("planned page");
+            .ok_or_else(|| Error("An exported boundary no longer exists.".into()))?;
         let scheme = color_scheme(
             page,
             schemes
@@ -1042,12 +1068,6 @@ pub(super) fn render(
             "html,body{{margin:0;padding:0;overflow-x:clip;}}\n.desegnos-viewport{{container-type:inline-size;width:100%;max-width:{}px;margin:0 auto;overflow-x:clip;}}\n.desegnos-page{{position:relative;width:100%;isolation:isolate;}}\n",
             sizes.last().map_or(1, |size| size.width)
         );
-        let default_text = crate::ElementTextStyle::default();
-        let default_family = fonts.family(
-            &default_text.font_family,
-            default_text.weight,
-            default_text.italic,
-        );
         css.push_str("[data-desegnos-id][hidden]{display:none!important;}\n");
         css.push_str(&fonts.css());
         css.push_str(&format!(":root{{color-scheme:{scheme};"));
@@ -1059,17 +1079,11 @@ pub(super) fn render(
             css.push_str(&format!("--text-{}-font-family:{};--text-{}-font-size:{}px;--text-{}-font-weight:{};--text-{}-line-height:{};--text-{}-letter-spacing:{}px;--text-{}-font-style:{};", text.id, family, text.id, text.size, text.id, text.weight, text.id, text.line_height, text.id, text.letter_spacing, text.id, if text.italic { "italic" } else { "normal" }));
         }
         css.push_str("}\n");
-        // Every layer's rule carries the `d-` class, so these resets apply once instead of in every
-        // rule. The text resets also stop a layer from inheriting a parent's font or colour.
-        css.push_str(&format!(
-            "[class^=\"d-\"]{{box-sizing:border-box;margin:0;padding:0;min-width:0;flex-shrink:0;white-space:pre-wrap;overflow-wrap:break-word;position:relative;transform-origin:center;color:{};font-family:{};font-size:{};font-weight:{};font-style:normal;line-height:{};letter-spacing:{};text-align:left;}}\n",
-            default_text.color,
-            default_family,
-            length(default_text.size),
-            default_text.weight,
-            default_text.line_height,
-            length(default_text.letter_spacing)
-        ));
+        css.push_str("[class^=\"d-\"]{");
+        for (property, value) in common_declarations(&mut fonts) {
+            css.push_str(&format!("{property}:{value};"));
+        }
+        css.push_str("}\n");
         let mut base_page: Option<Declarations> = None;
         let mut base_rules: Option<BTreeMap<Uuid, Declarations>> = None;
         for (index, size) in sizes.iter().enumerate() {
@@ -1116,34 +1130,45 @@ pub(super) fn render(
                 css.push_str("}\n");
             }
         }
-        let stem = planned.file.trim_end_matches(".html");
+        let css_file = planned
+            .companion_file
+            .as_ref()
+            .ok_or_else(|| Error("The export plan has no stylesheet file.".into()))?;
         // An empty behaviour file would be a request to nothing, so neither it nor its tag ships.
         let behaviour_script = if behaviours.is_empty() {
             ""
         } else {
-            "<script src=\"behaviours.js\" defer></script>"
+            &format!("<script src=\"{BEHAVIOURS_FILE}\" defer></script>")
         };
+        let embed_guard = format!(
+            r#"<script>(()=>{{const chain=(new URLSearchParams(location.search).get('__desegnosEmbed')||'').split(',').filter(Boolean);if(chain.length>={depth})return;chain.push('{page}');for(const frame of document.querySelectorAll('[data-desegnos-embed-src]')){{if(chain.includes(frame.dataset.desegnosEmbedPage))continue;const url=new URL(frame.dataset.desegnosEmbedSrc,location.href);url.searchParams.set('__desegnosEmbed',chain.join(','));frame.src=url.href;}}}})();</script>"#,
+            depth = crate::element_style::MAX_EMBED_DEPTH - 1,
+            page = page.id
+        );
         let document = format!(
-            "<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"color-scheme\" content=\"{scheme}\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>{}</title><link rel=\"stylesheet\" href=\"{stem}.css\">{behaviour_script}</head><body><div class=\"desegnos-viewport\"><main class=\"desegnos-page\" data-desegnos-id=\"{}\"{}>\n{html}</main></div></body></html>\n",
+            "<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"color-scheme\" content=\"{scheme}\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>{}</title><link rel=\"stylesheet\" href=\"{css_file}\">{behaviour_script}</head><body><div class=\"desegnos-viewport\"><main class=\"desegnos-page\" data-desegnos-id=\"{}\"{}>\n{html}</main></div>{embed_guard}</body></html>\n",
             escape(&page.name),
             page.id,
             pointer_attribute(page.id, &markers)
         );
         files.insert(planned.file.clone(), document.into_bytes());
-        files.insert(format!("{stem}.css"), css.into_bytes());
+        files.insert(css_file.clone(), css.into_bytes());
         for face in fonts.faces.values() {
             files.insert(face.asset.clone(), face.bytes.clone());
         }
     }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::export::*;
     use crate::{
         Appearance, BoundaryKind, ElementOverride, ElementStroke, InputType, PageSize, PointerKind,
         Rect, Viewport, empty_element,
     };
+    use crate::{ExportRecord, Pointer, PointerSource, PointerTarget};
 
     fn project() -> Project {
         Project::new(
@@ -1705,9 +1730,9 @@ mod tests {
         text.text = "Hello".into();
         project.pages[0].elements = vec![text];
         let bundle = direct_export_bundle(&project, &[]).unwrap();
-        assert!(!bundle.files.contains_key("behaviours.js"));
+        assert!(!bundle.files.contains_key(BEHAVIOURS_FILE));
         let html = std::str::from_utf8(&bundle.files["index.html"]).unwrap();
-        assert!(!html.contains("behaviours.js"), "{html}");
+        assert!(!html.contains(BEHAVIOURS_FILE), "{html}");
         assert!(!html.contains("<script"), "{html}");
     }
 
@@ -1939,8 +1964,13 @@ mod tests {
         let mut project = project();
         let base = project.pages[0].base_size().width;
         project.pages[0].sizes.push(PageSize {
-            id: Uuid::new_v4(), label: "Phone".into(), width: 390, height: 844,
-            kind: BoundaryKind::Page, x: 1000.0, y: 0.0,
+            id: Uuid::new_v4(),
+            label: "Phone".into(),
+            width: 390,
+            height: 844,
+            kind: BoundaryKind::Page,
+            x: 1000.0,
+            y: 0.0,
         });
         let css = exported_css(&project);
         assert!(css.contains("100cqw / 390"), "{css}");
@@ -1951,16 +1981,29 @@ mod tests {
     fn breakpoints_restore_values_that_match_the_smallest_size() {
         let mut project = project();
         project.pages[0].sizes.push(PageSize {
-            id: Uuid::new_v4(), label: "Phone".into(), width: 390, height: 600,
-            kind: BoundaryKind::Page, x: 1000.0, y: 0.0,
+            id: Uuid::new_v4(),
+            label: "Phone".into(),
+            width: 390,
+            height: 600,
+            kind: BoundaryKind::Page,
+            x: 1000.0,
+            y: 0.0,
         });
         project.pages[0].sizes.push(PageSize {
-            id: Uuid::new_v4(), label: "Tablet".into(), width: 600, height: 900,
-            kind: BoundaryKind::Page, x: 1500.0, y: 0.0,
+            id: Uuid::new_v4(),
+            label: "Tablet".into(),
+            width: 600,
+            height: 900,
+            kind: BoundaryKind::Page,
+            x: 1500.0,
+            y: 0.0,
         });
         let css = exported_css(&project);
         let desktop = css.split("@media (min-width:800px)").nth(1).unwrap();
-        assert!(desktop.contains("height:calc(600 * var(--desegnos-unit))"), "{desktop}");
+        assert!(
+            desktop.contains("height:calc(600 * var(--desegnos-unit))"),
+            "{desktop}"
+        );
     }
 
     #[test]
@@ -2129,9 +2172,11 @@ mod tests {
         assert!(
             std::str::from_utf8(&initial.files["index.html"])
                 .unwrap()
-                .contains("<script src=\"behaviours.js\" defer></script>")
+                .contains(&format!(
+                    "<script src=\"{BEHAVIOURS_FILE}\" defer></script>"
+                ))
         );
-        assert!(initial.files.contains_key("behaviours.js"));
+        assert!(initial.files.contains_key(BEHAVIOURS_FILE));
         let mut html_edit = initial.files.clone();
         let html = std::str::from_utf8(&html_edit["index.html"])
             .unwrap()
@@ -2176,11 +2221,11 @@ mod tests {
         assert_ne!(initial.files["index.html"], reused.files["index.html"]);
         assert_eq!(initial.files["index.css"], reused.files["index.css"]);
         assert_eq!(
-            initial.files["behaviours.js"],
-            reused.files["behaviours.js"]
+            initial.files[BEHAVIOURS_FILE],
+            reused.files[BEHAVIOURS_FILE]
         );
         assert!(
-            std::str::from_utf8(&reused.files["behaviours.js"])
+            std::str::from_utf8(&reused.files[BEHAVIOURS_FILE])
                 .unwrap()
                 .contains("'a  b'")
         );
@@ -2215,7 +2260,7 @@ mod tests {
             1
         );
         let mut edited = reused.files.clone();
-        edited.insert("behaviours.js".into(), b"// hand edit".to_vec());
+        edited.insert(BEHAVIOURS_FILE.into(), b"// hand edit".to_vec());
         assert_ne!(
             pointer_fingerprints(&reused.files),
             pointer_fingerprints(&edited)

@@ -23,7 +23,7 @@ pub(crate) fn adapt_with_styles(
     }
     let width = f64::from(size.width);
     let minimum_height = f64::from(size.height);
-    let mut measure = crate::render::ResponsiveTextMeasure::new(styles.clone());
+    let mut measure = crate::text_layout::ResponsiveTextMeasure::new(styles.clone());
     measure.set_viewport(width);
     let height = children(
         &mut page.elements,
@@ -135,7 +135,7 @@ fn place(
     e: &mut Element,
     id: Uuid,
     mut rect: Rect,
-    measure: &mut crate::render::ResponsiveTextMeasure,
+    measure: &mut crate::text_layout::ResponsiveTextMeasure,
 ) -> Rect {
     if manual(e, id) {
         let rect = effective(e, id);
@@ -263,7 +263,7 @@ fn children(
     base_width: f64,
     width: f64,
     layout: &ElementLayout,
-    measure: &mut crate::render::ResponsiveTextMeasure,
+    measure: &mut crate::text_layout::ResponsiveTextMeasure,
 ) -> f64 {
     let ratio = (width / base_width.max(1.0)).min(1.0);
     let mut bottom: f64 = 0.0;

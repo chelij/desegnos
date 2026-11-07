@@ -15,7 +15,7 @@ pub const MAX_OUTPUT_TOKENS: u32 = MODEL_MAX_OUTPUT_TOKENS;
 pub const DEFAULT_MAX_OUTPUT_TOKENS: u32 = 32_768;
 /// ChatGPT plans ignore `max_output_tokens`, so only their reply text keeps this allowance.
 pub const CHATGPT_MAX_OUTPUT_TOKENS: u32 = 32_768;
-pub const MAX_REQUIREMENTS_BYTES: usize = 8 * 1024 * 1024;
+pub use desegnos_core::MAX_REQUIREMENTS_BYTES;
 pub const MAX_OUTPUT_BYTES: usize = 8 * 1024 * 1024;
 pub const MAX_REQUEST_BYTES: usize = 16 * 1024 * 1024;
 pub const CONTEXT_WINDOW_TOKENS: u64 = 1_050_000;
@@ -510,7 +510,7 @@ pub(crate) fn request_content<'a>(
     let metadata = serde_json::to_string(&json!({"jobId":snapshot.job_id,"requirementsSha256":snapshot.sha256,"generationMode":mode}))
         .map_err(|_| ProviderError::before(ErrorKind::InvalidRequirements))?;
     snapshot
-        .format_version()
+        .validate_format()
         .map_err(|_| ProviderError::before(ErrorKind::InvalidRequirements))?;
     let web_search = snapshot
         .capabilities
@@ -743,7 +743,7 @@ mod web_search_tests {
     #[test]
     fn generation_wire_identifies_requests_and_elements_before_expanding_them() {
         let snapshot = snapshot(Some(desegnos_core::CURRENT_REQUIREMENTS_FORMAT));
-        let schema = desegnos_core::result_schema(&snapshot);
+        let schema = desegnos_core::result_schema();
         for auth in [AuthenticationMethod::ApiKey, AuthenticationMethod::Chatgpt] {
             let bytes = request_body(
                 auth,

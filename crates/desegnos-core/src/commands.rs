@@ -1113,7 +1113,7 @@ impl Project {
         }
         next.store_inline_images()?;
         next.validate()?;
-        if crate::render::sync_fit_rects(&mut next) {
+        if crate::text_layout::sync_fit_rects(&mut next) {
             next.validate()?;
         }
         crate::adapt::adapt_changed_pages(self, &mut next)?;

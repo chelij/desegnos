@@ -477,3 +477,22 @@ pub fn broken_pointers(project: &Project) -> Vec<Uuid> {
         .map(|pointer| pointer.id)
         .collect()
 }
+impl crate::Pointer {
+    pub(crate) fn source_endpoint(&self) -> (Uuid, Option<Uuid>) {
+        match self.from {
+            crate::PointerSource::Element { page_id, element_id, .. } => (page_id, Some(element_id)),
+            crate::PointerSource::Boundary { page_id, .. } => (page_id, None),
+        }
+    }
+    pub(crate) fn target_endpoint(&self) -> Option<(Uuid, Option<Uuid>)> {
+        match self.to {
+            crate::PointerTarget::Element { page_id, element_id, .. } => Some((page_id, Some(element_id))),
+            crate::PointerTarget::Boundary { page_id, .. } => Some((page_id, None)),
+            _ => None,
+        }
+    }
+    pub(crate) fn hook_endpoints(&self) -> impl Iterator<Item = Uuid> {
+        let (page, element) = self.source_endpoint();
+        std::iter::once(element.unwrap_or(page)).chain(self.target_endpoint().map(|(page, element)| element.unwrap_or(page)))
+    }
+}
