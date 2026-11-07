@@ -305,7 +305,8 @@ Named views persist in `Project.views`; commands and validation live in [model.r
 | `npm test` | `cargo test --workspace` through `scripts/cargo.mjs`. |
 | `npm run check:rust` | Clippy for the workspace, all targets, warnings denied. |
 | `npm run test:canvas` | `tests/project-canvas-geometry.test.mjs` + `tests/canvas-model.test.mjs`. |
-| `npm run test:editor` | The kept React/Node tests: CodeMirror state, crash copy, generation cancellation/conversation/problems/session/status, identity review, import flow, notice system/summary, number expressions, problem banner, recovery banner, start page, update check, visible actions, workspace surfaces, editor SSR. |
+| `npm run test:editor` | The kept React/Node tests: CodeMirror state, crash copy, generation cancellation/conversation/problems/session/status, identity review, import flow, notice summary, number expressions, problem banner, recovery banner, start page, update check, visible actions, workspace surfaces, editor SSR. |
+| `npm run test:notices` | `tests/notice-system.test.mjs`: notice queue and layout in headless Chromium (~10s, kept out of `test:editor`). |
 | `npm run test:smoke` | `tests/native/canvas-smoke.mjs`: builds the `native-tests,gtk-dialogs` app and drives the real editor on a guarded Xvfb display and private session bus. Linux only. |
 | `npm run test:vault` | `scripts/test-vault.mjs`: native secret-service vault flow against a loopback provider. |
 | `npm run release:local` | `scripts/build-release.mjs`: Tauri release build (no bundle), then the guarded Linux startup check. `--dist` keeps the full LTO release profile. |
