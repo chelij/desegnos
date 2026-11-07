@@ -47,6 +47,21 @@ fn retry_after(value: Option<&str>, now: SystemTime) -> Option<Duration> {
     (delay <= Duration::from_secs(30)).then_some(delay)
 }
 
+/// Wait before attempt `attempt + 1`: two seconds, then eight. Unit tests scale both down so
+/// they exercise the same policy without waiting out real backoff.
+fn backoff(attempt: u32) -> Duration {
+    let delay = if attempt == 1 {
+        Duration::from_secs(2)
+    } else {
+        Duration::from_secs(8)
+    };
+    if cfg!(test) {
+        delay / 100
+    } else {
+        delay
+    }
+}
+
 /// Keep one cloneable, frozen wire request for at most three submissions. Error response bodies
 /// are diagnostics, not model output. Once the first successful body byte arrives, ownership
 /// passes to the existing parser and this policy can never resend it.
@@ -66,7 +81,7 @@ pub(crate) async fn send(
     } else {
         SubmissionOutcome::Unknown
     };
-    for attempt in 1..=3 {
+    for attempt in 1u32..=3 {
         // A refused connection or failed DNS lookup won't heal in seconds: report it at once
         // rather than making every probe (models, access checks) wait through the backoff.
         let unreachable = std::sync::atomic::AtomicBool::new(false);
@@ -110,17 +125,16 @@ pub(crate) async fn send(
                         Some(delay) => delay,
                         None => return result,
                     },
-                    None => Duration::from_secs(if attempt == 1 { 2 } else { 8 }),
+                    None => backoff(attempt),
                 };
                 (kind, delay)
             }
             Err(error)
                 if matches!(error.kind, ErrorKind::Transport | ErrorKind::Deadline)
                     && !unreachable.load(std::sync::atomic::Ordering::Relaxed) =>
-            (
-                error.kind,
-                Duration::from_secs(if attempt == 1 { 2 } else { 8 }),
-            ),
+            {
+                (error.kind, backoff(attempt))
+            }
             _ => return result,
         };
         if attempt == 3 || Instant::now() + delay >= deadline {
@@ -128,7 +142,7 @@ pub(crate) async fn send(
         }
         progress(ProviderProgress {
             retry: Some(crate::ProviderRetry {
-                attempt: attempt + 1,
+                attempt: attempt as u8 + 1,
                 kind,
             }),
             received_bytes: 0,

@@ -2070,6 +2070,7 @@ async fn a_silent_provider_times_out_long_before_the_overall_deadline() {
     reply.delay = Duration::from_secs(1);
     let server = Server::start(reply).await;
     let started = std::time::Instant::now();
+    let attempts = std::sync::Mutex::new(vec![]);
     let error = server
         .client()
         .with_test_idle(Duration::from_millis(30))
@@ -2083,14 +2084,20 @@ async fn a_silent_provider_times_out_long_before_the_overall_deadline() {
                 key: &ApiKey::new(KEY.into()).unwrap(),
                 cancellation: &CancellationToken::new(),
             },
-            |_| {},
+            |update| {
+                if let Some(retry) = update.retry {
+                    attempts.lock().unwrap().push(retry.attempt);
+                }
+            },
         )
         .await
         .unwrap_err();
     assert_eq!(error.kind, ErrorKind::Deadline);
-    assert!(started.elapsed() >= Duration::from_secs(10));
-    assert!(started.elapsed() < Duration::from_secs(12));
-    assert_eq!(server.count.load(Ordering::SeqCst), 3);
+    // Idle timeouts of 30 ms, then the test-scaled 20 ms and 80 ms backoffs.
+    assert!(started.elapsed() >= Duration::from_millis(100));
+    assert!(started.elapsed() < Duration::from_secs(5));
+    // Three submissions, each abandoned on the idle timeout.
+    assert_eq!(*attempts.lock().unwrap(), [2, 3]);
 }
 
 #[tokio::test]
@@ -4421,7 +4428,7 @@ async fn output_then_transport_error_never_resends_even_when_the_next_request_wo
 async fn cancelling_during_backoff_never_submits_the_next_attempt() {
     let frozen = snapshot(GenerationMode::Strict);
     let mut failed = Reply::json(500, json!({"code":"internal_error"}));
-    failed.headers.clear(); // Exercise the real two-second backoff, not Retry-After: 0.
+    failed.headers.clear(); // Exercise the real backoff, not Retry-After: 0.
     let server = Server::start_sequence(vec![failed, Reply::sse(stream(&frozen))]).await;
     let cancel = CancellationToken::new();
     let started = tokio::time::Instant::now();
@@ -4441,7 +4448,7 @@ async fn cancelling_during_backoff_never_submits_the_next_attempt() {
                 if update.retry.is_some() {
                     let cancel = cancel.clone();
                     tokio::spawn(async move {
-                        tokio::time::sleep(Duration::from_millis(20)).await;
+                        tokio::time::sleep(Duration::from_millis(1)).await;
                         cancel.cancel();
                     });
                 }
@@ -4511,7 +4518,7 @@ async fn read_only_preflight_network_failures_do_not_claim_an_unknown_generation
     let error = crate::retry::send(
         client.get(&server.endpoint),
         &cancel,
-        tokio::time::Instant::now() + Duration::from_millis(100),
+        tokio::time::Instant::now() + Duration::from_secs(5),
         Duration::from_secs(30),
         1024,
         &|_| {},
@@ -4521,7 +4528,8 @@ async fn read_only_preflight_network_failures_do_not_claim_an_unknown_generation
     .unwrap();
     assert_eq!(error.kind, ErrorKind::Transport);
     assert_eq!(error.outcome, SubmissionOutcome::NotSubmitted);
-    assert_eq!(server.count.load(Ordering::SeqCst), 1);
+    // Every resend keeps the read-only outcome instead of claiming an unknown submission.
+    assert_eq!(server.count.load(Ordering::SeqCst), 3);
 }
 
 #[tokio::test]
