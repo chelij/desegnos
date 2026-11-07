@@ -108,7 +108,7 @@ export type ExportAttemptView = { ordinal: number; status: string; usage: TokenU
 export type ExportStatus = 'prepared' | 'sending' | 'ready' | 'failed' | 'cancelled' | 'stale';
 export type ExportJobView = { providerError?: ProviderError | null; provider?: ProviderId | null; jobId: string; projectId: string; baseRevision: number; kind: 'code' | 'comment'; status: ExportStatus;
   message: string; summary: string; estimateUsd: number; usage: TokenUsage | null; attempts: ExportAttemptView[];
-  pages: ExportPageView[]; sizeCount: number; pointerCount: number; warnings: string[]; result: ExportResultView | null; error: string | null };
+  pages: ExportPageView[]; sizeCount: number; pointerCount: number; reusedBehaviourCount?: number; warnings: string[]; result: ExportResultView | null; error: string | null };
 export type ExportCheck = { states: PointerStateView[]; lastExport: ExportRecord | null; readable: boolean };
 export type HistoryEntry = { label: string; at: number; position: number };
 export type HistoryView = { entries: HistoryEntry[]; sessionId: string; start: number; position: number; end: number; version: number };

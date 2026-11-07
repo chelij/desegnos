@@ -124,6 +124,59 @@ fn excluded_boundaries_can_be_previewed_without_joining_the_full_export() {
 }
 
 #[test]
+fn export_packet_lists_hidden_hooks_including_nested_and_size_overrides() {
+    let (mut project, _) = webpage_project();
+    let mut parent = empty_element(ElementKind::Group, rect(0.0, 0.0, 300.0, 200.0));
+    let mut child = empty_element(ElementKind::Text, rect(0.0, 0.0, 100.0, 20.0));
+    child.visible = false;
+    let child_id = child.id;
+    let parent_id = parent.id;
+    parent.children.push(child);
+    let phone = Uuid::new_v4();
+    parent.overrides.insert(
+        phone,
+        desegnos_core::ElementOverride {
+            hidden: true,
+            ..Default::default()
+        },
+    );
+    project.pages[0].elements.push(parent);
+    project.pages[0].sizes.push(PageSize {
+        id: phone,
+        label: "Phone".into(),
+        width: 390,
+        height: 844,
+        kind: BoundaryKind::Screen,
+        x: 1000.0,
+        y: 0.0,
+    });
+    let plan = plan_export(&project, &[], Uuid::new_v4()).unwrap();
+    let design = plan
+        .markdown
+        .split("## Design\n```json\n")
+        .nth(1)
+        .unwrap()
+        .split("\n```\n")
+        .next()
+        .unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(design).unwrap();
+    let sizes = parsed["pages"][0]["sizes"].as_array().unwrap();
+    assert_eq!(
+        sizes[0]["initiallyHiddenIds"],
+        serde_json::json!([child_id])
+    );
+    assert_eq!(
+        sizes[1]["initiallyHiddenIds"],
+        serde_json::json!([parent_id, child_id])
+    );
+    assert!(
+        plan.markdown
+            .contains("never by guessing visible text, punctuation or separators")
+    );
+    assert!(plan.markdown.contains("move or reflow following siblings"));
+}
+
+#[test]
 fn the_frozen_packet_keeps_its_design_compact_so_a_large_page_stays_sendable() {
     // Indenting the design nearly triples a packet whose text is mostly element trees, and a
     // several-hundred-layer page pressed against the provider's context window because of it.

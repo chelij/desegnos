@@ -133,6 +133,7 @@ pub struct ExportJobView {
     pages: Vec<ExportPageView>,
     size_count: usize,
     pointer_count: usize,
+    reused_behaviour_count: usize,
     warnings: Vec<String>,
     result: Option<ExportResultView>,
     error: Option<String>,
@@ -286,17 +287,13 @@ pub struct PickDestination {
     path: String,
 }
 
-/// The default destination, <Documents>/Desegnos/<project>, may not exist yet, so Export creates
-/// it. Any other missing folder still has to be chosen.
+/// Create only the default parent; the writer creates the project folder inside it.
 fn create_default_destination(app: &AppHandle, path: &str) -> NativeResult<()> {
     let path = Path::new(path);
     let Ok(documents) = app.path().document_dir() else {
         return Ok(());
     };
-    if path.parent() == Some(documents.join("Desegnos").as_path())
-        && path.file_name().is_some()
-        && !path.exists()
-    {
+    if path == documents.join("Desegnos") && !path.exists() {
         fs::create_dir_all(path)
             .map_err(|error| format!("The export folder could not be created: {error}"))?;
     }
@@ -435,6 +432,7 @@ pub async fn prepare_export(
         (Some(trusted_destination(parent)?), None)
     };
     let has_ai = plan.request_count > 0 && (!preview || build_behaviours.unwrap_or(false));
+    let reused_behaviour_count = desegnos_core::reused_export_behaviour_count(&project, &plan);
     let mut view = ExportJobView {
         job_id,
         project_id,
@@ -452,7 +450,8 @@ pub async fn prepare_export(
         attempts: Vec::new(),
         pages: page_views(&plan),
         size_count: plan.pages.iter().map(|page| page.size_ids.len()).sum(),
-        pointer_count: plan.pointers.len(),
+        pointer_count: plan.pointers.len() + reused_behaviour_count,
+        reused_behaviour_count,
         warnings: plan.warnings.clone(),
         result: None,
         error: None,
@@ -479,8 +478,14 @@ pub async fn prepare_export(
             .map_err(message)?
             .remember(&project, &bundle)?;
         view.status = JobStatus::Ready.label();
+        view.pointer_count = bundle.behaviours.len();
+        view.reused_behaviour_count = bundle.behaviours.len();
         view.message = written.label.clone();
-        view.summary = "Rendered directly from the design.".into();
+        view.summary = if bundle.behaviours.is_empty() {
+            "Rendered directly from the design.".into()
+        } else {
+            String::new()
+        };
         // Each unbuilt behaviour is named; Connect AI says how to build them.
         view.warnings.extend(bundle.warnings.iter().cloned());
         if plan.request_count > 0 {
@@ -896,6 +901,7 @@ fn finish(
                                             status: "received".into(),
                                             usage: response.usage,
                                         });
+                                        job.view.pointer_count = bundle.behaviours.len();
                                         job.view.summary = reply.summary.clone();
                                         job.view.warnings = bundle.warnings.clone();
                                         job.view.message = written.label.clone();
@@ -1225,6 +1231,7 @@ pub async fn keep_pointer_code(
         pages: Vec::new(),
         size_count: 0,
         pointer_count: 1,
+        reused_behaviour_count: 0,
         warnings: Vec::new(),
         result: None,
         error: None,

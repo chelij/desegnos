@@ -55,7 +55,7 @@ export function ExportPanel({ project, destination, busy, job, sending, error, c
     {job && <div className="export-panel-job" role="status">
       <p><strong>{STATUS_LABELS[job.status] ?? job.status}</strong>{job.status === 'prepared' && job.estimateUsd > 0 ? ` · ${money(job.estimateUsd)} estimate` : ''}</p>
       <p>{job.providerError ? userError(job) : job.message}</p>
-      {job.kind === 'code' && <p className="muted">Export {job.pages.length} {job.pages.length === 1 ? 'boundary' : 'boundaries'} · {job.sizeCount} {job.sizeCount === 1 ? 'size' : 'sizes'} · {job.pointerCount} {job.pointerCount === 1 ? 'pointer' : 'pointers'}</p>}
+      {job.kind === 'code' && <p className="muted">Export {job.pages.length} {job.pages.length === 1 ? 'boundary' : 'boundaries'} · {job.sizeCount} {job.sizeCount === 1 ? 'size' : 'sizes'} · {job.pointerCount} {job.pointerCount === 1 ? 'behaviour' : 'behaviours'}{job.reusedBehaviourCount ? ` · ${job.reusedBehaviourCount} ${job.reusedBehaviourCount === 1 ? 'behaviour' : 'behaviours'} reused` : ''}</p>}
       {job.summary && <p className="muted">{job.summary}</p>}
       {job.usage && <p className="muted">{job.usage.inputTokens.toLocaleString()} in · {job.usage.outputTokens.toLocaleString()} out tokens{job.attempts.length > 1 ? ` · ${job.attempts.length} attempts` : ''}</p>}
       {job.pages.length > 0 && <details><summary>Files</summary><ul className="export-panel-files">{job.pages.map(page => <li key={page.pageId}>{page.name} → {page.file || page.output}</li>)}</ul></details>}

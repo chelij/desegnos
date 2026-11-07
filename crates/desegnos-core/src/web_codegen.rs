@@ -263,16 +263,24 @@ fn markup(
     plan: &ExportPlan,
     owner_path: &str,
     markers: &BTreeMap<Uuid, Vec<Uuid>>,
+    initially_hidden: &BTreeSet<Uuid>,
     out: &mut String,
 ) {
     use ElementKind::*;
+    // Only elements hidden at some size need an initial inline display. Clearing it opts
+    // out of design visibility at every breakpoint, without disturbing normal layout CSS.
+    let visibility = if initially_hidden.contains(&element.id) {
+        " style=\"display:var(--desegnos-initial-display)\""
+    } else {
+        ""
+    };
     if matches!(element.kind, Checkbox | Radio) {
         let input_type = if matches!(element.kind, Checkbox) {
             "checkbox"
         } else {
             "radio"
         };
-        out.push_str(&format!("<label class=\"{}\"{}><input type=\"{input_type}\" data-desegnos-id=\"{}\" aria-label=\"{}\">{}</label>\n", class(element.id), pointer_attribute(element.id, markers), element.id, escape(element.name.as_deref().unwrap_or(&element.text)), escape(&element.text)));
+        out.push_str(&format!("<label class=\"{}\"{} data-desegnos-id=\"{}\"{visibility}><input type=\"{input_type}\" aria-label=\"{}\">{}</label>\n", class(element.id), pointer_attribute(element.id, markers), element.id, escape(element.name.as_deref().unwrap_or(&element.text)), escape(&element.text)));
         return;
     }
     let tag = tag_name(element);
@@ -282,6 +290,7 @@ fn markup(
         element.id
     ));
     out.push_str(&pointer_attribute(element.id, markers));
+    out.push_str(visibility);
     if tag == "a" {
         out.push_str(&format!(" href=\"{}\"", link_href(element, plan)));
     }
@@ -387,7 +396,7 @@ fn markup(
         _ => out.push_str(&escape(&element.text)),
     }
     for child in &element.children {
-        markup(child, plan, owner_path, markers, out);
+        markup(child, plan, owner_path, markers, initially_hidden, out);
     }
     out.push_str(&format!("</{tag}>\n"));
 }
@@ -533,9 +542,7 @@ fn declarations(element: &Element, parent: &ElementLayout, fonts: &mut Fonts) ->
     };
     let mut css = Declarations::new();
     // The common rule carries the resets, so a layer states only what differs from them.
-    if !element.visible {
-        css.set("display", "none");
-    } else if display == "block" && matches!(tag_name(element), "div" | "pre") {
+    if display == "block" && matches!(tag_name(element), "div" | "pre") {
         css.reset("display", display);
     } else {
         css.set("display", display);
@@ -871,6 +878,10 @@ fn declarations(element: &Element, parent: &ElementLayout, fonts: &mut Fonts) ->
             },
         );
     }
+    css.set(
+        "--desegnos-initial-display",
+        if element.visible { display } else { "none" },
+    );
     css
 }
 
@@ -1032,9 +1043,20 @@ pub(super) fn render(
         for text in &project.styles.text {
             fonts.family(&text.font_family, text.weight, text.italic);
         }
+        let initially_hidden: BTreeSet<_> = sizes
+            .iter()
+            .flat_map(|size| initially_hidden_ids(&crate::resolve_for_size(project, page, size.id)))
+            .collect();
         let mut html = String::new();
         for element in crate::resolve_for_size(project, page, page.base_size_id()) {
-            markup(&element, plan, &page.path, &markers, &mut html);
+            markup(
+                &element,
+                plan,
+                &page.path,
+                &markers,
+                &initially_hidden,
+                &mut html,
+            );
         }
         let mut css = format!(
             "html,body{{margin:0;padding:0;overflow-x:clip;}}\n.desegnos-viewport{{container-type:inline-size;width:100%;max-width:{}px;margin:0 auto;overflow-x:clip;}}\n.desegnos-page{{position:relative;width:100%;isolation:isolate;}}\n",
@@ -1046,6 +1068,7 @@ pub(super) fn render(
             default_text.weight,
             default_text.italic,
         );
+        css.push_str("[data-desegnos-id][hidden]{display:none!important;}\n");
         css.push_str(&fonts.css());
         css.push_str(&format!(":root{{color-scheme:{scheme};"));
         for colour in &project.styles.colours {
@@ -1170,6 +1193,127 @@ mod tests {
     fn exported_css(project: &Project) -> String {
         let bundle = direct_export_bundle(project, &[]).unwrap();
         String::from_utf8(bundle.files["index.css"].clone()).unwrap()
+    }
+
+    #[test]
+    fn hidden_layers_keep_normal_display_and_inline_visibility_tracks_sizes() {
+        let mut project = project();
+        let base = project.pages[0].base_size_id();
+        let phone = Uuid::new_v4();
+        project.pages[0].sizes.push(PageSize {
+            id: phone,
+            label: "Phone".into(),
+            width: 390,
+            height: 844,
+            kind: BoundaryKind::Screen,
+            x: 1000.0,
+            y: 0.0,
+        });
+        let mut elements = vec![
+            element(ElementKind::Text),
+            element(ElementKind::Button),
+            element(ElementKind::Box),
+            element(ElementKind::Checkbox),
+            element(ElementKind::Radio),
+        ];
+        elements[2].layout = ElementLayout::Grid {
+            columns: 2,
+            gap: 0.0,
+            padding: 0.0,
+        };
+        for element in &mut elements {
+            element.visible = false;
+        }
+        // A visible base layer hidden only on the phone must get the same inline contract.
+        let mut responsive = element(ElementKind::Box);
+        responsive.overrides.insert(
+            phone,
+            ElementOverride {
+                hidden: true,
+                ..Default::default()
+            },
+        );
+        elements.push(responsive);
+        // The opposite transition: hidden on desktop, visible on phone.
+        elements[0].visible = true;
+        elements[0].overrides.insert(
+            base,
+            ElementOverride {
+                hidden: true,
+                ..Default::default()
+            },
+        );
+        project.pages[0].elements = elements.clone();
+        let bundle = direct_export_bundle(&project, &[]).unwrap();
+        let html = std::str::from_utf8(&bundle.files["index.html"]).unwrap();
+        let css = std::str::from_utf8(&bundle.files["index.css"]).unwrap();
+        for element in &elements {
+            let hook = format!("data-desegnos-id=\"{}\"", element.id);
+            assert_eq!(html.matches(&hook).count(), 1);
+            let start = html.find(&hook).unwrap();
+            let tag = &html[start..start + html[start..].find('>').unwrap()];
+            assert!(
+                tag.contains("style=\"display:var(--desegnos-initial-display)\""),
+                "{tag}"
+            );
+            assert!(!tag.contains(" hidden"));
+        }
+        let phone_css = css
+            .split(&format!("/* size:{phone} */"))
+            .nth(1)
+            .unwrap()
+            .split("@media")
+            .next()
+            .unwrap();
+        let base_css = css.split(&format!("/* size:{base} */")).nth(1).unwrap();
+        assert!(rule_of(phone_css, elements[0].id).contains("--desegnos-initial-display:block;"));
+        assert!(rule_of(base_css, elements[0].id).contains("--desegnos-initial-display:none;"));
+        assert!(rule_of(phone_css, elements[1].id).contains("display:flex;"));
+        assert!(rule_of(phone_css, elements[2].id).contains("display:grid;"));
+        assert!(rule_of(phone_css, elements[5].id).contains("--desegnos-initial-display:none;"));
+        assert!(rule_of(base_css, elements[5].id).contains("--desegnos-initial-display:block;"));
+        // No generated layer or media rule may set the display property to none.
+        assert!(
+            !css.replace("--desegnos-initial-display:none;", "")
+                .replace("[data-desegnos-id][hidden]{display:none!important;}", "")
+                .contains("display:none")
+        );
+        assert!(css.contains("[data-desegnos-id][hidden]{display:none!important;}"));
+        lightningcss::stylesheet::StyleSheet::parse(css, Default::default()).unwrap();
+    }
+
+    #[test]
+    fn linked_hidden_children_receive_visibility_on_their_exported_hooks() {
+        let mut project = project();
+        let mut master = element(ElementKind::Group);
+        let mut child = element(ElementKind::Text);
+        child.visible = false;
+        let master_child_id = child.id;
+        master.children.push(child);
+        let definition_id = Uuid::new_v4();
+        project.linked.insert(
+            definition_id,
+            crate::LinkedDefinition {
+                id: definition_id,
+                name: "Linked group".into(),
+                master,
+            },
+        );
+        let mut instance = element(ElementKind::Group);
+        instance.link = Some(definition_id);
+        project.pages[0].elements.push(instance);
+        let resolved =
+            crate::resolve_for_size(&project, &project.pages[0], project.pages[0].base_size_id());
+        let child_id = resolved[0].children[0].id;
+        assert_ne!(child_id, master_child_id);
+        let bundle = direct_export_bundle(&project, &[]).unwrap();
+        let html = std::str::from_utf8(&bundle.files["index.html"]).unwrap();
+        let css = std::str::from_utf8(&bundle.files["index.css"]).unwrap();
+        assert!(html.contains(&format!(
+            "data-desegnos-id=\"{child_id}\" style=\"display:var(--desegnos-initial-display)\""
+        )));
+        assert!(rule_of(css, child_id).contains("--desegnos-initial-display:none;"));
+        assert!(!rule_of(css, child_id).contains("{display:none"));
     }
 
     #[test]
@@ -2041,6 +2185,8 @@ mod tests {
                 .request_count,
             0
         );
+        let cached_plan = plan_export(&project, &[], Uuid::new_v4()).unwrap();
+        assert_eq!(reused_export_behaviour_count(&project, &cached_plan), 2);
         project.pages[0].elements[0].text = "New label".into();
         let reused = direct_export_bundle(&project, &[]).unwrap();
         assert_ne!(initial.files["index.html"], reused.files["index.html"]);
@@ -2064,6 +2210,7 @@ mod tests {
         project.pointers[0].comment = "Hide target".into();
         let changed = plan_export(&project, &[], Uuid::new_v4()).unwrap();
         assert_eq!(changed.pointers.len(), 1);
+        assert_eq!(reused_export_behaviour_count(&project, &changed), 1);
         assert_eq!(changed.pointers[0].id, project.pointers[0].id);
         project.pages[0].elements[1]
             .children

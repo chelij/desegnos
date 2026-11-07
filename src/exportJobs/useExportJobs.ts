@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { documentDir, join } from '@tauri-apps/api/path';
+import { defaultExportFolder } from './exportFolder';
 import { native } from '../api';
 import { isTextField } from '../WorkspaceSurface';
 import type { Command, PointerStateView, Project, WorkspaceView, ExportCheck, ExportJobView } from '../types';
@@ -38,17 +38,6 @@ function readExportFolders(): Record<string, string> {
     if (!raw || typeof raw !== 'object') return {};
     return Object.fromEntries(Object.entries(raw).filter((entry): entry is [string, string] => typeof entry[1] === 'string'));
   } catch { return {}; }
-}
-
-/** A project name is a folder name here, never a path. */
-function exportFolderName(name: string): string {
-  const clean = name.trim().replace(/[\\/:*?"<>|\u0000-\u001f]/g, ' ').replace(/\s+/g, ' ').replace(/^[.\s]+|[.\s]+$/g, '').slice(0, 80);
-  return clean || 'Untitled project';
-}
-
-/** The platform's Documents folder, then Desegnos/<project name>. */
-async function defaultExportFolder(name: string): Promise<string> {
-  return join(await documentDir(), 'Desegnos', exportFolderName(name));
 }
 
 export function useExportJobs(input: Pick<Context, 'current' | 'view' | 'panel' | 'play' | 'setPlay' | 'openPanel' | 'closePanel'>, context: () => Context) {
@@ -93,13 +82,13 @@ export function useExportJobs(input: Pick<Context, 'current' | 'view' | 'panel' 
   const pageIds = view?.project?.pages.map(page => page.id).join() ?? '';
   useEffect(() => { setExportError(''); }, [pageIds]);
   useEffect(() => { try { localStorage.setItem(EXPORT_FOLDERS_KEY, JSON.stringify(exportFolders)); } catch { /* Preferences can be unavailable. */ } }, [exportFolders]);
-  // A new project starts in Documents/Desegnos/<project name>, so Export is one click.
+  // A new export creates one project folder inside Documents/Desegnos.
   useEffect(() => {
     const project = view?.project;
     if (!project) return;
     let live = true;
-    void defaultExportFolder(project.name).then(path => {
-      if (live) setExportFolders(current => current[project.id] ? current : { ...current, [project.id]: path });
+    void defaultExportFolder(project.name, exportFolders[project.id]).then(path => {
+      if (live) setExportFolders(current => current[project.id] === exportFolders[project.id] ? { ...current, [project.id]: path } : current);
     }).catch(() => { /* Without a Documents folder, Choose folder… still works. */ });
     return () => { live = false; };
   }, [view?.project?.id, view?.project?.name]);
@@ -128,10 +117,9 @@ export function useExportJobs(input: Pick<Context, 'current' | 'view' | 'panel' 
 
   async function ensureExportDestination(project: Project): Promise<string | null> {
     const saved = exportFolders[project.id];
-    if (saved) return saved;
-    const path = await defaultExportFolder(project.name).catch(() => null);
+    const path = await defaultExportFolder(project.name, saved).catch(() => saved ?? null);
     if (!path) return null;
-    setExportFolders(current => current[project.id] ? current : { ...current, [project.id]: path });
+    setExportFolders(current => current[project.id] === saved ? { ...current, [project.id]: path } : current);
     return path;
   }
 
