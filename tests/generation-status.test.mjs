@@ -4,9 +4,10 @@ import { compileModules } from './typescript.mjs';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 
-const modules = await compileModules(['src/Generation.tsx']);
+const modules = await compileModules(['src/Generation.tsx', 'src/generationSession.ts']);
 try {
   const { GenerationFeedback } = await modules.load('Generation.js');
+  const { announcesStatus } = await modules.load('generationSession.js');
   const id = '12345678-1234-1234-1234-123456789abc';
   const project = { id: 'project', pages: [{ id: 'page', name: 'Home', path: '/', sizes: [], elements: [{ id, kind: 'box', name: null, rect: { x: 0, y: 0, width: 10, height: 10 }, rotation: 0, visible: true, locked: false, style: {}, text: '', image: null, url: null, layout: { kind: 'free' }, children: [], meta: { requests: [], context: [], pending: { prompt: 'Add a booking form', attachments: [], requestedAt: 'now' } } }] }] };
   const controller = job => ({ job, phase: { name: 'idle' }, operation: null, elapsedSeconds: null, error: '', stopped: false, canStop: false, prepare() {}, cancel() {} });
@@ -33,6 +34,47 @@ try {
     assert.doesNotMatch(edited, /Needs your input/);
     const failed = render({ jobId: 'job', status: 'failed', requirements: { markdown: '' }, areas: [], candidate: null });
     assert.match(failed, />Try again</);
+  });
+  await test('a rejected whole reply shows its reason, retry and conversation details', () => {
+    const rejected = { ...base, areas: [], candidate: null,
+      message: 'Desegnos rejected the candidate: The generation result is invalid: missing field `requirementsSha256` Nothing was applied.',
+      validationEvents: [{ elementId: null, kind: 'replyStructure', disposition: 'conflicted', message: 'missing field `requirementsSha256`' }] };
+    const html = render(rejected, { details() {} });
+    assert.match(html, /Needs attention/);
+    assert.match(html, /reply was incomplete, so nothing was changed/);
+    assert.match(html, />Try again</);
+    assert.match(html, />Details</);
+    assert.doesNotMatch(html, /requirementsSha256|rejected the candidate/);
+    for (const status of ['blocked', 'failed', 'unknown']) {
+      const fallback = render({ ...rejected, status, message: '', validationEvents: [] });
+      assert.match(fallback, /nothing was changed|confirm whether the changes were applied/);
+      assert.match(fallback, />Try again</);
+    }
+  });
+  await test('Try again prepares the same layers or the full boundary request and respects retryability', () => {
+    const calls = [];
+    const rejected = { ...base, candidate: null, message: 'Desegnos rejected the candidate: invalid reply' };
+    const feedback = job => GenerationFeedback({ controller: { ...controller(job), prepare: async ids => { calls.push(ids); } } });
+    feedback(rejected).props.action.onClick();
+    feedback({ ...rejected, areas: [] }).props.action.onClick();
+    assert.deepEqual(calls, [[id], undefined]);
+    assert.equal(feedback({ ...rejected, retryable: false }).props.action, undefined);
+    const batches = { ...rejected, batches: [{ status: 'failed' }] };
+    const notice = GenerationFeedback({ controller: { ...controller(batches), retry: async () => { calls.push('batch'); } } });
+    notice.props.action.onClick();
+    assert.equal(calls.at(-1), 'batch');
+  });
+  await test('partial success announces skipped changes with Details and no error styling', () => {
+    const partial = { ...base, status: 'applied', areas: [], candidate: null,
+      validationEvents: [{ elementId: null, kind: 'element', disposition: 'dropped', message: 'invalid operation targetId' }] };
+    const html = render(partial, { details() {} });
+    assert.match(html, /Layers updated/);
+    assert.match(html, /Some layer changes were skipped/);
+    assert.match(html, />Details</);
+    assert.doesNotMatch(html, /notice-error|targetId|>Try again</);
+    assert.equal(announcesStatus(partial, { owns: true, stopped: false, working: false }), true);
+    assert.equal(announcesStatus({ ...partial, validationEvents: [] }, { owns: true, stopped: false, working: false }), false);
+    assert.equal(announcesStatus(partial, { owns: false, stopped: false, working: false }), false);
   });
   await test('a reply cut off at the output limit names the cause instead of guessing', () => {
     const settings = { model: 'deepseek-flash', maxOutputTokens: 128000, reasoningEffort: 'low', spendingLimitUsd: 2, imageGeneration: false };

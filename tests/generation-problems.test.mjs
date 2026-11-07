@@ -88,12 +88,40 @@ try {
     assert.equal(resolutionAction('Make it feel calmer.'), undefined);
   });
   await test('a stale result retries even an implemented request, and a fresh one does not', () => {
-    const implemented = { jobId: 'job', status: 'blocked', areas: [{ pageId: 'page', elementId: 'a' }], candidate: { summary: 'Done', requests: [{ elementId: 'a', status: 'implemented', explanation: 'Added the chat' }] } };
+    const implemented = { jobId: 'job', status: 'applied', areas: [{ pageId: 'page', elementId: 'a' }], candidate: { summary: 'Done', requests: [{ elementId: 'a', status: 'implemented', explanation: 'Added the chat' }] } };
     assert.deepEqual(jobOutcome(implemented).retryable, []);
-    const stale = { ...implemented, message: 'The generated result is stale: Existing page source changed.' };
+    assert.deepEqual(jobOutcome({ ...implemented, status: 'blocked' }).retryable, ['a']);
+    const stale = { ...implemented, status: 'blocked', message: 'The generated result is stale: Existing page source changed.' };
     assert.deepEqual(jobOutcome(stale).retryable, ['a']);
     assert.equal(jobOutcome({ jobId: 'failed', status: 'failed', areas: [], candidate: null }).retryAll, true);
-    assert.deepEqual(jobOutcome({ jobId: 'working', status: 'generating', areas: [], candidate: null }), { retryable: [], blocked: [], retryAll: false, retryBatches: false });
+    assert.deepEqual(jobOutcome({ jobId: 'working', status: 'generating', areas: [], candidate: null }), { reason: '', retryable: [], blocked: [], retryAll: false, retryBatches: false });
+  });
+  await test('whole-reply rejections explain the failure and can resend boundary-only requests', () => {
+    const rejected = { jobId: 'rejected', status: 'blocked', areas: [], candidate: null,
+      message: 'Desegnos rejected the candidate: The generation result is invalid: missing field `requirementsSha256` Nothing was applied.',
+      validationEvents: [{ elementId: null, kind: 'replyStructure', disposition: 'conflicted', message: 'missing field `requirementsSha256`' }] };
+    assert.equal(jobOutcome(rejected).reason, "The AI's reply was incomplete, so nothing was changed.");
+    assert.equal(jobOutcome(rejected).retryAll, true);
+    assert.equal(jobOutcome({ ...rejected, message: '' }).reason, jobOutcome(rejected).reason);
+    assert.equal(jobOutcome({ ...rejected, retryable: false }).retryAll, false);
+    const layers = { ...rejected, areas: job.areas, candidate: { requests: [{ elementId: 'a', status: 'implemented' }] } };
+    assert.deepEqual(jobOutcome(layers).retryable, ['a']);
+    assert.deepEqual(jobOutcome({ ...layers, retryable: false }).retryable, []);
+  });
+  await test('terminal failures always have a reason, including without diagnostics', () => {
+    for (const status of ['blocked', 'failed', 'unknown']) {
+      const review = jobOutcome({ jobId: 'failure', status, areas: [], candidate: null });
+      assert.ok(review.reason.length > 0);
+      assert.equal(review.retryAll, true);
+    }
+  });
+  await test('applied jobs describe skipped changes without exposing validation internals', () => {
+    const applied = { jobId: 'partial', status: 'applied', areas: [], candidate: null,
+      validationEvents: [{ elementId: null, kind: 'image', disposition: 'dropped', message: 'unknown imageKey' }] };
+    assert.equal(jobOutcome(applied).reason, 'Some image changes were skipped. The rest was applied.');
+    assert.equal(jobOutcome(applied).retryAll, false);
+    assert.equal(jobOutcome({ ...applied, validationEvents: [{ kind: 'element', disposition: 'repaired', message: 'Fixed' }] }).reason, '');
+    assert.equal(jobOutcome({ ...applied, validationEvents: [], message: 'Applied with warnings: dropped invalid operation' }).reason, 'Some changes were skipped. The rest was applied.');
   });
   await test('a reply cut off at the output limit is named, not left unknown', () => {
     const settings = { model: 'deepseek-flash', maxOutputTokens: 128000, reasoningEffort: 'low', spendingLimitUsd: 2, imageGeneration: false };

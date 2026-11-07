@@ -1,10 +1,10 @@
 import type { Element, GenerationJobView, Page, Project, Rect } from './types';
-import { generationError, outcomeReason, technicalReason } from './userErrors.js';
+import { generationError, outcomeReason, technicalReason, userError } from './userErrors.js';
 
 /// A specific place that can resolve an outcome the AI itself declared.
 export type OutcomeFix = 'aiSettings' | 'import' | 'brief';
 export type Outcome = { retryable: boolean; reason: string; fix?: OutcomeFix };
-export type JobOutcome = { retryable: string[]; blocked: { elementId: string; reason: string; fix?: OutcomeFix }[]; retryAll: boolean; retryBatches: boolean };
+export type JobOutcome = { reason: string; retryable: string[]; blocked: { elementId: string; reason: string; fix?: OutcomeFix }[]; retryAll: boolean; retryBatches: boolean };
 export type AreaProblem = { key: string; elementId: string; message: string; stale: boolean; retryable: boolean; fix?: OutcomeFix; rect: Rect };
 
 export function requestText(project: Project | null, elementId: string): string {
@@ -101,9 +101,31 @@ export function areaOutcome(job: GenerationJobView | null, elementId: string, pr
   return retry();
 }
 
+function jobReason(job: GenerationJobView): string {
+  if (staleResult(job)) return staleResultMessage;
+  const events = [...(job.validationEvents ?? []), ...(job.batches ?? []).flatMap(batch => batch.validationEvents ?? [])];
+  if (job.status === 'applied') {
+    const skipped = events.filter(event => /^(?:dropped|skipped|conflicted|warning)$/.test(event.disposition) && event.kind !== 'telemetryStorage');
+    const kinds = new Set(skipped.map(event => /image/i.test(event.kind) ? 'image changes'
+      : /pointer/i.test(event.kind) ? 'interaction changes' : /operation|element|layer/i.test(event.kind) ? 'layer changes' : 'changes'));
+    if (kinds.size) return `Some ${[...kinds].join(' and ')} were skipped. The rest was applied.`;
+    if (job.candidate?.requests.some(request => request.status === 'conflict')) return 'Some requests were skipped. The rest was applied.';
+    if (/\b(?:skipped|dropped|warnings?)\b/i.test(job.message ?? '')) return 'Some changes were skipped. The rest was applied.';
+    return '';
+  }
+  if (!['blocked', 'failed', 'unknown'].includes(job.status)) return '';
+  const reply = events.find(event => event.elementId == null && event.kind === 'replyStructure');
+  const message = (job.message?.trim() || reply?.message || '').replace(/^Desegnos rejected the candidate:\s*/i, '');
+  if (reply || /missing field|incomplete|unexpected end|requirementsSha256/i.test(message)) return "The AI's reply was incomplete, so nothing was changed.";
+  if (/generation result|candidate|schema|JSON|deserializ|invalid.*(?:reply|response|format)/i.test(message)) return "The AI's reply couldn't be used, so nothing was changed.";
+  if (!message) return job.status === 'unknown' ? "Desegnos couldn't confirm whether the changes were applied." : "The AI couldn't finish these requests, so nothing was changed.";
+  const translated = userError(message);
+  return translated === message && technicalReason(message) ? generationError(message) : translated;
+}
+
 /// Classify a whole job, keeping the retryable areas separate from the declared gaps.
 export function jobOutcome(job: GenerationJobView | null, promptOf: (elementId: string) => string | undefined = () => undefined): JobOutcome {
-  if (!job || !terminal.includes(job.status)) return { retryable: [], blocked: [], retryAll: false, retryBatches: false };
+  if (!job || !terminal.includes(job.status)) return { reason: '', retryable: [], blocked: [], retryAll: false, retryBatches: false };
   const ids = new Set<string>();
   for (const area of job.areas) ids.add(area.elementId);
   for (const outcome of job.candidate?.requests ?? []) if (outcome.elementId) ids.add(outcome.elementId);
@@ -111,15 +133,18 @@ export function jobOutcome(job: GenerationJobView | null, promptOf: (elementId: 
   const blocked: JobOutcome['blocked'] = [];
   // A stale result was never applied, so even its finished areas are worth resending.
   const stale = staleResult(job);
+  const rejected = ['blocked', 'failed', 'unknown'].includes(job.status) && ((job.validationEvents ?? []).some(event => event.elementId == null && event.kind === 'replyStructure') || /^Desegnos rejected the candidate:/i.test(job.message ?? ''));
   for (const elementId of ids) {
     const outcome = areaOutcome(job, elementId, promptOf(elementId));
-    if (!outcome.retryable) { blocked.push({ elementId, reason: outcome.reason, fix: outcome.fix }); continue; }
+    if (!rejected && !outcome.retryable) { blocked.push({ elementId, reason: outcome.reason, fix: outcome.fix }); continue; }
     const implemented = job.candidate?.requests?.some(request => request.elementId === elementId && request.status === 'implemented');
-    if (stale || !implemented) retryable.push(elementId);
+    if (stale || ['blocked', 'failed', 'unknown'].includes(job.status) || !implemented) retryable.push(elementId);
   }
   // A batched job keeps its finished parts; a failed part is retried on its own.
   const retryBatches = (job.batches ?? []).some(batch => ['failed', 'unknown', 'cancelled', 'blocked'].includes(batch.status));
-  return { retryable, blocked, retryAll: ids.size === 0 && !blocked.length && ['failed', 'unknown', 'cancelled'].includes(job.status), retryBatches };
+  return { reason: jobReason(job), retryable: job.retryable === false ? [] : retryable, blocked,
+    retryAll: job.retryable !== false && ids.size === 0 && !blocked.length && ['blocked', 'failed', 'unknown', 'cancelled'].includes(job.status),
+    retryBatches: job.retryable !== false && retryBatches };
 }
 
 /// The AI declared a scope conflict for this request: its fix belongs outside the area.

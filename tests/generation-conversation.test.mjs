@@ -59,6 +59,16 @@ try {
     assert.doesNotMatch(html, /Needs your input|>Change request</);
   });
 
+  await test('a whole-reply rejection explains the Needs attention result and offers Try again', () => {
+    const rejected = { ...job, areas: [], candidate: null,
+      message: 'Desegnos rejected the candidate: The generation result is invalid: missing field `requirementsSha256` Nothing was applied.',
+      validationEvents: [{ elementId: null, kind: 'replyStructure', disposition: 'conflicted', message: 'missing field `requirementsSha256`' }] };
+    const html = render({ job: rejected });
+    assert.match(html, /reply was incomplete, so nothing was changed/);
+    assert.match(html, />Try again</);
+    assert.doesNotMatch(render({ job: { ...rejected, retryable: false } }), />Try again</);
+  });
+
   await test('a boundary-only request counts as the one request that was sent', () => {
     const boundaryJob = {
       ...job, areas: [], requirements: { markdown: '', requestCount: 1 },

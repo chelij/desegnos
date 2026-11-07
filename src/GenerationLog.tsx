@@ -107,9 +107,10 @@ export function GenerationLog({ job: currentJob, operation, error, project, cont
           {working && !candidate && <p className="log-working"><span className="log-dots" aria-hidden="true"><i /><i /><i /></span>{job.receivedBytes ? `Writing… ${kb(job.receivedBytes)} received` : 'Thinking…'}</p>}
           {!past && !working && stale && <div className="log-stale">
             <p className="log-text">{staleResultMessage}</p>
-            <button className="primary" disabled={busy} onClick={() => { const ids = requests.filter(item => item.exists).map(item => item.key); void controller.prepare(ids.length ? ids : undefined).catch(() => {}); }}>Try again</button>
+            {(review.retryable.length > 0 || review.retryAll) && <button className="primary" disabled={busy} onClick={() => { const ids = requests.filter(item => item.exists).map(item => item.key); void controller.prepare(ids.length ? ids : undefined).catch(() => {}); }}>Try again</button>}
           </div>}
-          {!past && !working && !stale && (review.retryable.length > 0 || review.retryAll) && <button disabled={!!operation} onClick={() => { void controller.prepare(review.retryable.length ? review.retryable : undefined).catch(() => {}); }}>Try again</button>}
+          {!working && !stale && (!review.blocked.length || job.status === 'applied') && review.reason && <p className="log-text">{review.reason}</p>}
+          {!past && !working && !stale && (review.retryable.length > 0 || review.retryAll || review.retryBatches) && <button disabled={!!operation} onClick={() => { void (review.retryBatches ? controller.retry() : controller.prepare(review.retryable.length ? review.retryable : undefined)).catch(() => {}); }}>Try again</button>}
           {candidate && <p className="log-text">{candidate.summary}</p>}
           {candidate?.requests.flatMap((request, requestIndex) => request.operations.map((operation, operationIndex) => operation.kind === 'setBehaviour' ? <p className="log-text" key={`${requestIndex}-${operationIndex}`}>Behaviour: {operation.behaviour}</p> : null))}
           {candidate && candidate.criticism.length > 0 && <Disclosure className="generation-feedback" summary={`Design feedback (${candidate.criticism.length})`}><ul>{candidate.criticism.map((item, index) => <li key={index}><p className="log-text">{humanText(item.message)}</p><p className="log-meta">{humanText(item.suggestion)}</p></li>)}</ul></Disclosure>}
@@ -148,7 +149,7 @@ export function GenerationLog({ job: currentJob, operation, error, project, cont
         {history?.truncated && <p className="field-help">Showing the latest 100 saved generations.</p>}
         {historyError && <ProblemBanner message={userError(historyError)} dismiss={() => setHistoryError('')} />}
       </Disclosure>
-      {(error || job?.message || job?.candidate) && <Disclosure summary="Technical details"><pre>{JSON.stringify({ error, message: job?.message, providerError: job?.providerError, validationEvents: job?.validationEvents, outcomes: job?.candidate?.requests }, null, 2)}</pre></Disclosure>}
+      {(error || job?.message || job?.candidate || !!job?.validationEvents?.length) && <Disclosure summary="Technical details"><pre>{JSON.stringify({ error, message: job?.message, providerError: job?.providerError, validationEvents: job?.validationEvents, outcomes: job?.candidate?.requests }, null, 2)}</pre></Disclosure>}
     </div>
   </WorkspaceSurface>;
 }
