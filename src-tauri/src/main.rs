@@ -22,6 +22,7 @@ mod project_location;
 mod recent;
 mod release;
 mod request_zip;
+mod shutdown;
 mod system_open;
 mod updates;
 mod usage;
@@ -75,6 +76,7 @@ fn main() {
             ));
             app.manage(std::sync::Mutex::new(generation));
             app.manage(std::sync::Mutex::new(identity));
+            shutdown::install(app.handle().clone())?;
             // The editor window is created only now, so its commands work from the first render.
             let config = app
                 .config()

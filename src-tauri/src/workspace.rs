@@ -1060,6 +1060,21 @@ impl Workspace {
         }
     }
 
+    /// Flush every tab without throttling or saving to the user's saved branch.
+    pub(super) fn flush_recovery(&self) {
+        for open in self.active.iter().chain(&self.parked) {
+            if open.dirty()
+                && let Some(file) = &open.file
+                && let Err(error) = file.autosave(
+                    open.session.project(),
+                    desegnos_storage::project_db::now_millis(),
+                )
+            {
+                eprintln!("Could not keep unsaved work: {error}");
+            }
+        }
+    }
+
     fn take_version_labels(&mut self) -> Vec<String> {
         self.session_mut()
             .map(Session::take_version_labels)
