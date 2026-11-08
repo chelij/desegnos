@@ -17,7 +17,7 @@ export function isBehaviour(pointer: Pointer): boolean {
 
 /** The behaviour pointer that belongs to one layer or boundary, or null when it has none. */
 export function behaviourFor(project: Project, source: PointerSource): Pointer | null {
-  return (project.pointers ?? []).find(pointer => isBehaviour(pointer) && sameEndpoints(pointer.from, source)) ?? null;
+  return project.pointers.find(pointer => isBehaviour(pointer) && sameEndpoints(pointer.from, source)) ?? null;
 }
 
 /** One source's behaviour key, so the canvas, the dock and the pointer tool agree on identity. */
@@ -75,6 +75,6 @@ export function behaviourStateLabel(state: PointerStateKind): string {
 export function playShouldPreview(project: Project, pageId: string): boolean {
   const page = project.pages.find(item => item.id === pageId);
   if (!page || (page.output !== 'webpage')) return false;
-  return (project.pointers ?? []).some(pointer => pointer.from.pageId === pageId
+  return project.pointers.some(pointer => pointer.from.pageId === pageId
     && (isBehaviour(pointer) || (pointer.kind === 'change' && !pointer.play)));
 }

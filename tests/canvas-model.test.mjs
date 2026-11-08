@@ -83,7 +83,7 @@ try {
     schemaVersion: 14, id: `project-${++projectSequence}`, name: 'Test', revision: 1,
     viewport: { width: 800, height: 600 }, appearance: 'light', showGrid: true,
     gridSettings: { spacing: 8, unit: 'pixels', snap: true, rulers: true }, generationMode: 'fuzzy',
-    homePageId: pages[0]?.id ?? 'home', pages, reference: [], pointers: [], linked: {},
+    homePageId: pages[0]?.id ?? 'home', pages, reference: [], pointers: [], linked: {}, requests: [], views: [], styles: { colours: [], text: [] },
     brief: { purpose: '', audience: '', brandName: '', tone: '' }, latestGeneration: null,
     decisions: [], exceptions: [], appliedJobIds: [], extensions: {}, ...patch,
   });

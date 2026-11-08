@@ -159,8 +159,3 @@ export function Notice(props: NoticeProps) {
   useLayoutEffect(() => () => context?.update(id, null), [context, id]);
   return !context && visible ? <NoticeRow {...props} dismiss={close} /> : null;
 }
-
-export type ProblemBannerProps = NoticeProps;
-export function ProblemBanner({ variant = 'error', ...props }: ProblemBannerProps) {
-  return <Notice {...props} variant={variant} />;
-}

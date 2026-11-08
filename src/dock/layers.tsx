@@ -53,14 +53,14 @@ function StylesSection({ project, command, busy = false }: { project: Project; c
   const disabled = busy || !command;
   const send = (edit: import('../types').Command) => { void command?.(edit); };
   return <PropsSection id="project-styles" title="Styles">
-    {project.styles?.colours.map(style => <div key={style.id}>
+    {project.styles.colours.map(style => <div key={style.id}>
       <CompactTextField label="Colour style name" value={style.name} disabled={disabled} valid={value => !!value.trim()} commit={name => send({ type: 'update_colour_style', style: { ...style, name: name.trim() } })} />
       <div className="dock-inline">
         <ColourField label={`${style.name} colour`} value={style.value} optional={false} disabled={disabled} commit={value => send({ type: 'update_colour_style', style: { ...style, value } })} />
         <button type="button" className="icon-button sm" aria-label={`Delete ${style.name} style`} disabled={disabled} onClick={() => send({ type: 'remove_colour_style', id: style.id })}><Icon name="close" size={12} /></button>
       </div>
     </div>)}
-    {project.styles?.text.map(style => <details key={style.id}>
+    {project.styles.text.map(style => <details key={style.id}>
       <summary>{style.name}</summary>
       <div className="dock-inline"><CompactTextField label="Text style name" value={style.name} disabled={disabled} valid={value => !!value.trim()} commit={name => send({ type: 'update_text_style', style: { ...style, name: name.trim() } })} />
         <button type="button" className="icon-button sm" aria-label={`Delete ${style.name} style`} disabled={disabled} onClick={() => send({ type: 'remove_text_style', id: style.id })}><Icon name="close" size={12} /></button></div>
@@ -121,9 +121,9 @@ export function CanvasLayers({ project, boundaries, selection, focused, selectBo
     }
   };
   const referenceIcon = (item: ReferenceItem): IconName => item.kind.kind === 'link' ? 'link' : item.kind.kind === 'swatch' ? 'fill-color' : item.kind.kind === 'image' ? 'image' : 'note';
-  const pointers = project.pointers ?? [];
+  const pointers = project.pointers;
   const linked = Object.values(project.linked ?? {}).sort((first, second) => first.name.localeCompare(second.name));
-  const requests = project.requests ?? [];
+  const requests = project.requests;
   const shownRequests = requests.filter(request => matches(request.text.trim().split('\n')[0] || 'Empty request'));
   const shownPointers = pointers.filter(pointer => matches(pointerLabel(pointer, project)));
   const shownLinked = linked.filter(definition => matches(definition.name));

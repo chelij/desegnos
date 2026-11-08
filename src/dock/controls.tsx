@@ -1,4 +1,12 @@
 import { fieldKeys, useFieldDraft } from '../CompactField';
+import { MAX_HTTP_URL_BYTES } from '../generated/limits';
+
+/** The same rule as the core's `valid_http_url`: http(s), a host, no credentials, bounded length. */
+export function validHttpUrl(value: string): boolean {
+  const text = value.trim();
+  if (new TextEncoder().encode(text).length > MAX_HTTP_URL_BYTES) return false;
+  try { const url = new URL(text); return (url.protocol === 'http:' || url.protocol === 'https:') && !!url.hostname && !url.username && !url.password; } catch { return false; }
+}
 
 export function PropertyField({ label, ariaLabel, value, commit, valid, type = 'text', min, max, maxLength, disabled, field }: {
   label: string; ariaLabel?: string; value: string | number; commit: (value: string) => void;

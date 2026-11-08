@@ -93,7 +93,7 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
   const requestEdits = useRequestEdits({ current, mutate, edits, setError, setNotice, setCanvasSelection });
   const { views, saveCurrentView, addNamedViewAt, addNamedView, renameNamedView, removeNamedView } = useNamedViews(project, mutate, canvasRef, run);
   const changeBrief = useCallback(async (patch: Partial<NonNullable<typeof project>['brief']>) => {
-    const before = current.current?.project?.brief ?? { purpose: '', audience: '', brandName: '', tone: '' };
+    const before = current.current!.project!.brief;
     const workspace = await mutate(project => ({ type: 'set_brief', brief: { ...project.brief, ...patch } }));
     return workspace?.project?.brief ?? before;
   }, [mutate]);

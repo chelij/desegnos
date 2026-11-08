@@ -46,7 +46,6 @@ try {
     assert.equal(behaviourFor(design, elementSource('home', 'a', 'phone'))?.id, 'layer');
     assert.equal(behaviourFor(design, boundarySource())?.id, 'boundary');
     assert.equal(behaviourFor(design, elementSource('home', 'c')), null);
-    assert.equal(behaviourFor(project(undefined), boundarySource()), null);
     assert.equal(behaviourFor(project([]), boundarySource()), null);
   });
 

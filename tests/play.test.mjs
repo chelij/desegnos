@@ -22,7 +22,7 @@ try {
   const project = (pages, pointers = []) => ({
     schemaVersion: 14, id: 'project', name: 'Play', revision: 1, viewport: { width: 800, height: 600 },
     appearance: 'light', showGrid: false, gridSettings: { spacing: 8, unit: 'pixels', snap: true, rulers: true },
-    generationMode: 'fuzzy', homePageId: pages[0].id, pages, reference: [], pointers, linked: {},
+    generationMode: 'fuzzy', homePageId: pages[0].id, pages, reference: [], pointers, linked: {}, requests: [], views: [], styles: { colours: [], text: [] },
     views: [], brief: { purpose: '', audience: '', brandName: '', tone: '' }, decisions: [], exceptions: [],
     appliedJobIds: [], extensions: {},
   });

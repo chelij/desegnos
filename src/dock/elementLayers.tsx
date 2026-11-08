@@ -188,7 +188,7 @@ export function ElementLayers({ project, pageId, sizeId, elements, selection, se
   const removeRow = useCallback((...args: Parameters<typeof remove>) => actions.current.remove(...args), []);
   const grabRow = useCallback((...args: Parameters<typeof startRowDrag>) => actions.current.grab(...args), []);
   const rows = useMemo(() => flattenLayers(elements, sizeId, collapsed, keep), [elements, sizeId, collapsed, keep]);
-  const behaviourIds = useMemo(() => behaviourLayerKeys(project.pointers ?? []), [project.pointers]);
+  const behaviourIds = useMemo(() => behaviourLayerKeys(project.pointers), [project.pointers]);
   const selected = useMemo(() => new Set(selection), [selection]);
   const list = useRef<HTMLUListElement>(null);
   /** The layer row under the pointer, so a drop follows the cursor rather than the source row. */

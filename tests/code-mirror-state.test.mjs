@@ -1,9 +1,6 @@
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { join } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
 import test from 'node:test';
+import { compileModules } from './typescript.mjs';
 import { ChangeSet, Compartment, EditorState, StateEffect, Transaction } from '@codemirror/state';
 import { history, isolateHistory, redo, undo, undoDepth } from '@codemirror/commands';
 import { SearchQuery, search, setSearchQuery } from '@codemirror/search';
@@ -12,14 +9,10 @@ import { css } from '@codemirror/lang-css';
 import { javascript } from '@codemirror/lang-javascript';
 import { syntaxTree } from '@codemirror/language';
 
-const root = fileURLToPath(new URL('../', import.meta.url));
-const temporary = await mkdtemp(join(root, '.code-mirror-state-'));
+const modules = await compileModules(['src/editorHtml.ts', 'src/codeMirrorMetadata.ts']);
 try {
-  const compiler = fileURLToPath(new URL('bin/tsc', import.meta.resolve('typescript/package.json')));
-  const result = spawnSync(process.execPath, [compiler, '--ignoreConfig', '--module', 'esnext', '--target', 'ES2022', '--moduleResolution', 'bundler', '--skipLibCheck', '--outDir', temporary, 'src/editorHtml.ts', 'src/codeMirrorMetadata.ts'], { cwd: root, encoding: 'utf8' });
-  assert.equal(result.status, 0, result.stderr || result.stdout || String(result.error));
-  const { htmlMetadata, metadataHistory, replaceMetadata, mapHtmlMetadata, metadataEcho } = await import(pathToFileURL(join(temporary, 'codeMirrorMetadata.js')).href);
-  const { projectEditorHtml, restoreEditorHtml } = await import(pathToFileURL(join(temporary, 'editorHtml.js')).href);
+  const { htmlMetadata, metadataHistory, replaceMetadata, mapHtmlMetadata, metadataEcho } = await modules.load('codeMirrorMetadata.js');
+  const { projectEditorHtml, restoreEditorHtml } = await modules.load('editorHtml.js');
   const stateFor = raw => { const projected = projectEditorHtml(raw); return EditorState.create({ doc: projected.text, extensions: [htmlMetadata.init(() => projected), metadataHistory, history(), html()] }); };
   const apply = (state, changes, isolated = false) => state.update({ changes, userEvent: 'input.type', annotations: isolated ? isolateHistory.of('full') : undefined }).state;
   const travel = (state, command) => { assert.ok(command({ state, dispatch: transaction => { state = transaction.state; } })); return state; };
@@ -119,4 +112,4 @@ try {
     const positions = []; while (!cursor.next().done) positions.push(cursor.value.from);
     assert.deepEqual(positions, [5, 11]);
   });
-} finally { await rm(temporary, { recursive: true, force: true }); }
+} finally { await modules.cleanup(); }

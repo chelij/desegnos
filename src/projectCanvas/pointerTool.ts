@@ -26,7 +26,7 @@ export type PointerToolContext = {
 export function createPointerTool(context: () => PointerToolContext) {
   function armPointer(pointerId: string) {
     const { latest, setArmedPointer, surface } = context();
-    const pointer = (latest.current.project.pointers ?? []).find(item => item.id === pointerId);
+    const pointer = latest.current.project.pointers.find(item => item.id === pointerId);
     if (!pointer) return;
     const world = pointerWorld(latest.current.project, latest.current.boundaries, null, {}, {});
     const route = pointerRoute(pointer, world);
@@ -57,7 +57,7 @@ export function createPointerTool(context: () => PointerToolContext) {
   function startReattach(event: ReactPointerEvent<HTMLButtonElement>, pointerId: string, end: 'from' | 'to') {
     const { surface, project, pointerWorldNow, beginPointerSession, worldPoint, drag } = context();
     if (!surface.current) return;
-    const pointer = (project.pointers ?? []).find(item => item.id === pointerId);
+    const pointer = project.pointers.find(item => item.id === pointerId);
     if (!pointer) return;
     const route = pointerRoute(pointer, pointerWorldNow());
     if (!route) return;

@@ -1,20 +1,7 @@
 // The Rust transport tests separately verify discovery and submission over loopback HTTP.
-import assert from 'node:assert/strict';
-import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
-import { promisify } from 'node:util';
-import { fileURLToPath } from 'node:url';
-import { createServer } from 'vite';
+import { runInBrowser } from './browserFixture.mjs';
 
-const root = fileURLToPath(new URL('../', import.meta.url));
-await mkdir(join(root, 'test-results'), { recursive: true });
-const folder = await mkdtemp(join(root, 'test-results/ai-models-'));
-const fixture = join(folder, 'index.html');
-let server;
-try {
-  await writeFile(fixture, `<!doctype html><html><body style="width:380px;padding:16px"><div id="root"></div><pre id="result">pending</pre>
-  <script type="module">
+const script = `
   import React from 'react';
   import { createRoot } from 'react-dom/client';
   import { flushSync } from 'react-dom';
@@ -184,21 +171,5 @@ try {
     render();
     await wait(() => document.body.textContent.includes('DeepSeek account is out of credit.'), 'Billing code on HTTP 429 was mistaken for a rate limit');
     document.getElementById('result').textContent = 'PASS: account/provider discovery, selection, prices, save, refresh, isolation, single-line controls, DeepSeek catalogue pricing, key-first banner, and local auth failure';  } catch (error) { document.getElementById('result').textContent = 'FAIL: ' + error.stack; }
-  </script></body></html>`);
-  server = await createServer({ root, configLoader: 'runner', cacheDir: join(folder, 'cache'),
-    server: { host: '127.0.0.1', port: 0, strictPort: false }, optimizeDeps: { entries: [fixture] } });
-  await server.listen();
-  const port = server.httpServer.address().port;
-  const { stdout } = await promisify(execFile)(process.env.CHROMIUM ?? 'chromium', [
-    '--headless', '--no-first-run', '--disable-background-networking', '--disable-dev-shm-usage',
-    '--no-default-browser-check', '--password-store=basic', '--disable-extensions',
-    '--user-data-dir=' + join(folder, 'profile'), '--dump-dom', '--virtual-time-budget=15000',
-    'http://127.0.0.1:' + port + fixture.slice(root.length - 1),
-  ], { timeout: 45000, maxBuffer: 2 * 1024 * 1024 });
-  const result = stdout.match(/<pre id="result">([\s\S]*?)<\/pre>/)?.[1];
-  assert.match(result ?? stdout.slice(-2000), /^PASS:/);
-  console.log(result);
-} finally {
-  await server?.close();
-  await rm(folder, { recursive: true, force: true });
-}
+`;
+console.log(await runInBrowser({ name: 'ai-models', script, bodyStyle: 'width:380px;padding:16px' }));

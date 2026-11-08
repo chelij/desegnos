@@ -14,9 +14,10 @@
     "check:rust": "node scripts/run.mjs cargo clippy --workspace --all-targets -- -D warnings",
     "test:canvas-ux": "node tests/canvas-ux-browser.test.mjs",
     "test:ai-models": "node tests/ai-models-browser.test.mjs",
-    "test:notices": "node tests/notice-system.test.mjs",
+    "test:notices": "node tests/notice-system-browser.test.mjs",
     "test:vault": "node scripts/test-vault.mjs",
     "test:editor": "node scripts/test-editor.mjs",
+    "test:browser": "node scripts/test-editor.mjs --browser",
     "test:smoke": "node tests/native/canvas-smoke.mjs"
   },
   "dependencies": {

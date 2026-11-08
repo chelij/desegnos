@@ -1,5 +1,6 @@
 import { errorMessage } from './errorMessage.js';
 import { invoke, isTauri } from '@tauri-apps/api/core';
+import { isTextField } from './textField';
 import type { CommandName } from './generated/commands';
 import type { UsageEvent } from './generated/types';
 
@@ -74,7 +75,7 @@ export function installUsageLog() {
   };
   const key = (event: KeyboardEvent) => {
     const target = event.target instanceof HTMLElement ? event.target : null;
-    const editing = !!target && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName) || !!target.closest('.cm-editor'));
+    const editing = !!target && isTextField(target);
     const modified = event.ctrlKey || event.metaKey || event.altKey;
     if (modified || /^(Escape|Delete|Backspace|Enter|Tab|F\d+)$/.test(event.key) && !(editing && /^(Backspace|Enter|Tab)$/.test(event.key))) {
       const combo = [event.ctrlKey && 'Ctrl', event.metaKey && 'Meta', event.altKey && 'Alt', event.shiftKey && 'Shift', event.key.length === 1 ? event.key.toUpperCase() : event.key].filter(Boolean).join('+');

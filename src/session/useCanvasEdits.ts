@@ -42,7 +42,7 @@ export function useCanvasEdits({ current, mutate, edits, run, setNotice, travel,
     return next ? children : [];
   }, [mutate]);
   const removeLinkedDefinition = useCallback((id: string) => {
-    const name = current.current?.project?.linked?.[id]?.name ?? 'this linked element';
+    const name = current.current?.project?.linked[id]?.name ?? 'this linked element';
     void mutate({ type: 'delete_items', linked_ids: [id] }).then(next => { if (next) removedWithUndo(`Removed ${name}.`); });
   }, [mutate, removedWithUndo]);
   const renameCanvasElement = useCallback((pageId: string, elementId: string, name: string | null) =>

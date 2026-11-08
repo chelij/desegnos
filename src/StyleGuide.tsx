@@ -1,6 +1,6 @@
 import { errorMessage } from './errorMessage.js';
 import type { ProjectEdits } from './session/projectEdits';
-import { ProblemBanner } from './ProblemBanner.js';
+import { Notice } from './ProblemBanner.js';
 import { userError } from './userErrors.js';
 import { useMemo, useState } from 'react';
 import type { Project } from './types';
@@ -75,7 +75,7 @@ export function StyleGuide({ project, edits, openBrief }: { project: Project; ed
     finally { setBusy(false); }
   }
   return <div className="dialog-body style-guide">
-    {error && <ProblemBanner message={userError(error)} dismiss={() => setError('')} />}
+    {error && <Notice variant="error" message={userError(error)} dismiss={() => setError('')} />}
     <section aria-label="Brand colours"><h3>Colours</h3><div className="sg-roles">
       {COLOUR_ROLES.map(topic => { const value = normal(rule(topic)?.value ?? '') ?? null; return <div key={topic} className="sg-role">
         <label className="sg-swatch" style={{ background: value ?? undefined }} title={value ? `Change ${topic.toLowerCase()}` : `Choose ${topic.toLowerCase()}`}>

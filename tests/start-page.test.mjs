@@ -1,29 +1,14 @@
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
 import test from 'node:test';
+import { compileModules } from './typescript.mjs';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 
-const root = fileURLToPath(new URL('../', import.meta.url));
-const temporary = await mkdtemp(join(root, '.start-page-'));
+const modules = await compileModules(['src/StartPage.tsx']);
 const all = tree => tree == null ? [] : typeof tree !== 'object' ? [tree] : [tree, ...[tree.props?.children].flat(Infinity).flatMap(all)];
 const button = (tree, label) => all(tree).find(node => node.type === 'button' && all(node).some(child => child === label));
 try {
-  const compiler = fileURLToPath(new URL('bin/tsc', import.meta.resolve('typescript/package.json')));
-  const compiled = spawnSync(process.execPath, [compiler, '--ignoreConfig', '--jsx', 'react-jsx', '--module', 'esnext', '--target', 'ES2022', '--moduleResolution', 'bundler', '--skipLibCheck', '--types', 'vite/client', '--outDir', temporary, 'src/StartPage.tsx'], { cwd: root, encoding: 'utf8' });
-  assert.equal(compiled.status, 0, compiled.stderr || compiled.stdout || String(compiled.error));
-  await writeFile(join(temporary, 'style-stub.js'), 'export {};\n');
-  for (const [file, replacements] of [
-    ['StartPage.js', [["'./icons'", "'./icons.js'"], ["'./startPage.css'", "'./style-stub.js'"]]],
-  ]) {
-    const path = join(temporary, file);
-    const source = await readFile(path, 'utf8');
-    await writeFile(path, replacements.reduce((value, [from, to]) => value.replaceAll(from, to), source));
-  }
-  const { StartPage } = await import(pathToFileURL(join(temporary, 'StartPage.js')).href);
+  const { StartPage } = await modules.load('StartPage.js');
 
   const recents = [
     { path: '/home/design/Shop.desegnos', name: 'Shop', pinned: false, openedAtMs: Date.now() - 3 * 60 * 60_000 },
@@ -112,5 +97,5 @@ try {
     }
   });
 } finally {
-  await rm(temporary, { recursive: true, force: true });
+  await modules.cleanup();
 }

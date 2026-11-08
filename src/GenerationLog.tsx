@@ -1,5 +1,5 @@
 import { errorValue, type ErrorValue } from './errorMessage.js';
-import { ProblemBanner } from './ProblemBanner.js';
+import { Notice } from './ProblemBanner.js';
 import { userError, generationError } from './userErrors.js';
 import { areaOutcome, declaredConflict, fixLabel, generationWarnings, jobOutcome, jsonBlocks, staleResult, staleResultMessage } from './generationProblems.js';
 import { useEffect, useRef, useState } from 'react';
@@ -60,11 +60,11 @@ export function GenerationLog({ job: currentJob, operation, error, project, cont
     const sent = frozen.find(item => item.elementId === area.elementId);
     const outcome = job?.candidate?.requests.find(item => item.elementId === area.elementId);
     const done = outcome?.status === 'implemented';
-    const current = project.requests?.find(request => request.targets.some(target => target.kind === 'element' && target.id === area.elementId))?.text;
+    const current = project.requests.find(request => request.targets.some(target => target.kind === 'element' && target.id === area.elementId))?.text;
     return { done, key: area.elementId, pageId: page?.id ?? '', exists: !!element, page: sent?.pageName || page?.name || 'Removed boundary',
       label: element ? elementName(element) : 'Removed layer', prompt: sent?.request || current || '', current,
       outcome: job ? areaOutcome(job, area.elementId, current) : null,
-      attachments: sent?.attachments ?? (past ? [] : project.requests?.find(request => request.targets.some(target => target.kind === 'element' && target.id === area.elementId))?.attachments ?? []) };
+      attachments: sent?.attachments ?? (past ? [] : project.requests.find(request => request.targets.some(target => target.kind === 'element' && target.id === area.elementId))?.attachments ?? []) };
   });
   const review = jobOutcome(job, id => requests.find(item => item.key === id)?.current);
   const openFix = (fix: Parameters<typeof fixLabel>[0]) => fix === 'aiSettings' ? openSettings : fix === 'import' ? openImport : openBrief;
@@ -143,7 +143,7 @@ export function GenerationLog({ job: currentJob, operation, error, project, cont
             <textarea ref={replyBox} rows={1} value={replyText} aria-label="Reply to the AI" placeholder="Reply to the AI…" maxLength={MAX_PROMPT_CHARS} onChange={event => setReplyText(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) { event.preventDefault(); void sendReply(); } }} />
             <button type="button" className="primary" disabled={busy || replySending || !replyText.trim()} onClick={() => void sendReply()}>Send</button>
           </div>}
-          {replyError && <ProblemBanner message={userError(replyError)} dismiss={() => setReplyError('')} />}
+          {replyError && <Notice variant="error" message={userError(replyError)} dismiss={() => setReplyError('')} />}
         </section>
       </>}
       <Disclosure className="past-generations" ariaLabel="Past generations" summary={`Past generations · ${history?.jobs.length ?? 0}`}>
@@ -154,7 +154,7 @@ export function GenerationLog({ job: currentJob, operation, error, project, cont
         </button></p>)}
         {history?.skipped ? <p className="field-help">{history.skipped} saved records could not be read.</p> : null}
         {history?.truncated && <p className="field-help">Showing the latest 100 saved generations.</p>}
-        {historyError && <ProblemBanner message={userError(historyError)} dismiss={() => setHistoryError('')} />}
+        {historyError && <Notice variant="error" message={userError(historyError)} dismiss={() => setHistoryError('')} />}
       </Disclosure>
       {(error || job?.message || job?.candidate || !!job?.validationEvents?.length) && <Disclosure summary="Technical details"><pre>{JSON.stringify({ error, message: job?.message, providerError: job?.providerError, validationEvents: job?.validationEvents, outcomes: job?.candidate?.requests }, null, 2)}</pre></Disclosure>}
     </div>

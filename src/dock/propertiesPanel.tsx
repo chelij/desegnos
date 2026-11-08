@@ -12,7 +12,7 @@ export function PropertiesPanel({ editor }: { editor: PropertiesEditor }) {
   if (!project) return null;
   const { selectedBoundary, selectedReferenceItem, selectedPointer, selectedRequest, selectedElementTargets, selectedElementPageId, selectedElements, selectedElementRequest, selectedPointerState } = propertySelection(project, canvasSelection, canvasFocus, pointerStateMap);
   function clashActions(pointer: Pointer, state: PointerStateView | null) {
-    const other = state?.clashWith.length ? (project?.pointers ?? []).find(item => item.id === state.clashWith[0]) ?? null : null;
+    const other = state?.clashWith.length ? project?.pointers.find(item => item.id === state.clashWith[0]) ?? null : null;
     return {
       keepComment: () => ["codeChanged", "needsExporting"].includes(state?.state ?? '') ? exports.forgetPointer(pointer.id) : keepPointerComment(pointer.id),
       keepCode: () => run(() => exports.keepPointerCode(pointer.id)),

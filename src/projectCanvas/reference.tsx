@@ -21,7 +21,7 @@ export function ReferenceLayer({ project, movingItems, selection, draftNote }: {
   project: Project; movingItems: Record<string, Rect>; selection: CanvasTarget[]; draftNote: Rect | null;
 }) {
   return <div className="reference-layer">
-    {(project.reference ?? []).map(item => {
+    {project.reference.map(item => {
       const rect = shownReference(item, movingItems);
       const isSelected = selection.some(target => target.kind === 'reference' && target.itemId === item.id);
       const element = item.kind.kind === 'element' ? structuredClone(resolveElement(project, item.kind.element)) : null;

@@ -11,7 +11,7 @@ function ownerPageId(project: Project, elementId: string): string | null {
 }
 
 const requestTargetingElement = (project: Project, elementId: string): PendingRequest | null =>
-  (project.requests ?? []).find(request => request.targets.some(target => target.kind === 'element' && target.id === elementId)) ?? null;
+  project.requests.find(request => request.targets.some(target => target.kind === 'element' && target.id === elementId)) ?? null;
 
 const elementRequest = (page: Project['pages'][number] | undefined, pageId: string, elementId: string, text: string, attachments: RequestAttachment[]): PendingRequest => ({
   id: crypto.randomUUID(), text, attachments, requestedAt: new Date().toISOString(),
@@ -36,7 +36,7 @@ export function useRequestEdits({ current, mutate, edits, setError, setNotice, s
   const setCanvasElementRequest = useCallback((elementId: string, data: { text: string; attachments: RequestAttachment[] } | null) => {
     const project = current.current?.project;
     if (!project) return;
-    const existing = (project.requests ?? []).find(request => request.targets.length === 1
+    const existing = project.requests.find(request => request.targets.length === 1
       && request.targets[0].kind === 'element' && request.targets[0].id === elementId) ?? null;
     if (data === null || (!data.text.trim() && !data.attachments.length)) {
       if (existing) removeCanvasRequests([existing.id]);
@@ -60,7 +60,7 @@ export function useRequestEdits({ current, mutate, edits, setError, setNotice, s
   }
 
   const attachToRequest = useCallback(async (requestId: string, files: File[], links: string[]) => {
-    const request = (current.current?.project?.requests ?? []).find(item => item.id === requestId);
+    const request = current.current?.project?.requests.find(item => item.id === requestId);
     if (!request) return;
     const { attachments, errors: problems } = await readRequestAttachments(request.attachments, files, links);
     if (!await mutate({ type: 'update_request', request: { ...request, attachments } })) return;

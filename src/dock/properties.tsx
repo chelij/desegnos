@@ -11,7 +11,7 @@ import { SIZE_PRESETS } from '../projectCanvas/sizes';
 import { requestAreaLabel, requestTargetLabel } from '../projectCanvas/requests';
 import { behaviourStateLabel } from '../projectCanvas/behaviours';
 import { PropsSection } from './sections';
-import { PropertyField } from './controls';
+import { PropertyField, validHttpUrl } from './controls';
 import { MAX_NAME_CHARS, MAX_PROMPT_CHARS, MAX_VIEWPORT_SIDE } from '../generated/limits';
 
 function wholeSize(draft: string, min: number, max: number) {
@@ -113,10 +113,6 @@ export function BoundaryProperties({ page, commit, updateSize, adaptSize, addSiz
     </div>
   </div>;
 }
-
-const validHttpUrl = (value: string) => {
-  try { const url = new URL(value.trim()); return (url.protocol === 'http:' || url.protocol === 'https:') && !!url.hostname; } catch { return false; }
-};
 
 export function ReferenceProperties({ item, update, remove, busy }: {
   item: ReferenceItem; update: (patch: { text?: string; url?: string; title?: string; color?: string }) => void;

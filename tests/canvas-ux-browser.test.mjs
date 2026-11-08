@@ -1,20 +1,12 @@
 // Real dock clicks and rendered text geometry, without a release build or desktop display.
-import assert from 'node:assert/strict';
-import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
-import { promisify } from 'node:util';
-import { fileURLToPath } from 'node:url';
-import { createServer } from 'vite';
+import { runInBrowser } from './browserFixture.mjs';
 
-const root = fileURLToPath(new URL('../', import.meta.url));
-await mkdir(join(root, 'test-results'), { recursive: true });
-const folder = await mkdtemp(join(root, 'test-results/canvas-ux-'));
-const fixture = join(folder, 'index.html');
-let server;
-try {
-  await writeFile(fixture, `<!doctype html><html><body><div id="dock"></div><div id="canvas" style="position:relative"></div><pre id="result">pending</pre>
-  <script type="module">
+const fixtureCanvasFont = { name: 'fixture-canvas-font', enforce: 'pre', transform(code, id) {
+  if (id.endsWith('/src/projectCanvas/fonts.ts')) return code.replace("import { native } from '../api';",
+    "const native = async <T,>() => ({ id: 'fixture-archivo', bundled: true, fellBack: false, italic: false } as T);");
+} };
+
+const script = `
   import React from 'react';
   import { createRoot } from 'react-dom/client';
   import { BoundaryProperties } from '/src/dock/properties.tsx';
@@ -99,24 +91,6 @@ try {
     }
     document.getElementById('result').textContent = 'PASS: preset selection/addition, base preservation, focused state, Adapt layout, slide/image presets; 8 text kinds × 3 alignments × 3 decorations and pill label geometry';
   } catch (error) { document.getElementById('result').textContent = 'FAIL: ' + error.stack; }
-  </script></body></html>`);
-  server = await createServer({ root, configFile: false, esbuild: { jsx: 'automatic' },
-    plugins: [{ name: 'fixture-canvas-font', enforce: 'pre', transform(code, id) {
-      if (id.endsWith('/src/projectCanvas/fonts.ts')) return code.replace("import { native } from '../api';",
-        "const native = async <T,>() => ({ id: 'fixture-archivo', bundled: true, fellBack: false, italic: false } as T);");
-    } }], cacheDir: join(folder, 'cache'),
-    server: { host: '127.0.0.1', port: 0, strictPort: false }, optimizeDeps: { entries: [fixture] } });
-  await server.listen();
-  const { stdout } = await promisify(execFile)(process.env.CHROMIUM ?? 'chromium', [
-    '--headless', '--no-first-run', '--disable-background-networking', '--disable-dev-shm-usage',
-    '--no-default-browser-check', '--password-store=basic', '--disable-extensions',
-    '--user-data-dir=' + join(folder, 'profile'), '--dump-dom', '--virtual-time-budget=15000',
-    'http://127.0.0.1:' + server.httpServer.address().port + fixture.slice(root.length - 1),
-  ], { timeout: 45000, maxBuffer: 2 * 1024 * 1024 });
-  const result = stdout.match(/<pre id="result">([\s\S]*?)<\/pre>/)?.[1];
-  assert.match(result ?? stdout.slice(-2000), /^PASS:/);
-  console.log(result);
-} finally {
-  await server?.close();
-  await rm(folder, { recursive: true, force: true });
-}
+`;
+console.log(await runInBrowser({ name: 'canvas-ux', script, plugins: [fixtureCanvasFont],
+  body: '<div id="dock"></div><div id="canvas" style="position:relative"></div>' }));

@@ -10,7 +10,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { CodeEditor } from '../CodeEditor';
 import { CompactNumberField, CompactTextField, fieldKeys, useFieldDraft } from '../CompactField';
 import { normalizeAngle } from '../numberExpression';
-import { ChoiceRow } from './controls';
+import { ChoiceRow, validHttpUrl } from './controls';
 import { PropsSection } from './sections';
 import { BehaviourField, type BehaviourProperty } from './properties';
 import { Icon } from '../icons';
@@ -22,11 +22,8 @@ import { EditScopeChoice, requestEditScope } from '../projectCanvas/selectionBar
 import { MAX_PROMPT_CHARS, MAX_VIEWPORT_SIDE } from '../generated/limits';
 
 const validNumber = (value: string) => Number.isFinite(Number(value));
-const validUrl = (value: string) => {
-  try { const url = new URL(value.trim()); return (url.protocol === 'http:' || url.protocol === 'https:') && !!url.hostname; } catch { return false; }
-};
 /** A hyperlink is a web address or a path to one of this project's boundaries. */
-const validLink = (value: string) => !value.trim() || (value.trim().startsWith('/') && !value.trim().startsWith('//')) || validUrl(value);
+const validLink = (value: string) => !value.trim() || (value.trim().startsWith('/') && !value.trim().startsWith('//')) || validHttpUrl(value);
 /** An Embed needs a target: a web address or one of this project's page paths. */
 const validEmbedAddress = (value: string) => !!value.trim() && validLink(value);
 
@@ -111,7 +108,7 @@ function RequestArea({ element, project, request, setRequest, error }: {
   function drop(event: React.DragEvent<HTMLDivElement>) {
     if (event.dataTransfer.files.length) { event.preventDefault(); void attach(Array.from(event.dataTransfer.files)); return; }
     const text = (event.dataTransfer.getData('text/uri-list') || event.dataTransfer.getData('text/plain') || '').trim();
-    if (!text || !validUrl(text)) return;
+    if (!text || !validHttpUrl(text)) return;
     event.preventDefault();
     void attach([], [text]);
   }
@@ -143,7 +140,7 @@ function RequestArea({ element, project, request, setRequest, error }: {
 function StylePicker({ project, category, label, value, choose, create, disabled }: {
   project: Project; category: 'colour' | 'text'; label: string; value?: string | null; choose: (id: string | null) => void; create: () => void; disabled: boolean;
 }) {
-  const styles = category === 'colour' ? project.styles?.colours : project.styles?.text;
+  const styles = category === 'colour' ? project.styles.colours : project.styles.text;
   return <select aria-label={`${label} style`} title="Style" value={value ?? ''} disabled={disabled} style={{ width: 100, minWidth: 0, flex: 'none' }}
     onChange={event => event.target.value === '__create' ? create() : choose(event.target.value || null)}>
     <option value="">Custom</option>{styles?.map(style => <option key={style.id} value={style.id}>{style.name}</option>)}
@@ -195,7 +192,7 @@ export function ElementProperties({ project, page, sizeId, elements, busy, updat
   const shared = useMemo(() => sharedElementValues(elements), [elements]);
   const linkIds = elements.map(element => linkedDefinition(project, element)?.id ?? null);
   const sharedLinkId = multi && linkIds.every(id => id === linkIds[0]) ? linkIds[0] : null;
-  const sharedLinked = sharedLinkId ? project.linked?.[sharedLinkId] ?? null : null;
+  const sharedLinked = sharedLinkId ? project.linked[sharedLinkId] ?? null : null;
   // Edits in one size become that size's overrides; All sizes changes base values and clears
   // the same fields from every size.
   const sized = <T,>(patch: T): T & { size_id?: string | null; all_sizes?: boolean } =>
@@ -234,12 +231,12 @@ export function ElementProperties({ project, page, sizeId, elements, busy, updat
       try {
         if (reference === 'text') {
           const { color: _color, align: _align, ...properties } = elements[0].style.textStyle;
-          await styleCommand({ type: 'add_text_style', style: { id, name: `Text ${(project.styles?.text.length ?? 0) + 1}`, ...properties } });
+          await styleCommand({ type: 'add_text_style', style: { id, name: `Text ${project.styles.text.length + 1}`, ...properties } });
         } else {
           const style = elements[0].style;
           const value = reference === 'fill' ? style.fill : reference === 'stroke' ? style.stroke.color : style.textStyle.color;
           if (!value) return;
-          await styleCommand({ type: 'add_colour_style', style: { id, name: `Colour ${(project.styles?.colours.length ?? 0) + 1}`, value } });
+          await styleCommand({ type: 'add_colour_style', style: { id, name: `Colour ${project.styles.colours.length + 1}`, value } });
         }
         choose(id);
       } catch (reason) { error(reason instanceof Error ? reason.message : String(reason)); }
@@ -399,7 +396,7 @@ export function ElementProperties({ project, page, sizeId, elements, busy, updat
         <input ref={picture} type="file" hidden accept={IMAGE_MIME_TYPES.join(',')} onChange={event => { choosePicture(event.target.files?.[0]); event.target.value = ''; }} />
       </div>}
       {kind === 'embed' && single && <ProjectPageSelect label="Embed page…" project={project} value={single.url} disabled={busy} choose={commitUrl} />}
-      {mediaKind && <CompactTextField label="Address" value={url ?? ''} disabled={busy} valid={kind === 'embed' ? validEmbedAddress : validUrl} commit={value => update(elements.map(element => ({ id: element.id, url: value.trim() })))} />}
+      {mediaKind && <CompactTextField label="Address" value={url ?? ''} disabled={busy} valid={kind === 'embed' ? validEmbedAddress : validHttpUrl} commit={value => update(elements.map(element => ({ id: element.id, url: value.trim() })))} />}
     </PropsSection>}
     {textKind && <PropsSection id="props-text" title="Text">
       {picker('text')}

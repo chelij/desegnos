@@ -1,5 +1,5 @@
 import { errorValue, type ErrorValue } from '../errorMessage.js';
-import { readJsonPreference, writePreference } from '../preferences';
+import { readJsonPreference, writeJsonPreference } from '../preferences';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { defaultExportFolder } from './exportFolder';
 import { native } from '../api';
@@ -36,13 +36,8 @@ type Context = {
 
 const EXPORT_FOLDERS_KEY = 'desegnos.export-folders';
 
-function readExportFolders(): Record<string, string> {
-  try {
-    const raw: unknown = readJsonPreference(EXPORT_FOLDERS_KEY, {});
-    if (!raw || typeof raw !== 'object') return {};
-    return Object.fromEntries(Object.entries(raw).filter((entry): entry is [string, string] => typeof entry[1] === 'string'));
-  } catch { return {}; }
-}
+const readExportFolders = (): Record<string, string> => readJsonPreference(EXPORT_FOLDERS_KEY, raw => !raw || typeof raw !== 'object' ? {}
+  : Object.fromEntries(Object.entries(raw).filter((entry): entry is [string, string] => typeof entry[1] === 'string')));
 
 export function useExportJobs(context: Context) {
   const { current, view, panel, setPlay, openPanel, closePanel } = context;
@@ -83,7 +78,7 @@ export function useExportJobs(context: Context) {
   // An error about a boundary that was added or removed no longer describes the current export.
   const pageIds = view?.project?.pages.map(page => page.id).join() ?? '';
   useEffect(() => { setExportError(''); }, [pageIds]);
-  useEffect(() => { writePreference(EXPORT_FOLDERS_KEY, JSON.stringify(exportFolders)); }, [exportFolders]);
+  useEffect(() => { writeJsonPreference(EXPORT_FOLDERS_KEY, exportFolders); }, [exportFolders]);
   // A new export creates one project folder inside Documents/Desegnos.
   useEffect(() => {
     const project = view?.project;

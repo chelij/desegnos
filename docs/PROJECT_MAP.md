@@ -170,7 +170,7 @@ test-results/                Local evidence from smoke, startup and vault runs (
 | [main.tsx](../src/main.tsx) | Mounts `App`, installs the usage log and history-step listener, and loads global CSS. |
 | [api.ts](../src/api.ts) | `native` invocation (command names typed by `CommandName`) plus usage recording; `edit(revision, command)` for revision-checked edits. |
 | [types.ts](../src/types.ts) | Re-exports `src/generated/types.ts` and holds the few frontend-only types (`Viewport`, `ElementKind`, `kindFields`). |
-| [generated/](../src/generated) | Written from Rust by `npm run generate:contract`; never edit: `types.ts` (every payload, view, `Command`, error kind), `limits.ts` (limits, MIME/route lists, element/template defaults, size labels and grid default) and `commands.ts` (`CommandName`, `IMAGE_DRAG_EVENT`); `elementFacts.json` cross-checks live frontend labels against Rust, including Unicode. |
+| [generated/](../src/generated) | Written from Rust by `npm run generate:contract`; never edit: `types.ts` (every payload, view, `Command`, error kind), `limits.ts` (limits, MIME/route lists, element/template defaults, size labels and grid default) and `commands.ts` (`CommandName`, `IMAGE_DRAG_EVENT`); `elementFacts.json` cross-checks live frontend labels against Rust, including Unicode. The canvas's TypeScript copy of linked-element, size-override and shared-style resolution ([sizes.ts](../src/projectCanvas/sizes.ts), [links.ts](../src/projectCanvas/links.ts)) is cross-checked the same way: `crates/desegnos-core/tests/resolution_fixture.rs` resolves a fixture project in Rust and writes `tests/fixtures/resolution.json`; `tests/resolution.test.mjs` runs the TypeScript resolver on that project and compares. The Rust test fails when the fixture is stale; `npm run generate:contract` (`UPDATE_GENERATED=1`) rewrites it. |
 | [ProjectCanvas.tsx](../src/ProjectCanvas.tsx) | Canvas rendering and overlays; `useProjectCanvas.tsx` assembles camera, gestures, Request tools, selection, inline editing and drops. |
 | [projectCanvas/camera.ts](../src/projectCanvas/camera.ts) | Zoom levels, grid snap, camera fit/pan/zoom, dot grid and rect helpers shared by everything on the canvas. |
 | [projectCanvas/boundaryLayout.ts](../src/projectCanvas/boundaryLayout.ts) | Boundary layout from pages and sizes, drawing, push-apart and moves, boundary hit tests. |
@@ -182,6 +182,9 @@ test-results/                Local evidence from smoke, startup and vault runs (
 | [dock/controls.tsx](../src/dock/controls.tsx), [dock/properties.tsx](../src/dock/properties.tsx) | Reusable property fields and boundary/reference/request/project/pointer editors. |
 | [dock/layers.tsx](../src/dock/layers.tsx) | Layers, requests, pointers, styles and named-view tree. |
 | [dock/propertiesPanel.tsx](../src/dock/propertiesPanel.tsx), [dock/selection.ts](../src/dock/selection.ts) | Selection derivation and property-editor/behaviour wiring. |
+| [projectCanvas/ColourField.tsx](../src/projectCanvas/ColourField.tsx), [FontField.tsx](../src/projectCanvas/FontField.tsx), [sharedElementValues.ts](../src/projectCanvas/sharedElementValues.ts) | The colour and font property fields, and the value (or `Mixed`) a multi-selection shares. |
+| [projectCanvas/fonts.ts](../src/projectCanvas/fonts.ts) | The canvas font handshake with native `fonts.rs`: loads, aliases and measures faces, and exposes the family list and a revision that redraws text when a font arrives. |
+| [projectCanvas/behaviours.ts](../src/projectCanvas/behaviours.ts), [boundaryDefaults.ts](../src/projectCanvas/boundaryDefaults.ts), [selectionGeometry.ts](../src/projectCanvas/selectionGeometry.ts) | Behaviour pointers and their commands; page/slide/image boundary defaults and labels; selection entries and bounds. |
 | [projectCanvas/elementFacts.ts](../src/projectCanvas/elementFacts.ts) | Canvas element labels and tree lookup; kind labels, placeholders and default layer names come from the generated Rust contract. Live label/name predicates are cross-checked against generated Rust cases. |
 | [EditorTools.tsx](../src/EditorTools.tsx) | Left tool strip, Request area-shape flyout (Pick, Rectangle, Ellipse, Polygon, Freehand), insert flyout, zoom control, labels and shortcut tooltips. |
 | [shortcuts.ts](../src/shortcuts.ts) | Action metadata, tool mapping, keys, derived display labels, matching and keyboard help. F starts a Request on the selection or picks the Request tool, Shift+F takes a selected shape's outline, and Delete/Backspace removes the selection. |
@@ -201,10 +204,11 @@ test-results/                Local evidence from smoke, startup and vault runs (
 | [session/useBoundaryCommands.ts](../src/session/useBoundaryCommands.ts), [session/useNamedViews.ts](../src/session/useNamedViews.ts) | Boundary creation/resizing/layout and named camera-view edits. |
 | [session/projectEdits.ts](../src/session/projectEdits.ts) | Feature editing API shared by canvas and property controls. |
 | [preferences.ts](../src/preferences.ts), [usePoll.ts](../src/usePoll.ts) | Optional browser preference storage and cancellable, non-overlapping native progress polling. |
-| [exportJobs/useExportJobs.ts](../src/exportJobs/useExportJobs.ts) | Export jobs, preview, Play coordination and debounced pointer-clash rechecks. |
+| [exportJobs/useExportJobs.ts](../src/exportJobs/useExportJobs.ts), [exportJobs/exportFolder.ts](../src/exportJobs/exportFolder.ts) | Export jobs, preview, Play coordination and debounced pointer-clash rechecks; the default export folder lookup. |
 | [Menus.tsx](../src/Menus.tsx) | Accessible menu button, popover positioning and keyboard navigation. |
 | [WorkspaceSurface.tsx](../src/WorkspaceSurface.tsx) | Panel/banner/start/canvas surface host, stacking and focus return; each open surface registers with `escape.ts`. |
-| [ProblemBanner.tsx](../src/ProblemBanner.tsx), [noticeSummary.ts](../src/noticeSummary.ts) | Notice queue/host, problem banners and the changed-pages summary for generation results. |
+| [ProblemBanner.tsx](../src/ProblemBanner.tsx), [noticeSummary.ts](../src/noticeSummary.ts) | `Notice` (the one banner component; errors pass `variant="error"`), the notice queue/host and the changed-pages summary for generation results. |
+| [colourValue.ts](../src/colourValue.ts), [wheelStep.ts](../src/wheelStep.ts) | CSS colour parsing to hex for colour fields; the global wheel-over-number-field stepping handler (WebKitGTK workaround). |
 | [Disclosure.tsx](../src/Disclosure.tsx), [StatusChip.tsx](../src/StatusChip.tsx), [icons.tsx](../src/icons.tsx) | Shared disclosure row, status badge and inline icon set. |
 | [DraftText.tsx](../src/DraftText.tsx) | `useDraftText`: batched text commits that never overwrite newer typing. |
 | [dock/historyPanel.tsx](../src/dock/historyPanel.tsx), [historySteps.ts](../src/historySteps.ts) | Versions/alternatives in the dock, derived history labels, and ending the native history step when a text field loses focus. |
@@ -285,8 +289,8 @@ test-results/                Local evidence from smoke, startup and vault runs (
 
 ### Deleting selections
 
-1. **Delete/Backspace** removes every selection kind in one gesture: layers, reference items, pointers and requests, or the focused boundary when nothing is selected. The canvas action modules collect the selection and call `removeCanvasSelection` in [useEditor.tsx](../src/session/useEditor.tsx), which sends one `delete_items` command.
-2. The dock's row trash buttons use the same path: a layer row, reference row, pointer row or request row deletes just that item, and a boundary is removed as a page or as one linked size through `delete_items` page/size ids. [RequestProperties](../src/EditorDock.tsx) has its own Delete request action.
+1. **Delete/Backspace** removes every selection kind in one gesture: layers, reference items, pointers and requests, or the focused boundary when nothing is selected. The canvas action modules collect the selection and call `removeCanvasSelection` in [useCanvasEdits.ts](../src/session/useCanvasEdits.ts), which sends one `delete_items` command.
+2. The dock's row trash buttons use the same path: a layer row, reference row, pointer row or request row deletes just that item, and a boundary is removed as a page or as one linked size through `delete_items` page/size ids. [RequestProperties](../src/dock/properties.tsx) has its own Delete request action.
 3. Core removes explicitly selected requests first, then their targets, then `prune_requests` drops dangling targets and requests left with nothing to act on. The gesture is one undoable step and its toast offers Undo.
 
 ### Generation: request → element operations → apply
@@ -336,7 +340,7 @@ Brand import is separate: `prepare_website_import_url` and `pick_website_import_
 | --- | --- | --- |
 | **Boundary** | `Page`, `PageSize`, `Page.sizes`, `BoundaryKind::{Page, Screen}` | One `Page` draws one boundary per linked size. "Page" here is a canvas output, not an HTML page or a website home page. |
 | **Layer** | `Element`, `ElementKind::Group` | A layer is one element or a group; `ElementMeta` carries its request history and context. |
-| **Request** | `PendingRequest`, `Project.requests`, `RequestLayer`, `RequestBoxEditor`, [RequestProperties](../src/EditorDock.tsx), `request_history.rs` | Requests belong to the project, not to one layer, so one request can target a mix of layers, boundaries, reference items and pointers. The old **Frame** word survives in geometry helpers (`FrameCorner`, `frameBox`, `drawnFrameRect`, `referenceFrameRect` in [referenceGeometry.ts](../src/projectCanvas/referenceGeometry.ts)); read all of them as Request. The session label `"AI filled frames"` is historical wording for a generation step. |
+| **Request** | `PendingRequest`, `Project.requests`, `RequestLayer`, `RequestBoxEditor`, [RequestProperties](../src/dock/properties.tsx), `request_history.rs` | Requests belong to the project, not to one layer, so one request can target a mix of layers, boundaries, reference items and pointers. The old **Frame** word survives only in the session label `"AI filled frames"`, historical wording for a generation step. |
 | **Reference** | `Project.reference`, `ReferenceItem`, `ReferenceKind`, [reference.tsx](../src/projectCanvas/reference.tsx) | The spec renamed **Moodboard** to Reference. No `moodboard` identifier remains in `src/`, `crates/` or `src-tauri/`; only the glossary's Gone table still records the old word. |
 | **Pointer / comment / wired** | `Pointer`, `Pointer.comment`, `PointerWiring`, `PointerState` | `Pointer.play` holds a classified simple action. |
 | **Clash** | `PointerState::{CodeChanged, Contradicts, Broken}`, `ExportRecord.pointers`, `pointer_fingerprints` | Resolved by `ResolvePointerClash`, `SetPointerWiring`/Keep code and `ForgetExportPointer`/Keep comment. |
@@ -361,11 +365,12 @@ Named views persist in `Project.views`; commands and validation live in [model.r
 | `npm run build` | `tsc --noEmit && vite build`. |
 | `npm test` | `cargo test --workspace` through `scripts/run.mjs cargo`. |
 | `npm run check:rust` | Clippy for the workspace, all targets, warnings denied. |
-| `npm run test:editor` | `scripts/test-editor.mjs` discovers every top-level `tests/*.test.mjs` except the three headless-browser suites (AI models, canvas UX, notices). Includes Play, release orchestration and launcher tests. |
+| `npm run test:editor` | `scripts/test-editor.mjs` runs every top-level `tests/*.test.mjs` except the headless-browser suites, which are named `*-browser.test.mjs`. Includes Play, release orchestration and launcher tests. |
+| `npm run test:browser` | The same script with `--browser`: every `*-browser.test.mjs` suite (canvas UX, AI models, notices, workspace surfaces, import flow) in headless Chromium. |
 | `npm run test:canvas-ux` | `tests/canvas-ux-browser.test.mjs`: canvas interactions in headless Chromium. |
 | `npm run test:ai-models` | `tests/ai-models-browser.test.mjs`: AI model list in headless Chromium. |
-| `npm run generate:contract` | `scripts/generate-contract.mjs`: regenerates `src/generated/` from Rust. |
-| `npm run test:notices` | `tests/notice-system.test.mjs`: notice queue and layout in headless Chromium (~10s, kept out of `test:editor`). |
+| `npm run generate:contract` | `scripts/generate-contract.mjs`: regenerates `src/generated/` and `tests/fixtures/resolution.json` from Rust. |
+| `npm run test:notices` | `tests/notice-system-browser.test.mjs`: notice queue and layout in headless Chromium (kept out of `test:editor`). |
 | `npm run test:smoke` | `tests/native/canvas-smoke.mjs`: builds the `native-tests,gtk-dialogs` app and drives the real editor on a guarded Xvfb display and private session bus. Linux only. |
 | `npm run test:vault` | `scripts/test-vault.mjs`: native secret-service vault flow against a loopback provider. |
 | `npm run release:local` | `scripts/build-release.mjs`: Tauri release build (no bundle), then the guarded Linux startup check. `--dist` keeps the full LTO release profile. |
@@ -397,9 +402,9 @@ Every top-level test file runs under one of these scripts. Packages are installe
 | [generation-session.test.mjs](../tests/generation-session.test.mjs) | Owned vs restored job notices. |
 | [generation-status.test.mjs](../tests/generation-status.test.mjs) | Status-bar retry, fix and question logic. |
 | [identity-review.test.mjs](../tests/identity-review.test.mjs) | Colour/font parsing, roles and deduplication. |
-| [import-flow.test.mjs](../tests/import-flow.test.mjs) | Brand source review, resume and page-import handoff. |
+| [import-flow-browser.test.mjs](../tests/import-flow-browser.test.mjs) | Brand source review, resume and page-import handoff, with the real components in headless Chromium and native commands stubbed. |
 | [notice-summary.test.mjs](../tests/notice-summary.test.mjs) | Outside-change summaries and fallbacks. |
-| [notice-system.test.mjs](../tests/notice-system.test.mjs) | Headless notice queue, preemption, duplicates and layout. |
+| [notice-system-browser.test.mjs](../tests/notice-system-browser.test.mjs) | Headless notice queue, preemption, duplicates and layout. |
 | [problem-banner.test.mjs](../tests/problem-banner.test.mjs) | Banner variants, callbacks, close and priority order. |
 | [project-canvas-geometry.test.mjs](../tests/project-canvas-geometry.test.mjs) | Boundary layout/push/snap, sizes and camera fitting. |
 | [recovery-banner.test.mjs](../tests/recovery-banner.test.mjs) | Recovery error typing, choice markup and persistence beside open projects. |
@@ -407,8 +412,12 @@ Every top-level test file runs under one of these scripts. Packages are installe
 | [tauri-launcher.test.mjs](../tests/tauri-launcher.test.mjs) | Launcher `CI` normalization and environment. |
 | [update-check.test.mjs](../tests/update-check.test.mjs) | Newer/current/no-release update messages. |
 | [visible-actions.test.mjs](../tests/visible-actions.test.mjs) | Conditional control visibility across surfaces. |
-| [workspace-surfaces.test.mjs](../tests/workspace-surfaces.test.mjs) | Non-modal editor panels (with the unsaved-work modal exempted), panel switching, save-conflict focus and Escape. |
-| [typescript.mjs](../tests/typescript.mjs) | Compiles browser TS entry points into an importable Node tree for tests. |
+| [workspace-surfaces-browser.test.mjs](../tests/workspace-surfaces-browser.test.mjs) | Non-modal editor panels (with the unsaved-work modal exempted), panel switching, save-conflict focus and Escape. |
+| [typescript.mjs](../tests/typescript.mjs) | `compileModules`: the one TypeScript compile for Node tests; compiles entry points into an importable tree. |
+| [browserFixture.mjs](../tests/browserFixture.mjs) | `runInBrowser`: the one Vite dev server plus headless Chromium runner for `*-browser.test.mjs`, with a `tauriStub` plugin for native commands. |
+| [project-map.test.mjs](../tests/project-map.test.mjs) | Every `src/**` file name appears in this map. |
+| [resolution.test.mjs](../tests/resolution.test.mjs), [fixtures/resolution.json](../tests/fixtures/resolution.json) | Canvas TypeScript resolver compared with the core's resolved trees (see `generated/` above). |
+| [resolution_fixture.rs](../crates/desegnos-core/tests/resolution_fixture.rs) | Writes and checks that fixture; fails when it is stale. |
 | [native/canvas-smoke.mjs](../tests/native/canvas-smoke.mjs) | Real-app Xvfb/WebDriver smoke: Home, templates, tools, Request Pick and drawn area shapes with queued requests, boundary/element drawing, Properties, Layers, sizes, History and save/reopen. |
 | [native/webdriver.mjs](../tests/native/webdriver.mjs) | Minimal WebDriver client and wait helpers. |
 | [native/provider-server.mjs](../tests/native/provider-server.mjs) | Loopback provider fixture that asserts no synthetic keys leak. |

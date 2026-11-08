@@ -1,18 +1,10 @@
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { join } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
 import test from 'node:test';
+import { compileModules } from './typescript.mjs';
 
-const root = fileURLToPath(new URL('../', import.meta.url));
-const temporary = await mkdtemp(join(root, '.update-check-'));
+const modules = await compileModules(['src/updateCheck.ts']);
 try {
-  const compiler = fileURLToPath(new URL('bin/tsc', import.meta.resolve('typescript/package.json')));
-  const result = spawnSync(process.execPath, [compiler, '--ignoreConfig', '--module', 'esnext', '--target', 'ES2022',
-    '--moduleResolution', 'bundler', '--skipLibCheck', '--outDir', temporary, 'src/updateCheck.ts'], { cwd: root, encoding: 'utf8' });
-  assert.equal(result.status, 0, result.stderr || result.stdout || String(result.error));
-  const { updateSummary } = await import(pathToFileURL(join(temporary, 'updateCheck.js')).href);
+  const { updateSummary } = await modules.load('updateCheck.js');
 
   const release = { version: '0.2.0', name: 'Desegnos 0.2.0', url: 'https://github.com/chelij/desegnos/releases/tag/v0.2.0', publishedAt: '2026-11-01T10:00:00Z' };
 
@@ -29,5 +21,5 @@ try {
       { variant: 'info', message: 'No releases yet.', download: null });
   });
 } finally {
-  await rm(temporary, { recursive: true, force: true });
+  await modules.cleanup();
 }

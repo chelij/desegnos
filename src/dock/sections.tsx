@@ -1,18 +1,11 @@
 import { useCallback, useSyncExternalStore, type ReactNode } from 'react';
 import { Icon } from '../icons';
-import { readPreference as readString, writePreference as store } from '../preferences';
+import { readJsonPreference, stringList, writeJsonPreference } from '../preferences';
 
 const SECTION_COLLAPSED_KEY = 'desegnos.dock-section-collapsed';
 
-function readCollapsedSections(): Set<string> {
-  try {
-    const raw: unknown = JSON.parse(readString(SECTION_COLLAPSED_KEY) ?? '[]');
-    return new Set(Array.isArray(raw) ? raw.filter((key): key is string => typeof key === 'string') : []);
-  } catch { return new Set(); }
-}
-function storeCollapsedSections(collapsed: ReadonlySet<string>) {
-  store(SECTION_COLLAPSED_KEY, JSON.stringify([...collapsed]));
-}
+const readCollapsedSections = () => new Set(readJsonPreference(SECTION_COLLAPSED_KEY, stringList));
+const storeCollapsedSections = (collapsed: ReadonlySet<string>) => writeJsonPreference(SECTION_COLLAPSED_KEY, [...collapsed]);
 
 // One shared snapshot keeps separately mounted sections in step and on disk;
 // every toggle merges into the latest stored set instead of overwriting it.

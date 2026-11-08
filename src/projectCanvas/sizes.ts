@@ -82,15 +82,14 @@ export function sizeAtWidth(page: Page, width: number): PageSize {
   return sizes.filter(size => size.width <= width).at(-1) ?? sizes[0];
 }
 export function resolveSharedStyles(project: Project, elements: Element[]): void {
-  if (!project.styles) return;
   for (const element of elements) {
     const style = element.style, refs = style.references;
-    const colour = (id: string | null | undefined) => project.styles?.colours.find(item => item.id === id)?.value;
+    const colour = (id: string | null | undefined) => project.styles.colours.find(item => item.id === id)?.value;
     const fill = colour(refs?.fill), stroke = colour(refs?.stroke), textColour = colour(refs?.textColour);
     if (fill) style.fill = fill;
     if (stroke) style.stroke.color = stroke;
     if (textColour) style.textStyle.color = textColour;
-    const text = project.styles?.text.find(item => item.id === refs?.text);
+    const text = project.styles.text.find(item => item.id === refs?.text);
     if (text) { const { id: _id, name: _name, ...properties } = text; Object.assign(style.textStyle, properties); }
     resolveSharedStyles(project, element.children);
   }

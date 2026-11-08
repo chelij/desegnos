@@ -21,7 +21,7 @@ export const isPresenting = (project: Project, play: PlayState) =>
 
 /** The pointer a click on this element runs in Play, or null when it runs nothing. */
 function playPointerAt(project: Project, pageId: string, elementId: string): Pointer | null {
-  for (const pointer of project.pointers ?? []) {
+  for (const pointer of project.pointers) {
     if (pointer.from.kind !== 'element' || pointer.from.pageId !== pageId || pointer.from.elementId !== elementId) continue;
     if (pointer.play) return pointer;
   }

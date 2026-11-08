@@ -52,7 +52,7 @@ export function useGenerationFlow({ project, canGenerateFromBrief, canvasSelecti
   const working = generation.canStop || activeGeneration(generation.job) || !!generation.operation;
   const showGenerationStatus = !!generation.error || announcesStatus(generation.job, { owns: generation.owns, stopped: generation.stopped, working });
 
-  const requestedAreas = project ? (project.requests ?? []).filter(request => request.text.trim()).length : 0;
+  const requestedAreas = project ? project.requests.filter(request => request.text.trim()).length : 0;
   // With nothing described, a filled brief captures the first empty page as one request area.
   const firstPage = project?.pages[0];
   const firstBoundary = firstPage && canvasBoundaries.find(item => item.pageId === firstPage.id && item.sizeId === baseSizeId(firstPage));

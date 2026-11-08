@@ -1,17 +1,10 @@
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { join } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
 import test from 'node:test';
+import { compileModules } from './typescript.mjs';
 
-const root = fileURLToPath(new URL('../', import.meta.url));
-const temporary = await mkdtemp(join(root, '.identity-review-'));
+const modules = await compileModules(['src/identityReview.ts']);
 try {
-  const compiler = fileURLToPath(new URL('bin/tsc', import.meta.resolve('typescript/package.json')));
-  const result = spawnSync(process.execPath, [compiler, '--ignoreConfig', '--module', 'esnext', '--target', 'ES2022', '--moduleResolution', 'bundler', '--skipLibCheck', '--outDir', temporary, 'src/identityReview.ts'], { cwd: root, encoding: 'utf8' });
-  assert.equal(result.status, 0, result.stderr || result.stdout || String(result.error));
-  const { parseColours, parseFonts, parseTone, findingSection, groupIdentityPages, selectedPageContent } = await import(pathToFileURL(join(temporary, 'identityReview.js')).href);
+  const { parseColours, parseFonts, parseTone, findingSection, groupIdentityPages, selectedPageContent } = await modules.load('identityReview.js');
   const hexes = value => parseColours(value).map(colour => colour.hex);
   await test('several hex colours keep local roles and expand shorthand', () => {
     assert.deepEqual(parseColours('Background: #faf8f2; Accent: #257; Text: #18232a'), [
@@ -105,4 +98,4 @@ try {
   });
 
 
-} finally { await rm(temporary, { recursive: true, force: true }); }
+} finally { await modules.cleanup(); }

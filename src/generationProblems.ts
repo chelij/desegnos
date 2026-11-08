@@ -7,7 +7,7 @@ export type Outcome = { retryable: boolean; reason: string; fix?: OutcomeFix };
 export type JobOutcome = { reason: string; retryable: string[]; blocked: { elementId: string; reason: string; fix?: OutcomeFix }[]; retryAll: boolean; retryBatches: boolean };
 
 export function requestText(project: Project | null, elementId: string): string {
-  const request = (project?.requests ?? []).find(item => item.targets.some(target => target.kind === 'element' && target.id === elementId));
+  const request = project?.requests.find(item => item.targets.some(target => target.kind === 'element' && target.id === elementId));
   return request?.text ?? '';
 }
 

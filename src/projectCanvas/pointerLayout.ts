@@ -23,6 +23,6 @@ export function pointerWorld(project: Project, boundaries: Boundary[], moving: {
   return {
     requests: elementBoxes(project, boundaries, moving),
     boundaries: boundaries.map(item => ({ pageId: item.pageId, sizeId: item.sizeId, rect: moving && moving.sizeId === item.sizeId && moving.pageId === item.pageId ? moving.rect : item.rect })),
-    reference: (project.reference ?? []).map(item => ({ itemId: item.id, rect: movingItems[item.id] ?? item.rect, url: item.kind.kind === 'link' ? item.kind.url : undefined })),
+    reference: project.reference.map(item => ({ itemId: item.id, rect: movingItems[item.id] ?? item.rect, url: item.kind.kind === 'link' ? item.kind.url : undefined })),
   };
 }

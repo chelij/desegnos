@@ -24,7 +24,7 @@ export function pointerEndpointName(endpoint: PointerSource | PointerTarget, pro
     }
     case 'boundary': return project.pages.find(item => item.id === endpoint.pageId)?.name ?? missing;
     case 'reference': {
-      const item = (project.reference ?? []).find(entry => entry.id === endpoint.itemId);
+      const item = project.reference.find(entry => entry.id === endpoint.itemId);
       return item ? referenceLabel(item) : missing;
     }
     case 'url': return endpoint.url;

@@ -2,7 +2,7 @@ import { Fragment, useEffect, useRef, useState, type PointerEvent as ReactPointe
 import { Icon, type IconName } from './icons';
 
 import { clampDockWidth, MIN_PANEL_HEIGHT, type PanelState, type PanelActions } from './dock/panelState';
-import { readPreference as readString, writePreference as store } from './preferences';
+import { readJsonPreference, stringList, writeJsonPreference } from './preferences';
 const PANEL_WEIGHTS_KEY = 'desegnos.dock-panel-weights';
 const PANEL_COLLAPSED_KEY = 'desegnos.dock-panel-collapsed';
 function DockSection({ name, open, toggle, children, grow, register, fitContent }: {
@@ -18,20 +18,9 @@ function DockSection({ name, open, toggle, children, grow, register, fitContent 
   </section>;
 }
 
-function readWeights(): Record<string, number> {
-  try {
-    const raw: unknown = JSON.parse(readString(PANEL_WEIGHTS_KEY) ?? '{}');
-    if (!raw || typeof raw !== 'object') return {};
-    return Object.fromEntries(Object.entries(raw).filter(([, value]) => typeof value === 'number' && Number.isFinite(value) && value > 0));
-  } catch { return {}; }
-}
-
-function readCollapsedPanels(): ReadonlySet<string> {
-  try {
-    const raw: unknown = JSON.parse(readString(PANEL_COLLAPSED_KEY) ?? '[]');
-    return new Set(Array.isArray(raw) ? raw.filter((key): key is string => typeof key === 'string') : []);
-  } catch { return new Set(); }
-}
+const readWeights = (): Record<string, number> => readJsonPreference(PANEL_WEIGHTS_KEY, raw => !raw || typeof raw !== 'object' ? {}
+  : Object.fromEntries(Object.entries(raw).filter(([, value]) => typeof value === 'number' && Number.isFinite(value) && value > 0)));
+const readCollapsedPanels = (): ReadonlySet<string> => new Set(readJsonPreference(PANEL_COLLAPSED_KEY, stringList));
 
 const DOCK_ICONS: Record<string, IconName> = { history: 'history', export: 'external', properties: 'properties', layers: 'layers' };
 /** Properties carries the most fields, so it starts taller than History and Layers. */
@@ -49,8 +38,8 @@ export function EditorDock({ state, actions, properties, layers, history, export
   const [weights, setWeights] = useState<Record<string, number>>(readWeights);
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(readCollapsedPanels);
   const nodes = useRef(new Map<string, HTMLElement>());
-  useEffect(() => { store(PANEL_WEIGHTS_KEY, JSON.stringify(weights)); }, [weights]);
-  useEffect(() => { store(PANEL_COLLAPSED_KEY, JSON.stringify([...collapsed])); }, [collapsed]);
+  useEffect(() => { writeJsonPreference(PANEL_WEIGHTS_KEY, weights); }, [weights]);
+  useEffect(() => { writeJsonPreference(PANEL_COLLAPSED_KEY, [...collapsed]); }, [collapsed]);
 
   function startResize(event: ReactPointerEvent<HTMLDivElement>) {
     event.preventDefault();

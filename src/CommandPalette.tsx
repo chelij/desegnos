@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import './palette.css';
+import { readJsonPreference, stringList, writeJsonPreference } from './preferences';
 
 export type PaletteCommand = {
   id: string;
@@ -14,17 +15,8 @@ const RECENT_KEY = 'desegnos.recent-commands';
 const RECENT_LIMIT = 6;
 const MAX_ROWS = 80;
 
-function readRecent(): string[] {
-  try {
-    const value: unknown = JSON.parse(localStorage.getItem(RECENT_KEY) ?? '[]');
-    return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string').slice(0, RECENT_LIMIT) : [];
-  } catch { return []; }
-}
-
-function rememberRecent(id: string) {
-  try { localStorage.setItem(RECENT_KEY, JSON.stringify([id, ...readRecent().filter(item => item !== id)].slice(0, RECENT_LIMIT))); }
-  catch { /* The recent order is a convenience, never a requirement. */ }
-}
+const readRecent = (): string[] => readJsonPreference(RECENT_KEY, stringList).slice(0, RECENT_LIMIT);
+const rememberRecent = (id: string) => writeJsonPreference(RECENT_KEY, [id, ...readRecent().filter(item => item !== id)].slice(0, RECENT_LIMIT));
 
 function fuzzyScore(needle: string, haystack: string): number | null {
   let index = 0, score = 0, streak = 0;

@@ -15,7 +15,7 @@ export type RequestDraft = { targets: RequestTarget[]; area: RequestArea | null 
 
 /** Pending requests in project order, with the size their marker sits in. */
 export function pendingRequests(project: Project): { request: PendingRequest; pageId: string | null; sizeId: string | null }[] {
-  return (project.requests ?? []).map(request => {
+  return project.requests.map(request => {
     const element = request.targets.find((target): target is Extract<RequestTarget, { kind: 'element' }> => target.kind === 'element');
     const pageId = request.area?.page ?? element?.page ?? request.targets.find(target => target.kind === 'boundary')?.page ?? null;
     const page = project.pages.find(item => item.id === pageId);
@@ -64,7 +64,7 @@ function requestTargetRects(project: Project, boundaries: Boundary[], request: P
 
 /** The real pointer line of one pointer, or null when it is broken. */
 function pointerSegment(project: Project, boundaries: Boundary[], pointerId: string): { from: Point; to: Point } | null {
-  const pointer = (project.pointers ?? []).find(item => item.id === pointerId);
+  const pointer = project.pointers.find(item => item.id === pointerId);
   if (!pointer) return null;
   const route = pointerRoute(pointer, pointerWorld(project, boundaries, null, {}, {}));
   return route ? { from: route.from, to: route.to } : null;
@@ -118,7 +118,7 @@ export function coveredTargets(project: Project, boundaries: Boundary[], area: R
   for (const item of project.reference as ReferenceItem[]) {
     if (mostlyInside(shape, movingItems[item.id] ?? item.rect)) targets.push({ kind: 'reference', id: item.id });
   }
-  for (const pointer of project.pointers ?? []) {
+  for (const pointer of project.pointers) {
     const segment = pointerSegment(project, boundaries, pointer.id);
     if (segment && segmentCrosses(shape, segment.from, segment.to)) targets.push({ kind: 'pointer', id: pointer.id });
   }
@@ -153,7 +153,7 @@ export function requestTargetKey(target: RequestTarget): string {
 export function singleTargetRequest(project: Project, targets: RequestTarget[]): PendingRequest | null {
   const target = targets.length === 1 && targets[0].kind === 'element' ? targets[0] : null;
   if (!target) return null;
-  return (project.requests ?? []).find(request => request.targets.length === 1 && request.targets[0].kind === 'element' && request.targets[0].id === target.id) ?? null;
+  return project.requests.find(request => request.targets.length === 1 && request.targets[0].kind === 'element' && request.targets[0].id === target.id) ?? null;
 }
 
 export function requestTargetLabel(project: Project, target: RequestTarget): string {

@@ -1,7 +1,7 @@
 import { errorMessage } from './errorMessage.js';
 import { Component, useEffect, useState, type ErrorInfo, type ReactNode } from 'react';
 import { native } from './api';
-import { Notice, ProblemBanner } from './ProblemBanner';
+import { Notice } from './ProblemBanner';
 import { CRASH_NOTICE, crashOpenFailure, type PendingCrash } from './crashReportText';
 
 let editorFailed = false;
@@ -78,6 +78,6 @@ export function CrashReportNotice() {
       action={{ label: copied ? 'Copied' : 'Copy link', disabled: copied, onClick: copy }}
       dismiss={() => setFailure(null)}
     />}
-    {failure && !url && <ProblemBanner message={failure.message} dismiss={() => setFailure(null)} />}
+    {failure && !url && <Notice variant="error" message={failure.message} dismiss={() => setFailure(null)} />}
   </>;
 }

@@ -385,15 +385,17 @@ try {
     assert.deepEqual(viewportWorldRect({ x: -100, y: -50, zoom: 2 }, { width: 1000, height: 800 }), { x: 50, y: 25, width: 500, height: 400 });
   });
 
+  const plainStyle = { references: {}, stroke: {}, textStyle: {} };
   const project = {
+    styles: { colours: [], text: [] }, linked: {},
     pages: [
       {
         id: 'home', name: 'Home', path: '/', sizes: [{ id: 'home', label: 'Desktop', x: 0, y: 0, width: 800, height: 600, kind: 'page' }],
-        elements: [{ id: 'e1', kind: 'text', text: 'Home link', name: null, url: '/about/', children: [], rect: box(0, 0, 100, 40), overrides: {}, visible: true }],
+        elements: [{ id: 'e1', kind: 'text', text: 'Home link', name: null, url: '/about/', children: [], rect: box(0, 0, 100, 40), overrides: {}, visible: true, style: plainStyle }],
       },
       {
         id: 'about', name: 'About', path: '/about', sizes: [{ id: 'about', label: 'Desktop', x: 1000, y: 0, width: 800, height: 600, kind: 'page' }],
-        elements: [{ id: 'e2', kind: 'text', text: 'External', name: null, url: 'https://example.test', children: [], rect: box(0, 0, 100, 40), overrides: {}, visible: true }],
+        elements: [{ id: 'e2', kind: 'text', text: 'External', name: null, url: 'https://example.test', children: [], rect: box(0, 0, 100, 40), overrides: {}, visible: true, style: plainStyle }],
       },
     ],
     reference: [

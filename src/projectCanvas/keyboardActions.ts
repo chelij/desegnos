@@ -407,8 +407,8 @@ export function createKeyboardActions(context: () => KeyboardContext) {
   });
   add(['minimap'], () => true, () => context().setMinimapPreference(context().minimapVisible ? 'off' : 'on'));
   add(['saveView'], () => true, (_, options) => context().saveView(options.slot ?? null, context().currentCamera()));
-  add(['goToView'], () => (context().project.views ?? []).length > 0, (_, options) => {
-    const views = context().project.views ?? [];
+  add(['goToView'], () => context().project.views.length > 0, (_, options) => {
+    const views = context().project.views;
     const view = options.slot ? views.find(item => item.name === viewNameForSlot(options.slot!)) : views[0];
     if (view) context().goToView(view);
   });

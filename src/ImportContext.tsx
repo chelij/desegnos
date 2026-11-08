@@ -1,7 +1,7 @@
 import { errorMessage, errorValue, type ErrorValue } from './errorMessage.js';
 import { MAX_IMPORT_PAGES } from './generated/limits';
 import { usePoll } from './usePoll';
-import { ProblemBanner, Notice } from './ProblemBanner.js';
+import { Notice } from './ProblemBanner.js';
 import { userError, needsAiSettings } from './userErrors.js';
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { native } from './api';
@@ -324,7 +324,7 @@ export function ImportContext({ busy, settings, openSettings, importInto, onPage
   }
   const aiNeedsFixing = !connected || selection?.needsSettings || (lastAttempt?.status === 'failed' && needsAiSettings(lastAttempt.error ?? '', lastAttempt.providerError));
   return <form className="new-project import-context dialog-body" onSubmit={submit}>
-    {error && <ProblemBanner message={userError(error)} dismiss={() => setError('')} action={needsAiSettings(error) ? { label: 'AI settings', onClick: openSettings } : { label: 'Choose another location', disabled: !!locked, onClick: () => { void pick('file'); } }} />}
+    {error && <Notice variant="error" message={userError(error)} dismiss={() => setError('')} action={needsAiSettings(error) ? { label: 'AI settings', onClick: openSettings } : { label: 'Choose another location', disabled: !!locked, onClick: () => { void pick('file'); } }} />}
       <section className="identity-import" aria-label="Brand evidence">
         <>
         <h2>Source</h2>
@@ -333,7 +333,7 @@ export function ImportContext({ busy, settings, openSettings, importInto, onPage
         <div className="identity-source-actions"><span className="identity-or">or</span><button type="button" disabled={locked} onClick={() => { void pick('folder'); }}>Choose folder…</button><button type="button" disabled={locked} onClick={() => { void pick('zip'); }}>Choose ZIP…</button><button type="button" disabled={locked} onClick={() => { void pick('file'); }}>Choose HTML files…</button></div>
 
         {source && <h3 className="identity-source-name">{source.name}</h3>}
-        {!source && previousReadError && <ProblemBanner message={userError(previousReadError)} action={{ label: 'Try loading again', disabled: !!locked || previousBrand.status === 'reading', onClick: () => { void readPrevious(previousReadError); } }} />}
+        {!source && previousReadError && <Notice variant="error" message={userError(previousReadError)} action={{ label: 'Try loading again', disabled: !!locked || previousBrand.status === 'reading', onClick: () => { void readPrevious(previousReadError); } }} />}
         {!source && previousBrand.status === 'ready' && previousBrand.analysis && <button type="button" disabled={locked} onClick={() => { const previous = previousBrand.analysis; if (previous) resume(previous); }}>Continue with my previous brand</button>}
         </>
         {source && source.skipped.length > 0 && <details><summary>See all skipped files · {skippedSummary(source.skipped)}</summary><ul className="identity-skipped">{source.skipped.map((reason, index) => <li key={index}>{skippedFile(reason)}</li>)}</ul></details>}
@@ -355,10 +355,10 @@ export function ImportContext({ busy, settings, openSettings, importInto, onPage
             <div className="identity-files">{source.files.map(file => <label className="identity-choice" key={file.id}><input type="checkbox" disabled={locked || !!candidate} checked={files.includes(file.id)} onChange={event => change({ type: 'files', update: current => event.target.checked ? [...current, file.id] : current.filter(id => id !== file.id) })} /><span>{file.name}<small>{file.asset ? 'Logo' : `${Math.ceil(file.textBytes / 1024)} KB`}</small></span></label>)}</div>
           </details>
           {!candidate && <p className="field-help">Sent to {analysisMethod === 'chatgpt' ? `ChatGPT (${(analysisAccount ?? account)?.label ?? 'current account'})` : `${settings?.providers.find(provider => provider.id === settings.provider)?.name ?? 'OpenAI'} (API key)`}</p>}
-          {!candidate && selection?.message && <ProblemBanner message={userError(selection.message)} />}
+          {!candidate && selection?.message && <Notice variant="error" message={userError(selection.message)} />}
           </>}
           {analyzing ? <div className="identity-progress" role="status"><span>Reading your brand…</span><button type="button" disabled={working} onClick={() => { void cancel(); }}>Stop reading</button></div> : !candidate ? <>
-            {lastAttempt && (lastAttempt.status === 'cancelled' ? <Notice message="Reading stopped." /> : <ProblemBanner message={userError({ ...lastAttempt, message: lastAttempt.error || 'The AI could not read your brand. Try again.' })} action={needsAiSettings(lastAttempt.error || '', lastAttempt.providerError) ? { label: 'AI settings', onClick: openSettings } : { label: 'Try again', disabled: !!locked, onClick: () => { void analyze(); } }} />)}
+            {lastAttempt && (lastAttempt.status === 'cancelled' ? <Notice message="Reading stopped." /> : <Notice variant="error" message={userError({ ...lastAttempt, message: lastAttempt.error || 'The AI could not read your brand. Try again.' })} action={needsAiSettings(lastAttempt.error || '', lastAttempt.providerError) ? { label: 'AI settings', onClick: openSettings } : { label: 'Try again', disabled: !!locked, onClick: () => { void analyze(); } }} />)}
             <div className="identity-source-actions">{!hasPages && <button type="button" className="primary" disabled={locked || !selection?.fits || !connected} onClick={() => { void analyze(); }}>Read my brand</button>}{aiNeedsFixing && <button type="button" disabled={locked} onClick={openSettings}>{connected ? 'Check AI settings' : 'Connect AI'}</button>}</div>
           </> : <div className="identity-result" aria-label="Brand review">
             <div className="identity-review-intro"><h3>Choose what to keep</h3></div>

@@ -67,7 +67,7 @@ export function useNativeDrop(surface: RefObject<HTMLDivElement | null>, latest:
       const project = latest.current.project;
       const page = project.pages.find(item => !!findElementIn(item.elements, elementId));
       const ids = page ? [elementId, ...elementParents(project, page.id, elementId)] : [elementId];
-      return (project.requests ?? []).find(request => request.targets.some(target => target.kind === 'element' && ids.includes(target.id)))?.id ?? null;
+      return project.requests.find(request => request.targets.some(target => target.kind === 'element' && ids.includes(target.id)))?.id ?? null;
     }
     function showNotice(message: string, variant: 'info' | 'warning') {
       if (!message) return;

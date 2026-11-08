@@ -1,6 +1,6 @@
 import { errorMessage } from './errorMessage.js';
 import type { CommandName } from './generated/commands';
-import { Notice, ProblemBanner } from './ProblemBanner.js';
+import { Notice } from './ProblemBanner.js';
 import { userError, providerProblem } from './userErrors.js';
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import { native } from './api';
@@ -198,8 +198,8 @@ export function AiSettings({ current, refresh, update, manageUsage, pollingError
   const imagesUsable = !!view?.readiness.imagesUsable;
   const imageStatus = view?.imageAccessChecking || checkingImages || pending ? 'Checking…' : !provider?.capabilities.imageGeneration || view?.imageAccess?.available === 'no' ? 'Not available' : !connectedHealthy ? 'Not connected' : view?.imageAccess?.available === 'yes' ? 'Available' : "Couldn't check";
   return <div className="ai-settings dialog-body">
-    {feedback.kind === 'error' && <ProblemBanner message={userError(feedback)} action={feedback.access ? { label: providerProblem(feedback.providerError)?.action ?? 'Try again', disabled: busy, onClick: () => { if (providerProblem(feedback.providerError)?.settings) showAccountSettings(); else void testAccess(); } } : undefined} dismiss={() => setFeedback({ kind: 'none' })} />}
-    {pollingError && <ProblemBanner message={userError(pollingError)} action={{ label: 'Try again', disabled: busy, onClick: () => { void load(); } }} />}
+    {feedback.kind === 'error' && <Notice variant="error" message={userError(feedback)} action={feedback.access ? { label: providerProblem(feedback.providerError)?.action ?? 'Try again', disabled: busy, onClick: () => { if (providerProblem(feedback.providerError)?.settings) showAccountSettings(); else void testAccess(); } } : undefined} dismiss={() => setFeedback({ kind: 'none' })} />}
+    {pollingError && <Notice variant="error" message={userError(pollingError)} action={{ label: 'Try again', disabled: busy, onClick: () => { void load(); } }} />}
     {loading ? <p role="status">Reading AI settings…</p> : !view || !settings ? <button onClick={() => { void load(); }}>Retry AI settings</button> : <>
       <label className="ai-provider ai-inline-field">Provider<select disabled={busy || pending || dirty} value={usesChatgpt ? 'openai-chatgpt' : view.provider} onChange={event => { setKey(''); setReplacingKey(false); setFeedback({ kind: 'none' }); void chooseProvider(event.target.value); }}>
         {(view.providers ?? []).flatMap(item => item.id === 'openai' ? [
@@ -211,7 +211,7 @@ export function AiSettings({ current, refresh, update, manageUsage, pollingError
         <label>Server URL<input type="url" aria-label="Local server URL" required maxLength={MAX_HTTP_URL_BYTES} disabled={busy} value={endpoint ?? view.settings.endpoint ?? DEFAULT_LOCAL_ENDPOINT} onChange={event => setEndpoint(event.target.value)} /></label>
         <button type="submit" disabled={busy}>Connect</button>
       </form>}
-      {view.configurationError && <ProblemBanner message={userError(view.configurationError)} />}
+      {view.configurationError && <Notice variant="error" message={userError(view.configurationError)} />}
       <section ref={accountSettings} tabIndex={-1} className={usesChatgpt ? 'chatgpt-accounts' : 'api-key-connection'} aria-label={usesChatgpt ? 'ChatGPT account settings' : `${providerName} key connection`}>
         <div className="ai-account-card">
           <span className="ai-avatar" aria-hidden="true">{identity.charAt(0).toUpperCase()}</span>
@@ -238,14 +238,14 @@ export function AiSettings({ current, refresh, update, manageUsage, pollingError
           ] satisfies MenuItem[]} />
         </div>
         {usesChatgpt ? <>
-          {view.chatgpt.storageError && <ProblemBanner message={userError(view.chatgpt.storageError)} />}
-          {view.chatgpt.message && !['ChatGPT connected.', 'Signed out. Remote access was revoked.', 'Secure storage repaired.'].includes(view.chatgpt.message) && <ProblemBanner message={userError(view.chatgpt.message)} />}
-          {account?.connected && !account.planEnabled && <ProblemBanner message="Your ChatGPT plan is not enabled for Desegnos." />}
-          {account?.storageRepairRequired && <ProblemBanner message="Your saved sign-in details need attention." action={{ label: 'Repair secure storage', disabled: busy || pending, onClick: () => { void action('retry_chatgpt_secure_storage', { accountId: account.id }); } }} />}
+          {view.chatgpt.storageError && <Notice variant="error" message={userError(view.chatgpt.storageError)} />}
+          {view.chatgpt.message && !['ChatGPT connected.', 'Signed out. Remote access was revoked.', 'Secure storage repaired.'].includes(view.chatgpt.message) && <Notice variant="error" message={userError(view.chatgpt.message)} />}
+          {account?.connected && !account.planEnabled && <Notice variant="error" message="Your ChatGPT plan is not enabled for Desegnos." />}
+          {account?.storageRepairRequired && <Notice variant="error" message="Your saved sign-in details need attention." action={{ label: 'Repair secure storage', disabled: busy || pending, onClick: () => { void action('retry_chatgpt_secure_storage', { accountId: account.id }); } }} />}
           {pending ? <button type="button" disabled={busy} onClick={() => { void action('cancel_chatgpt_sign_in'); }}>Cancel sign-in</button> : !connected && <button type="button" className="primary" disabled={busy} onClick={() => { void action('begin_chatgpt_sign_in', { storage: chatgptStorage, accountId: account?.id ?? null }); }}>Sign in with ChatGPT</button>}
-          {view.chatgpt.signIn.message && view.chatgpt.signIn.status !== 'complete' && <>{view.chatgpt.signIn.status === 'failed' ? <ProblemBanner message={userError(view.chatgpt.signIn.message)} action={{ label: 'Sign in again', disabled: busy || pending, onClick: () => { void action('begin_chatgpt_sign_in', { storage: chatgptStorage, accountId: account?.id ?? null }); } }} /> : <Notice variant="info" message={view.chatgpt.signIn.message} />}</>}
+          {view.chatgpt.signIn.message && view.chatgpt.signIn.status !== 'complete' && <>{view.chatgpt.signIn.status === 'failed' ? <Notice variant="error" message={userError(view.chatgpt.signIn.message)} action={{ label: 'Sign in again', disabled: busy || pending, onClick: () => { void action('begin_chatgpt_sign_in', { storage: chatgptStorage, accountId: account?.id ?? null }); } }} /> : <Notice variant="info" message={view.chatgpt.signIn.message} />}</>}
         </> : <>
-          {view.credential.configured && view.credential.vaultError && <ProblemBanner message={userError(view.credential.vaultError)} />}
+          {view.credential.configured && view.credential.vaultError && <Notice variant="error" message={userError(view.credential.vaultError)} />}
           {(!view.credential.configured || replacingKey) && <form className="ai-key-form" onSubmit={saveKey}>
             <label>{hasKey ? 'Replacement API key' : `${providerName} API key`}<input disabled={busy || pending} type="password" value={key} onChange={event => setKey(event.target.value)} autoComplete="new-password" spellCheck={false} required autoFocus={replacingKey} /></label>
             <button className="primary" type="submit" disabled={busy || pending || !key.trim()}>{busy ? 'Connecting…' : 'Connect'}</button>
@@ -263,8 +263,8 @@ export function AiSettings({ current, refresh, update, manageUsage, pollingError
             {usesChatgpt && <button type="button" className="ai-usage-link" disabled={busy} onClick={() => { void usage(); }}>Usage <Icon name="external" size={14} /></button>}
           </div>
         </div>
-        {modelsError && <ProblemBanner message={userError({ message: modelsError, providerError: modelsProviderError, provider: view.provider })} action={{ label: providerProblem(modelsProviderError)?.action ?? 'Refresh models', disabled: !canRefreshModels, onClick: () => { if (providerProblem(modelsProviderError)?.settings) showAccountSettings(); else void action('get_ai_settings', { refreshModels: true }); } }} />}
-        {!model && connectedHealthy && <ProblemBanner message="No available AI model is selected." />}
+        {modelsError && <Notice variant="error" message={userError({ message: modelsError, providerError: modelsProviderError, provider: view.provider })} action={{ label: providerProblem(modelsProviderError)?.action ?? 'Refresh models', disabled: !canRefreshModels, onClick: () => { if (providerProblem(modelsProviderError)?.settings) showAccountSettings(); else void action('get_ai_settings', { refreshModels: true }); } }} />}
+        {!model && connectedHealthy && <Notice variant="error" message="No available AI model is selected." />}
         {(!usesChatgpt || view.imageKey.configured) && <label className="ai-inline-field ai-budget">Budget per generation (USD)<input disabled={busy || pending} type="number" required min={0.01} step={0.01} aria-label="API budget per generation (USD)" value={budget ?? String(settings.spendingLimitUsd)} onChange={event => { setBudget(event.target.value); if (event.target.value.trim() && Number.isFinite(event.target.valueAsNumber)) setSettings({ ...settings, spendingLimitUsd: event.target.valueAsNumber }); }} onBlur={() => setBudget(null)} /></label>}
         {!usesChatgpt && model?.pricingRequired && <div className="field-pair ai-price-ceilings">
           <label>Input ceiling (USD / million)<input type="number" aria-label="Input price ceiling" required min={0} max={1000000} step="any" disabled={busy || pending} value={settings.pricing?.inputUsdPerMillion ?? ''} onChange={event => setPrice('inputUsdPerMillion', event.target.value)} /></label>
@@ -288,8 +288,8 @@ export function AiSettings({ current, refresh, update, manageUsage, pollingError
             <label>Store key<select value={imageStorage} disabled={busy || pending} onChange={event => setImageStorage(event.target.value as 'system' | 'session')}><option value="system">Secure storage</option><option value="session">This session</option></select></label>
             <button type="button" disabled={busy || pending || !imageKey.trim()} onClick={() => { void connectImageKey(); }}>Connect image key</button>
           </div>}
-          {view.provider === 'openai' && view.imageKey.configured && view.imageKey.vaultError && <ProblemBanner message={userError(view.imageKey.vaultError)} />}
-          {view.provider === 'openai' && view.imageAccess?.available !== 'yes' && [view.imageKeyAccess, view.mainImageAccess].find(access => access?.reason.includes('API Organization Verification')) && <ProblemBanner message="Verify your OpenAI account to create pictures." />}
+          {view.provider === 'openai' && view.imageKey.configured && view.imageKey.vaultError && <Notice variant="error" message={userError(view.imageKey.vaultError)} />}
+          {view.provider === 'openai' && view.imageAccess?.available !== 'yes' && [view.imageKeyAccess, view.mainImageAccess].find(access => access?.reason.includes('API Organization Verification')) && <Notice variant="error" message="Verify your OpenAI account to create pictures." />}
           <div className="ai-feature-row"><span>Web search</span><StatusChip tone={provider?.capabilities.webSearch ? 'neutral' : 'warning'}>{provider?.capabilities.webSearch ? 'Available' : 'Not available'}</StatusChip></div>
         </section>
         <Disclosure className="ai-advanced" summary="Advanced" open={advanced} onToggle={setAdvanced}><fieldset className="advanced-settings"><legend>Model details</legend>{usesChatgpt && account && <p className="small muted">Registration: <span className="source-url">{account.id}</span></p>}{model && !model.pricingRequired && <div className="model-details">{!usesChatgpt && <p className="small">Standard input: USD {model.inputUsdPerMillion} / million tokens · Standard output: USD {model.outputUsdPerMillion} / million tokens</p>}

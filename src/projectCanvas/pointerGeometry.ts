@@ -126,8 +126,8 @@ export function pointerBroken(pointer: Pointer, project: Project): boolean {
     switch (endpoint.kind) {
       case 'element': return !hasElement(endpoint.pageId, endpoint.elementId) || !hasSize(endpoint.pageId, endpoint.sizeId);
       case 'boundary': return !hasPage(endpoint.pageId) || !hasSize(endpoint.pageId, endpoint.sizeId);
-      case 'reference': return !(project.reference ?? []).some(item => item.id === endpoint.itemId);
-      case 'url': return !(project.reference ?? []).some(item => item.kind.kind === 'link' && item.kind.url === endpoint.url);
+      case 'reference': return !project.reference.some(item => item.id === endpoint.itemId);
+      case 'url': return !project.reference.some(item => item.kind.kind === 'link' && item.kind.url === endpoint.url);
     }
   };
   return missing(pointer.from) || missing(pointer.to);

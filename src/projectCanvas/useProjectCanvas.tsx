@@ -343,7 +343,7 @@ export function useProjectCanvas({
   const boundaryUnder = (point: Point): Boundary | null => boundaryAt(boundaries.map(item => moving?.sizeId === item.sizeId ? { ...item, rect: moving.rect } : item), point);
   // Drawing forgives a press that misses the edge by a few screen pixels, as at a corner.
   const boundaryNearPress = (point: Point): Boundary | null => boundaryNear(boundaries, point, 16 / camera.zoom);
-  const referenceBoxes = (): ReferenceBox[] => (project.reference ?? []).map(item => ({ itemId: item.id, rect: movingItems[item.id] ?? item.rect }));
+  const referenceBoxes = (): ReferenceBox[] => project.reference.map(item => ({ itemId: item.id, rect: movingItems[item.id] ?? item.rect }));
   const requestBoxes = (): RequestBox[] => elementBoxes(project, boundaries, moving);
   const pointerWorldNow = () => pointerWorld(project, boundaries, moving, {}, movingItems);
 
@@ -476,7 +476,7 @@ export function useProjectCanvas({
   const selectedItem = soleReferenceItem();
   const selectedItemScreen = selectedItem ? screenRect(shownReference(selectedItem, movingItems), camera) : null;
   const inverse = 1 / camera.zoom;
-  const pointers = project.pointers ?? [];
+  const pointers = project.pointers;
   const pointerWorldNowValue = useMemo(() => pointerWorld(project, boundaries, moving, {}, movingItems), [project, boundaries, moving, movingItems]);
   const viewport: Rect = viewSize.width > 0 ? viewportWorldRect(camera, viewSize) : { x: -1e7, y: -1e7, width: 2e7, height: 2e7 };
   const selectedPointerIds = new Set(selectedPointers(selection));

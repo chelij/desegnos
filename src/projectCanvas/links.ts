@@ -41,7 +41,7 @@ function assignNestedIds(root: string, element: Element, path: number[]) {
 export function linkedDefinition(project: Project, element: Element | null | undefined): LinkedDefinition | null {
   if (!element) return null;
   const id = element.link ?? project.pages.map(page => findElementIn(page.elements, element.id)?.link).find(Boolean);
-  return id ? project.linked?.[id] ?? null : null;
+  return id ? project.linked[id] ?? null : null;
 }
 
 /** A copy's concrete tree: its own id and position, the definition's content. */
@@ -79,7 +79,6 @@ export function linkedName(project: Project, element: Element): string | null {
 /** Every layer id that comes from a definition; their order and parent are shared. */
 export function nestedLayerIds(project: Project): Set<string> {
   const ids = new Set<string>();
-  if (!project.linked) return ids;
   const walk = (root: string, elements: Element[], path: number[]) => {
     elements.forEach((child, index) => {
       path.push(index);
@@ -140,7 +139,6 @@ export function copySummary(element: Element): string {
 
 /** True when a layer only exists inside a linked element's definition. */
 export function isNestedLayer(project: Project, id: string): boolean {
-  if (!project.linked) return false;
   const walk = (root: string, elements: Element[], path: number[]): boolean => elements.some((child, index) => {
     path.push(index);
     const found = nestedElementId(root, path) === id || walk(root, child.children, path);

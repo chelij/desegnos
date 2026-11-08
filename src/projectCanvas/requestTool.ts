@@ -44,7 +44,7 @@ export function createRequestTool(context: () => RequestToolContext) {
     }
     const item = boundaryAt(project.reference.map(entry => ({ itemId: entry.id, rect: shownReference(entry, movingItems) })), point);
     if (item) return { kind: 'reference', id: item.itemId };
-    const hits = pointerAt(pointerEntries(project.pointers ?? [], pointerWorldNow(), new Set(), viewportWorldRect(camera, viewSize)), point, POINTER_HIT_PX / camera.zoom);
+    const hits = pointerAt(pointerEntries(project.pointers, pointerWorldNow(), new Set(), viewportWorldRect(camera, viewSize)), point, POINTER_HIT_PX / camera.zoom);
     if (hits) return { kind: 'pointer', id: hits.pointer.id };
     const boundary = boundaryUnder(point);
     return boundary ? { kind: 'boundary', page: boundary.pageId, size: boundary.sizeId } : null;
