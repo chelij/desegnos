@@ -3,7 +3,7 @@ import { CanvasWorkspace } from './CanvasWorkspace';
 import { CommandPalette } from './CommandPalette';
 import { EditorCrashBoundary } from './CrashReport';
 import { EditorDialogs } from './EditorDialogs';
-import { RecoveryList } from './editorShared';
+import { RecoveryList } from './RecoveryList';
 import { errorValue } from './errorMessage.js';
 import { NoticeProvider } from './ProblemBanner.js';
 import { PanelSurfaces } from './PanelSurfaces';

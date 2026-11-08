@@ -1,7 +1,7 @@
 import { defaultText, ELEMENT_KIND_LABELS, findElementIn } from './elementFacts';
 import { MIN_SIZE, snapValue } from './camera';
 import { canvasFont } from './fonts';
-import type { Element, ElementKind, ElementLayout, ElementPadding, ElementStyle, InputType, OutputType, Page, Project, Rect } from '../types';
+import type { Element, ElementKind, ElementPadding, ElementStyle, InputType, OutputType, Project, Rect } from '../types';
 import type { Point } from './camera';
 import { resolveElements } from './links';
 import { resolveForSize } from './sizes';
@@ -19,7 +19,6 @@ export type ElementPathEntry = {
   depth: number;
 };
 
-export type ElementLocation = { pageId: string; parentId: string | null; index: number; element: Element };
 
 const TEXT_COLOUR = '#1a1a1a';
 const DARK_TEXT_COLOUR = '#f2f2f2';
@@ -158,32 +157,6 @@ export function findPageElement(project: Project, pageId: string, id: string, si
   return findElementIn(pageElements(project, pageId, sizeId), id);
 }
 
-export function findElementPage(project: Project, id: string): Page | null {
-  return project.pages.find(page => findElementIn(page.elements, id) || findElementIn(pageElements(project, page.id), id)) ?? null;
-}
-
-export function elementLocation(project: Project, pageId: string, id: string): ElementLocation | null {
-  const elements = pageElements(project, pageId);
-  if (!elements.length && !project.pages.some(entry => entry.id === pageId)) return null;
-  const walk = (children: Element[], parentId: string | null): ElementLocation | null => {
-    for (const [index, element] of children.entries()) {
-      if (element.id === id) return { pageId, parentId, index, element };
-      const found = walk(element.children, element.id);
-      if (found) return found;
-    }
-    return null;
-  };
-  return walk(elements, null);
-}
-
-export function anyElementLocation(project: Project, id: string): ElementLocation | null {
-  for (const page of project.pages) {
-    const found = elementLocation(project, page.id, id);
-    if (found) return found;
-  }
-  return null;
-}
-
 /** Root to element, with page-local origins, so drags, inserts and outlines agree. */
 export function elementPath(project: Project, pageId: string, id: string, sizeId?: string | null): ElementPathEntry[] | null {
   if (!project.pages.some(entry => entry.id === pageId)) return null;
@@ -209,22 +182,11 @@ export function elementChildrenOf(project: Project, pageId: string, parentId: st
   return findElementIn(elements, parentId)?.children ?? [];
 }
 
-export function elementSiblings(project: Project, pageId: string, id: string): Element[] {
-  const location = elementLocation(project, pageId, id);
-  return location ? elementChildrenOf(project, pageId, location.parentId) : [];
-}
-
 export function elementWorldRect(project: Project, pageId: string, id: string, boundaryOrigin: Point): Rect | null {
   const path = elementPath(project, pageId, id);
   if (!path?.length) return null;
   const { origin, element } = path[path.length - 1];
   return { x: boundaryOrigin.x + origin.x, y: boundaryOrigin.y + origin.y, width: element.rect.width, height: element.rect.height };
-}
-
-export function elementParentWorldOrigin(project: Project, pageId: string, id: string, boundaryOrigin: Point): Point {
-  const path = elementPath(project, pageId, id);
-  const entry = path?.[path.length - 1];
-  return entry ? { x: boundaryOrigin.x + entry.parentOrigin.x, y: boundaryOrigin.y + entry.parentOrigin.y } : boundaryOrigin;
 }
 
 export function elementBoundsHeight(elements: Element[], minimum: number): number {
@@ -238,29 +200,9 @@ function elementBottom(element: Element): number {
   return Math.max(own, children);
 }
 
-/** The canvas rect of an element rect measured inside a boundary and its parent box. */
-export function elementCanvasRect(rect: Rect, boundaryOrigin: Point, parentOrigin: Point): Rect {
-  return { x: rect.x + boundaryOrigin.x + parentOrigin.x, y: rect.y + boundaryOrigin.y + parentOrigin.y, width: rect.width, height: rect.height };
-}
-
 /** A canvas rect from an element rect measured inside a boundary and its parent box. */
 export function elementLocalRect(world: Rect, boundaryOrigin: Point, parentOrigin: Point): Rect {
   return { x: world.x - boundaryOrigin.x - parentOrigin.x, y: world.y - boundaryOrigin.y - parentOrigin.y, width: world.width, height: world.height };
-}
-
-/** Move a layer to another box or boundary while it keeps the same spot on the canvas. */
-export function reparentedElementRect(
-  rect: Rect,
-  fromBoundary: Point,
-  fromParent: Point,
-  toBoundary: Point,
-  toParent: Point,
-): Rect {
-  return elementLocalRect(elementCanvasRect(rect, fromBoundary, fromParent), toBoundary, toParent);
-}
-
-export function movedElementRect(rect: Rect, delta: Point, snap: boolean, spacing: number): Rect {
-  return snap ? { ...rect, x: snapValue(rect.x + delta.x, spacing), y: snapValue(rect.y + delta.y, spacing) } : { ...rect, x: rect.x + delta.x, y: rect.y + delta.y };
 }
 
 export function resizedElementRect(rect: Rect, corner: ElementCorner, point: Point, snap: boolean, spacing: number): Rect {
@@ -349,21 +291,8 @@ export function snappedLineEnd(start: Point, end: Point, step = 15): Point {
   return { x: start.x + Math.cos(angle) * length, y: start.y + Math.sin(angle) * length };
 }
 
-export function lineEnd(start: Point, end: Point, constrain: boolean): Point {
-  return constrain ? snappedLineEnd(start, end, 45) : end;
-}
-
 export function rectFromPoints(start: Point, end: Point): Rect {
   return { x: Math.min(start.x, end.x), y: Math.min(start.y, end.y), width: Math.abs(end.x - start.x), height: Math.abs(end.y - start.y) };
-}
-
-export function draggedElementRect(rect: Rect, start: Point, point: Point, snap: boolean, spacing: number): Rect {
-  return movedElementRect(rect, { x: point.x - start.x, y: point.y - start.y }, snap, spacing);
-}
-
-/** A grid or stack box lays its children out itself; its own rect still places it. */
-export function layoutChildren(layout: ElementLayout): boolean {
-  return layout.kind !== 'free';
 }
 
 export const pictureUri = (project: Project, id: string | null | undefined): string | null => {
@@ -397,11 +326,6 @@ export function elementKindLabel(element: Element): string {
 }
 
 export const inputTypes: InputType[] = ['text', 'email', 'password', 'number', 'search', 'tel', 'url', 'date', 'time', 'color', 'range', 'file'];
-
-export function commonValue<T>(values: T[]): T | undefined {
-  if (!values.length) return undefined;
-  return values.every(value => JSON.stringify(value) === JSON.stringify(values[0])) ? values[0] : undefined;
-}
 
 export function measureText(text: string, style: Element['style']['textStyle']): { width: number; height: number } {
   const font = canvasFont(style);

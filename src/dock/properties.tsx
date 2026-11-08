@@ -10,10 +10,9 @@ import { ColourField } from '../projectCanvas/ColourField';
 import { SIZE_PRESETS } from '../projectCanvas/sizes';
 import { requestAreaLabel, requestTargetLabel } from '../projectCanvas/requests';
 import { behaviourStateLabel } from '../projectCanvas/behaviours';
-import { PROJECT_NAME_MAX_LENGTH } from '../editorShared';
 import { PropsSection } from './sections';
 import { PropertyField } from './controls';
-import { MAX_PROMPT_CHARS, MAX_VIEWPORT_SIDE } from '../generated/limits';
+import { MAX_NAME_CHARS, MAX_PROMPT_CHARS, MAX_VIEWPORT_SIDE } from '../generated/limits';
 
 function wholeSize(draft: string, min: number, max: number) {
   const value = Number(draft);
@@ -147,7 +146,7 @@ export function ProjectProperties({ project, rename, setGrid, setGridSettings, b
   busy: boolean; save?: () => void;
 }) {
   return <div className="dock-form">
-    <PropertyField label="Project" ariaLabel="Project name" maxLength={PROJECT_NAME_MAX_LENGTH} value={project.name} disabled={busy}
+    <PropertyField label="Project" ariaLabel="Project name" maxLength={MAX_NAME_CHARS} value={project.name} disabled={busy}
       valid={name => name.trim().length > 0} commit={name => rename(name.trim())} />
     {save && <button type="button" className="dock-action" disabled={busy} onClick={save}>Save project…</button>}
     <div className="dock-checks">
@@ -189,7 +188,7 @@ export function UntitledSaveForm({ project, location, busy, chooseLocation, save
   }
   return <form className="dialog-body dock-form untitled-save" aria-label="Save untitled project" onSubmit={submit}>
     <label className="dock-field">Project name
-      <input autoFocus required maxLength={PROJECT_NAME_MAX_LENGTH} value={name} disabled={locked} autoComplete="off"
+      <input autoFocus required maxLength={MAX_NAME_CHARS} value={name} disabled={locked} autoComplete="off"
         onFocus={event => event.currentTarget.select()} onChange={event => setName(event.target.value)} />
     </label>
     <div className="dock-field">Location

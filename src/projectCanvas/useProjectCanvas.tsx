@@ -283,6 +283,14 @@ export function useProjectCanvas({
     surface.current?.focus({ preventScroll: true });
   }
 
+  // A move asked for by a command that also changes the project waits for the canvas to render it.
+  const [pendingMove, setPendingMove] = useState<{ kind: 'fit' } | { kind: 'boundary'; pageId: string } | null>(null);
+  useLayoutEffect(() => {
+    if (!pendingMove) return;
+    if (pendingMove.kind === 'fit') fit(); else focusBoundary(pendingMove.pageId);
+    setPendingMove(null);
+  }, [pendingMove]);
+
   function goToView(view: NamedView) {
     animateTo({ x: view.x, y: view.y, zoom: view.zoom });
     surface.current?.focus({ preventScroll: true });
@@ -340,7 +348,7 @@ export function useProjectCanvas({
     event.preventDefault(); holdTool(heldAction); return true;
   }
 
-  useImperativeHandle(ref, () => ({ containsTarget: target => target instanceof Node && !!surface.current?.contains(target), handleKeyDown, handleKeyUp: heldKeyUp, focusCanvas: () => surface.current?.focus({ preventScroll: true }), fit, fitSelection, zoomStep, zoomTo, focusBoundary, armPointer, linkSelection, unlinkSelection, copyStyle, pasteStyle, paintFormat, currentCamera, goToView, canvasAction, startRequestOnSelection }));
+  useImperativeHandle(ref, () => ({ containsTarget: target => target instanceof Node && !!surface.current?.contains(target), handleKeyDown, handleKeyUp: heldKeyUp, focusCanvas: () => surface.current?.focus({ preventScroll: true }), fit: () => setPendingMove({ kind: 'fit' }), fitSelection, zoomStep, zoomTo, focusBoundary: pageId => setPendingMove({ kind: 'boundary', pageId }), armPointer, linkSelection, unlinkSelection, copyStyle, pasteStyle, paintFormat, currentCamera, goToView, canvasAction, startRequestOnSelection }));
 
   /** Double-click editing is the all-sizes mode: a layer drawn then belongs to every size. */
   const editingAllSizes = (pageId: string): boolean =>

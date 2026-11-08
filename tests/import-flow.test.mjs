@@ -39,7 +39,7 @@ try {
     };
     const jsx = (type, props) => typeof type === 'function' ? type(props) : ({ type, props });
     const window = { addEventListener: (_, listener) => listeners.add(listener), removeEventListener: (_, listener) => listeners.delete(listener), setTimeout: () => 1, clearTimeout() {} };
-    const bindings = { useState, useEffect, useRef, useMemo: fn => fn(), useCallback: fn => fn, native, window, EXTRACTOR_SCRIPT: 'extract', _jsx: jsx, _jsxs: jsx, _Fragment: 'fragment', Icon: 'icon', Notice: 'notice', ProblemBanner: 'problem', userError: error => error?.message ?? String(error), needsAiSettings: () => false, groupIdentityPages: () => [], selectedPageContent: () => ({ photos: [], items: [] }), findingSection: () => 'Other', parseColours: () => [], parseFonts: () => [], parseTone: () => [] };
+    const bindings = { useState, useEffect, useRef, useMemo: fn => fn(), useCallback: fn => fn, native, window, EXTRACTOR_SCRIPT: 'extract', CAPTURE_TIMEOUT_MS: 1, _jsx: jsx, _jsxs: jsx, _Fragment: 'fragment', Icon: 'icon', Notice: 'notice', ProblemBanner: 'problem', userError: error => error?.message ?? String(error), needsAiSettings: () => false, groupIdentityPages: () => [], selectedPageContent: () => ({ photos: [], items: [] }), findingSection: () => 'Other', parseColours: () => [], parseFonts: () => [], parseTone: () => [] };
     const Component = new Function(...Object.keys(bindings), `${code}\nreturn ImportContext;`)(...Object.values(bindings));
     const render = () => {
       cursor = 0;

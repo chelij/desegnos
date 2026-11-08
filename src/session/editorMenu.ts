@@ -1,6 +1,6 @@
 import type { PaletteCommand } from '../CommandPalette';
 import type { EditorActions } from '../editorActions';
-import { menuPaletteCommands, Theme } from '../editorShared';
+import type { Theme } from './useEditorTheme';
 import type { MenuItem } from '../Menus';
 import { KEYMAP } from '../shortcuts';
 import type { AppSettingsView, GenerationMode, Project, RecentProject } from '../types';
@@ -72,4 +72,13 @@ export function paletteCommands(actions: EditorActions, menuItems: MenuItem[]): 
     })),
     ...menuPaletteCommands(menuItems),
   ];
+}
+
+export function menuPaletteCommands(items: MenuItem[], group = 'Menu'): PaletteCommand[] {
+  return items.flatMap(item => {
+    if (item.separator) return [];
+    if (item.children?.length) return menuPaletteCommands(item.children, item.label);
+    if (item.shortcut || item.disabled || !item.action) return [];
+    return [{ id: `menu:${item.id}`, label: item.label, group, run: item.action }];
+  });
 }

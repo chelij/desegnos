@@ -1,7 +1,8 @@
 import type { Project, Rect } from '../types';
 import type { CanvasTarget } from './canvasTargets';
 import { type ElementEntry, isElementTarget } from './interactionTypes';
-import { elementPath, elementParents } from './elementGeometry';
+import { elementPath, elementParents, elementWorldRect } from './elementGeometry';
+import { unionBounds } from './camera';
 import { baseSizeId } from './sizes';
 
 export function selectionEntries(project: Project, targets: CanvasTarget[], boundaryRect: (sizeId: string) => Rect | null): ElementEntry[] {
@@ -29,3 +30,16 @@ export function selectionEntries(project: Project, targets: CanvasTarget[], boun
   return entries.filter(entry => !elementParents(project, entry.pageId, entry.id).some(id => selected.has(id)));
 }
 
+function targetCanvasRect(project: Project, target: CanvasTarget): Rect | null {
+  if (target.kind === 'reference') return project.reference.find(item => item.id === target.itemId)?.rect ?? null;
+  if (target.kind !== 'element') return null;
+  const page = project.pages.find(item => item.id === target.pageId);
+  const size = page ? page.sizes.find(item => item.id === target.sizeId) ?? page.sizes[0] : null;
+  if (!page || !size) return null;
+  return elementWorldRect(project, page.id, target.elementId, { x: size.x, y: size.y });
+}
+
+export function selectionBounds(project: Project, selection: CanvasTarget[]): Rect | null {
+  const rects = selection.flatMap(target => { const rect = targetCanvasRect(project, target); return rect ? [rect] : []; });
+  return rects.length ? unionBounds(rects) : null;
+}

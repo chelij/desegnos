@@ -4,7 +4,7 @@ import type { ProjectEdits } from '../session/projectEdits';
 import { MIN_SIZE, snapValue, type CanvasCamera, type Point } from './camera';
 import { drawnBoundaryRect } from './boundaryLayout';
 import { type CanvasTarget, type ElementTarget, type RequestBox } from './canvasTargets';
-import { type FrameCorner } from './referenceGeometry';
+import { type ReferenceCorner } from './referenceGeometry';
 import type { Command, WorkspaceView, Element, ElementKind, NamedView, PointerSource, PointerStateView, PointerTarget, Project, Rect } from '../types';
 import type { ProjectTool, RequestToolShape } from '../EditorTools';
 import { type ScreenRect } from './surface';
@@ -32,7 +32,7 @@ export type MoveTarget = { kind: 'reference'; itemId: string; origin: Rect };
 
 export type MoveSelectionDrag = { kind: 'move-selection'; pointerId: number; start: Point; targets: MoveTarget[]; rects: Record<string, Rect>; moved: boolean; axisLocked: boolean };
 
-type ResizeReferenceDrag = { kind: 'resize-reference'; pointerId: number; start: Point; corner: FrameCorner; itemId: string; origin: Rect; rect: Rect; moved: boolean };
+type ResizeReferenceDrag = { kind: 'resize-reference'; pointerId: number; start: Point; corner: ReferenceCorner; itemId: string; origin: Rect; rect: Rect; moved: boolean };
 
 export type ElementEntry = { id: string; pageId: string; sizeId: string; allSizes: boolean; parentId: string | null; index: number; element: Element; rect: Rect; parentOrigin: Point; boundaryOrigin: Point; world: Rect };
 
@@ -58,7 +58,7 @@ type PolygonDrag = { kind: 'polygon-request'; pointerId: number; points: Point[]
 
 export type Drag = PolygonDrag | PanDrag | MoveBoundaryDrag | DrawBoundaryDrag | DrawRequestAreaDrag | DrawNoteDrag | DrawPointerDrag | ReattachPointerDrag | MoveSelectionDrag | ResizeReferenceDrag | MoveElementsDrag | ResizeElementDrag | DrawElementDrag | MarqueeDrag | ZoomDrag;
 
-export const CORNERS: FrameCorner[] = ['nw', 'ne', 'sw', 'se'];
+export const CORNERS: ReferenceCorner[] = ['nw', 'ne', 'sw', 'se'];
 
 export const NIL_UUID = '00000000-0000-0000-0000-000000000000';
 

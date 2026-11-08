@@ -1,5 +1,5 @@
 import { errorMessage, nativeErrorKind } from './errorMessage.js';
-import type { ProviderError, ProviderId } from './types';
+import type { ProviderError } from './types';
 
 export type ProviderProblem = { message: string; settings: boolean; action: 'AI settings' | 'Try again' };
 const settingsKinds = new Set([
@@ -7,18 +7,17 @@ const settingsKinds = new Set([
   'invalidSettings', 'vaultUnavailable', 'spendingLimit', 'chatgptUsageLimit', 'chatgptPermission', 'chatgptInvalidUser',
 ]);
 
-export function providerProblem(error: ProviderError | null | undefined, _provider?: ProviderId | null, message = ''): ProviderProblem | null {
+export function providerProblem(error: ProviderError | null | undefined, message = ''): ProviderProblem | null {
   if (!error) return null;
   const settings = settingsKinds.has(error.kind);
   return { message, settings, action: settings ? 'AI settings' : 'Try again' };
 }
 
-export function providerFailureMessage(error: ProviderError | null | undefined, _provider?: ProviderId | null, message = ''): string | null {
+export function providerFailureMessage(error: ProviderError | null | undefined, message = ''): string | null {
   return error ? message || 'The AI could not finish this request.' : null;
 }
 
-
-export function generationError(_reason: string, request = '', _affected?: string): string {
+export function generationError(request = ''): string {
   const text = request.trim().replace(/[\n\r]+/g, ' ').slice(0, 100).replace(/[.!?]+$/, '');
   const subject = text ? `“${text}”` : 'this request';
   return `The AI could not complete ${subject} as requested.`;
@@ -44,10 +43,10 @@ export function technicalReason(reason: string): boolean {
   return pagePrefix.test(raw) || camelCase.test(text) || modelJargon.test(text);
 }
 
-export function outcomeReason(reason: string, request = 'this request', affected?: string): string {
+export function outcomeReason(reason: string, request = 'this request'): string {
   const value = reasonText(reason);
-  if (!value) return generationError(reason, request, affected);
-  if (modelJargon.test(value) || camelCase.test(value)) return generationError(value, request, affected);
+  if (!value) return generationError(request);
+  if (modelJargon.test(value) || camelCase.test(value)) return generationError(request);
   const first = value.match(/^.*?[.!?](?=\s|$)/)?.[0] ?? value;
   const sentence = first.length > 200 ? `${first.slice(0, 197).trimEnd()}…` : first;
   return /[.!?…]$/.test(sentence) ? sentence : `${sentence}.`;
@@ -63,8 +62,8 @@ export function browserOpenUrl(error: unknown): string | null {
 
 export function userError(error: unknown): string {
   if (error && typeof error === 'object' && 'providerError' in error) {
-    const structured = error as { providerError?: ProviderError; provider?: ProviderId };
-    const message = providerFailureMessage(structured.providerError, structured.provider, 'message' in error ? errorMessage(error) : '');
+    const structured = error as { providerError?: ProviderError };
+    const message = providerFailureMessage(structured.providerError, 'message' in error ? errorMessage(error) : '');
     if (message) return message;
   }
   switch (nativeErrorKind(error)) {
@@ -75,4 +74,10 @@ export function userError(error: unknown): string {
     case 'command': return errorMessage(error) || 'The operation could not finish. Try again.';
     default: return errorMessage(error);
   }
+}
+
+export function needsAiSettings(error: unknown, structured?: ProviderError | null): boolean {
+  const problem = providerProblem(structured);
+  if (problem) return problem.settings;
+  return nativeErrorKind(error) === 'aiSettings';
 }

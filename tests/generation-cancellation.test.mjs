@@ -24,7 +24,8 @@ try {
   const { useGeneration } = await modules.load('useGeneration.js');
   function setup(call, applied = () => {}) {
     slots = []; nativeCalls = [];
-    return () => { cursor = 0; return useGeneration('project', call, applied); };
+    const natives = { call, prepare: (args, signal) => call('prepare_generation', args, signal), apply: (args, signal) => call('apply_generation', args, signal) };
+    return () => { cursor = 0; return useGeneration('project', natives, applied); };
   }
   const prepared = { jobId: 'job', status: 'prepared', attempts: [] };
 

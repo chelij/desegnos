@@ -5,7 +5,6 @@ import { BOUNDARY_GAP } from './boundaryLayout';
 
 export type BoundaryToolKind = 'page' | 'slide' | 'image';
 export const boundaryKindLabel = (kind: BoundaryToolKind) => ({ page: 'Page', slide: 'Slide', image: 'Image' })[kind];
-export const boundaryName = boundaryKindLabel;
 export const boundaryIcon = (kind: BoundaryToolKind): IconName => ({ page: 'canvas', slide: 'rectangle', image: 'image' } as const)[kind];
 // The saved page/screen values describe height behaviour, not separate output types.
 export const layoutKind = (kind: BoundaryToolKind, project: Project): BoundaryKind => kind !== 'page' ? 'screen'

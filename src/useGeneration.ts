@@ -6,7 +6,11 @@ import { native } from './api';
 import { ownsJob, type OwnedJob } from './generationSession.js';
 import type { GenerationJobView, GenerationStatus, WorkspaceView } from './types';
 
-export type GenerationCall = <T>(command: CommandName, args?: Record<string, unknown>, signal?: AbortSignal) => Promise<T>;
+type GenerationArgs = Record<string, unknown> | undefined;
+type GenerationSend<T> = (args?: GenerationArgs, signal?: AbortSignal) => Promise<T>;
+export type GenerationCall = <T>(command: CommandName, args?: GenerationArgs, signal?: AbortSignal) => Promise<T>;
+/** How the editor reaches native: any command, plus the two that carry editor side effects. */
+export type GenerationNative = { call: GenerationCall; prepare: GenerationSend<GenerationJobView>; apply: GenerationSend<WorkspaceView> };
 
 const activeStatuses: readonly GenerationStatus[] = ['generating', 'applying'];
 // A restored job in one of these states can still finish on its own and be applied automatically.
@@ -53,7 +57,7 @@ const idle: GenerationPhase = { name: 'idle' };
 const stopped: GenerationPhase = { name: 'stopped' };
 const preparing = (step: 'discarding' | 'reading' | 'starting'): GenerationPhase => ({ name: 'preparing', step });
 
-export function useGeneration(projectId: string | null, call: GenerationCall, applied: (view: WorkspaceView) => void, recorded?: () => Promise<void>) {
+export function useGeneration(projectId: string | null, { call, prepare: prepareJob, apply: applyJob }: GenerationNative, applied: (view: WorkspaceView) => void, recorded?: () => Promise<void>) {
   const [job, setJob] = useState<GenerationJobView | null>(null);
   // The job this app session created; a restored job never owns the automatic notices.
   const [owned, setOwned] = useState<OwnedJob>(null);
@@ -113,11 +117,12 @@ export function useGeneration(projectId: string | null, call: GenerationCall, ap
     try { const value = await native<GenerationJobView | null>('get_generation', { projectId }); if (context.current === projectId && version === epoch.current) { setJob(value); setError(''); } }
     catch (error) { if (context.current === projectId && version === epoch.current) setError(errorValue(error)); }
   }, [projectId]);
-  async function perform(command: CommandName, next: GenerationPhase, args?: Record<string, unknown>, signal?: AbortSignal) {
+  const send = (command: CommandName): GenerationSend<GenerationJobView> => (args, signal) => call<GenerationJobView>(command, args, signal);
+  async function perform(run: GenerationSend<GenerationJobView>, next: GenerationPhase, args?: GenerationArgs, signal?: AbortSignal) {
     const id = projectId;
     const version = ++epoch.current;
     const token = ++action.current; setOperationStartedAt(Date.now()); setPhase(next); setError('');
-    try { const value = await call<GenerationJobView>(command, args, signal); if (context.current === id && version === epoch.current) { setJob(value); if (id) setOwned({ projectId: id, jobId: value.jobId }); } return value; }
+    try { const value = await run(args, signal); if (context.current === id && version === epoch.current) { setJob(value); if (id) setOwned({ projectId: id, jobId: value.jobId }); } return value; }
     catch (error) { if (!signal?.aborted && context.current === id && version === epoch.current) setError(errorValue(error)); throw error; }
     finally { if (!signal?.aborted && context.current === id && token === action.current) setPhase(idle); }
   }
@@ -131,13 +136,13 @@ export function useGeneration(projectId: string | null, call: GenerationCall, ap
     const signal = current.controller.signal;
     setPhase(preparing(replacing ? 'discarding' : 'reading'));
     try {
-      if (replacing) await perform('discard_generation', preparing('discarding'), { jobId: replacing.jobId }, signal);
+      if (replacing) await perform(send('discard_generation'), preparing('discarding'), { jobId: replacing.jobId }, signal);
       signal.throwIfAborted();
-      const prepared = await perform('prepare_generation', preparing('reading'), elementIds || referenceIds ? { elementIds, referenceIds } : undefined, signal);
+      const prepared = await perform(prepareJob, preparing('reading'), elementIds || referenceIds ? { elementIds, referenceIds } : undefined, signal);
       current.jobId = prepared.jobId;
       signal.throwIfAborted();
       automatic.current = prepared.jobId;
-      const started = await perform('start_generation', preparing('starting'), { jobId: prepared.jobId }, signal);
+      const started = await perform(send('start_generation'), preparing('starting'), { jobId: prepared.jobId }, signal);
       current.jobId = started.jobId; automatic.current = started.jobId;
     } catch (error) { if (!signal.aborted && context.current === projectId) setError(errorValue(error)); } finally {
       finish();
@@ -170,7 +175,7 @@ export function useGeneration(projectId: string | null, call: GenerationCall, ap
     const current = { controller: new AbortController(), jobId: job!.jobId, done: new Promise<void>(resolve => { finish = resolve; }) };
     flow.current = current; automatic.current = current.jobId;
     try {
-      const submitted = await perform(command, next, { jobId: current.jobId }, current.controller.signal);
+      const submitted = await perform(send(command), next, { jobId: current.jobId }, current.controller.signal);
       current.jobId = submitted.jobId; automatic.current = submitted.jobId;
       return submitted;
     }
@@ -184,7 +189,7 @@ export function useGeneration(projectId: string | null, call: GenerationCall, ap
     epoch.current += 1;
     const token = ++action.current; setOperationStartedAt(Date.now()); setPhase({ name: 'applying' }); setError('');
     try {
-      const value = await call<WorkspaceView>('apply_generation', { ...args(), acceptedDecisionIndices: indices }, flow.current?.controller.signal);
+      const value = await applyJob({ ...args(), acceptedDecisionIndices: indices }, flow.current?.controller.signal);
       if (!flow.current?.controller.signal.aborted && context.current === id) { applied(value); await refresh(); setVisible(false); }
     } catch (error) {
       if (!flow.current?.controller.signal.aborted && context.current === id) {
@@ -206,7 +211,7 @@ export function useGeneration(projectId: string | null, call: GenerationCall, ap
   return { owns, job, phase, visible, operation, error, elapsedSeconds, stopped: phase.name === 'stopped', canStop, open: () => setVisible(true), close: () => setVisible(false), refresh, prepare, apply,
     start: () => launch('start_generation', { name: 'starting' }),
     cancel,
-    discard: () => perform('discard_generation', { name: 'discarding' }, args()).catch(error => { setError(errorValue(error)); }),
+    discard: () => perform(send('discard_generation'), { name: 'discarding' }, args()).catch(error => { setError(errorValue(error)); }),
     retry: () => launch('retry_generation', { name: 'retrying' }) };
 }
 

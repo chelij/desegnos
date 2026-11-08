@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { native } from './api';
 import { Notice } from './ProblemBanner.js';
 import { SIZE_PRESETS, MAX_IMPORT_PAGES } from './generated/limits';
-import { EXTRACTOR_SCRIPT } from './websiteImportExtract';
+import { CAPTURE_TIMEOUT_MS, EXTRACTOR_SCRIPT } from './websiteImportExtract';
 import type { WebCapture, WebsiteImportPageView, WebsiteImportResultView, WebsiteImportSourceView } from './types';
 
 type Progress = { done: number; total: number; label: string };
@@ -96,7 +96,7 @@ export function useWebsiteImport(busy: boolean, onImported: (result: WebsiteImpo
     if (!source) return Promise.reject(new Error('Read a website first.'));
     const id = crypto.randomUUID();
     return new Promise<WebCapture>((resolve, reject) => {
-      const timer = window.setTimeout(() => finishCapture(id, 'That page took too long to render.'), 32000);
+      const timer = window.setTimeout(() => finishCapture(id, 'That page took too long to render.'), CAPTURE_TIMEOUT_MS);
       const src = `${source.extractorUrl}?id=${encodeURIComponent(id)}&url=${encodeURIComponent(page.url)}&width=${width}`;
       const resolveCapture = (capture: WebCapture) => resolve({ ...capture, site: source.name, route: page.route,
         scripts: capture.scripts.map(script => ({ ...script, src: script.src?.startsWith(source.baseUrl) ? script.src.slice(source.baseUrl.length) : script.src })) });

@@ -1,12 +1,13 @@
 import brandLight from './assets/brand/desegnos-wordmark-light.svg';
 import brandDark from './assets/brand/desegnos-wordmark-dark.svg';
-import { PROJECT_COLOURS } from './editorShared';
 import { Icon } from './icons';
 import { MenuButton } from './Menus';
 import { playIsActive } from './projectCanvas/play';
 import type { Editor } from './session/useEditor';
 import { withShortcut } from './shortcuts';
 import { projectHasPreviewPages, showsOpener } from './visibleActions';
+
+const PROJECT_COLOURS = ['#2f6fde', '#c2410c', '#267a36', '#ae3ec9', '#0e7490', '#b35c00'];
 
 export function AppBar({ editor }: { editor: Editor }) {
   const {

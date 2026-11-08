@@ -2,10 +2,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { native } from '../api';
 import { AUTOSAVE_INTERVAL_MS } from '../generated/limits';
 import { createEditorActions } from '../editorActions';
-import { Confirmation, Replacement, selectionBounds } from '../editorShared';
+import type { Confirmation, Replacement } from './projectCommands';
+import { selectionBounds } from '../projectCanvas/selectionGeometry';
 import { errorValue, nativeErrorKind, type ErrorValue } from '../errorMessage.js';
 import { type PendingRecovery, type RecoveryChoices } from '../RecoveryBanner';
-import { needsAiSettings } from '../ProblemBanner.js';
+import { needsAiSettings } from '../userErrors.js';
+import { aiReady } from './aiReady';
 import type { ProjectCanvasHandle } from '../ProjectCanvas';
 import { propertySelection } from '../dock/selection';
 import { usePanelState } from '../dock/panelState';
@@ -75,8 +77,7 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
   const { closeRequest, setCloseRequest } = useWindowClose({ settle, current, generation: generationJob, aiAuthentication: aiCurrent, setError });
 
   const selectedElementPageId = propertySelection(project, canvasSelection, canvasFocus, {}).selectedElementPageId;
-  const exportConnected = aiSettings?.readiness.ready ?? false;
-  const exports = useExportJobs({ current, panels, panelActions, accept, setNotice, settle, setError, setOpenFailure, openPanel, closePanel, mutate, canvasFocus, selectedElementPageId, play, setPlay, view, panel, aiConnected: exportConnected, spendingLimitUsd: aiSettings?.settings.spendingLimitUsd ?? null });
+  const exports = useExportJobs({ current, panels, panelActions, accept, setNotice, settle, setError, setOpenFailure, openPanel, closePanel, mutate, canvasFocus, selectedElementPageId, play, setPlay, view, panel, aiConnected: aiReady(aiSettings, null), spendingLimitUsd: aiSettings?.settings.spendingLimitUsd ?? null });
   const { preview, closePreview, checkedStates, checkedProject } = exports;
 
   const {
@@ -85,7 +86,7 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
     recover, dismissRecoveries, travel, saveCopy, compactHistory } = createProjectCommands({
     setPendingRecovery, setError, saveState, transitionSave, current, panels, panelActions, settle, queue, accept, setNotice, refreshRecent,
     setReplacement, setCanvasSelection, setCanvasFocus, setShowStartPage,
-    setConfirmation, resolvedTheme, canvasRef, closePanel, setHistoryEpoch });
+    setConfirmation, resolvedTheme, closePanel, setHistoryEpoch });
 
   const { createCanvasBoundary, addProjectBoundary, updateCanvasPage, updateCanvasPageSize, addCanvasPageSize } = useBoundaryCommands(current, mutate, canvasRef, selectCanvasBoundary);
   const canvasEdits = useCanvasEdits({ current, mutate, edits, run, setNotice, travel, canvasRef, setCanvasSelection, setCanvasFocus, setCanvasFocusSize });
@@ -100,7 +101,6 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
   const load = useCallback(async () => {
     setLoading(true); setError('');
     try {
-      // The start-page choice decides whether launch opens a canvas or waits on the start page.
       const settings = await native<AppSettingsView>('get_app_settings');
       setAppSettings(settings);
       let loaded = await native<WorkspaceView>('get_workspace');
@@ -152,7 +152,7 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
       const step = playClick(projectNow, current, pageId, elementId);
       if (step.goTo) {
         setCanvasFocus(step.goTo);
-        requestAnimationFrame(() => canvasRef.current?.focusBoundary(step.goTo!));
+        canvasRef.current?.focusBoundary(step.goTo);
       }
       return step.play;
     });
@@ -183,9 +183,7 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
   useEffect(() => { closePanel('log'); }, [project?.id]);
   useEffect(() => { if (generation.visible) { openPanel({ kind: 'log', focus: 0 }); generation.close(); } }, [generation.visible]);
   const composeJob = generation.job && ['prepared', 'generating', 'ready', 'blocked', 'applying'].includes(generation.job.status) ? generation.job : null;
-  const composeUsesChatgpt = (composeJob?.authentication ?? aiSettings?.authentication) === 'chatgpt';
-  const composeAccountId = composeJob ? composeJob.chatgptAccountId : aiSettings?.chatgpt.activeAccountId;
-  const aiConnected = !!aiSettings && (composeJob ? composeUsesChatgpt ? !!composeAccountId && !!aiSettings.readiness.accounts[composeAccountId] : aiSettings.readiness.apiKeyReady : aiSettings.readiness.ready);
+  const aiConnected = aiReady(aiSettings, composeJob);
   function openGeneration() {
     openPanel({ kind: 'log', focus: panel.kind === 'log' ? panel.focus + 1 : 1 });
     void generation.refresh();
@@ -224,7 +222,7 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
         event.preventDefault(); document.execCommand(event.shiftKey ? 'redo' : 'undo'); return;
       }
       // One Escape path: the newest overlay closes first, then the canvas ends its own gesture, Play or preview.
-      if (event.key === 'Escape' && !editingText && !document.querySelector('.editor-menu') && dismissNewestOverlay()) { event.preventDefault(); return; }
+      if (event.key === 'Escape' && !editingText && dismissNewestOverlay()) { event.preventDefault(); return; }
       if (!onStartPage && canvasRef.current?.handleKeyDown(event)) return;
       const canvasText = event.target instanceof HTMLElement && event.target.classList.contains('element-text-editor');
       const action = shortcutFor(event, editingText, canvasText, undefined, canvasRef.current?.containsTarget(event.target) ?? false);

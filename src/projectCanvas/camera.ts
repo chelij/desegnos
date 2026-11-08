@@ -94,8 +94,6 @@ export function rectsIntersect(first: Rect, second: Rect): boolean {
     && first.y < second.y + second.height && first.y + first.height > second.y;
 }
 
-export const sameRect = (first: Rect, second: Rect) => first.x === second.x && first.y === second.y && first.width === second.width && first.height === second.height;
-
 export function unionBounds(rects: Rect[]): Rect {
   if (!rects.length) return { x: 0, y: 0, width: 0, height: 0 };
   const left = Math.min(...rects.map(rect => rect.x));

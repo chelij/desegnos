@@ -83,7 +83,7 @@ export function ExportPanel({ project, exports, busy, selectBoundary, setInclude
       {prepared && <button type="button" className="primary" disabled={sending} onClick={sendExport}>{sending ? 'Sending…' : job?.kind === 'comment' ? 'Send to rewrite the comment' : 'Generate behaviour'}</button>}
       {prepared && <button type="button" className="dock-action" disabled={sending} onClick={cancelExport}>Cancel</button>}
       {running && <button type="button" className="dock-action" onClick={cancelExport}>Cancel</button>}
-      {(job?.status === 'failed' || job?.status === 'cancelled' || job?.status === 'stale') && <button type="button" className="dock-action" disabled={sending} onClick={providerProblem(job.providerError, job.provider)?.settings ? openSettings : sendExport}>{providerProblem(job.providerError, job.provider)?.action ?? 'Try again'}</button>}
+      {(job?.status === 'failed' || job?.status === 'cancelled' || job?.status === 'stale') && <button type="button" className="dock-action" disabled={sending} onClick={providerProblem(job.providerError)?.settings ? openSettings : sendExport}>{providerProblem(job.providerError)?.action ?? 'Try again'}</button>}
     </div>
   </div>;
 }

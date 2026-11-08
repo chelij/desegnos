@@ -2,12 +2,15 @@ import type { Dispatch, RefObject, SetStateAction } from 'react';
 import type { EditorTool } from './EditorTools';
 import type { MenuItem } from './Menus';
 import type { ProjectCanvasHandle } from './ProjectCanvas';
-import { ActionEvent, NO_ACTION_EVENT } from './editorShared';
 import type { PanelActions } from './dock/panelState';
 import { playIsActive, type PlayState, idlePlay } from './projectCanvas/play';
 import type { OpenPanel } from './session/editorPanel';
 import { actionKeys, actionLabel, bindingOf, TOOL_ACTIONS, viewSlot, type ActionId, type ShortcutAction } from './shortcuts';
 import type { CanvasTemplate, WorkspaceView } from './types';
+
+export type ActionEvent = { preventDefault: () => void; key: string; code?: string; repeat?: boolean; target?: EventTarget | null };
+
+export const NO_ACTION_EVENT: ActionEvent = { preventDefault: () => {}, key: '' };
 
 type Context = {
   run: (action: () => Promise<unknown>) => void;

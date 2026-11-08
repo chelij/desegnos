@@ -170,6 +170,6 @@ function statusLabel(status: string) {
 }
 
 function humanText(value: string) {
-  if (/data-desegnos-|<\/?[a-z][^>]*>/i.test(value)) return generationError(value);
+  if (/data-desegnos-|<\/?[a-z][^>]*>/i.test(value)) return generationError();
   return value.replace(/\b[0-9a-f]{8}-[0-9a-f-]{27,}\b/gi, 'request');
 }

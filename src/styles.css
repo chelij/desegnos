@@ -107,9 +107,6 @@ p { margin-bottom: var(--space-5); }
 .recovery-choice .recovery-dismiss { position: absolute; top: var(--space-1); right: var(--space-1); width: 20px; height: 20px; min-height: 20px; padding: 0; border-color: transparent; background: transparent; }
 .recovery-choice button:disabled { opacity: .4; cursor: not-allowed; }
 .recovery-choice button:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
-.recovery-choice-card { flex-direction: column; align-items: stretch; justify-content: center; gap: var(--space-2); height: 100%; padding: var(--space-3); }
-.recovery-choice-card .recovery-message { padding-right: 18px; }
-.recovery-choice-card .recovery-actions { min-width: 0; }
 .empty-message { font-size: var(--text-sm); color: var(--muted); margin: 0; }
 .canvas { position: absolute; top: 0; left: 0; touch-action: none; cursor: crosshair; box-shadow: var(--shadow-1); }
 .canvas.light { background-color: var(--site-light); color: #242424; --grid-line: #0000000e; --annotation-surface: #f5f5f5; --annotation-text: #242424; --annotation-muted: #4b4b4b; --annotation-border: color-mix(in srgb, var(--annotation) 70%, #242424); --annotation-focus: var(--annotation); --annotation-hover: #dcdcdc; }
