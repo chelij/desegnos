@@ -32,7 +32,7 @@ impl RetryResponse {
     }
 }
 
-fn retry_after(value: Option<&str>, now: SystemTime) -> Option<Duration> {
+fn retry_after(value: Option<&str>, now: SystemTime, maximum: Duration) -> Option<Duration> {
     let value = value?;
     let delay = value
         .parse::<u64>()
@@ -44,9 +44,12 @@ fn retry_after(value: Option<&str>, now: SystemTime) -> Option<Duration> {
                 .map(|date| date.duration_since(now).unwrap_or_default())
         })?;
     // Do not resend earlier than a provider asked. Long waits require an explicit later attempt.
-    (delay <= Duration::from_secs(30)).then_some(delay)
+    (delay <= maximum).then_some(delay)
 }
 
+const MAX_RETRY_AFTER: Duration = Duration::from_secs(30);
+pub(crate) const REVOCATION_BACKOFF: [Duration; 2] =
+    [Duration::from_millis(150), Duration::from_millis(300)];
 pub(crate) const DEFAULT_BACKOFF: [Duration; 2] = [Duration::from_secs(2), Duration::from_secs(8)];
 
 #[derive(Clone, Copy)]
@@ -55,6 +58,7 @@ pub(crate) struct RetryPolicy {
     pub idle: Duration,
     pub max_body: usize,
     pub backoff: [Duration; 2],
+    pub max_retry_after: Duration,
 }
 impl RetryPolicy {
     pub fn new(deadline: Instant, idle: Duration, max_body: usize) -> Self {
@@ -63,6 +67,7 @@ impl RetryPolicy {
             idle,
             max_body,
             backoff: DEFAULT_BACKOFF,
+            max_retry_after: MAX_RETRY_AFTER,
         }
     }
 }
@@ -81,6 +86,7 @@ pub(crate) async fn send(
         idle,
         max_body,
         backoff,
+        max_retry_after,
     } = policy;
     let (client, request) = request.build_split();
     let request = request.map_err(|_| ProviderError::before(ErrorKind::InvalidRequirements))?;
@@ -89,34 +95,43 @@ pub(crate) async fn send(
     } else {
         SubmissionOutcome::Unknown
     };
-    for attempt in 1u32..=3 {
+    let mut attempt = 0_u32;
+    loop {
+        attempt += 1;
         // A refused connection or failed DNS lookup won't heal in seconds: report it at once
         // rather than making every probe (models, access checks) wait through the backoff.
-        let unreachable = std::sync::atomic::AtomicBool::new(false);
         let copy = request
             .try_clone()
             .ok_or_else(|| ProviderError::before(ErrorKind::InvalidRequirements))?;
         let result = tokio::select! {
             biased;
             _ = cancel.cancelled() => return Err(ProviderError::before(ErrorKind::Cancelled)),
-            _ = tokio::time::sleep_until(deadline.min(Instant::now() + idle)) => Err(ProviderError::new(ErrorKind::Deadline, outcome)),
+            _ = tokio::time::sleep_until(deadline.min(Instant::now() + idle)) => Err((ProviderError::new(ErrorKind::Deadline, outcome), false)),
             result = async {
                 let mut response = client.execute(copy).await.map_err(|error| {
-                    unreachable.store(error.is_connect() && !error.is_timeout(), std::sync::atomic::Ordering::Relaxed);
-                    network_error(error, outcome)
+                    let terminal = error.is_connect() && !error.is_timeout();
+                    (network_error(error, outcome), terminal)
                 })?;
                 let content_length = response.content_length();
                 if !response.status().is_success() || content_length.is_some_and(|length| length > max_body as u64) {
                     return Ok(RetryResponse { response, first: None, content_length });
                 }
                 let first = loop {
-                    match response.chunk().await.map_err(|error| network_error(error, outcome))? {
+                    match response.chunk().await.map_err(|error| (network_error(error, outcome), false))? {
                         Some(bytes) if bytes.is_empty() => continue,
                         bytes => break bytes,
                     }
                 };
                 Ok(RetryResponse { response, first, content_length })
             } => result,
+        };
+        let result = match result {
+            Err((error, true)) => return Err(error),
+            Err((error, false)) => Err(error),
+            Ok(response) => Ok(response),
+        };
+        let Some(fallback) = backoff.get(attempt as usize - 1).copied() else {
+            return result;
         };
         let (kind, delay) = match &result {
             Ok(response)
@@ -129,23 +144,22 @@ pub(crate) async fn send(
                     ErrorKind::RateLimited
                 };
                 let delay = match response.headers().get("retry-after") {
-                    Some(value) => match retry_after(value.to_str().ok(), SystemTime::now()) {
-                        Some(delay) => delay,
-                        None => return result,
-                    },
-                    None => backoff[(attempt as usize - 1).min(1)],
+                    Some(value) => {
+                        match retry_after(value.to_str().ok(), SystemTime::now(), max_retry_after) {
+                            Some(delay) => delay,
+                            None => return result,
+                        }
+                    }
+                    None => fallback,
                 };
                 (kind, delay)
             }
-            Err(error)
-                if matches!(error.kind, ErrorKind::Transport | ErrorKind::Deadline)
-                    && !unreachable.load(std::sync::atomic::Ordering::Relaxed) =>
-            {
-                (error.kind, backoff[(attempt as usize - 1).min(1)])
+            Err(error) if matches!(error.kind, ErrorKind::Transport | ErrorKind::Deadline) => {
+                (error.kind, fallback)
             }
             _ => return result,
         };
-        if attempt == 3 || Instant::now() + delay >= deadline {
+        if Instant::now() + delay >= deadline {
             return result;
         }
         progress(ProviderProgress {
@@ -165,7 +179,6 @@ pub(crate) async fn send(
             _ = tokio::time::sleep(delay) => {}
         }
     }
-    unreachable!("three attempts return their final response")
 }
 fn network_error(error: reqwest::Error, outcome: SubmissionOutcome) -> ProviderError {
     ProviderError::new(
@@ -184,15 +197,19 @@ mod tests {
     #[test]
     fn retry_after_accepts_seconds_and_dates_but_never_shortens_a_long_wait() {
         let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000);
-        assert_eq!(retry_after(Some("12"), now), Some(Duration::from_secs(12)));
+        assert_eq!(
+            retry_after(Some("12"), now, MAX_RETRY_AFTER),
+            Some(Duration::from_secs(12))
+        );
         assert_eq!(
             retry_after(
                 Some(&httpdate::fmt_http_date(now + Duration::from_secs(20))),
-                now
+                now,
+                MAX_RETRY_AFTER
             ),
             Some(Duration::from_secs(20))
         );
-        assert_eq!(retry_after(Some("31"), now), None);
-        assert_eq!(retry_after(Some("invalid"), now), None);
+        assert_eq!(retry_after(Some("31"), now, MAX_RETRY_AFTER), None);
+        assert_eq!(retry_after(Some("invalid"), now, MAX_RETRY_AFTER), None);
     }
 }

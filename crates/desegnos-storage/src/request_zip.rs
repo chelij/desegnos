@@ -36,7 +36,9 @@ pub fn unpack_request_zip<R: Read + Seek>(
     let mut zip =
         ZipArchive::new(reader).map_err(|_| Error("The ZIP could not be opened.".into()))?;
     if zip.len() > MAX_ENTRIES {
-        return Err(Error("The ZIP exceeds the 64 entry limit.".into()));
+        return Err(Error(format!(
+            "The ZIP exceeds the {MAX_ENTRIES} entry limit."
+        )));
     }
     let mut result = ZipAttachments {
         attachments: vec![],
@@ -64,9 +66,10 @@ pub fn unpack_request_zip<R: Read + Seek>(
             .checked_add(entry.size())
             .ok_or_else(|| Error("ZIP size overflow.".into()))?;
         if total > MAX_TOTAL_BYTES {
-            return Err(Error(
-                "The ZIP exceeds the 64 MiB expanded size limit.".into(),
-            ));
+            return Err(Error(format!(
+                "The ZIP exceeds the {} MiB expanded size limit.",
+                MAX_TOTAL_BYTES / 1024 / 1024
+            )));
         }
         if !crate::source_files::ordinary_zip_mode(entry.unix_mode()) {
             skip("symlink or special file");
@@ -92,13 +95,8 @@ pub fn unpack_request_zip<R: Read + Seek>(
             continue;
         }
         let ext = path.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
-        let mime = match ext.as_str() {
-            "png" => Some("image/png"),
-            "jpg" | "jpeg" => Some("image/jpeg"),
-            "webp" => Some("image/webp"),
-            "gif" => Some("image/gif"),
-            _ => None,
-        };
+        let mime = desegnos_core::limits::image_mime_for_extension(&ext)
+            .filter(|mime| *mime != "image/svg+xml");
         if ext == "zip" {
             skip("nested ZIP");
             continue;
@@ -109,7 +107,10 @@ pub fn unpack_request_zip<R: Read + Seek>(
             continue;
         }
         if entry.size() > MAX_FILE_BYTES {
-            skip("exceeds 16 MiB file limit");
+            skip(&format!(
+                "exceeds {} MiB file limit",
+                MAX_FILE_BYTES / 1024 / 1024
+            ));
             continue;
         }
         if crate::source_files::excessive_expansion(entry.size(), entry.compressed_size()) {
@@ -124,8 +125,11 @@ pub fn unpack_request_zip<R: Read + Seek>(
             continue;
         }
         let full_name = format!("{name}/{path}");
-        if full_name.chars().count() > 120 {
-            skip("name exceeds 120 characters");
+        if full_name.chars().count() > desegnos_core::limits::MAX_NAME_CHARS {
+            skip(&format!(
+                "name exceeds {} characters",
+                desegnos_core::limits::MAX_NAME_CHARS
+            ));
             continue;
         }
         let mut attachment = RequestAttachment {

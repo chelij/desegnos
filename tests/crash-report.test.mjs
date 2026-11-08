@@ -16,16 +16,16 @@ try {
     assert.equal(failure.url, url);
   });
 
-  await test('a plain failure becomes readable copy and has no fallback address', () => {
+  await test('a plain failure keeps its native message and has no fallback address', () => {
     const failure = crashOpenFailure('boom');
     assert.equal(failure.url, null);
-    assert.equal(failure.message, 'Something went wrong. Try again.');
+    assert.equal(failure.message, 'boom');
   });
 
   await test('an ordinary rejection is not a crash address', () => {
     const failure = crashOpenFailure(new Error('ordinary'));
     assert.equal(failure.url, null);
-    assert.match(failure.message, /went wrong|Try again/);
+    assert.equal(failure.message, 'ordinary');
   });
 } finally {
   await modules.cleanup();

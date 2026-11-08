@@ -7,9 +7,7 @@ use crate::source_files::{
     portable_name, read_exact_bounded, safe_archive_name,
 };
 use crate::{io, load_project};
-fn excluded(name: &str) -> bool {
-    source_excluded(name, SourcePurpose::Identity)
-}
+
 use base64::{Engine, engine::general_purpose::STANDARD};
 use desegnos_core::{Error, limits::MAX_PROJECT_PHOTO_BYTES, ProjectPhoto, Result, digest};
 use serde::{Deserialize, Serialize};
@@ -25,9 +23,9 @@ const MAX_ENTRIES: usize = 4096;
 const MAX_FILES: usize = 128;
 const MAX_TEXT_BYTES: usize = 256 * 1024;
 const MAX_TOTAL_TEXT: usize = 2 * 1024 * 1024;
-const MAX_ASSET_BYTES: usize = 128 * 1024;
 use desegnos_core::limits::MAX_IDENTITY_ASSETS as MAX_ASSETS;
-const MAX_ASSET_URI_BYTES: usize = 512 * 1024;
+use desegnos_core::limits::MAX_IDENTITY_LOGO_BYTES as MAX_ASSET_BYTES;
+use desegnos_core::limits::MAX_IDENTITY_LOGO_URI_TOTAL_BYTES as MAX_ASSET_URI_BYTES;
 use desegnos_core::limits::MAX_IDENTITY_SOURCE_BYTES as MAX_COLLECTED_BYTES;
 const MAX_ARCHIVE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const MAX_EXPANDED_BYTES: u64 = 2 * 1024 * 1024 * 1024;
@@ -94,7 +92,6 @@ struct Collector {
     inventory: BTreeSet<String>,
     photos: Vec<IdentitySourcePhoto>,
     photo_aliases: BTreeMap<String, Vec<String>>,
-    photo_origins: BTreeMap<String, Vec<desegnos_core::SourcePageRef>>,
     page_overrides: BTreeMap<String, desegnos_core::SourcePage>,
     collected_bytes: usize,
     skipped: Vec<String>,
@@ -269,30 +266,6 @@ impl Collector {
             .map(|page| (page.path.clone(), page))
             .collect();
         for item in &mut self.photos {
-            if let Some(aliases) = self.photo_aliases.get(&item.photo.sha256) {
-                for alias in aliases {
-                    for page in self.photo_origins.get(alias).into_iter().flatten() {
-                        if !item
-                            .photo
-                            .source_pages
-                            .iter()
-                            .any(|source| source.path == page.path)
-                        {
-                            item.photo.source_pages.push(page.clone());
-                        }
-                        pages.entry(page.path.clone()).or_insert_with(|| {
-                            desegnos_core::SourcePage {
-                                path: page.path.clone(),
-                                title: page.title.clone(),
-                                url: page.url.clone(),
-                                kind: desegnos_core::source_page_kind(&page.path, &page.title),
-                                photo_count: 0,
-                                item_count: 0,
-                            }
-                        });
-                    }
-                }
-            }
             if item.photo.source_pages.is_empty() {
                 item.photo.source_pages = files
                     .iter()
@@ -355,27 +328,14 @@ pub fn identity_source_from_files(
     files: Vec<(String, Vec<u8>)>,
     skipped: Vec<String>,
 ) -> Result<IdentitySource> {
-    identity_source_from_files_attributed(name, files, skipped, BTreeMap::new())
-}
-
-/// The crawler supplies explicit origins for image URLs whose CDN path or query
-/// cannot be reconstructed from the bounded local snapshot filename.
-pub fn identity_source_from_files_attributed(
-    name: &str,
-    files: Vec<(String, Vec<u8>)>,
-    skipped: Vec<String>,
-    photo_origins: BTreeMap<String, Vec<desegnos_core::SourcePageRef>>,
-) -> Result<IdentitySource> {
-    let mut collector = Collector {
-        photo_origins,
-        ..Collector::default()
-    };
+    let mut collector = Collector::default();
     for reason in skipped {
         collector.skip_reason(reason);
     }
     for (path, bytes) in files {
         collector.inventory.insert(path.clone());
-        if excluded(&path) || !(relevant(&path) || is_photo(&path)) {
+        if source_excluded(&path, SourcePurpose::Identity) || !(relevant(&path) || is_photo(&path))
+        {
             collector.skip(&path, "not needed to read your brand");
         } else if is_photo(&path) {
             collector.add_photo(path, &bytes);
@@ -458,7 +418,9 @@ fn collect_folder(
         let metadata = fs::symlink_metadata(&path).map_err(io)?;
         if metadata.file_type().is_symlink() {
             collector.skip(&name, "symbolic link; excluded");
-        } else if excluded(&name) || !include_build && build_path(&name) {
+        } else if source_excluded(&name, SourcePurpose::Identity)
+            || !include_build && build_path(&name)
+        {
             collector.skip(
                 &name,
                 "private, generated, dependency, or unsupported source",
@@ -517,7 +479,9 @@ fn collect_zip(path: &Path, metadata: &Metadata, collector: &mut Collector) -> R
         .extend(archive.file_names().map(str::to_owned));
     let source_names = archive
         .file_names()
-        .filter(|name| !excluded(name) && !build_path(name) && relevant(name))
+        .filter(|name| {
+            !source_excluded(name, SourcePurpose::Identity) && !build_path(name) && relevant(name)
+        })
         .map(|name| Candidate {
             name: name.to_owned(),
             bytes: Vec::new(),
@@ -551,7 +515,8 @@ fn collect_zip(path: &Path, metadata: &Metadata, collector: &mut Collector) -> R
         if entry.is_dir() {
             continue;
         }
-        let skip = excluded(&name) || has_sources && build_path(&name);
+        let skip =
+            source_excluded(&name, SourcePurpose::Identity) || has_sources && build_path(&name);
         if !skip && is_photo(&name) {
             if entry.size() > MAX_PHOTO_FILE_BYTES as u64 {
                 collector.skip(&name, "photo exceeds the 30 MiB file limit");
@@ -607,7 +572,7 @@ fn collect_project(path: &Path, metadata: &Metadata, collector: &mut Collector) 
     if let Some(identity) = &project.imported_identity {
         for (index, asset) in identity.assets.iter().enumerate() {
             let uri = &asset.data_uri;
-            if uri.len() > MAX_ASSET_BYTES * 2 {
+            if uri.len() > desegnos_core::limits::MAX_IDENTITY_LOGO_URI_BYTES {
                 continue;
             }
             let Some((header, encoded)) = uri.split_once(',') else {
@@ -1068,12 +1033,10 @@ fn choose_assets(candidates: &[Candidate]) -> BTreeMap<String, IdentitySourceAss
         if !hashes.insert(sha256.clone()) {
             continue;
         }
-        let mime = match extension(&candidate.name).as_str() {
-            "svg" => "image/svg+xml",
-            "png" => "image/png",
-            "jpg" | "jpeg" => "image/jpeg",
-            "webp" => "image/webp",
-            _ => continue,
+        let Some(mime) =
+            desegnos_core::limits::image_mime_for_extension(&extension(&candidate.name))
+        else {
+            continue;
         };
         let data_uri = format!("data:{mime};base64,{}", STANDARD.encode(&candidate.bytes));
         if uri_bytes + data_uri.len() > MAX_ASSET_URI_BYTES {
@@ -1118,13 +1081,7 @@ fn asset_group(name: &str, svg: bool) -> String {
 }
 
 fn checked_asset(candidate: &Candidate) -> Option<desegnos_core::IdentityAsset> {
-    let mime = match extension(&candidate.name).as_str() {
-        "svg" => "image/svg+xml",
-        "png" => "image/png",
-        "jpg" | "jpeg" => "image/jpeg",
-        "webp" => "image/webp",
-        _ => return None,
-    };
+    let mime = desegnos_core::limits::image_mime_for_extension(&extension(&candidate.name))?;
     let sha256 = digest(&candidate.bytes);
     let asset = desegnos_core::IdentityAsset {
         id: stable_id(&format!("asset:{sha256}")),
@@ -1138,67 +1095,8 @@ fn checked_asset(candidate: &Candidate) -> Option<desegnos_core::IdentityAsset> 
 }
 
 fn raster_size(name: &str, bytes: &[u8]) -> Option<(u32, u32)> {
-    match extension(name).as_str() {
-        "png" if bytes.starts_with(b"\x89PNG\r\n\x1a\n") && bytes.get(12..16) == Some(b"IHDR") => {
-            Some((
-                u32::from_be_bytes(bytes.get(16..20)?.try_into().ok()?),
-                u32::from_be_bytes(bytes.get(20..24)?.try_into().ok()?),
-            ))
-        }
-        "jpg" | "jpeg" if bytes.starts_with(&[0xff, 0xd8]) && bytes.ends_with(&[0xff, 0xd9]) => {
-            let mut cursor = 2;
-            while cursor + 4 <= bytes.len() {
-                if bytes[cursor] != 0xff {
-                    return None;
-                }
-                let marker = bytes[cursor + 1];
-                cursor += 2;
-                if marker == 0xda || marker == 0xd9 {
-                    return None;
-                }
-                if marker == 0xff || marker == 0x01 || (0xd0..=0xd7).contains(&marker) {
-                    continue;
-                }
-                let length =
-                    u16::from_be_bytes(bytes.get(cursor..cursor + 2)?.try_into().ok()?) as usize;
-                if length < 2 {
-                    return None;
-                }
-                if matches!(marker, 0xc0..=0xc3 | 0xc5..=0xc7 | 0xc9..=0xcb | 0xcd..=0xcf) {
-                    return Some((
-                        u16::from_be_bytes(bytes.get(cursor + 5..cursor + 7)?.try_into().ok()?)
-                            as u32,
-                        u16::from_be_bytes(bytes.get(cursor + 3..cursor + 5)?.try_into().ok()?)
-                            as u32,
-                    ));
-                }
-                cursor = cursor.checked_add(length)?;
-            }
-            None
-        }
-        "webp" if bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP") => {
-            match bytes.get(12..16)? {
-                b"VP8X" => Some((
-                    1 + little_24(bytes.get(24..27)?),
-                    1 + little_24(bytes.get(27..30)?),
-                )),
-                b"VP8L" if bytes.get(20) == Some(&0x2f) => {
-                    let bits = u32::from_le_bytes(bytes.get(21..25)?.try_into().ok()?);
-                    Some(((bits & 0x3fff) + 1, ((bits >> 14) & 0x3fff) + 1))
-                }
-                b"VP8 " if bytes.get(23..26) == Some(&[0x9d, 0x01, 0x2a]) => Some((
-                    (u16::from_le_bytes(bytes.get(26..28)?.try_into().ok()?) & 0x3fff) as u32,
-                    (u16::from_le_bytes(bytes.get(28..30)?.try_into().ok()?) & 0x3fff) as u32,
-                )),
-                _ => None,
-            }
-        }
-        _ => None,
-    }
-}
-
-fn little_24(bytes: &[u8]) -> u32 {
-    bytes[0] as u32 | (bytes[1] as u32) << 8 | (bytes[2] as u32) << 16
+    let mime = desegnos_core::limits::image_mime_for_extension(&extension(name))?;
+    desegnos_core::raster_dimensions(mime, bytes)
 }
 
 fn separate_site(path: &Path) -> bool {
@@ -1368,7 +1266,9 @@ fn source_routes(
         }
         if route.contains('[') {
             let prefix = route.split('[').next().unwrap().trim_end_matches('/');
-            let text = std::str::from_utf8(&candidate.bytes).unwrap_or_default();
+            let Ok(text) = std::str::from_utf8(&candidate.bytes) else {
+                continue;
+            };
             // Only expand the collection named by this route, with literal evidence
             // that the route renders that collection.
             let collection = text

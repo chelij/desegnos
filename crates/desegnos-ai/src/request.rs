@@ -44,3 +44,50 @@ impl RequestContent<'_> {
         })
     }
 }
+
+pub(crate) fn frozen_schema(
+    snapshot: &desegnos_core::RequirementsSnapshot,
+    schema: &serde_json::Value,
+) -> crate::Result<serde_json::Value> {
+    use crate::{ErrorKind, ProviderError};
+    use serde_json::{Value, json};
+    let invalid = || ProviderError::before(ErrorKind::InvalidRequirements);
+    if snapshot.markdown.is_empty()
+        || snapshot.sha256 != desegnos_core::digest(snapshot.markdown.as_bytes())
+        || snapshot.job_id.is_nil()
+        || snapshot.project_id.is_nil()
+        || schema.get("type").and_then(Value::as_str) != Some("object")
+        || schema.get("additionalProperties") != Some(&Value::Bool(false))
+    {
+        return Err(invalid());
+    }
+    if snapshot.markdown.len() > crate::MAX_REQUIREMENTS_BYTES
+        || serde_json::to_vec(schema).map_err(|_| invalid())?.len() > crate::MAX_SCHEMA_BYTES
+    {
+        return Err(ProviderError::before(ErrorKind::InputLimit));
+    }
+    let mut schema = schema.clone();
+    for (name, value) in [
+        ("jobId", snapshot.job_id.to_string()),
+        ("requirementsSha256", snapshot.sha256.clone()),
+    ] {
+        if !schema
+            .get("required")
+            .and_then(Value::as_array)
+            .is_some_and(|keys| keys.iter().any(|key| key.as_str() == Some(name)))
+        {
+            return Err(invalid());
+        }
+        let property = schema
+            .get_mut("properties")
+            .and_then(Value::as_object_mut)
+            .and_then(|properties| properties.get_mut(name))
+            .and_then(Value::as_object_mut)
+            .ok_or_else(invalid)?;
+        if property.get("type").and_then(Value::as_str) != Some("string") {
+            return Err(invalid());
+        }
+        property.insert("enum".into(), json!([value]));
+    }
+    Ok(schema)
+}

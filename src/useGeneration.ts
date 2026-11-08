@@ -1,4 +1,4 @@
-import { errorValue, type ErrorValue } from './errorMessage.js';
+import { errorMessage, errorValue, type ErrorValue } from './errorMessage.js';
 import type { CommandName } from './generated/commands';
 import { usePoll } from './usePoll';
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -78,7 +78,7 @@ export function useGeneration(projectId: string | null, call: GenerationCall, ap
   useEffect(() => {
     if (!recorded || !job) return;
     let active = true;
-    void recorded().catch(error => { if (active) setError(`The project brief could not be refreshed: ${errorValue(error)}`); });
+    void recorded().catch(error => { if (active) setError(`The project brief could not be refreshed: ${errorMessage(error)}`); });
     return () => { active = false; };
   }, [job?.jobId, job?.status, recorded]);
   const busy = working || activeGeneration(job);
@@ -106,7 +106,7 @@ export function useGeneration(projectId: string | null, call: GenerationCall, ap
       const jobId = job?.jobId;
       const value = await native<GenerationJobView | null>('get_generation', { projectId });
       if (active() && context.current === projectId && version === epoch.current && value?.jobId === jobId) { setJob(value); setError(''); }
-    }, error => setError(`Progress could not be refreshed: ${errorValue(error)}`));
+    }, error => setError(`Progress could not be refreshed: ${errorMessage(error)}`));
   const refresh = useCallback(async () => {
     if (!projectId) return;
     const version = ++epoch.current;

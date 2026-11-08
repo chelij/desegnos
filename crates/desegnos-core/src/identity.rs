@@ -421,7 +421,7 @@ impl Project {
     }
 }
 
-fn raster_dimensions(mime: &str, bytes: &[u8]) -> Option<(u32, u32)> {
+pub fn raster_dimensions(mime: &str, bytes: &[u8]) -> Option<(u32, u32)> {
     // GIF decoding is not enabled: retain animation and inspect its logical screen size.
     if mime == "image/gif" {
         return Some((

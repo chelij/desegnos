@@ -195,56 +195,46 @@ pub(crate) fn excluded(name: &str, purpose: SourcePurpose) -> bool {
     })
 }
 
-pub(crate) fn priority(name: &str) -> Option<u8> {
-    Some(match extension(name).as_str() {
-        "html" | "htm" => 0,
-        "css" => 1,
-        "svg" | "png" | "jpg" | "jpeg" | "webp" | "gif" | "avif" | "ico" | "bmp" => 2,
-        "woff" | "woff2" | "ttf" | "otf" | "eot" => 3,
-        "js" | "mjs" | "cjs" => 4,
+struct FileClass {
+    priority: Option<u8>,
+    text: bool,
+    image: bool,
+    download: bool,
+}
+fn classify(name: &str) -> FileClass {
+    let ext = extension(name);
+    let (priority, text, image) = match ext.as_str() {
+        "html" | "htm" => (Some(0), true, false),
+        "css" => (Some(1), true, false),
+        "svg" => (Some(2), true, true),
+        "png" | "jpg" | "jpeg" | "webp" => (Some(2), false, true),
+        "gif" | "avif" | "ico" | "bmp" => (Some(2), false, false),
+        "woff" | "woff2" | "ttf" | "otf" | "eot" => (Some(3), false, false),
+        "js" | "mjs" | "cjs" => (Some(4), true, false),
         "md" | "mdx" | "txt" | "json" | "scss" | "sass" | "less" | "ts" | "tsx" | "jsx"
         | "astro" | "vue" | "svelte" | "njk" | "hbs" | "liquid" | "php" | "toml" | "yaml"
-        | "yml" => 5,
-        _ => return None,
-    })
+        | "yml" => (Some(5), true, false),
+        _ => (None, false, false),
+    };
+    FileClass {
+        priority,
+        text,
+        image,
+        download: matches!(
+            ext.as_str(),
+            "mp3" | "mp4" | "webm" | "ogg" | "wav" | "pdf" | "txt" | "json" | "xml"
+        ),
+    }
 }
-
+pub(crate) fn priority(name: &str) -> Option<u8> {
+    classify(name).priority
+}
 pub(crate) fn is_text(name: &str) -> bool {
-    matches!(
-        extension(name).as_str(),
-        "html"
-            | "htm"
-            | "css"
-            | "scss"
-            | "sass"
-            | "less"
-            | "js"
-            | "jsx"
-            | "mjs"
-            | "cjs"
-            | "ts"
-            | "tsx"
-            | "md"
-            | "mdx"
-            | "json"
-            | "svg"
-            | "txt"
-            | "astro"
-            | "vue"
-            | "svelte"
-            | "njk"
-            | "hbs"
-            | "liquid"
-            | "php"
-            | "toml"
-            | "yaml"
-            | "yml"
-    )
+    classify(name).text
 }
-
 pub(crate) fn is_image(name: &str) -> bool {
-    matches!(
-        extension(name).as_str(),
-        "png" | "jpg" | "jpeg" | "webp" | "svg"
-    )
+    classify(name).image
+}
+pub(crate) fn is_download(name: &str) -> bool {
+    classify(name).download
 }

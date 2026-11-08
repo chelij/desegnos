@@ -167,7 +167,7 @@ impl AuthHttp {
     pub fn new(endpoints: Endpoints) -> ChatgptResult<Self> {
         let client = crate::net::hardened_client(!endpoints.test)
             .connect_timeout(Duration::from_secs(15))
-            .timeout(Duration::from_secs(30))
+            .timeout(crate::net::PROBE_IDLE)
             .build()
             .map_err(|_| Kind::Transport)?;
         Ok(Self {
@@ -407,26 +407,41 @@ impl AuthHttp {
     ) -> ChatgptResult<()> {
         let config = self.configuration(cancellation).await?;
         let endpoint = config.revocation_endpoint.ok_or(Kind::Discovery)?;
-        for attempt in 0..3 {
-            let request = self.client.post(&endpoint).form(&[
-                ("token", token),
-                ("token_type_hint", "refresh_token"),
-                ("client_id", client),
-            ]);
-            match self.send(request, cancellation).await {
-                Ok(response) if response.status() == reqwest::StatusCode::OK => return Ok(()),
-                Ok(response) if !response.status().is_server_error() => {
-                    return Err(Kind::TokenRejected.into());
-                }
-                Err(error) if error.kind == Kind::Cancelled => return Err(error),
-                _ => {}
+        let request = self.client.post(&endpoint).form(&[
+            ("token", token),
+            ("token_type_hint", "refresh_token"),
+            ("client_id", client),
+        ]);
+        let response = crate::retry::send(
+            request,
+            cancellation,
+            crate::retry::RetryPolicy {
+                backoff: crate::retry::REVOCATION_BACKOFF,
+                ..crate::retry::RetryPolicy::new(
+                    tokio::time::Instant::now() + crate::net::PROBE_IDLE,
+                    crate::net::PROBE_IDLE,
+                    crate::net::ERROR_BODY_LIMIT,
+                )
+            },
+            &|_| {},
+        )
+        .await
+        .map_err(|error| {
+            if error.kind == crate::ErrorKind::Cancelled {
+                Kind::Cancelled
+            } else {
+                Kind::Transport
             }
-            if attempt < 2 {
-                tokio::select! { _ = cancellation.cancelled() => return Err(Kind::Cancelled.into()), _ = tokio::time::sleep(Duration::from_millis(150 * (1 << attempt))) => {} }
-            }
+        })?;
+        if response.status() == reqwest::StatusCode::OK {
+            Ok(())
+        } else if response.status().is_server_error() {
+            Err(Kind::Transport.into())
+        } else {
+            Err(Kind::TokenRejected.into())
         }
-        Err(Kind::Transport.into())
     }
+
     async fn send(
         &self,
         request: reqwest::RequestBuilder,
@@ -447,7 +462,7 @@ async fn bounded_json<T: DeserializeOwned>(
         &mut response,
         512 * 1024,
         cancellation,
-        tokio::time::Instant::now() + Duration::from_secs(30),
+        tokio::time::Instant::now() + crate::net::PROBE_IDLE,
     )
     .await
     .map_err(|error| match error.kind {

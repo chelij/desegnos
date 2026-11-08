@@ -73,7 +73,7 @@ test-results/                Local evidence from smoke, startup and vault runs (
 | [identity_pages.rs](../crates/desegnos-core/src/identity_pages.rs) | Source-page kinds and portable route names for imported evidence. |
 | [project_assets.rs](../crates/desegnos-core/src/project_assets.rs) | `desegnos-asset:` references, the content-addressed picture store, `prepare_picture`, image catalogues and unused-picture cleanup. |
 | [picture_scaling.rs](../crates/desegnos-core/src/picture_scaling.rs) | AI preview size/quality and display-scaled picture copies. |
-| [image_generation.rs](../crates/desegnos-core/src/image_generation.rs) | `ImageGenerationRequest`. Task data cannot grant credentials or file access. |
+| [image_generation.rs](../crates/desegnos-core/src/image_generation.rs) | The downloaded-image byte ceiling. |
 | [website.rs](../crates/desegnos-core/src/website.rs) | `website_links`, `website_assets` and `css_urls`: stylesheets, logos, pages, photos, media frames and CSS references. |
 | [website_import.rs](../crates/desegnos-core/src/website_import.rs) | `WebCapture` types and the pure conversion into pages, elements, reference notes, behaviour pointers and linked-size overrides. |
 | [export.rs](../crates/desegnos-core/src/export.rs) | Export plans, exact AI request markdown, schemas, reply parsing/validation, AI and direct bundles, manifests, pointer fingerprints and `RecordExport`. |
@@ -88,13 +88,13 @@ test-results/                Local evidence from smoke, startup and vault runs (
 
 | Module | Owns |
 | --- | --- |
-| [lib.rs](../crates/desegnos-storage/src/lib.rs) | Module wiring, `load_project`, atomic small-file writes, `.previous` backups and `write_markdown`. |
-| [project_db.rs](../crates/desegnos-storage/src/project_db.rs) | `ProjectDatabase`: the `.desegnos` SQLite file, blobs/versions/branches/head tables, WAL transactions, checked saves, the hidden `__autosave` branch, alternatives, restore, compaction and save-conflict stamps. |
+| [lib.rs](../crates/desegnos-storage/src/lib.rs) | Module wiring, atomic small-file writes, `.previous` backups and `write_text`. |
+| [project_db.rs](../crates/desegnos-storage/src/project_db.rs) | `ProjectDatabase`: the `.desegnos` SQLite file, blobs/versions/branches/head tables, rollback-journal transactions, checked saves, the hidden `__autosave` branch, alternatives, restore, compaction and save-conflict stamps. |
 | [project_parts.rs](../crates/desegnos-storage/src/project_parts.rs) | `split_project`/`join_project`: one part per boundary, plus `reference`, `pointers`, `brief`, `identity`, `dossier`, `settings` and one part per picture. |
-| [project_folder.rs](../crates/desegnos-storage/src/project_folder.rs) | Project-folder naming, one-project-file lookup, managed-folder creation and name sanitising. |
+| [project_folder.rs](../crates/desegnos-storage/src/project_folder.rs) | Project-folder naming, one-project-file lookup, collision-safe creation and name sanitising. |
 | [website_export.rs](../crates/desegnos-storage/src/website_export.rs) | Bounded, staged export writing, no-replace destination rules, output verification, receipts and `read_export_file`. |
 | [source_files.rs](../crates/desegnos-storage/src/source_files.rs) | Shared source paths, archive safety, file classification and bounded reads. |
-| [website_snapshot.rs](../crates/desegnos-storage/src/website_snapshot.rs) | Bounded folder/ZIP website snapshots, page routes, private import folders and read-only snapshot writing. |
+| [website_snapshot.rs](../crates/desegnos-storage/src/website_snapshot.rs) | Shared URL/folder/ZIP snapshot and page types, route/file rules, titles, charset/percent decoding, bounded local collection and private import folders. |
 | [identity_source.rs](../crates/desegnos-storage/src/identity_source.rs) | Read-only brand evidence from files, folders, archives and websites, including photos and assets. |
 | [request_zip.rs](../crates/desegnos-storage/src/request_zip.rs) | Bounded in-memory ZIP extraction into request attachments. |
 | [system_tools.rs](../crates/desegnos-storage/src/system_tools.rs) | Executable lookup for OS launchers using inherited and common tool directories. |
@@ -106,22 +106,29 @@ test-results/                Local evidence from smoke, startup and vault runs (
 | Module | Owns |
 | --- | --- |
 | [providers.rs](../crates/desegnos-ai/src/providers.rs) | `ProviderId`, `ProviderDescriptor`, provider catalogue, `ProviderAdapter`, `ProviderClient`, estimates, model access checks and generation/identity dispatch. |
-| [transport.rs](../crates/desegnos-ai/src/transport.rs) | `OpenAiClient`, HTTP/SSE streaming, deadlines/idle limits, response identity and correlation, model discovery and ChatGPT bearer use. |
+| [transport.rs](../crates/desegnos-ai/src/transport.rs) | `OpenAiClient`, HTTP/SSE streaming, deadlines/idle limits, response identity and correlation, and ChatGPT bearer use. |
+| [estimate.rs](../crates/desegnos-ai/src/estimate.rs) | Shared cost, pricing overrides, image fees, spending and context-window arithmetic with explicit wire-format reserves. |
+| [model_discovery.rs](../crates/desegnos-ai/src/model_discovery.rs) | Provider discovery profiles, model parsing, authorization, shared connectivity probes and ChatGPT catalogue discovery. |
+| [retry.rs](../crates/desegnos-ai/src/retry.rs) | Pre-output retry budgets, backoff and bounded Retry-After handling, including token revocation. |
+| [schema_wire.rs](../crates/desegnos-ai/src/schema_wire.rs) | Wire-only schema property ordering, independent of persisted canonical hashes. |
 | [settings.rs](../crates/desegnos-ai/src/settings.rs) | `ProviderSettings`, model catalogue, request bodies, token/size limits, cost estimates and billed output caps. |
-| [request.rs](../crates/desegnos-ai/src/request.rs) | Shared validated task content: instructions, documents, images and reply schema before provider-specific encoding. |
+| [request.rs](../crates/desegnos-ai/src/request.rs) | Shared frozen-packet/schema validation and task content: instructions, documents, images and reply schema before provider-specific encoding. |
 | [credentials.rs](../crates/desegnos-ai/src/credentials.rs) | `ApiKey`, `CredentialManager`, system/session storage, masked identifiers and credential status. |
 | [error.rs](../crates/desegnos-ai/src/error.rs) | `ProviderError`, error kinds, submission outcomes, diagnostics scrubbing and authentication context. |
 | [sse.rs](../crates/desegnos-ai/src/sse.rs) | Bounded SSE decoder, event framing, terminal output extraction and stream validation. |
 | [identity.rs](../crates/desegnos-ai/src/identity.rs) | Brand analysis bodies/budgets, logo and photo images, identity schema checks and estimates. |
-| [website.rs](../crates/desegnos-ai/src/website.rs) | `WebsiteFetcher` page, snapshot and image methods under public-address, size, redirect and timeout rules. |
+| [website.rs](../crates/desegnos-ai/src/website.rs) | `WebsiteFetcher` snapshot and image methods under public-address, size, redirect and timeout rules. |
 | [public_fetch.rs](../crates/desegnos-ai/src/public_fetch.rs) | Public web fetch requests, DNS pinning, fixture boundary and redirect policy. |
 | [net.rs](../crates/desegnos-ai/src/net.rs) | Hardened HTTP clients, shared deadlines and cancellable bounded response reads. |
-| [image_generation.rs](../crates/desegnos-ai/src/image_generation.rs) | Bounded Image API requests/edits, model names, reply decoding and generated bytes. |
+| [image_generation.rs](../crates/desegnos-ai/src/image_generation.rs) | Bounded Image API generation, its model and fixed output dimensions, reply decoding and generated bytes. |
 | [image_access.rs](../crates/desegnos-ai/src/image_access.rs) | Account-specific image capability discovery and caching. |
-| [chatgpt/mod.rs](../crates/desegnos-ai/src/chatgpt/mod.rs) | `ChatgptManager`: browser sign-in lifecycle, accounts, token refresh, model discovery and sign-out. |
+| [chatgpt/mod.rs](../crates/desegnos-ai/src/chatgpt/mod.rs) | `ChatgptManager`: browser sign-in lifecycle, accounts, sign-in state and sign-out; refresh and catalogue operations have separate modules. |
 | [chatgpt/callback.rs](../crates/desegnos-ai/src/chatgpt/callback.rs) | Loopback OAuth callback listener with state checks and cancellation. |
 | [chatgpt/http.rs](../crates/desegnos-ai/src/chatgpt/http.rs) | OAuth discovery, authorize/token/JWKS calls, JWT validation, revocation and model access. |
 | [chatgpt/storage.rs](../crates/desegnos-ai/src/chatgpt/storage.rs) | Registration/token records, system vault abstraction, test vault and bounded private files. |
+| [chatgpt/refresh.rs](../crates/desegnos-ai/src/chatgpt/refresh.rs) | Refresh-token rotation and recovery after secure-storage failures. |
+| [chatgpt/models.rs](../crates/desegnos-ai/src/chatgpt/models.rs) | Account-bound catalogue refresh and stale-result checks. |
+| [chatgpt/lock.rs](../crates/desegnos-ai/src/chatgpt/lock.rs) | Shared lock polling and deadlines, with cancellable asynchronous leases. |
 | [chatgpt/types.rs](../crates/desegnos-ai/src/chatgpt/types.rs) | ChatGPT error/view/account types. |
 | [tests.rs](../crates/desegnos-ai/src/tests.rs), [identity_tests.rs](../crates/desegnos-ai/src/identity_tests.rs) | Rust provider/transport/identity tests, including loopback fake servers. |
 | [chatgpt/tests.rs](../crates/desegnos-ai/src/chatgpt/tests.rs) | ChatGPT OAuth/token/storage tests against loopback servers. |
@@ -147,6 +154,7 @@ test-results/                Local evidence from smoke, startup and vault runs (
 | [identity.rs](../src-tauri/src/identity.rs) | `IdentityService`: brand source selection/fetching, analysis lifecycle, photo descriptions and approved-context handoff. |
 | [local_site.rs](../src-tauri/src/local_site.rs) | `LocalSite`: loopback GET/HEAD static servers with token prefixes, path rules and stop control. |
 | [chatgpt.rs](../src-tauri/src/chatgpt.rs) | `ChatgptState`: accounts, sign-in commands, epochs/revocation, secure-storage repair and usage links. |
+| [project_history.rs](../src-tauri/src/project_history.rs) | Renderer history and save-conflict contract types, converted explicitly from native storage values. |
 | [project_location.rs](../src-tauri/src/project_location.rs), [recent.rs](../src-tauri/src/recent.rs) | App settings in `project-settings.json` (default project location, show start page on launch) and the recent-project catalogue with pins and last-opened times. |
 | [clipboard.rs](../src-tauri/src/clipboard.rs), [image_drop.rs](../src-tauri/src/image_drop.rs) | Editor-only clipboard adapter and OS image-drop events. |
 | [system_open.rs](../src-tauri/src/system_open.rs), [file_dialogs.rs](../src-tauri/src/file_dialogs.rs), [portal.rs](../src-tauri/src/portal.rs), [linux_startup.rs](../src-tauri/src/linux_startup.rs) | OS opening with Linux fallbacks, dialog result handling, XDG desktop-portal detection and the NVIDIA/Wayland startup workaround. |
@@ -304,7 +312,7 @@ test-results/                Local evidence from smoke, startup and vault runs (
 
 ### Website import to elements
 
-1. **Import website…** calls `prepare_website_import_url` or `pick_website_import_source` → bounded fetch (`fetch_website_snapshot`) or read (`collect_website_snapshot`) into a private import folder, served by `ImportSite`.
+1. **Import website…** calls `prepare_website_import_url` or `pick_website_import_source` → bounded fetch (`fetch_website_snapshot`) or read (`collect_import_snapshot`/`collect_import_html`) into a private import folder, served by `ImportSite`.
 2. [WebsiteImport.tsx](../src/WebsiteImport.tsx) renders each page in a hidden iframe through [websiteImportExtract.ts](../src/websiteImportExtract.ts). The page itself runs in a nested script-disabled frame; only the extractor reads the DOM and posts a compact `WebCapture` tree of positions, text, computed styles, links, pictures and script tags.
 3. `import_website_pages` validates routes and picture sources, downloads or reads bounded images, stores them through `Project::prepare_picture`, then calls the pure `import_website` conversion in core. It returns pages, elements, reference notes, behaviour pointers where recognisable, linked-size overrides and pictures.
 4. `Command::ImportWebsite` applies the whole import in **one undo step**. Page code never runs; scripts become notes or pointer comments.

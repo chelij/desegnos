@@ -13,7 +13,10 @@ pub fn open(target: impl AsRef<OsStr>) -> io::Result<()> {
 }
 
 #[cfg(target_os = "linux")]
-fn open_with(target: &OsStr, search: &desegnos_storage::system_tools::ToolSearch) -> io::Result<()> {
+fn open_with(
+    target: &OsStr,
+    search: &desegnos_storage::system_tools::ToolSearch,
+) -> io::Result<()> {
     use std::{
         process::{Command, Stdio},
         time::{Duration, Instant},
@@ -29,7 +32,7 @@ fn open_with(target: &OsStr, search: &desegnos_storage::system_tools::ToolSearch
             .unwrap_or_else(|_| std::path::PathBuf::from(tool));
         let Ok(mut child) = Command::new(program)
             .args(template.get_args())
-            .env("PATH", search.path())
+            .env("PATH", search.path()?)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())

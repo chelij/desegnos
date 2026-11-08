@@ -3,8 +3,9 @@ use desegnos_core::{
     Appearance, BoundaryKind, Command, ElementKind, PageSize, Project, Rect, Session, Viewport,
     digest, empty_element,
 };
+use desegnos_storage::ProjectDatabase;
 use desegnos_storage::project_db::now_millis;
-use desegnos_storage::{ProjectDatabase, join_project, split_project};
+use desegnos_storage::project_parts::{join_project, split_project};
 use std::fs;
 use std::path::PathBuf;
 use uuid::Uuid;
@@ -259,11 +260,23 @@ fn screen_project_keeps_sizes_content_history_and_web_export() {
 
     let mut edited = loaded.clone();
     edited.pages[0].elements[0].text = "Edited in the unified Page editor".into();
-    database.save(&edited, &[], Some("Edit page")).unwrap();
+    database
+        .save(
+            &edited,
+            &[],
+            Some("Edit page"),
+            desegnos_storage::project_db::now_millis(),
+        )
+        .unwrap();
     drop(database);
     let database = ProjectDatabase::open(&path).unwrap();
     assert_eq!(database.load().unwrap().project, edited);
-    assert_eq!(database.restore(original_version).unwrap(), old);
+    assert_eq!(
+        database
+            .restore(original_version, desegnos_storage::project_db::now_millis())
+            .unwrap(),
+        old
+    );
 }
 
 #[test]
@@ -373,18 +386,32 @@ fn save_amends_recent_versions_and_restore_creates_a_new_one() {
     let database = create_database(&directory, &project);
     let created = database.load().unwrap();
     assert_eq!(created.project, project);
-    assert_eq!(created.branch, desegnos_storage::DEFAULT_BRANCH);
+    assert_eq!(created.branch, desegnos_storage::project_db::DEFAULT_BRANCH);
     assert_eq!(database.history().unwrap().versions.len(), 1);
 
     let mut one = project.clone();
     one.name = "One".into();
-    let saved_one = database.save(&one, &[], Some("First save")).unwrap();
+    let saved_one = database
+        .save(
+            &one,
+            &[],
+            Some("First save"),
+            desegnos_storage::project_db::now_millis(),
+        )
+        .unwrap();
     assert_ne!(saved_one.id, created.version);
     assert_eq!(database.load().unwrap().project.name, "One");
 
     let mut two = project.clone();
     two.name = "Two".into();
-    let saved_two = database.save(&two, &[], Some("Second save")).unwrap();
+    let saved_two = database
+        .save(
+            &two,
+            &[],
+            Some("Second save"),
+            desegnos_storage::project_db::now_millis(),
+        )
+        .unwrap();
     assert_eq!(
         saved_two.id, saved_one.id,
         "a save seconds later amends the previous version"
@@ -396,7 +423,9 @@ fn save_amends_recent_versions_and_restore_creates_a_new_one() {
     assert_eq!(history.versions[0].id, saved_one.id);
     assert!(history.versions[0].head);
 
-    let restored = database.restore(created.version).unwrap();
+    let restored = database
+        .restore(created.version, desegnos_storage::project_db::now_millis())
+        .unwrap();
     assert_eq!(restored.name, "Storage");
     let after = database.load().unwrap();
     assert_eq!(after.project.name, "Storage");
@@ -428,20 +457,34 @@ fn alternatives_keep_independent_heads() {
     let database = create_database(&directory, &project());
     let mut dark = database.load().unwrap().project;
     dark.name = "Dark".into();
-    database.save(&dark, &[], Some("Main dark")).unwrap();
+    database
+        .save(
+            &dark,
+            &[],
+            Some("Main dark"),
+            desegnos_storage::project_db::now_millis(),
+        )
+        .unwrap();
 
     let branch = database.create_branch("Dark version").unwrap();
     assert_eq!(branch, "Dark version");
     assert_eq!(database.branch().unwrap(), "Dark version");
     let mut darker = database.load().unwrap().project;
     darker.name = "Darker".into();
-    database.save(&darker, &[], Some("Darker")).unwrap();
+    database
+        .save(
+            &darker,
+            &[],
+            Some("Darker"),
+            desegnos_storage::project_db::now_millis(),
+        )
+        .unwrap();
 
     let main = database
-        .switch_branch(desegnos_storage::DEFAULT_BRANCH)
+        .switch_branch(desegnos_storage::project_db::DEFAULT_BRANCH)
         .unwrap();
     assert_eq!(main.project.name, "Dark");
-    assert_eq!(main.branch, desegnos_storage::DEFAULT_BRANCH);
+    assert_eq!(main.branch, desegnos_storage::project_db::DEFAULT_BRANCH);
     let alternative = database.switch_branch("Dark version").unwrap();
     assert_eq!(alternative.project.name, "Darker");
     let history = database.history().unwrap();
@@ -490,7 +533,12 @@ fn autosave_is_detected_as_recovery_and_cleared_by_save() {
     assert_eq!(database.load().unwrap().project.name, "Storage");
 
     database
-        .save(&changed, &[], Some("Saved after recovery"))
+        .save(
+            &changed,
+            &[],
+            Some("Saved after recovery"),
+            desegnos_storage::project_db::now_millis(),
+        )
         .unwrap();
     assert!(database.autosave_work().unwrap().is_none());
     assert_eq!(database.load().unwrap().project.name, "Unsaved");
@@ -503,7 +551,14 @@ fn a_copy_has_one_version_and_no_history() {
     let source = create_database(&directory, &project);
     let mut changed = project.clone();
     changed.name = "Copy source".into();
-    source.save(&changed, &[], Some("Before copy")).unwrap();
+    source
+        .save(
+            &changed,
+            &[],
+            Some("Before copy"),
+            desegnos_storage::project_db::now_millis(),
+        )
+        .unwrap();
 
     let copy_path = directory.path("copy.desegnos");
     let copy =
@@ -535,7 +590,14 @@ fn an_open_saved_project_leaves_only_its_file_in_the_folder() {
     let path = directory.path("Bakery site.desegnos");
     let project = project_with_element();
     let database = ProjectDatabase::create(&path, &project, now_millis()).unwrap();
-    database.save(&project, &[], Some("Saved")).unwrap();
+    database
+        .save(
+            &project,
+            &[],
+            Some("Saved"),
+            desegnos_storage::project_db::now_millis(),
+        )
+        .unwrap();
 
     let visible: Vec<String> = fs::read_dir(&directory.0)
         .unwrap()

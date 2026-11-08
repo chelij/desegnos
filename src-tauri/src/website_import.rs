@@ -228,36 +228,7 @@ pub async fn prepare_website_import_url(
             Err(error) => return Err(message(error)),
         };
         let snapshot = fetcher.fetch_website_snapshot(&url).await?;
-        install(
-            &state,
-            revision,
-            WebsiteSnapshot {
-                name: snapshot.name,
-                files: snapshot.files,
-                pages: snapshot
-                    .pages
-                    .into_iter()
-                    .map(|page| desegnos_storage::WebsitePage {
-                        file: {
-                            let route = page.route.trim_start_matches('/');
-                            if route.is_empty() || route.ends_with('/') {
-                                format!("{route}index.html")
-                            } else if route.ends_with(".html") || route.ends_with(".htm") {
-                                route.to_owned()
-                            } else {
-                                format!("{route}.html")
-                            }
-                        },
-                        route: page.route,
-                        title: page.title,
-                    })
-                    .collect(),
-                skipped: snapshot.skipped,
-            },
-            &identity,
-            None,
-            &extractor,
-        )
+        install(&state, revision, snapshot, &identity, None, &extractor)
     }
     .await;
     result.map_err(|error| {

@@ -6,7 +6,7 @@ use crate::{
     },
 };
 use desegnos_core::{Project, digest};
-use desegnos_storage::write_markdown;
+use desegnos_storage::write_text;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -136,7 +136,7 @@ impl GenerationJobStore {
                 return Err("The frozen requirements file changed on disk. The existing record was preserved.".into());
             }
         } else {
-            write_markdown(&markdown, &primary.markdown).map_err(message)?;
+            write_text(&markdown, &primary.markdown).map_err(message)?;
         }
         if let Some(context) = &record.view.context {
             if context.markdown.len() > desegnos_core::limits::MAX_REQUIREMENTS_BYTES
@@ -160,14 +160,14 @@ impl GenerationJobStore {
                     );
                 }
             } else {
-                write_markdown(&path, &context.markdown).map_err(message)?;
+                write_text(&path, &context.markdown).map_err(message)?;
             }
         }
         if let Some(reply) = &record.view.raw_reply {
             if reply.len() > 64 * 1024 {
                 return Err("The failed reply exceeds its diagnostic limit.".into());
             }
-            write_markdown(&directory.join("REPLY.txt"), reply).map_err(message)?;
+            write_text(&directory.join("REPLY.txt"), reply).map_err(message)?;
         }
         write_json(&directory.join("job.json"), &record)?;
         let history_path = self.history_path(record.view.project_id);

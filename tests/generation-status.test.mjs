@@ -86,7 +86,7 @@ try {
     const needsInput = GenerationFeedback({ controller: controller(base), project, changeRequest() {}, openSettings() {}, details() {} });
     assert.equal(needsInput.props.action.label, 'Change request');
     assert.equal(needsInput.props.secondaryAction.label, 'Details');
-    const failed = { ...base, status: 'failed', candidate: null, message: 'API key is missing' };
+    const failed = { ...base, status: 'failed', candidate: null, message: 'API key is missing', provider: 'openai', providerError: { kind: 'missingCredential', outcome: 'notSent', authentication: 'apiKey' } };
     const html = render(failed, { details() {} });
     assert.match(html, />AI settings</);
     assert.match(html, />Details</);

@@ -67,7 +67,7 @@ pub use generation::{
 };
 pub use identity::{
     IdentityAsset, ImportedContext, ImportedIdentity, ImportedItem, ImportedPageContext,
-    ProjectPhoto, SourcePage, SourcePageRef,
+    ProjectPhoto, SourcePage, SourcePageRef, raster_dimensions,
 };
 pub use identity_pages::{
     identity_source_page, page_references_image, source_page_at_route, source_page_kind,

@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import test from 'node:test';
-import { compileModules } from './typescript.mjs';
+import { join } from 'node:path';
+import { compileModules, root } from './typescript.mjs';
 
 const modules = await compileModules([
   'src/projectCanvas/canvasView.ts',

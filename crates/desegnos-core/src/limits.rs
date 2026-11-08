@@ -24,6 +24,22 @@ pub const DEFAULT_PAGE_BACKGROUND: &str = "#ffffff";
 pub const MAX_REQUEST_SHAPE_POINTS: usize = 4096;
 pub const IMAGE_MIME_TYPES: &[&str] = &["image/png", "image/jpeg", "image/webp", "image/gif"];
 
+pub const MAX_IDENTITY_LOGO_BYTES: usize = 128 * 1024;
+pub const MAX_IDENTITY_LOGO_URI_BYTES: usize = 256 * 1024;
+pub const MAX_IDENTITY_LOGO_URI_TOTAL_BYTES: usize = 512 * 1024;
+pub const MAX_IDENTITY_PHOTO_URI_BYTES: usize = 96 * 1024;
+
+pub fn image_mime_for_extension(extension: &str) -> Option<&'static str> {
+    match extension {
+        "png" => Some("image/png"),
+        "jpg" | "jpeg" => Some("image/jpeg"),
+        "webp" => Some("image/webp"),
+        "gif" => Some("image/gif"),
+        "svg" => Some("image/svg+xml"),
+        _ => None,
+    }
+}
+
 pub const fn base64_encoded_len(bytes: usize) -> usize {
     bytes.div_ceil(3) * 4
 }

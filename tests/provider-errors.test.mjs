@@ -7,9 +7,9 @@ import { compileModules } from './typescript.mjs';
 const modules = await compileModules(['src/userErrors.ts', 'src/Generation.tsx', 'src/dock/exportPanel.tsx']);
 try {
   const { providerProblem, userError } = await modules.load('userErrors.js');
-  await test('startup recovery failures do not become AI failures when diagnostics name elements', () => {
-    const reason = 'de94f600-bf86-4db4-84e1-8af71e5f1522: The unsaved work in this project is damaged: unknown field `appearance`, expected one of `id`, `name`, `path`, `included`, `output`, `sizes`, `background`, `elements`';
-    assert.equal(userError(reason), "Desegnos couldn't restore an unsaved project. Its original file is still on disk.");
+  await test('recovery failures show the native wording', () => {
+    const reason = "Desegnos couldn't restore an unsaved project. Its original file is still on disk.";
+    assert.equal(userError(reason), reason);
   });
   const { needsAiSettings } = await modules.load('ProblemBanner.js');
   const { GenerationFeedback } = await modules.load('Generation.js');

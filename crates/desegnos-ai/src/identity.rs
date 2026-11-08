@@ -1,18 +1,18 @@
 use crate::{
-    AuthenticationMethod, CostEstimate, ErrorKind, MAX_REQUEST_BYTES, MAX_REQUIREMENTS_BYTES,
-    MAX_SCHEMA_BYTES, ProviderError, ProviderSettings, Result,
+    AuthenticationMethod, CostEstimate, ErrorKind, MAX_REQUEST_BYTES, ProviderError,
+    ProviderSettings, Result,
     request::{RequestContent, RequestPart},
     settings::estimate_body_with_reserve,
 };
-use base64::{Engine, engine::general_purpose::STANDARD};
-use desegnos_core::{RequirementsSnapshot, digest};
+use desegnos_core::RequirementsSnapshot;
 use serde_json::{Value, json};
 
-pub use desegnos_core::limits::MAX_IDENTITY_ASSETS as MAX_IDENTITY_IMAGES;
-pub const MAX_IDENTITY_IMAGE_URI_BYTES: usize = 256 * 1024;
-pub const MAX_IDENTITY_IMAGE_URI_TOTAL_BYTES: usize = 512 * 1024;
-/// Photo thumbnails are looked at in low detail only, to describe what each photo shows.
-pub const MAX_IDENTITY_PHOTO_URI_BYTES: usize = 96 * 1024;
+pub use desegnos_core::limits::{
+    MAX_IDENTITY_ASSETS as MAX_IDENTITY_IMAGES,
+    MAX_IDENTITY_LOGO_URI_BYTES as MAX_IDENTITY_IMAGE_URI_BYTES,
+    MAX_IDENTITY_LOGO_URI_TOTAL_BYTES as MAX_IDENTITY_IMAGE_URI_TOTAL_BYTES,
+    MAX_IDENTITY_PHOTO_URI_BYTES,
+};
 pub const IDENTITY_PHOTO_TOKEN_RESERVE: u64 = 1_024;
 // Compressed logo bytes do not bound visual token use. Reserve 64K tokens per high-detail image
 // in addition to counting every request byte; this exceeds the documented 30K patch rejection
@@ -63,7 +63,6 @@ pub(crate) fn prepare_identity_body(
 }
 
 pub(crate) fn vision_reserve(images: &[IdentityImage]) -> u64 {
-    // Called only after the identity content builder validates the images.
     images
         .iter()
         .map(|image| {
@@ -99,47 +98,8 @@ pub(crate) fn identity_content<'a>(
     schema: &Value,
     images: &'a [IdentityImage],
 ) -> Result<RequestContent<'a>> {
-    if snapshot.markdown.is_empty()
-        || snapshot.sha256 != digest(snapshot.markdown.as_bytes())
-        || snapshot.job_id.is_nil()
-        || snapshot.project_id.is_nil()
-        || schema.get("type").and_then(Value::as_str) != Some("object")
-        || schema.get("additionalProperties") != Some(&Value::Bool(false))
-    {
-        return Err(ProviderError::before(ErrorKind::InvalidRequirements));
-    }
-    if snapshot.markdown.len() > MAX_REQUIREMENTS_BYTES
-        || serde_json::to_vec(schema)
-            .map_err(|_| ProviderError::before(ErrorKind::InvalidRequirements))?
-            .len()
-            > MAX_SCHEMA_BYTES
-    {
-        return Err(ProviderError::before(ErrorKind::InputLimit));
-    }
+    let schema = crate::request::frozen_schema(snapshot, schema)?;
     validate_images(images)?;
-    let mut schema = schema.clone();
-    for (name, value) in [
-        ("jobId", snapshot.job_id.to_string()),
-        ("requirementsSha256", snapshot.sha256.clone()),
-    ] {
-        if !schema
-            .get("required")
-            .and_then(Value::as_array)
-            .is_some_and(|required| required.iter().any(|key| key.as_str() == Some(name)))
-        {
-            return Err(ProviderError::before(ErrorKind::InvalidRequirements));
-        }
-        let property = schema
-            .get_mut("properties")
-            .and_then(Value::as_object_mut)
-            .and_then(|properties| properties.get_mut(name))
-            .and_then(Value::as_object_mut)
-            .ok_or_else(|| ProviderError::before(ErrorKind::InvalidRequirements))?;
-        if property.get("type").and_then(Value::as_str) != Some("string") {
-            return Err(ProviderError::before(ErrorKind::InvalidRequirements));
-        }
-        property.insert("enum".into(), json!([value]));
-    }
     let metadata = serde_json::to_string(&json!({
         "jobId":snapshot.job_id,
         "requirementsSha256":snapshot.sha256,
@@ -202,7 +162,7 @@ fn validate_images(images: &[IdentityImage]) -> Result<()> {
                 return Err(ProviderError::before(ErrorKind::InputLimit));
             }
         }
-        let (prefix, encoded) = image
+        let (prefix, _encoded) = image
             .data_uri
             .split_once(',')
             .ok_or_else(|| ProviderError::before(ErrorKind::InvalidRequirements))?;
@@ -212,24 +172,8 @@ fn validate_images(images: &[IdentityImage]) -> Result<()> {
         ) {
             return Err(ProviderError::before(ErrorKind::InvalidRequirements));
         }
-        let bytes = STANDARD
-            .decode(encoded)
+        desegnos_core::limits::decode_image_data_uri(&image.data_uri)
             .map_err(|_| ProviderError::before(ErrorKind::InvalidRequirements))?;
-        let valid = match prefix {
-            "data:image/png;base64" => bytes.starts_with(b"\x89PNG\r\n\x1a\n"),
-            "data:image/jpeg;base64" => bytes.starts_with(b"\xff\xd8\xff"),
-            "data:image/webp;base64" => {
-                bytes.len() >= 20
-                    && bytes.starts_with(b"RIFF")
-                    && &bytes[8..12] == b"WEBP"
-                    && (u32::from_le_bytes(bytes[4..8].try_into().unwrap()) as usize).checked_add(8)
-                        == Some(bytes.len())
-            }
-            _ => false,
-        };
-        if !valid || STANDARD.encode(&bytes) != encoded {
-            return Err(ProviderError::before(ErrorKind::InvalidRequirements));
-        }
     }
     Ok(())
 }

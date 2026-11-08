@@ -10,7 +10,6 @@ use crate::ensure;
 use crate::project_parts::{self, PartData};
 use desegnos_core::{Error, Project, Result, digest};
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params, types::Value as SqlValue};
-use serde::Serialize;
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, File, OpenOptions},
@@ -52,8 +51,6 @@ CREATE INDEX IF NOT EXISTS versions_parent ON versions(parent);
 
 use crate::io;
 
-
-
 pub fn now_millis() -> i64 {
     match SystemTime::now().duration_since(UNIX_EPOCH) {
         Ok(duration) => i64::try_from(duration.as_millis()).unwrap_or(i64::MAX),
@@ -68,15 +65,13 @@ fn project_extension(path: &Path) -> bool {
 }
 
 /// What was read from the database at open or after the last save.
-#[derive(ts_rs::TS, Clone, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FileStamp {
     pub project_id: Uuid,
     pub version: i64,
 }
 
-#[derive(ts_rs::TS, Clone, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SaveFailureKind {
     Changed,
     DifferentProject,
@@ -85,8 +80,7 @@ pub enum SaveFailureKind {
     Io,
 }
 
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Debug)]
 pub struct SaveFailure {
     pub kind: SaveFailureKind,
     pub message: String,
@@ -129,8 +123,7 @@ pub struct AutosaveProject {
     pub created_at: i64,
 }
 
-#[derive(ts_rs::TS, Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Debug)]
 pub struct VersionSummary {
     pub id: i64,
     pub parent: Option<i64>,
@@ -140,8 +133,7 @@ pub struct VersionSummary {
     pub head: bool,
 }
 
-#[derive(ts_rs::TS, Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Debug)]
 pub struct BranchSummary {
     pub name: String,
     pub head: i64,
@@ -149,8 +141,7 @@ pub struct BranchSummary {
     pub primary: bool,
 }
 
-#[derive(ts_rs::TS, Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Debug)]
 pub struct ProjectHistoryView {
     pub branch: String,
     pub primary_branch: String,
@@ -158,8 +149,7 @@ pub struct ProjectHistoryView {
     pub versions: Vec<VersionSummary>,
 }
 
-#[derive(ts_rs::TS, Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Debug)]
 pub struct CompactReport {
     pub removed_versions: usize,
     pub removed_blobs: usize,
@@ -302,7 +292,6 @@ impl ProjectDatabase {
         Ok(current_head(&self.connection)?.0)
     }
 
-    /// The saved design, as the file's current branch and version hold it.
     pub fn load(&self) -> Result<LoadedProject> {
         let (branch, version) = current_head(&self.connection)?;
         let row = version_row(&self.connection, version)?
@@ -323,8 +312,8 @@ impl ProjectDatabase {
         project: &Project,
         labels: &[String],
         label: Option<&str>,
+        now: i64,
     ) -> Result<VersionSummary> {
-        let now = now_millis();
         let transaction = self.connection.unchecked_transaction().map_err(io)?;
         let saved = save_in(&transaction, project, labels, label, now, true)?;
         transaction.commit().map_err(io)?;
@@ -338,10 +327,14 @@ impl ProjectDatabase {
         expected: Option<&FileStamp>,
         labels: &[String],
         label: Option<&str>,
+        now: i64,
     ) -> std::result::Result<VersionSummary, Box<SaveFailure>> {
+        project.validate().map_err(|error| {
+            SaveFailure::new(SaveFailureKind::InvalidProject, error.to_string())
+        })?;
         check_stamp(self, project, expected, false)?;
-        self.save(project, labels, label)
-            .map_err(|error| SaveFailure::new(SaveFailureKind::InvalidProject, error.to_string()))
+        self.save(project, labels, label, now)
+            .map_err(|error| SaveFailure::new(SaveFailureKind::Io, error.to_string()))
     }
 
     /// Replace the project after an explicit user choice bound to this observed stamp.
@@ -352,24 +345,26 @@ impl ProjectDatabase {
         allow_different_project: bool,
         labels: &[String],
         label: Option<&str>,
+        now: i64,
     ) -> std::result::Result<VersionSummary, Box<SaveFailure>> {
+        project.validate().map_err(|error| {
+            SaveFailure::new(SaveFailureKind::InvalidProject, error.to_string())
+        })?;
         check_stamp(self, project, Some(observed), allow_different_project)?;
         let actual = self
             .stamp()
             .map_err(|error| SaveFailure::new(SaveFailureKind::Io, error.to_string()))?;
         if actual.project_id != project.id {
-            self.reset(project).map_err(|error| {
-                SaveFailure::new(SaveFailureKind::InvalidProject, error.to_string())
-            })?;
+            self.reset(project, now)
+                .map_err(|error| SaveFailure::new(SaveFailureKind::Io, error.to_string()))?;
         }
-        self.save(project, labels, label)
-            .map_err(|error| SaveFailure::new(SaveFailureKind::InvalidProject, error.to_string()))
+        self.save(project, labels, label, now)
+            .map_err(|error| SaveFailure::new(SaveFailureKind::Io, error.to_string()))
     }
 
     /// Throw away every version and start this file again from this project.
-    fn reset(&self, project: &Project) -> Result<()> {
+    fn reset(&self, project: &Project, now: i64) -> Result<()> {
         project.validate()?;
-        let now = now_millis();
         let transaction = self.connection.unchecked_transaction().map_err(io)?;
         transaction
             .execute_batch(
@@ -390,10 +385,8 @@ impl ProjectDatabase {
             .map(|row| row.manifest)
             .ok_or_else(|| Error("This project's current version is missing.".into()))?;
         let manifest = write_parts(&transaction, project)?;
-        if manifest == head_manifest {
-            clear_autosave(&transaction)?;
-        } else {
-            clear_autosave(&transaction)?;
+        clear_autosave(&transaction)?;
+        if manifest != head_manifest {
             let id = insert_version(
                 &transaction,
                 Some(head),
@@ -418,7 +411,6 @@ impl ProjectDatabase {
         read_autosave_work(&self.connection)
     }
 
-    /// Stop offering the autosave: the unsaved edits are gone.
     pub fn discard_autosave(&self) -> Result<()> {
         let transaction = self.connection.unchecked_transaction().map_err(io)?;
         clear_autosave(&transaction)?;
@@ -431,10 +423,11 @@ impl ProjectDatabase {
         let (branch, head) = current_head(&self.connection)?;
         let mut versions = Vec::new();
         let mut cursor = Some(head);
+        let mut seen = BTreeSet::new();
         while let Some(id) = cursor {
-            let Some(row) = version_row(&self.connection, id)? else {
-                break;
-            };
+            ensure(seen.insert(id), "This project history contains a cycle.")?;
+            let row = version_row(&self.connection, id)?
+                .ok_or_else(|| Error("This project history refers to a missing version.".into()))?;
             versions.push(VersionSummary {
                 id: row.id,
                 parent: row.parent,
@@ -442,9 +435,6 @@ impl ProjectDatabase {
                 created_at: row.created_at,
                 head: row.id == head,
             });
-            if versions.len() >= 10_000 {
-                break;
-            }
             cursor = row.parent;
         }
         let primary = primary_branch(&self.connection)?;
@@ -490,7 +480,6 @@ impl ProjectDatabase {
         Ok(list)
     }
 
-    /// The design stored in one version.
     pub fn version_project(&self, version: i64) -> Result<Project> {
         let row = version_row(&self.connection, version)?
             .ok_or_else(|| Error("That version is no longer in this project.".into()))?;
@@ -498,9 +487,8 @@ impl ProjectDatabase {
     }
 
     /// Restore a version as a new version on the current branch. History is never rewritten.
-    pub fn restore(&self, version: i64) -> Result<Project> {
+    pub fn restore(&self, version: i64, now: i64) -> Result<Project> {
         let project = self.version_project(version)?;
-        let now = now_millis();
         let transaction = self.connection.unchecked_transaction().map_err(io)?;
         save_in(
             &transaction,
@@ -636,7 +624,9 @@ impl ProjectDatabase {
             let mut statement = transaction
                 .prepare("SELECT id FROM versions WHERE branch = ?1 ORDER BY id DESC")
                 .map_err(io)?;
-            let rows = statement.query_map(params![name], |row| row.get::<_, i64>(0)).map_err(io)?;
+            let rows = statement
+                .query_map(params![name], |row| row.get::<_, i64>(0))
+                .map_err(io)?;
             for row in rows {
                 ids.push(row.map_err(io)?);
             }
@@ -758,7 +748,7 @@ fn lock_path(path: &Path) -> Result<PathBuf> {
     Ok(path.with_file_name(format!(".{}.lock", name.to_string_lossy())))
 }
 
-/// Delete a project database with its write-ahead log, shared memory and lock files.
+/// Delete a closed project database and its rollback journal and writer lock.
 /// Files that are already gone are fine.
 pub fn remove_project_files(path: &Path) -> Result<()> {
     let name = path
@@ -768,8 +758,7 @@ pub fn remove_project_files(path: &Path) -> Result<()> {
         .into_owned();
     for file in [
         path.to_owned(),
-        path.with_file_name(format!("{name}-wal")),
-        path.with_file_name(format!("{name}-shm")),
+        path.with_file_name(format!("{name}-journal")),
         lock_path(path)?,
     ] {
         match fs::remove_file(file) {
@@ -970,7 +959,6 @@ fn has_children(connection: &Connection, id: i64) -> Result<bool> {
         .map_err(io)
 }
 
-/// Write every part as a blob and return the version's manifest bytes.
 fn write_parts(connection: &Connection, project: &Project) -> Result<Vec<u8>> {
     let parts = project_parts::split_project(project)?;
     let mut hashes = serde_json::Map::new();
@@ -991,8 +979,8 @@ fn write_parts(connection: &Connection, project: &Project) -> Result<Vec<u8>> {
 }
 
 fn project_from_manifest(connection: &Connection, manifest: &[u8]) -> Result<Project> {
-    let hashes: BTreeMap<String, String> =
-        serde_json::from_slice(manifest).map_err(|error| Error(format!("A version's manifest is damaged: {error}")))?;
+    let hashes: BTreeMap<String, String> = serde_json::from_slice(manifest)
+        .map_err(|error| Error(format!("A version's manifest is damaged: {error}")))?;
     let mut parts = BTreeMap::new();
     for (name, hash) in hashes {
         let row = connection
@@ -1041,14 +1029,17 @@ fn save_in(
         _ => describe_labels(labels),
     };
     let previous = version_row(connection, head)?;
-    let amend = allow_amend
-        && previous.as_ref().is_some_and(|previous| {
-            previous.branch == branch
-                && now.saturating_sub(previous.created_at) <= AMEND_WINDOW_MS
+    let has_children = has_children(connection, head)?;
+    let amend = previous
+        .as_ref()
+        .filter(|previous| {
+            allow_amend && {
+                previous.branch == branch
+                    && now.saturating_sub(previous.created_at) <= AMEND_WINDOW_MS
+            }
         })
-        && !has_children(connection, head)?;
-    let id = if amend {
-        let previous = previous.unwrap_or_else(|| unreachable!("checked above"));
+        .filter(|_| !has_children);
+    let id = if let Some(previous) = amend {
         let merged = merge_labels(&previous.label, &label);
         connection
             .execute(
@@ -1113,10 +1104,11 @@ fn read_autosave_work(connection: &Connection) -> Result<Option<AutosaveProject>
     if manifest == head_row.manifest {
         return Ok(None);
     }
-    let project = project_from_manifest(connection, &manifest).map_err(|error| {
-        Error(format!(
-            "The unsaved work in this project is damaged: {error}"
-        ))
+    let project = project_from_manifest(connection, &manifest).map_err(|_| {
+        Error(
+            "Desegnos couldn't restore an unsaved project. Its original file is still on disk."
+                .into(),
+        )
     })?;
     Ok(Some(AutosaveProject {
         project,
@@ -1156,7 +1148,7 @@ fn valid_branch_name(name: &str) -> Result<String> {
     let name = name.trim();
     ensure(
         !name.is_empty() && name.chars().count() <= MAX_BRANCH_CHARS,
-        "Name the alternative in 60 characters or fewer.".to_string(),
+        format!("Name the alternative in {MAX_BRANCH_CHARS} characters or fewer."),
     )?;
     ensure(
         !name.chars().any(char::is_control),
@@ -1279,9 +1271,7 @@ fn referenced_blobs(connection: &Connection) -> Result<BTreeSet<String>> {
 }
 
 fn blob_hashes(connection: &Connection) -> Result<Vec<String>> {
-    let mut statement = connection
-        .prepare("SELECT hash FROM blobs")
-        .map_err(io)?;
+    let mut statement = connection.prepare("SELECT hash FROM blobs").map_err(io)?;
     let rows = statement
         .query_map([], |row| row.get::<_, String>(0))
         .map_err(io)?;
@@ -1304,10 +1294,8 @@ mod tests {
 
     impl TempDir {
         fn new(label: &str) -> Self {
-            let path = std::env::temp_dir().join(format!(
-                "desegnos-db-{label}-{}",
-                Uuid::new_v4().simple()
-            ));
+            let path = std::env::temp_dir()
+                .join(format!("desegnos-db-{label}-{}", Uuid::new_v4().simple()));
             fs::create_dir_all(&path).unwrap();
             Self(path)
         }
@@ -1391,14 +1379,17 @@ mod tests {
 
         // A version with a child is never amended, even inside the window.
         let transaction = database.connection.unchecked_transaction().unwrap();
-        let child = insert_version(&transaction, Some(next), "Child", now + 10, "Child", b"{}")
-            .unwrap();
+        let child =
+            insert_version(&transaction, Some(next), "Child", now + 10, "Child", b"{}").unwrap();
         set_head(&transaction, DEFAULT_BRANCH, child).unwrap();
         transaction.commit().unwrap();
         let mut fourth = project.clone();
         fourth.name = "Fourth".into();
         let after_child = version_at(&database, &fourth, now + 20, "Fourth");
-        assert_ne!(after_child, child, "a version with children keeps its history");
+        assert_ne!(
+            after_child, child,
+            "a version with children keeps its history"
+        );
     }
 
     #[test]
@@ -1429,7 +1420,10 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM blobs", [], |row| row.get(0))
             .unwrap();
         let report = database.compact(now).unwrap();
-        assert_eq!(report.removed_versions, 2, "same-day older versions are thinned");
+        assert_eq!(
+            report.removed_versions, 2,
+            "same-day older versions are thinned"
+        );
         assert!(
             report.removed_blobs >= 2,
             "blobs only the removed versions used are gone"
@@ -1445,17 +1439,28 @@ mod tests {
             .connection
             .prepare("SELECT label FROM versions ORDER BY id")
             .unwrap();
-        let rows = statement.query_map([], |row| row.get::<_, String>(0)).unwrap();
+        let rows = statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .unwrap();
         for row in rows {
             labels.push(row.unwrap());
         }
         assert!(labels.contains(&"Created the project".to_string()));
         assert!(labels.contains(&"V0".to_string()), "an old week is kept");
-        assert!(labels.contains(&"V3".to_string()), "the newest of the day is kept");
+        assert!(
+            labels.contains(&"V3".to_string()),
+            "the newest of the day is kept"
+        );
         assert!(labels.contains(&"V4".to_string()), "the last 7 days stay");
         assert!(labels.contains(&"V5".to_string()), "the head stays");
-        assert!(!labels.contains(&"V1".to_string()), "older same-day versions go");
-        assert!(!labels.contains(&"V2".to_string()), "older same-day versions go");
+        assert!(
+            !labels.contains(&"V1".to_string()),
+            "older same-day versions go"
+        );
+        assert!(
+            !labels.contains(&"V2".to_string()),
+            "older same-day versions go"
+        );
         assert!(versions.contains(&versions[5]), "the head id is stable");
     }
 }
