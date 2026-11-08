@@ -1,23 +1,18 @@
+use crate::limits::{
+    MAX_EXPORT_DESTINATION, MAX_NAMED_VIEW_NAME_CHARS, MAX_NAMED_VIEWS, MAX_PAGE_SIZES, MAX_PAGES,
+    MAX_POINTERS, MAX_PROMPT_CHARS, MAX_REFERENCE_ITEMS, MAX_REQUEST_TARGETS, MAX_REQUESTS,
+    MAX_VIEWPORT_SIDE, is_hex_colour,
+};
+use crate::validation::validate_text;
 use crate::{
-    Element, Error, GenerationDossier, LinkedDefinition, MAX_APPLIED_JOBS, RequestAttachment,
-    Result, ensure,
+    Error, Result, attachments::RequestAttachment, dossier::GenerationDossier, elements::Element,
+    elements::LinkedDefinition, limits::MAX_APPLIED_JOBS, validation::ensure,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
 
 pub const SCHEMA_VERSION: u32 = 14;
-/// The longest export destination the project remembers.
-pub use crate::limits::MAX_EXPORT_DESTINATION;
-pub use crate::limits::MAX_NAMED_VIEW_NAME_CHARS;
-pub use crate::limits::MAX_NAMED_VIEWS;
-pub use crate::limits::MAX_PAGE_SIZES;
-pub use crate::limits::MAX_PAGES;
-pub use crate::limits::MAX_POINTERS;
-pub use crate::limits::MAX_PROMPT_CHARS;
-pub use crate::limits::MAX_REFERENCE_ITEMS;
-pub use crate::limits::MAX_REQUEST_TARGETS;
-pub use crate::limits::MAX_REQUESTS;
 
 #[derive(ts_rs::TS, Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -79,9 +74,6 @@ impl GridSettings {
         )
     }
 }
-
-/// The widest or highest a viewport or a boundary size may be; `PageSize::validate` shares it.
-pub use crate::limits::MAX_VIEWPORT_SIDE;
 
 #[derive(ts_rs::TS, Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -326,7 +318,7 @@ impl PendingRequest {
             "A request needs a short creation time.",
         )?;
         ensure(
-            self.attachments.len() <= crate::MAX_ELEMENT_CONTEXT,
+            self.attachments.len() <= crate::limits::MAX_REQUEST_ATTACHMENTS,
             "A request supports at most 32 attachments.",
         )?;
         for attachment in &self.attachments {
@@ -334,7 +326,10 @@ impl PendingRequest {
         }
         ensure(
             self.targets.len() <= MAX_REQUEST_TARGETS,
-            "A request targets at most 64 things.",
+            format!(
+                "A request targets at most {} things.",
+                crate::limits::MAX_REQUEST_TARGETS
+            ),
         )?;
         for target in &self.targets {
             target.validate()?;
@@ -342,7 +337,10 @@ impl PendingRequest {
         ensure(
             self.boundary_retry_order.len() <= MAX_REQUEST_TARGETS
                 && self.boundary_retry_order.iter().all(|id| !id.is_nil()),
-            "A boundary follow-up needs at most 64 valid original boundaries.",
+            format!(
+                "A boundary follow-up needs at most {} valid original boundaries.",
+                crate::limits::MAX_REQUEST_TARGETS
+            ),
         )?;
         if let Some(area) = &self.area {
             area.validate()?;
@@ -368,8 +366,6 @@ pub enum BoundaryKind {
 pub enum OutputType {
     #[default]
     Webpage,
-    /// Legacy web output retained for saved projects and history; new pages use Webpage.
-    AppScreen,
     Slide,
     Image,
 }
@@ -377,7 +373,7 @@ pub enum OutputType {
 impl OutputType {
     pub fn label(self) -> &'static str {
         match self {
-            Self::Webpage | Self::AppScreen => "Page",
+            Self::Webpage => "Page",
             Self::Slide => "Slide",
             Self::Image => "Image",
         }
@@ -385,7 +381,7 @@ impl OutputType {
 
     /// Websites and apps are written by the AI export job; slides and images render directly.
     pub fn needs_ai(self) -> bool {
-        matches!(self, Self::Webpage | Self::AppScreen)
+        matches!(self, Self::Webpage)
     }
 }
 
@@ -454,10 +450,17 @@ pub enum CanvasTemplate {
     SocialImage,
 }
 
-/// Space between the starter boundaries of a template, matching the canvas layout gap.
 pub const TEMPLATE_GAP: u32 = 160;
 
 impl CanvasTemplate {
+    pub const ALL: [Self; 5] = [
+        Self::Blank,
+        Self::Website,
+        Self::AppScreen,
+        Self::SlideDeck,
+        Self::SocialImage,
+    ];
+
     fn size(width: u32, height: u32, kind: BoundaryKind, x: u32) -> PageSize {
         PageSize {
             id: Uuid::new_v4(),
@@ -536,7 +539,6 @@ impl CanvasTemplate {
     }
 }
 
-/// The name a new size gets from its width, so a boundary reads as Phone, Tablet or Desktop.
 pub fn size_label(width: u32) -> &'static str {
     if width >= 1024 {
         "Desktop"
@@ -623,7 +625,7 @@ pub struct ReferencePlacement {
 pub enum ReferenceKind {
     /// A design layer outside every boundary, retained for a lossless round trip.
     Element {
-        element: Box<crate::Element>,
+        element: Box<crate::elements::Element>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         size: Option<Uuid>,
     },
@@ -663,18 +665,15 @@ impl ReferenceItem {
             ReferenceKind::Note { text } => {
                 ensure(
                     text.chars().count() <= MAX_PROMPT_CHARS && !text.contains('\0'),
-                    "Reference notes are limited to 16,384 characters.",
+                    format!(
+                        "Reference notes are limited to {} characters.",
+                        crate::limits::MAX_PROMPT_CHARS
+                    ),
                 )?;
             }
             ReferenceKind::Link { url, title } => {
                 ensure(
-                    url.len() <= 2048
-                        && url::Url::parse(url).is_ok_and(|parsed| {
-                            matches!(parsed.scheme(), "https" | "http")
-                                && parsed.host_str().is_some()
-                                && parsed.username().is_empty()
-                                && parsed.password().is_none()
-                        }),
+                    crate::limits::valid_http_url(url),
                     "A reference link must start with http:// or https://.",
                 )?;
                 validate_text(title, "Link title", 240, false)?;
@@ -687,7 +686,7 @@ impl ReferenceItem {
                 validate_text(name, "Picture name", crate::limits::MAX_NAME_CHARS, false)?;
             }
             ReferenceKind::Swatch { color } => ensure(
-                valid_swatch(color),
+                is_hex_colour(color),
                 "A swatch colour must be #rgb, #rrggbb or #rrggbbaa.",
             )?,
         }
@@ -807,7 +806,7 @@ pub struct ExportRecord {
     pub pointers: BTreeMap<Uuid, ExportedPointer>,
     /// Accepted behaviour code, independent of visual/text edits.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub behaviours: BTreeMap<Uuid, crate::ExportBehaviour>,
+    pub behaviours: BTreeMap<Uuid, crate::export::ExportBehaviour>,
 }
 
 impl ExportRecord {
@@ -827,7 +826,10 @@ impl ExportRecord {
         validate_text(&self.exported_at, "Export time", 64, true)?;
         ensure(
             self.pages.len() <= MAX_PAGES,
-            "An export records at most 100 boundaries.",
+            format!(
+                "An export records at most {} boundaries.",
+                crate::limits::MAX_PAGES
+            ),
         )?;
         for page in &self.pages {
             ensure(
@@ -838,7 +840,10 @@ impl ExportRecord {
         }
         ensure(
             self.pointers.len() <= MAX_POINTERS,
-            "An export records at most 1,000 pointers.",
+            format!(
+                "An export records at most {} pointers.",
+                crate::limits::MAX_POINTERS
+            ),
         )?;
         for exported in self.pointers.values() {
             ensure(
@@ -852,7 +857,7 @@ impl ExportRecord {
                 false,
             )?;
         }
-        crate::validate_behaviours(&self.behaviours)?;
+        crate::export::validate_behaviours(&self.behaviours)?;
         Ok(())
     }
 }
@@ -884,7 +889,7 @@ pub struct Pointer {
     /// A simple action the comment asks for, and the comment it was classified from.
     #[serde(
         default,
-        deserialize_with = "crate::required_nullable",
+        deserialize_with = "crate::validation::required_nullable",
         skip_serializing_if = "Option::is_none"
     )]
     pub play: Option<PlayAction>,
@@ -965,11 +970,9 @@ impl Pointer {
     }
 
     pub fn is_broken(&self, project: &Project) -> bool {
-        crate::pointer_is_broken(project, self)
+        crate::pointers::pointer_is_broken(project, self)
     }
 }
-
-pub(crate) use crate::limits::is_hex_colour as valid_swatch;
 
 pub(crate) fn normalized_swatch(color: &str) -> String {
     let hex = color.trim().trim_start_matches('#').to_ascii_lowercase();
@@ -1001,7 +1004,7 @@ pub struct Page {
     pub name: String,
     pub path: String,
     pub included: bool,
-    /// What this boundary ships as: a page, slide or image (including legacy app-screen output).
+    /// What this boundary ships as: a page, slide or image.
     #[serde(default)]
     pub output: OutputType,
     /// Linked sizes, base first. Every size draws its own boundary on the canvas.
@@ -1033,7 +1036,6 @@ impl Page {
         }
     }
 
-    /// The base size: its element values are the ones the other sizes inherit.
     pub fn base_size(&self) -> &PageSize {
         self.sizes.first().expect("a validated page has a size")
     }
@@ -1129,7 +1131,7 @@ pub struct ProjectStyles {
     pub text: Vec<TextStyle>,
 }
 impl ProjectStyles {
-    pub fn resolve(&self, style: &mut crate::ElementStyle) {
+    pub fn resolve(&self, style: &mut crate::elements::ElementStyle) {
         let colour = |id| {
             self.colours
                 .iter()
@@ -1158,7 +1160,7 @@ impl ProjectStyles {
             style.text_style.italic = text.italic;
         }
     }
-    pub fn validate_references(&self, refs: &crate::StyleReferences) -> Result<()> {
+    pub fn validate_references(&self, refs: &crate::elements::StyleReferences) -> Result<()> {
         for id in [refs.fill, refs.stroke, refs.text_colour]
             .into_iter()
             .flatten()
@@ -1176,8 +1178,11 @@ impl ProjectStyles {
     }
     fn validate(&self) -> Result<()> {
         ensure(
-            self.colours.len() + self.text.len() <= 1000,
-            "A project supports at most 1,000 styles.",
+            self.colours.len() + self.text.len() <= crate::limits::MAX_PROJECT_STYLES,
+            format!(
+                "A project supports at most {} styles.",
+                crate::limits::MAX_PROJECT_STYLES
+            ),
         )?;
         let mut ids = std::collections::BTreeSet::new();
         for (id, name) in self
@@ -1196,8 +1201,8 @@ impl ProjectStyles {
             crate::elements::validate_colour(&colour.value, "Style colour")?;
         }
         for text in &self.text {
-            let mut style = crate::empty_element(
-                crate::ElementKind::Text,
+            let mut style = crate::element_edit::empty_element(
+                crate::elements::ElementKind::Text,
                 Rect {
                     x: 0.0,
                     y: 0.0,
@@ -1233,7 +1238,7 @@ pub struct Project {
     pub pages: Vec<Page>,
     pub brief: Brief,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub imported_identity: Option<crate::ImportedIdentity>,
+    pub imported_identity: Option<crate::identity::ImportedIdentity>,
     #[serde(default)]
     pub pictures: BTreeMap<Uuid, std::sync::Arc<str>>,
     /// Everything outside every boundary: reference the AI can read that never ships.
@@ -1257,7 +1262,7 @@ pub struct Project {
     pub decisions: Vec<Decision>,
     pub exceptions: Vec<DesignException>,
     pub applied_job_ids: Vec<Uuid>,
-    #[serde(deserialize_with = "crate::required_nullable")]
+    #[serde(deserialize_with = "crate::validation::required_nullable")]
     pub latest_generation: Option<GenerationDossier>,
     /// The last export written from this project, so pointer clashes can compare against it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1331,7 +1336,10 @@ impl Project {
         self.styles.validate()?;
         ensure(
             self.requests.len() <= MAX_REQUESTS,
-            "A project holds at most 256 pending requests.",
+            format!(
+                "A project holds at most {} pending requests.",
+                crate::limits::MAX_REQUESTS
+            ),
         )?;
         let mut request_ids = BTreeSet::new();
         for request in &self.requests {
@@ -1387,7 +1395,10 @@ impl Project {
         }
         ensure(
             self.views.len() <= MAX_NAMED_VIEWS,
-            "A project holds at most 50 named views.",
+            format!(
+                "A project holds at most {} named views.",
+                crate::limits::MAX_NAMED_VIEWS
+            ),
         )?;
         let mut view_ids = BTreeSet::new();
         for view in &self.views {
@@ -1396,7 +1407,10 @@ impl Project {
         }
         ensure(
             self.pages.len() <= MAX_PAGES,
-            "A project contains at most 100 pages.",
+            format!(
+                "A project contains at most {} pages.",
+                crate::limits::MAX_PAGES
+            ),
         )?;
         let mut ids = BTreeSet::from([self.id]);
         if let Some(identity) = &self.imported_identity {
@@ -1424,7 +1438,10 @@ impl Project {
         }
         ensure(
             self.reference.len() <= MAX_REFERENCE_ITEMS,
-            "A reference holds at most 1,000 items.",
+            format!(
+                "A reference holds at most {} items.",
+                crate::limits::MAX_REFERENCE_ITEMS
+            ),
         )?;
         for item in &self.reference {
             ensure(ids.insert(item.id), "Project identifiers must be unique.")?;
@@ -1432,7 +1449,10 @@ impl Project {
         }
         ensure(
             self.pointers.len() <= MAX_POINTERS,
-            "A project holds at most 1,000 pointers.",
+            format!(
+                "A project holds at most {} pointers.",
+                crate::limits::MAX_POINTERS
+            ),
         )?;
         let mut behaviour_sources = Vec::new();
         for pointer in &self.pointers {
@@ -1450,8 +1470,11 @@ impl Project {
             pointer.validate()?;
         }
         ensure(
-            self.linked.len() <= crate::MAX_LINKED_DEFINITIONS,
-            "A project holds at most 1,000 linked elements.",
+            self.linked.len() <= crate::limits::MAX_LINKED_DEFINITIONS,
+            format!(
+                "A project holds at most {} linked elements.",
+                crate::limits::MAX_LINKED_DEFINITIONS
+            ),
         )?;
         let mut linked_names = BTreeSet::new();
         for (id, definition) in &self.linked {
@@ -1462,7 +1485,7 @@ impl Project {
             validate_text(
                 &definition.name,
                 "Linked element name",
-                crate::MAX_ELEMENT_NAME_CHARS,
+                crate::limits::MAX_ELEMENT_NAME_CHARS,
                 true,
             )?;
             ensure(
@@ -1478,7 +1501,7 @@ impl Project {
             ensure(ids.insert(page.id), "Project identifiers must be unique.")?;
             validate_text(&page.name, "Page name", crate::limits::MAX_NAME_CHARS, true)?;
             ensure(
-                valid_swatch(&page.background),
+                is_hex_colour(&page.background),
                 "Boundary background must be a hex colour.",
             )?;
             validate_path(&page.path)?;
@@ -1488,7 +1511,10 @@ impl Project {
             )?;
             ensure(
                 !page.sizes.is_empty() && page.sizes.len() <= MAX_PAGE_SIZES,
-                "A boundary needs between 1 and 8 sizes.",
+                format!(
+                    "A boundary needs between 1 and {} sizes.",
+                    crate::limits::MAX_PAGE_SIZES
+                ),
             )?;
             let mut size_ids = BTreeSet::new();
             for size in &page.sizes {
@@ -1508,7 +1534,7 @@ impl Project {
         }
         for item in &self.reference {
             if let ReferenceKind::Element { element, .. } = &item.kind {
-                fn sizes(element: &crate::Element, ids: &mut BTreeSet<Uuid>) {
+                fn sizes(element: &crate::elements::Element, ids: &mut BTreeSet<Uuid>) {
                     ids.extend(element.overrides.keys().copied());
                     for child in &element.children {
                         sizes(child, ids);
@@ -1622,26 +1648,6 @@ impl Project {
             ),
         }
     }
-}
-
-pub(crate) fn validate_text(
-    value: &str,
-    label: &str,
-    maximum: usize,
-    required: bool,
-) -> Result<()> {
-    ensure(
-        !required || !value.trim().is_empty(),
-        format!("{label} is required."),
-    )?;
-    ensure(
-        value.chars().count() <= maximum,
-        format!("{label} exceeds {maximum} characters."),
-    )?;
-    ensure(
-        !value.contains('\0'),
-        format!("{label} cannot contain null characters."),
-    )
 }
 
 pub(crate) fn validate_path(path: &str) -> Result<()> {

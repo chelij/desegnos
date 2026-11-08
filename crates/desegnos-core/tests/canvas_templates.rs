@@ -9,7 +9,10 @@ fn blank_untitled_has_no_boundaries_until_the_first_one_becomes_home() {
     let project = untitled(CanvasTemplate::Blank);
     assert!(project.pages.is_empty());
     // The first boundary a blank project gets starts at the Desktop size.
-    assert_eq!(SizePreset::Desktop.dimensions(0, 0), ("Desktop".into(), 1440, 900));
+    assert_eq!(
+        SizePreset::Desktop.dimensions(0, 0),
+        ("Desktop".into(), 1440, 900)
+    );
 }
 
 #[test]

@@ -50,7 +50,7 @@ export function ExportPanel({ project, exports, busy, selectBoundary, setInclude
       {boundaries.map(page => <div key={page.id} className="export-panel-row">
         <input type="checkbox" aria-label={`Include ${page.name} in export`} checked={page.included} disabled={busy || running} onChange={event => setIncluded(page.id, event.target.checked)} />
         <button type="button" className="dock-action export-panel-name" onClick={() => selectBoundary(page.id)}>{page.name}</button>
-        <select aria-label={`Export ${page.name} as`} value={page.output === 'appScreen' ? 'webpage' : page.output} disabled={busy || running} onChange={event => setOutput(page.id, event.target.value as OutputType)}>
+        <select aria-label={`Export ${page.name} as`} value={page.output} disabled={busy || running} onChange={event => setOutput(page.id, event.target.value as OutputType)}>
           {OUTPUT_CHOICES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
         </select>
         {page.output === 'slide' || page.output === 'image'

@@ -1,4 +1,6 @@
-use crate::{Element, ElementKind, ElementLayout, ElementPadding};
+use crate::{
+    elements::Element, elements::ElementKind, elements::ElementLayout, elements::ElementPadding,
+};
 pub(crate) fn padding(element: &Element) -> ElementPadding {
     let fallback = match element.layout {
         ElementLayout::Free => 0.0,
@@ -41,14 +43,21 @@ pub(crate) fn generic_fallback(family: &str) -> &'static str {
 }
 
 pub(crate) fn border_width(element: &Element) -> f64 {
-    if draws_border(&element.kind) && element.style.stroke.color.as_deref().is_some_and(paints) {
+    if draws_border(&element.kind)
+        && element
+            .style
+            .stroke
+            .color
+            .as_deref()
+            .is_some_and(|value| visible_colour(value).is_some())
+    {
         element.style.stroke.width.max(0.0)
     } else {
         0.0
     }
 }
-pub(crate) fn paints(value: &str) -> bool {
-    crate::geometry::Rgba::parse(value).is_some_and(|colour| colour.a > 0.0)
+pub(crate) fn visible_colour(value: &str) -> Option<crate::geometry::Rgba> {
+    crate::geometry::Rgba::parse(value).filter(|colour| colour.a > 0.0)
 }
 
 pub(crate) fn text_of(element: &Element) -> Option<&str> {
@@ -81,7 +90,7 @@ pub(crate) fn wraps(kind: &ElementKind) -> bool {
             | ElementKind::Radio
     )
 }
-pub(crate) fn control_padding(kind: &ElementKind) -> crate::ElementPadding {
+pub(crate) fn control_padding(kind: &ElementKind) -> crate::elements::ElementPadding {
     let horizontal = match kind {
         ElementKind::Textarea | ElementKind::Input { .. } | ElementKind::Select { .. } => 8.0,
         ElementKind::Button | ElementKind::Link => 1.0,
@@ -93,7 +102,7 @@ pub(crate) fn control_padding(kind: &ElementKind) -> crate::ElementPadding {
     } else {
         0.0
     };
-    crate::ElementPadding {
+    crate::elements::ElementPadding {
         top: vertical,
         right: horizontal,
         bottom: vertical,
@@ -106,8 +115,8 @@ pub(crate) fn line_width(width: f64) -> f64 {
 pub(crate) fn transformed(element: &Element) -> bool {
     (element.rotation % 360.0).abs() > 0.000_001 || element.style.flip_x || element.style.flip_y
 }
-pub(crate) fn input_type_name(kind: &crate::InputType) -> &'static str {
-    use crate::InputType::*;
+pub(crate) fn input_type_name(kind: &crate::elements::InputType) -> &'static str {
+    use crate::elements::InputType::*;
     match kind {
         Text => "text",
         Email => "email",
@@ -124,7 +133,6 @@ pub(crate) fn input_type_name(kind: &crate::InputType) -> &'static str {
     }
 }
 
-pub(crate) const MAX_EMBED_DEPTH: usize = 3;
 pub(crate) fn generic_keyword(name: &str) -> Option<&'static str> {
     match name.to_ascii_lowercase().as_str() {
         "sans-serif" | "system-ui" | "ui-sans-serif" | "ui-rounded" | "-apple-system"

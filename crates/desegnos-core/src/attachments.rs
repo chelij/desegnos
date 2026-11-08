@@ -1,4 +1,4 @@
-use crate::{Result, ensure};
+use crate::{Result, validation::ensure};
 use serde::{Deserialize, Serialize};
 
 #[derive(ts_rs::TS, Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

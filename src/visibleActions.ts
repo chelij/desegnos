@@ -15,5 +15,5 @@ export function showsOpener({ available, open }: OpenerState): boolean {
 
 /// Preview renders exported web output, so a project without any web page has nothing to show.
 export function projectHasPreviewPages(project: Pick<Project, 'pages'> | null | undefined): boolean {
-  return !!project?.pages.some(page => page.output === 'webpage' || page.output === 'appScreen');
+  return !!project?.pages.some(page => page.output === 'webpage');
 }

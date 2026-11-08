@@ -1,4 +1,6 @@
-use crate::*;
+use crate::{
+    Error, Result, limits::MAX_REQUESTS, model::PendingRequest, model::Project, validation::ensure,
+};
 use std::collections::BTreeSet;
 use uuid::Uuid;
 
@@ -11,7 +13,10 @@ impl Project {
         }
         ensure(
             self.requests.len() < MAX_REQUESTS,
-            "A project holds at most 256 pending requests.",
+            format!(
+                "A project holds at most {} pending requests.",
+                crate::limits::MAX_REQUESTS
+            ),
         )?;
         ensure(
             !self
@@ -24,7 +29,6 @@ impl Project {
         Ok(())
     }
 
-    /// Keeps the newest pending request of each layer, for projects saved with several.
     pub fn keep_one_request_per_layer(&mut self) {
         let mut seen = BTreeSet::new();
         let mut kept: Vec<_> = self

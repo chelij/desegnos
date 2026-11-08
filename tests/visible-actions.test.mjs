@@ -28,7 +28,7 @@ try {
     assert.equal(projectHasPreviewPages({ pages: [] }), false);
     assert.equal(projectHasPreviewPages(project(['slide', 'image'])), false);
     assert.equal(projectHasPreviewPages(project(['image', 'webpage'])), true);
-    assert.equal(projectHasPreviewPages(project(['appScreen'])), true);
+    assert.equal(projectHasPreviewPages(project(['webpage'])), true);
   });
 
   await test('the app bar leaves out what is already on screen', async () => {

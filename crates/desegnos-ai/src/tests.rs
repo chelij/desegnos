@@ -3555,7 +3555,7 @@ fn attachment_previews_are_sent_as_low_detail_images_and_estimated_per_image() {
     let with_image = estimate_cost(&frozen, GenerationMode::Strict, &schema(), &settings).unwrap();
     assert_eq!(
         with_image.input_token_upper_bound - plain.input_token_upper_bound,
-        desegnos_core::AI_PREVIEW_TOKEN_RESERVE,
+        desegnos_core::limits::AI_PREVIEW_TOKEN_RESERVE,
         "a preview costs a fixed reserve, not one token per Base64 byte"
     );
 }

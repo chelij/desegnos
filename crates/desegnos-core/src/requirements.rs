@@ -1,4 +1,3 @@
-/// Requirements contract used for newly prepared requests.
 pub const CURRENT_REQUIREMENTS_FORMAT: u8 = 30;
 
 /// The exact heading every packet of the current format starts with. A stored packet that does
@@ -8,8 +7,10 @@ pub fn current_requirements_heading() -> String {
 }
 
 use crate::{
-    Brief, Decision, DesignException, Error, GenerationDossierContext, GenerationMode,
-    MAX_GENERATION_REQUESTS, MAX_REQUIREMENTS_BYTES, Page, Project, Result, Scope, digest, ensure,
+    Error, Result, dossier::GenerationDossierContext, limits::MAX_GENERATION_REQUESTS,
+    limits::MAX_REQUIREMENTS_BYTES, model::Brief, model::Decision, model::DesignException,
+    model::GenerationMode, model::Page, model::Project, model::Scope, validation::digest,
+    validation::ensure,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -47,13 +48,13 @@ impl std::str::FromStr for DependencyKey {
     }
 }
 
-impl crate::PendingRequest {
+impl crate::model::PendingRequest {
     pub(crate) fn boundary_order(&self) -> Vec<Uuid> {
         if self.boundary_retry_order.is_empty() {
             self.targets
                 .iter()
                 .filter_map(|target| match target {
-                    crate::RequestTarget::Boundary { page, .. } => Some(*page),
+                    crate::model::RequestTarget::Boundary { page, .. } => Some(*page),
                     _ => None,
                 })
                 .collect()
@@ -65,16 +66,13 @@ impl crate::PendingRequest {
 
 /// What the boundaries in scope ship as, and how to fill them with real content. Everything on
 /// the canvas reaches the audience, so the AI is told what it is making before it draws.
-fn content_guidance(outputs: &[crate::OutputType], web_search: bool) -> String {
-    use crate::OutputType;
+fn content_guidance(outputs: &[crate::model::OutputType], web_search: bool) -> String {
+    use crate::model::OutputType;
     let mut md = String::from(
         "\n## What you are making\n\nEach boundary in `pages` has an `output`: what it ships as. Draw for that audience.\n\n",
     );
-    if outputs
-        .iter()
-        .any(|o| matches!(o, OutputType::Webpage | OutputType::AppScreen))
-    {
-        md.push_str("- `webpage` (or `appScreen`): one page of the project's public website, built from this canvas at export. A `page` boundary scrolls and grows taller; a `screen` boundary is one fixed view, such as an app screen. Keep text readable at every listed size.\n");
+    if outputs.iter().any(|o| matches!(o, OutputType::Webpage)) {
+        md.push_str("- `webpage`: one page of the project's public website, built from this canvas at export. A `page` boundary scrolls and grows taller; a `screen` boundary is one fixed view, such as an app screen. Keep text readable at every listed size.\n");
 
         md.push_str("\n## Whole pages and pieces of pages\n\nBuild only what the request covers. A request on a layer or an area is one piece of the page: build it in place, match the style of the boundary outline around it, and add navigation, headers or footers only when the request asks for them. A request on a whole empty boundary is a whole page: give it the parts the request implies (navigation, sections, calls to action, footer) and the same header and style as the site's other pages. Link between pages with a layer's `url` set to the page's path, including a new path assigned by `setPage`; `siteRoutes` lists current routes.\n\n## Frames\n\nA frame shows other content inside a page. For a live external site, map or widget, use an Embed element with its https `url`. An Embed's `url` may also be a path from `siteRoutes`: it frames that page live and stays in sync with it. Draw a page's design as layers inside the frame box only for a mockup that should differ from the real page, and wrap it in a Link to its path when it should open the page. A request on a layer drawn as a frame changes what is inside it and keeps the frame itself unless the request asks otherwise.\n");
     }
@@ -113,7 +111,7 @@ impl Default for ImageGenerationCapability {
     fn default() -> Self {
         Self {
             max_images: 2,
-            sizes: vec!["1024x1024".into()],
+            sizes: vec![crate::limits::IMAGE_GENERATION_SIZE.into()],
         }
     }
 }
@@ -131,9 +129,9 @@ impl GenerationCapabilities {
         if let Some(images) = &self.image_generation {
             ensure(
                 images.max_images > 0
-                    && images.max_images <= 8
+                    && usize::from(images.max_images) <= crate::limits::MAX_GENERATED_IMAGES
                     && images.sizes.len() == 1
-                    && images.sizes[0] == "1024x1024",
+                    && images.sizes[0] == crate::limits::IMAGE_GENERATION_SIZE,
                 "The image generation capability is invalid.",
             )?;
         }
@@ -172,7 +170,7 @@ pub struct RequirementsSnapshot {
     /// Small previews of attached pictures, sent beside the requirements file.
     #[serde(default)]
     pub images: Vec<RequestImage>,
-    pub layer_requests: Vec<crate::FrozenLayerRequest>,
+    pub layer_requests: Vec<crate::request_history::FrozenLayerRequest>,
 }
 
 /// A downscaled preview of one attached picture, labelled with its attachment ID.
@@ -200,26 +198,31 @@ impl std::fmt::Debug for RequestImage {
 
 /// Previews of the frozen requests' picture attachments, at most `MAX_REQUEST_IMAGES`.
 /// GIFs cannot be previewed and travel by name and `pictureId` only.
-fn request_images(requests: &[&crate::PendingRequest]) -> Vec<RequestImage> {
-    requests
+fn request_images(requests: &[&crate::model::PendingRequest]) -> Result<Vec<RequestImage>> {
+    let mut images = Vec::new();
+    for attachment in requests
         .iter()
         .flat_map(|request| &request.attachments)
-        .filter(|attachment| attachment.kind == crate::AttachmentKind::Image)
-        .filter_map(|attachment| {
-            let uri = attachment.data_uri.as_deref()?;
-            let metadata = crate::picture_scaling::image_metadata(uri);
-            Some(RequestImage {
-                attachment_id: attachment.id.clone(),
-                data_uri: crate::ai_preview(uri)?,
-                stored_format: metadata["storedFormat"].as_str().map(str::to_owned),
-                transparent: metadata["transparent"].as_bool(),
-                transparent_percent: metadata["transparentPercent"]
-                    .as_u64()
-                    .and_then(|percent| u8::try_from(percent).ok()),
-            })
-        })
-        .take(crate::limits::MAX_REQUEST_IMAGES)
-        .collect()
+        .filter(|attachment| attachment.kind == crate::attachments::AttachmentKind::Image)
+    {
+        let Some(uri) = attachment.data_uri.as_deref() else {
+            continue;
+        };
+        let Some((facts, data_uri)) = crate::picture_scaling::picture_for_request(uri)? else {
+            continue;
+        };
+        images.push(RequestImage {
+            attachment_id: attachment.id.clone(),
+            data_uri,
+            stored_format: facts.stored_format,
+            transparent: facts.transparent,
+            transparent_percent: facts.transparent_percent,
+        });
+        if images.len() == crate::limits::MAX_REQUEST_IMAGES {
+            break;
+        }
+    }
+    Ok(images)
 }
 
 fn json(value: &impl Serialize) -> Result<String> {
@@ -273,9 +276,9 @@ pub(crate) fn project_notes(
 }
 
 /// Reference layers expose visual content, never image attachment bytes or request history.
-pub(crate) fn reference_element_value(element: &crate::Element) -> serde_json::Value {
-    fn strip_context(element: &mut crate::Element) {
-        element.meta = crate::ElementMeta::default();
+pub(crate) fn reference_element_value(element: &crate::elements::Element) -> serde_json::Value {
+    fn strip_context(element: &mut crate::elements::Element) {
+        element.meta = crate::elements::ElementMeta::default();
         for child in &mut element.children {
             strip_context(child);
         }
@@ -285,20 +288,22 @@ pub(crate) fn reference_element_value(element: &crate::Element) -> serde_json::V
     serde_json::json!(visual)
 }
 
-fn reference_value(kind: &crate::ReferenceKind) -> serde_json::Value {
+fn reference_value(kind: &crate::model::ReferenceKind) -> serde_json::Value {
     match kind {
-        crate::ReferenceKind::Element { element, .. } => {
+        crate::model::ReferenceKind::Element { element, .. } => {
             serde_json::json!({"kind":"element","element":reference_element_value(element)})
         }
-        crate::ReferenceKind::Note { text } => serde_json::json!({"kind":"note","text":text}),
-        crate::ReferenceKind::Link { url, title } => {
+        crate::model::ReferenceKind::Note { text } => {
+            serde_json::json!({"kind":"note","text":text})
+        }
+        crate::model::ReferenceKind::Link { url, title } => {
             serde_json::json!({"kind":"link","url":url,"title":title})
         }
         // Picture bytes never leave the project; only the name travels.
-        crate::ReferenceKind::Image { name, .. } => {
+        crate::model::ReferenceKind::Image { name, .. } => {
             serde_json::json!({"kind":"image","name":name})
         }
-        crate::ReferenceKind::Swatch { color } => {
+        crate::model::ReferenceKind::Swatch { color } => {
             serde_json::json!({"kind":"swatch","color":color})
         }
     }
@@ -353,7 +358,7 @@ impl Project {
         self.validate()?;
         // A request's scope is whatever it names, so every described pending request is prepared,
         // including one drawn as an area over an empty boundary with no layer to target.
-        let described: Vec<&crate::PendingRequest> = self
+        let described: Vec<&crate::model::PendingRequest> = self
             .requests
             .iter()
             .filter(|request| !request.text.trim().is_empty())
@@ -368,7 +373,7 @@ impl Project {
             .iter()
             .flat_map(|request| request.targets.iter())
             .filter_map(|target| match target {
-                crate::RequestTarget::Element { id, .. } => Some(*id),
+                crate::model::RequestTarget::Element { id, .. } => Some(*id),
                 _ => None,
             })
             .collect();
@@ -392,7 +397,10 @@ impl Project {
         self.prepare_for(capabilities, element_ids, &request_ids, reference_ids)
     }
 
-    fn scoped_targets<'a>(&'a self, element_ids: &[Uuid]) -> Vec<(&'a Page, &'a crate::Element)> {
+    fn scoped_targets<'a>(
+        &'a self,
+        element_ids: &[Uuid],
+    ) -> Vec<(&'a Page, &'a crate::elements::Element)> {
         let mut targets = Vec::new();
         for page in &self.pages {
             collect_targets(page, &page.elements, element_ids, &mut targets);
@@ -437,8 +445,8 @@ impl Project {
     /// pointer or drawn area instead.
     pub(crate) fn requests_in_scope<'a>(
         &'a self,
-        targets: &[(&Page, &crate::Element)],
-    ) -> Vec<&'a crate::PendingRequest> {
+        targets: &[(&Page, &crate::elements::Element)],
+    ) -> Vec<&'a crate::model::PendingRequest> {
         let element_ids: BTreeSet<Uuid> = targets.iter().map(|(_, element)| element.id).collect();
         let page_ids: BTreeSet<Uuid> = targets.iter().map(|(page, _)| page.id).collect();
         self.requests
@@ -447,10 +455,12 @@ impl Project {
             .filter(|request| {
                 request.targets.is_empty()
                     || request.targets.iter().any(|target| match target {
-                        crate::RequestTarget::Element { id, .. } => element_ids.contains(id),
-                        crate::RequestTarget::Boundary { page, .. } => page_ids.contains(page),
-                        crate::RequestTarget::Reference { .. }
-                        | crate::RequestTarget::Pointer { .. } => true,
+                        crate::model::RequestTarget::Element { id, .. } => element_ids.contains(id),
+                        crate::model::RequestTarget::Boundary { page, .. } => {
+                            page_ids.contains(page)
+                        }
+                        crate::model::RequestTarget::Reference { .. }
+                        | crate::model::RequestTarget::Pointer { .. } => true,
                     })
             })
             .collect()
@@ -461,7 +471,7 @@ impl Project {
         &self,
         job_id: Uuid,
         base_revision: u64,
-        targets: &[(&Page, &crate::Element)],
+        targets: &[(&Page, &crate::elements::Element)],
         request_ids: &[Uuid],
         dossier_context: Option<GenerationDossierContext>,
         capabilities: Option<GenerationCapabilities>,
@@ -511,7 +521,7 @@ impl Project {
                 md.push_str(&fenced_json(&catalogue)?);
             }
             let mut pictures = self.generation_picture_catalogue(&page_ids);
-            self.describe_catalogue_images(&mut pictures)?;
+            self.describe_catalogue_images(&mut pictures);
             if pictures
                 .as_array()
                 .is_some_and(|pictures| !pictures.is_empty())
@@ -524,11 +534,11 @@ impl Project {
         let mut pointed_reference_ids = reference_ids.clone();
         for (page, element) in &targets {
             for pointer in self.pointers_touching(page.id, element.id) {
-                pointed_reference_ids.extend(crate::pointed_reference_ids(self, pointer));
+                pointed_reference_ids.extend(crate::pointers::pointed_reference_ids(self, pointer));
             }
         }
 
-        let requests: Vec<&crate::PendingRequest> = self
+        let requests: Vec<&crate::model::PendingRequest> = self
             .requests
             .iter()
             .filter(|request| request_ids.contains(&request.id))
@@ -551,7 +561,7 @@ impl Project {
                 "id": page.id, "name": page.name, "path": page.path, "included": page.included,
                 "viewport": page.viewport(), "boundary": page.base_size().kind,
                 "output": page.output, "sizes": page.sizes,
-                "elements": crate::element_outline(&crate::resolve_elements(self, &page.elements)),
+                "elements": crate::element_edit::element_outline(&crate::elements::resolve_elements(self, &page.elements)),
             }));
             if !outputs.contains(&page.output) {
                 outputs.push(page.output);
@@ -570,58 +580,58 @@ impl Project {
                 let mut targets = Vec::new();
                 for target in &request.targets {
                     match target {
-                        crate::RequestTarget::Element { page, size, id } => {
+                        crate::model::RequestTarget::Element { page, size, id } => {
                             let page = self.page(*page)?;
                             let element = crate::elements::find_element(&page.elements, *id)
                                 .ok_or_else(|| Error("This layer no longer exists.".into()))?;
-                            let resolved = crate::resolve_element(self, element);
+                            let resolved = crate::elements::resolve_element(self, element);
                             targets.push(serde_json::json!({
                                 "kind": "element", "pageId": page.id, "sizeId": size,
                                 "elementId": element.id, "rect": resolved.rect,
-                                "layer": crate::element_subtree(&resolved),
-                                "boundaryOutline": crate::element_outline(&crate::resolve_elements(self, &page.elements)),
+                                "layer": crate::element_edit::element_subtree(&resolved),
+                                "boundaryOutline": crate::element_edit::element_outline(&crate::elements::resolve_elements(self, &page.elements)),
                             }));
                             for pointer in self.pointers_touching(page.id, element.id) {
-                                item_reference_ids.extend(crate::pointed_reference_ids(self, pointer));
+                                item_reference_ids.extend(crate::pointers::pointed_reference_ids(self, pointer));
                                 if !pointers.iter().any(|existing| existing["pointerId"] == serde_json::json!(pointer.id)) {
                                     pointers.push(serde_json::json!({
                                         "pointerId": pointer.id,
                                         "from": pointer.from,
                                         "to": pointer.to,
                                         "comment": pointer.comment,
-                                        "sourceDescription": crate::source_description(self, &pointer.from),
-                                        "targetDescription": crate::pointer_target_description(self, &pointer.to, pointer.kind),
-                                        "target": crate::pointer_target_value(self, &pointer.to, pointer.kind),
+                                        "sourceDescription": crate::pointers::source_description(self, &pointer.from),
+                                        "targetDescription": crate::pointers::pointer_target_description(self, &pointer.to, pointer.kind),
+                                        "target": crate::pointers::pointer_target_value(self, &pointer.to, pointer.kind),
                                         "kind": pointer.kind,
                                         "action": pointer.play,
                                     }));
                                 }
                             }
                         }
-                        crate::RequestTarget::Boundary { page, size } => {
+                        crate::model::RequestTarget::Boundary { page, size } => {
                             let page = self.page(*page)?;
                             targets.push(serde_json::json!({
                                 "kind": "boundary", "pageId": page.id, "sizeId": size,
                                 "boundary": { "kind": page.base_size().kind, "output": page.output, "size": page.viewport(), "sizes": page.sizes },
-                                "boundaryOutline": crate::element_outline(&crate::resolve_elements(self, &page.elements)),
+                                "boundaryOutline": crate::element_edit::element_outline(&crate::elements::resolve_elements(self, &page.elements)),
                             }));
                         }
-                        crate::RequestTarget::Reference { id } => {
+                        crate::model::RequestTarget::Reference { id } => {
                             targets.push(serde_json::json!({"kind": "reference", "itemId": id}));
                             item_reference_ids.push(*id);
                         }
-                        crate::RequestTarget::Pointer { id } => {
+                        crate::model::RequestTarget::Pointer { id } => {
                             if let Some(pointer) = self.pointers.iter().find(|pointer| pointer.id == *id) {
                                 targets.push(serde_json::json!({"kind": "pointer", "pointerId": id, "comment": pointer.comment}));
-                                item_reference_ids.extend(crate::pointed_reference_ids(self, pointer));
+                                item_reference_ids.extend(crate::pointers::pointed_reference_ids(self, pointer));
                                 pointers.push(serde_json::json!({
                                     "pointerId": pointer.id,
                                     "from": pointer.from,
                                     "to": pointer.to,
                                     "comment": pointer.comment,
-                                    "sourceDescription": crate::source_description(self, &pointer.from),
-                                    "targetDescription": crate::pointer_target_description(self, &pointer.to, pointer.kind),
-                                    "target": crate::pointer_target_value(self, &pointer.to, pointer.kind),
+                                    "sourceDescription": crate::pointers::source_description(self, &pointer.from),
+                                    "targetDescription": crate::pointers::pointer_target_description(self, &pointer.to, pointer.kind),
+                                    "target": crate::pointers::pointer_target_value(self, &pointer.to, pointer.kind),
                                     "kind": pointer.kind,
                                     "action": pointer.play,
                                 }));
@@ -661,11 +671,7 @@ impl Project {
             .pages
             .iter()
             .filter(|page| {
-                page.included
-                    && matches!(
-                        page.output,
-                        crate::OutputType::Webpage | crate::OutputType::AppScreen
-                    )
+                page.included && matches!(page.output, crate::model::OutputType::Webpage)
             })
             .map(|page| serde_json::json!({"name": page.name, "path": page.path}))
             .collect();
@@ -676,7 +682,7 @@ impl Project {
         let classifying: Vec<_> = self
             .pointers
             .iter()
-            .filter(|pointer| crate::pointer_needs_classifying(pointer))
+            .filter(|pointer| crate::pointers::pointer_needs_classifying(pointer))
             .collect();
         if !classifying.is_empty() {
             md.push_str("\n## Pointer comments to classify\n\nA pointer is intent and permission. Its comment is the specification. Classify each pointer below in `pointerClassifications`: use one simple Play action when the comment clearly means go to a boundary, show, hide, toggle or swap a layer; otherwise return `exportOnly`. A `change` pointer from a request target also grants that request permission to edit its target layer within this project; a `reference` pointer is context only, and its target must stay unchanged. External URLs and reference items can only be read.\n\n");
@@ -686,9 +692,9 @@ impl Project {
                     "comment": pointer.comment,
                     "from": pointer.from,
                     "to": pointer.to,
-                    "sourceDescription": crate::source_description(self, &pointer.from),
-                    "targetDescription": crate::pointer_target_description(self, &pointer.to, pointer.kind),
-                    "target": crate::pointer_target_value(self, &pointer.to, pointer.kind),
+                    "sourceDescription": crate::pointers::source_description(self, &pointer.from),
+                    "targetDescription": crate::pointers::pointer_target_description(self, &pointer.to, pointer.kind),
+                    "target": crate::pointers::pointer_target_value(self, &pointer.to, pointer.kind),
                     "kind": pointer.kind,
                 }))?);
             }
@@ -745,12 +751,12 @@ impl Project {
             request_history: String::new(),
             capabilities,
             reference_ids,
-            images: request_images(&requests),
+            images: request_images(&requests)?,
             layer_requests: requests
                 .iter()
                 .flat_map(|request| {
                     request.targets.iter().filter_map(move |target| {
-                        if let crate::RequestTarget::Element { page, id, .. } = target {
+                        if let crate::model::RequestTarget::Element { page, id, .. } = target {
                             Some((request, *page, *id))
                         } else {
                             None
@@ -761,7 +767,7 @@ impl Project {
                     let page = self.page(page)?;
                     let element = crate::elements::find_element(&page.elements, id)
                         .ok_or_else(|| Error("This layer no longer exists.".into()))?;
-                    Ok(crate::FrozenLayerRequest {
+                    Ok(crate::request_history::FrozenLayerRequest {
                         page_id: page.id,
                         element_id: id,
                         rect: element.rect,
@@ -773,33 +779,36 @@ impl Project {
     }
 
     /// Enrich stored picture metadata with the format and transparency of its bytes.
-    fn describe_catalogue_images(&self, value: &mut serde_json::Value) -> Result<()> {
+    fn describe_catalogue_images(&self, value: &mut serde_json::Value) {
         match value {
             serde_json::Value::Array(items) => {
                 for item in items {
-                    self.describe_catalogue_images(item)?;
+                    self.describe_catalogue_images(item);
                 }
             }
             serde_json::Value::Object(object) => {
                 if let Some(url) = object.get("url").and_then(serde_json::Value::as_str)
-                    && let Some(id) = url.strip_prefix(crate::PROJECT_ASSET_SCHEME)
+                    && let Some(id) = url.strip_prefix(crate::project_assets::PROJECT_ASSET_SCHEME)
                     && let Ok(id) = Uuid::parse_str(id)
                     && let Some(data) = self.picture_uri(id)
                 {
-                    object.extend(
-                        crate::picture_scaling::image_metadata(&data)
-                            .as_object()
-                            .expect("metadata object")
-                            .clone(),
-                    );
+                    let facts = crate::picture_scaling::image_metadata(&data);
+                    if let Some(format) = facts.stored_format {
+                        object.insert("storedFormat".into(), format.into());
+                    }
+                    if let Some(transparent) = facts.transparent {
+                        object.insert("transparent".into(), transparent.into());
+                    }
+                    if let Some(percent) = facts.transparent_percent {
+                        object.insert("transparentPercent".into(), percent.into());
+                    }
                 }
                 for value in object.values_mut() {
-                    self.describe_catalogue_images(value)?;
+                    self.describe_catalogue_images(value);
                 }
             }
             _ => {}
         }
-        Ok(())
     }
 
     pub(crate) fn context_digest(
@@ -824,7 +833,7 @@ impl Project {
                 if !pointers.iter().any(|existing: &serde_json::Value| {
                     existing["id"] == serde_json::json!(pointer.id)
                 }) {
-                    pointers.push(crate::pointer_context_value(self, pointer));
+                    pointers.push(crate::pointers::pointer_context_value(self, pointer));
                 }
             }
         }
@@ -835,7 +844,7 @@ impl Project {
                 .flat_map(|(page_id, element_id)| self
                     .pointers_touching(*page_id, *element_id)
                     .into_iter()
-                    .flat_map(|pointer| crate::pointed_reference_ids(self, pointer)))
+                    .flat_map(|pointer| crate::pointers::pointed_reference_ids(self, pointer)))
                 .collect::<BTreeSet<_>>()
         );
         context["referenceItems"] = serde_json::json!(
@@ -859,9 +868,9 @@ impl Project {
 
 fn collect_targets<'a>(
     page: &'a Page,
-    elements: &'a [crate::Element],
+    elements: &'a [crate::elements::Element],
     wanted: &[Uuid],
-    rows: &mut Vec<(&'a Page, &'a crate::Element)>,
+    rows: &mut Vec<(&'a Page, &'a crate::elements::Element)>,
 ) {
     for element in elements {
         if wanted.contains(&element.id) {
@@ -873,8 +882,8 @@ fn collect_targets<'a>(
 
 fn order_targets<'a>(
     project: &Project,
-    mut targets: Vec<(&'a Page, &'a crate::Element)>,
-) -> Vec<(&'a Page, &'a crate::Element)> {
+    mut targets: Vec<(&'a Page, &'a crate::elements::Element)>,
+) -> Vec<(&'a Page, &'a crate::elements::Element)> {
     targets.sort_by_key(|(page, element)| {
         (
             project.pages.iter().position(|item| item.id == page.id),
@@ -999,7 +1008,7 @@ impl RequirementsSnapshot {
                 crate::elements::find_element(&page.elements, element_id).ok_or_else(|| {
                     Error("A requested layer was removed. Generate new requirements.".into())
                 })?;
-            let frozen = crate::resolve_element(project, element);
+            let frozen = crate::elements::resolve_element(project, element);
             ensure(
                 *expected
                     == digest(
@@ -1065,7 +1074,7 @@ impl RequirementsSnapshot {
 #[cfg(test)]
 mod content_guidance_tests {
     use super::content_guidance;
-    use crate::OutputType;
+    use crate::model::OutputType;
 
     #[test]
     fn guidance_names_only_the_outputs_in_scope() {
@@ -1090,7 +1099,7 @@ impl RequirementsSnapshot {
                 || ((section.starts_with(crate::request_history::HEADING)
                     || section.starts_with(crate::request_history::RETRY_HEADING))
                     && section.chars().count()
-                        <= crate::REQUEST_HISTORY_CHARS
+                        <= crate::limits::REQUEST_HISTORY_CHARS
                             + crate::request_history::RETRY_HISTORY_CHARS),
             "The request history is invalid.",
         )?;
@@ -1105,7 +1114,7 @@ impl RequirementsSnapshot {
                 .ok_or_else(|| crate::Error("Missing reference items.".into()))?;
             self.markdown.insert_str(position, &section);
             ensure(
-                self.markdown.len() <= crate::MAX_REQUIREMENTS_BYTES,
+                self.markdown.len() <= crate::limits::MAX_REQUIREMENTS_BYTES,
                 "The requirements file exceeds its limit.",
             )?;
             self.sha256 = digest(self.markdown.as_bytes());
@@ -1119,12 +1128,12 @@ impl Project {
     pub(crate) fn generation_picture_catalogue(&self, page_ids: &[Uuid]) -> serde_json::Value {
         let mut ids = std::collections::BTreeSet::new();
         for page in self.pages.iter().filter(|page| page_ids.contains(&page.id)) {
-            let elements = crate::resolve_elements(self, &page.elements);
+            let elements = crate::elements::resolve_elements(self, &page.elements);
             crate::project_assets::collect_element_pictures(&elements, &mut ids);
         }
         serde_json::json!(
             ids.into_iter()
-                .map(|id| serde_json::json!({"url": crate::project_asset_reference(id)}))
+                .map(|id| serde_json::json!({"url": crate::project_assets::project_asset_reference(id)}))
                 .collect::<Vec<_>>()
         )
     }
@@ -1133,10 +1142,10 @@ impl Project {
         self.imported_identity.as_ref().map(|identity| serde_json::json!({
             "sourceName":identity.source_name,"sourceSha256":identity.source_sha256,"summary":identity.summary,
             "assets":identity.assets.iter().map(|asset| serde_json::json!({
-                "id":asset.id,"name":asset.name,"mime":asset.mime,"sha256":asset.sha256,"url":crate::project_asset_reference(asset.id)
+                "id":asset.id,"name":asset.name,"mime":asset.mime,"sha256":asset.sha256,"url":crate::project_assets::project_asset_reference(asset.id)
             })).collect::<Vec<_>>(),
             "photos":identity.photos.iter().map(|photo| serde_json::json!({
-                "name":photo.name,"width":photo.width,"height":photo.height,"description":photo.description,"url":crate::project_asset_reference(photo.id)
+                "name":photo.name,"width":photo.width,"height":photo.height,"description":photo.description,"url":crate::project_assets::project_asset_reference(photo.id)
             })).collect::<Vec<_>>(),
             "content":identity.content
         }))

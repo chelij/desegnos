@@ -8,16 +8,14 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 
 fn main() {
-    let templates = [
-        ("blank", CanvasTemplate::Blank),
-        ("website", CanvasTemplate::Website),
-        ("appScreen", CanvasTemplate::AppScreen),
-        ("slideDeck", CanvasTemplate::SlideDeck),
-        ("socialImage", CanvasTemplate::SocialImage),
-    ];
-    let projects: Vec<Value> = templates
+    let projects: Vec<Value> = CanvasTemplate::ALL
         .into_iter()
-        .map(|(name, template)| {
+        .map(|template| {
+            let name = serde_json::to_value(template)
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .to_owned();
             let mut project =
                 Project::untitled(format!("{name} template"), Appearance::Light, template)
                     .expect("the start templates are valid");

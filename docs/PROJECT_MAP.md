@@ -1,6 +1,6 @@
 # Desegnos project map
 
-A source map for people and AI agents, reviewed against files present on 2026-10-28, including concurrent uncommitted module splits. Paths are relative to this document. Product direction is [PRODUCT.md](../PRODUCT.md), the canvas concept [CANVAS.md](../CANVAS.md), the editor look and behaviour [DESIGN.md](../DESIGN.md) and the vocabulary [GLOSSARY.md](../GLOSSARY.md). Check claims here against the source before changing behaviour.
+A source map for people and AI agents, updated for the merged module splits on 2026-11-08. Paths are relative to this document. Product direction is [PRODUCT.md](../PRODUCT.md), the canvas concept [CANVAS.md](../CANVAS.md), the editor look and behaviour [DESIGN.md](../DESIGN.md) and the vocabulary [GLOSSARY.md](../GLOSSARY.md). Check claims here against the source before changing behaviour.
 
 ## Architecture
 
@@ -40,7 +40,7 @@ test-results/                Local evidence from smoke, startup and vault runs (
 
 ## `desegnos-core`
 
-[lib.rs](../crates/desegnos-core/src/lib.rs) wires the modules and re-exports the public API.
+[lib.rs](../crates/desegnos-core/src/lib.rs) declares modules and re-exports the externally consumed API; internal callers import the owning module directly.
 
 | Module | Owns |
 | --- | --- |
@@ -57,7 +57,15 @@ test-results/                Local evidence from smoke, startup and vault runs (
 | [session.rs](../crates/desegnos-core/src/session.rs) | `Session`: revision checks, undo/redo, burst-step merging, version labels, export metadata outside undo, generation recording/application, context import, restore and history position. |
 | [pointers.rs](../crates/desegnos-core/src/pointers.rs) | Pointer states (unwired, needs generating/exporting, code changed, wired, contradicts, broken), contradiction detection and target descriptions. |
 | [requirements.rs](../crates/desegnos-core/src/requirements.rs) | Frozen `RequirementsSnapshot`, capabilities, request markdown, targeted requirements and `validate_current`. |
-| [generation.rs](../crates/desegnos-core/src/generation.rs) | `GenerationCandidate`, `ElementOperation` (including area-bound `InsertInBoundary`/`AddReference`), request scopes and outcomes, batches, generated images, pointer classifications, validation and `apply_generation_output`. |
+| [generation.rs](../crates/desegnos-core/src/generation.rs) | `GenerationCandidate`, `ElementOperation` (including area-bound `InsertInBoundary`/`AddReference`), outcomes, batches, generated images, pointer classifications and typed validation. |
+| [adapt.rs](../crates/desegnos-core/src/adapt.rs) | Boundary size adaptation. |
+| [json_parse.rs](../crates/desegnos-core/src/json_parse.rs) | Provider JSON extraction, repair and reply parsing. |
+| [schema_conformance.rs](../crates/desegnos-core/src/schema_conformance.rs) | Schema-guided reply conformance, independent of validation and application. |
+| [generation_scope.rs](../crates/desegnos-core/src/generation_scope.rs) | Request permissions and area geometry. |
+| [generation_apply.rs](../crates/desegnos-core/src/generation_apply.rs) | Operation interpretation, boundary coverage and generation application. |
+| [generation_schema.rs](../crates/desegnos-core/src/generation_schema.rs) | Candidate and result JSON schemas. |
+| [svg_validation.rs](../crates/desegnos-core/src/svg_validation.rs) | Portable embedded SVG validation. |
+| [validation.rs](../crates/desegnos-core/src/validation.rs) | Text validation, error construction, hashing and nullable deserialization. |
 | [request_history.rs](../crates/desegnos-core/src/request_history.rs) | Text-only earlier-request context derived from frozen requests, plus retry rejection history. |
 | [dossier.rs](../crates/desegnos-core/src/dossier.rs) | `GenerationDossier`, application status, acceptance data and recording on the project. |
 | [attachments.rs](../crates/desegnos-core/src/attachments.rs) | Bounded text, picture and link attachments on requests, previews and validation. |
@@ -93,7 +101,7 @@ test-results/                Local evidence from smoke, startup and vault runs (
 
 ## `desegnos-ai`
 
-[lib.rs](../crates/desegnos-ai/src/lib.rs) wires the modules and re-exports the public API.
+[lib.rs](../crates/desegnos-ai/src/lib.rs) declares modules and re-exports the externally consumed API; internal callers import the owning module directly.
 
 | Module | Owns |
 | --- | --- |

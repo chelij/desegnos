@@ -1,4 +1,4 @@
-use crate::Rect;
+use crate::model::Rect;
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct Point {
     pub x: f64,

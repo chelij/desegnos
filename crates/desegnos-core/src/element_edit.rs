@@ -1,7 +1,16 @@
-use crate::elements::*;
+use crate::elements::{
+    Element, ElementKind, ElementLayout, ElementMeta, ElementOverride, ElementShadow,
+    ElementSizing, ElementStroke, ElementStyle, ElementTextStyle, InputType, LinkLocation,
+    LinkedDefinition, LinkedPasteInstance, SizingMode, StackAlign, StackDirection, StackJustify,
+    StyleReferences, collect_ids, collect_link_instances, collect_nested_ids, collect_resolved_ids,
+    default_layer_name_base, definition_master, find_element, find_element_mut, link_location,
+    remove_element, resolve_element, resolve_elements, resolve_for_size, same_element_structure,
+    tree_has_link, validate_element_rect, validate_element_url,
+};
+use crate::limits::{MAX_ELEMENT_CODE_CHARS, MAX_ELEMENT_CONTEXT, MAX_ELEMENT_NAME_CHARS};
 use crate::{
-    Error, MAX_PROMPT_CHARS, Page, Project, Rect, RequestAttachment, Result, ensure,
-    model::validate_text,
+    Error, Result, attachments::RequestAttachment, limits::MAX_PROMPT_CHARS, model::Page,
+    model::Project, model::Rect, validation::ensure, validation::validate_text,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -31,7 +40,7 @@ impl Project {
                 && request
                     .targets
                     .iter()
-                    .any(|target| matches!(target, crate::RequestTarget::Element { id: target_id, .. } if *target_id == id))
+                    .any(|target| matches!(target, crate::model::RequestTarget::Element { id: target_id, .. } if *target_id == id))
         })
     }
 
@@ -1516,6 +1525,7 @@ fn default_stack() -> ElementLayout {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::elements::{ElementPadding, validate_colour};
 
     #[test]
     fn sizing_defaults_and_limits_are_validated() {
@@ -1616,11 +1626,11 @@ mod tests {
     fn inserted_layers_get_numbered_default_names_per_kind() {
         let project = Project::new(
             "Names".into(),
-            crate::Viewport {
+            crate::model::Viewport {
                 width: 800,
                 height: 600,
             },
-            crate::Appearance::Light,
+            crate::model::Appearance::Light,
         )
         .unwrap();
         let page = project.pages[0].id;
@@ -1628,7 +1638,7 @@ mod tests {
             project
                 .apply(
                     project.revision,
-                    crate::Command::InsertElements {
+                    crate::commands::Command::InsertElements {
                         page_id: page,
                         parent_id: None,
                         index: 0,
@@ -1694,14 +1704,14 @@ mod tests {
     fn shared_style_edits_resolve_after_overrides_and_delete_preserves_values() {
         let mut project = Project::new(
             "Styles".into(),
-            crate::Viewport {
+            crate::model::Viewport {
                 width: 800,
                 height: 600,
             },
-            crate::Appearance::Light,
+            crate::model::Appearance::Light,
         )
         .unwrap();
-        let colour = crate::ColourStyle {
+        let colour = crate::model::ColourStyle {
             id: Uuid::new_v4(),
             name: "Ink".into(),
             value: "#123456".into(),
@@ -1709,7 +1719,7 @@ mod tests {
         project = project
             .apply(
                 project.revision,
-                crate::Command::AddColourStyle {
+                crate::commands::Command::AddColourStyle {
                     style: colour.clone(),
                 },
             )
@@ -1742,8 +1752,8 @@ mod tests {
         project = project
             .apply(
                 project.revision,
-                crate::Command::UpdateColourStyle {
-                    style: crate::ColourStyle {
+                crate::commands::Command::UpdateColourStyle {
+                    style: crate::model::ColourStyle {
                         value: "#abcdef".into(),
                         ..colour.clone()
                     },
@@ -1760,7 +1770,7 @@ mod tests {
         project = project
             .apply(
                 project.revision,
-                crate::Command::RemoveColourStyle { id: colour.id },
+                crate::commands::Command::RemoveColourStyle { id: colour.id },
             )
             .unwrap();
         let resolved = resolve_for_size(&project, &project.pages[0], size);
@@ -1770,8 +1780,8 @@ mod tests {
             project
                 .apply(
                     project.revision,
-                    crate::Command::AddColourStyle {
-                        style: crate::ColourStyle {
+                    crate::commands::Command::AddColourStyle {
+                        style: crate::model::ColourStyle {
                             value: "red".into(),
                             ..colour
                         }
@@ -1785,11 +1795,11 @@ mod tests {
     fn an_embed_accepts_a_project_page_path_but_video_and_audio_stay_web_only() {
         let project = Project::new(
             "Frames".into(),
-            crate::Viewport {
+            crate::model::Viewport {
                 width: 800,
                 height: 600,
             },
-            crate::Appearance::Light,
+            crate::model::Appearance::Light,
         )
         .unwrap();
         let page_path = project.pages[0].path.clone();

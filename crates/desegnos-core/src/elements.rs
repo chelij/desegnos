@@ -1,26 +1,19 @@
 //! Visual elements: the things drawn on the canvas. Elements hold visual properties only;
 //! code appears at export. Every page boundary owns a back-to-front tree of root elements.
 use crate::limits::{
-    LINE_HEIGHT_MAX, MAX_FONT_FAMILY_CHARS, MAX_FONT_WEIGHT, MAX_GRID_COLUMNS, MAX_LAYOUT_SPACING,
+    LINE_HEIGHT_MAX, MAX_ELEMENT_CODE_CHARS, MAX_ELEMENT_CONTEXT, MAX_ELEMENT_DEPTH,
+    MAX_ELEMENT_NAME_CHARS, MAX_ELEMENT_OPTIONS, MAX_ELEMENT_REQUESTS, MAX_ELEMENTS,
+    MAX_FONT_FAMILY_CHARS, MAX_FONT_WEIGHT, MAX_GRID_COLUMNS, MAX_LAYOUT_SPACING,
     MAX_LETTER_SPACING, MAX_RADIUS, MAX_SHADOW_BLUR, MAX_SHADOW_OFFSET, MAX_STROKE_WIDTH,
     TEXT_SIZE_RANGE,
 };
 use crate::{
-    Error, MAX_PROMPT_CHARS, Page, Project, Rect, RequestAttachment, Result, ensure,
-    model::validate_text,
+    Error, Result, attachments::RequestAttachment, limits::MAX_PROMPT_CHARS, model::Page,
+    model::Project, model::Rect, validation::ensure, validation::validate_text,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
-
-pub use crate::limits::MAX_ELEMENT_CODE_CHARS;
-pub use crate::limits::MAX_ELEMENT_CONTEXT;
-pub use crate::limits::MAX_ELEMENT_DEPTH;
-pub use crate::limits::MAX_ELEMENT_NAME_CHARS;
-pub use crate::limits::MAX_ELEMENT_OPTIONS;
-pub use crate::limits::MAX_ELEMENT_REQUESTS;
-pub use crate::limits::MAX_ELEMENTS;
-pub use crate::limits::MAX_LINKED_DEFINITIONS;
 
 #[derive(ts_rs::TS, Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -454,7 +447,7 @@ impl RequestRecord {
             "A request job identifier must be short and nonempty.",
         )?;
         ensure(
-            self.attachments.len() <= MAX_ELEMENT_CONTEXT,
+            self.attachments.len() <= crate::limits::MAX_REQUEST_ATTACHMENTS,
             "A request supports at most 32 attachments.",
         )?;
         for attachment in &self.attachments {
@@ -568,7 +561,7 @@ pub struct Element {
     #[serde(flatten)]
     pub kind: ElementKind,
     /// Set to name a layer.
-    #[serde(deserialize_with = "crate::required_nullable")]
+    #[serde(deserialize_with = "crate::validation::required_nullable")]
     pub name: Option<String>,
     /// Set on one copy of a linked element; the definition holds everything but position.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -867,12 +860,18 @@ pub(crate) fn validate_element(
 ) -> Result<()> {
     ensure(
         depth <= MAX_ELEMENT_DEPTH,
-        "Elements cannot be nested more than 32 deep.",
+        format!(
+            "Elements cannot be nested more than {} deep.",
+            crate::limits::MAX_ELEMENT_DEPTH
+        ),
     )?;
     *count += 1;
     ensure(
         *count <= MAX_ELEMENTS,
-        "A project holds at most 10,000 elements.",
+        format!(
+            "A project holds at most {} elements.",
+            crate::limits::MAX_ELEMENTS
+        ),
     )?;
     ensure(
         ids.insert(element.id),
@@ -1253,11 +1252,3 @@ pub struct LinkedPasteInstance {
     pub index: usize,
     pub rect: Rect,
 }
-
-pub use crate::element_edit::{
-    ElementMove, ElementPatch, element_outline, element_subtree, empty_element,
-};
-
-pub(crate) use crate::element_edit::{
-    apply_sized_patch, assign_default_names, size_target_for_patch, used_default_names,
-};

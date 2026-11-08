@@ -1,5 +1,15 @@
-use crate::model::{normalized_swatch, valid_swatch};
-use crate::*;
+use crate::model::normalized_swatch;
+use crate::{
+    Error, Result, attachments::RequestAttachment, element_edit::ElementMove,
+    element_edit::ElementPatch, elements::Element, elements::LinkedPasteInstance,
+    limits::MAX_NAMED_VIEWS, limits::is_hex_colour, model::BoundaryKind, model::Brief,
+    model::CanvasPlacement, model::ColourStyle, model::Decision, model::DesignException,
+    model::ExportRecord, model::ExportedPointer, model::GenerationMode, model::GridSettings,
+    model::NamedView, model::OutputType, model::Page, model::PageSize, model::PendingRequest,
+    model::Pointer, model::PointerKind, model::PointerSource, model::PointerTarget,
+    model::PointerWiring, model::Project, model::Rect, model::ReferenceItem, model::ReferenceKind,
+    model::ReferencePlacement, model::Scope, model::TextStyle, validation::ensure,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
@@ -29,7 +39,6 @@ pub enum Command {
     RenameProject {
         name: String,
     },
-    /// Lay a page's code out readably (Code view → Tidy code), without the AI.
     SetGrid {
         enabled: bool,
     },
@@ -389,9 +398,6 @@ impl HistoryBurst {
     pub(crate) fn survives_focus_change(&self) -> bool {
         matches!(self, Self::FirstText(_))
     }
-    pub(crate) fn ends_after_merge(&self) -> bool {
-        matches!(self, Self::FirstText(_))
-    }
 }
 
 pub(crate) struct CommandHistory {
@@ -460,8 +466,7 @@ impl Command {
         }
     }
 
-    /// A short, plain label for the change. Saved versions are named from these.
-    pub fn version_label(&self) -> &'static str {
+    fn version_label(&self) -> &'static str {
         match self {
             Self::AddColourStyle { .. } | Self::AddTextStyle { .. } => "Added a style",
             Self::UpdateColourStyle { .. } | Self::UpdateTextStyle { .. } => "Changed a style",
@@ -535,7 +540,7 @@ impl Project {
             "The project changed. Refresh the document before applying this edit.",
         )?;
         let mut next = self.clone();
-        next.revision = crate::limits::next_revision(next.revision)?;
+        next.revision = crate::session::next_revision(next.revision)?;
         match command {
             Command::AddColourStyle { style } => {
                 ensure(
@@ -592,7 +597,7 @@ impl Project {
                 p.name = name.trim().into();
                 p.path = path;
                 ensure(
-                    valid_swatch(&background),
+                    is_hex_colour(&background),
                     "Boundary background must be a hex colour.",
                 )?;
                 p.background = normalized_swatch(&background);
@@ -720,10 +725,6 @@ impl Project {
                     "This size already exists.",
                 )?;
                 let page = next.page_mut(page_id)?;
-                ensure(
-                    page.sizes.len() < MAX_PAGE_SIZES,
-                    "A boundary holds at most 8 sizes.",
-                )?;
                 size.validate()?;
                 page.sizes.push(size);
                 for placement in moves {
@@ -760,7 +761,10 @@ impl Project {
             Command::AddNamedView { name, x, y, zoom } => {
                 ensure(
                     next.views.len() < MAX_NAMED_VIEWS,
-                    "A project holds at most 50 named views.",
+                    format!(
+                        "A project holds at most {} named views.",
+                        crate::limits::MAX_NAMED_VIEWS
+                    ),
                 )?;
                 let view = NamedView {
                     id: Uuid::new_v4(),
@@ -966,8 +970,8 @@ impl Project {
                         next.home_page_id = page.id;
                     }
                     // Imported layers are new layers too: number the ones without a name.
-                    let mut used = crate::elements::used_default_names(&next);
-                    crate::elements::assign_default_names(&mut page.elements, &mut used);
+                    let mut used = crate::element_edit::used_default_names(&next);
+                    crate::element_edit::assign_default_names(&mut page.elements, &mut used);
                     next.pages.push(page);
                 }
                 next.reference.extend(reference);
@@ -1131,7 +1135,7 @@ impl Project {
                 next.exceptions.retain(|e| e.id != exception_id);
             }
         }
-        next.store_inline_images()?;
+        next.prune_picture_store()?;
         next.validate()?;
         if crate::text_layout::sync_fit_rects(&mut next) {
             next.validate()?;

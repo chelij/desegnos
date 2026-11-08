@@ -38,7 +38,7 @@ impl WebsiteFetcher {
 }
 
 const MAX_PAGE_BYTES: usize = 256 * 1024;
-use desegnos_core::MAX_DOWNLOADED_IMAGE_BYTES as MAX_IMAGE_BYTES;
+use desegnos_core::limits::MAX_DOWNLOADED_IMAGE_BYTES as MAX_IMAGE_BYTES;
 const MAX_BRAND_PAGES: usize = 20;
 const MAX_BRAND_TEXT_BYTES: usize = 2 * 1024 * 1024;
 const MAX_PHOTOS: usize = 32;

@@ -1,4 +1,5 @@
 //! Links worth reading from a fetched home page for brand import: stylesheets and logo images.
+use crate::limits::{MAX_LOGOS, MAX_PHOTOS, MAX_STYLESHEETS, MAX_WEBSITE_LINKS};
 use dom_query::Document;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -9,11 +10,6 @@ pub struct WebsiteLinks {
     pub photos: Vec<String>,
 }
 
-const MAX_STYLESHEETS: usize = 4;
-const MAX_LOGOS: usize = 6;
-
-const MAX_PHOTOS: usize = 32;
-const MAX_PAGES: usize = 128;
 fn push_url(list: &mut Vec<String>, value: Option<&str>, limit: usize, fragments: bool) {
     if let Some(value) = value.map(str::trim).filter(|value| {
         !value.is_empty() && !value.starts_with("data:") && (fragments || !value.starts_with('#'))
@@ -73,7 +69,11 @@ pub fn website_links(html: &str) -> WebsiteLinks {
         push(&mut links.logos, node.attr("content").as_deref(), MAX_LOGOS);
     }
     for node in doc.select("a[href]").nodes() {
-        push(&mut links.pages, node.attr("href").as_deref(), MAX_PAGES);
+        push(
+            &mut links.pages,
+            node.attr("href").as_deref(),
+            MAX_WEBSITE_LINKS,
+        );
     }
     links
 }

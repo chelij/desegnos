@@ -6,6 +6,7 @@ use desegnos_core::{
 use std::time::Instant;
 
 #[test]
+#[ignore = "manual timing probe; run in release mode with --ignored --nocapture"]
 fn benchmark_canvas_edits() {
     let mut project = Project::new(
         "Benchmark".into(),

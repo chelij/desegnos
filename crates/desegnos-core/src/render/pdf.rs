@@ -19,8 +19,7 @@ use std::io::{Cursor, Write as _};
 
 /// PDF points per canvas pixel (96 dpi pixels to 72 dpi points).
 const SCALE: f64 = 0.75;
-/// Maximum raster area per shadow, bounding allocation and embedded image size.
-const MAX_SHADOW_PIXELS: u32 = 4_000_000;
+use crate::limits::MAX_PDF_SHADOW_PIXELS;
 
 pub(super) fn deck(scenes: &[Scene]) -> crate::Result<Vec<u8>> {
     // Content comes first: it is what discovers the pictures and the opacity states the
@@ -366,7 +365,7 @@ impl ShadowImage {
         }
         // Work in canvas units: one canvas pixel is SCALE PDF points. Reserve room for
         // rounding so even extremely thin masks stay within the pixel budget.
-        let limit = f64::from(MAX_SHADOW_PIXELS);
+        let limit = f64::from(MAX_PDF_SHADOW_PIXELS);
         let mut scale = (2.0 * SCALE)
             .min((limit / (width * height)).sqrt())
             .min(limit / width)
@@ -378,7 +377,7 @@ impl ShadowImage {
             )
         };
         let (mut pixel_width, mut pixel_height) = dimensions(scale);
-        while u64::from(pixel_width) * u64::from(pixel_height) > u64::from(MAX_SHADOW_PIXELS) {
+        while u64::from(pixel_width) * u64::from(pixel_height) > u64::from(MAX_PDF_SHADOW_PIXELS) {
             scale *= 0.99 * (limit / (f64::from(pixel_width) * f64::from(pixel_height))).sqrt();
             (pixel_width, pixel_height) = dimensions(scale);
         }
@@ -593,9 +592,8 @@ fn image_stream(
         // The canvas renderer already supports SVG and GIF via resvg. The image crate's
         // configured codecs do not, so use that same renderer for these PDF pictures.
         if !matches!(mime, "image/svg+xml" | "image/gif") { return None; }
-        use base64::{Engine, engine::general_purpose::STANDARD};
         let (width, height) = picture_dimensions(mime, bytes)?;
-        let svg = format!("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{width}\" height=\"{height}\"><image width=\"100%\" height=\"100%\" href=\"data:{mime};base64,{}\"/></svg>", STANDARD.encode(bytes));
+        let svg = format!("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{width}\" height=\"{height}\"><image width=\"100%\" height=\"100%\" href=\"{}\"/></svg>", crate::limits::image_data_uri(mime, bytes));
         let tree = resvg::usvg::Tree::from_str(&svg, &resvg::usvg::Options::default()).ok()?;
         let scale = (4096.0 / width.max(height)).min(1.0);
         let mut pixmap = resvg::tiny_skia::Pixmap::new((width * scale).ceil() as u32, (height * scale).ceil() as u32)?;
@@ -715,6 +713,7 @@ impl Writer {
 mod tests {
     use super::super::Rect;
     use super::*;
+    use base64::{Engine, engine::general_purpose::STANDARD};
 
     fn shadow(blur: f64) -> Shadow {
         Shadow {
@@ -750,7 +749,22 @@ mod tests {
         }
     }
 
+    struct PdfTemp(std::path::PathBuf);
+    impl PdfTemp {
+        fn new() -> Self {
+            let path = std::env::temp_dir().join(format!("desegnos-pdf-{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir(&path).unwrap();
+            Self(path)
+        }
+    }
+    impl Drop for PdfTemp {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
     #[test]
+    #[ignore = "requires pdftoppm installed; run with --ignored"]
     fn pdf_pictures_preserve_alpha_and_do_not_inherit_the_previous_fill_opacity() {
         let mut png = Cursor::new(Vec::new());
         let pixels = image::RgbaImage::from_raw(2, 1, vec![255, 0, 0, 0, 0, 255, 0, 128]).unwrap();
@@ -787,9 +801,8 @@ mod tests {
         ]);
         let pdf = deck(&[page]).unwrap();
         assert_eq!(String::from_utf8_lossy(&pdf).matches("/SMask ").count(), 2);
-        let directory =
-            std::env::temp_dir().join(format!("desegnos-pdf-alpha-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir(&directory).unwrap();
+        let temporary = PdfTemp::new();
+        let directory = &temporary.0;
         let path = directory.join("alpha.pdf");
         std::fs::write(&path, pdf).unwrap();
         let result = std::process::Command::new("pdftoppm")
@@ -799,11 +812,6 @@ mod tests {
             .output();
         let output = match result {
             Ok(output) => output,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                std::fs::remove_dir_all(directory).unwrap();
-                eprintln!("pdftoppm unavailable; skipping PDF pixel validation");
-                return;
-            }
             Err(error) => panic!("could not render PDF: {error}"),
         };
         assert!(
@@ -828,12 +836,10 @@ mod tests {
                 );
             }
         }
-        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]
     fn svg_and_gif_pictures_are_embedded_as_pixels_instead_of_black_placeholders() {
-        use base64::{Engine, engine::general_purpose::STANDARD};
         use std::io::Read;
         let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" width="2" height="1"><path fill="#ff0000" d="M0 0H2V1H0Z"/></svg>"##;
         // A 1x1 opaque white GIF89a, including its colour table and first frame.
@@ -986,14 +992,15 @@ mod tests {
             height: 2000.0,
         });
         let mask = ShadowImage::new(&shadow).unwrap();
-        assert!(u64::from(mask.width) * u64::from(mask.height) <= u64::from(MAX_SHADOW_PIXELS));
+        assert!(u64::from(mask.width) * u64::from(mask.height) <= u64::from(MAX_PDF_SHADOW_PIXELS));
         assert!(mask.scale < 2.0 * SCALE);
     }
 
     #[test]
+    #[ignore = "requires qpdf installed; run with --ignored"]
     fn qpdf_accepts_shadow_images() {
-        let path =
-            std::env::temp_dir().join(format!("desegnos-shadow-{}.pdf", uuid::Uuid::new_v4()));
+        let temporary = PdfTemp::new();
+        let path = temporary.0.join("shadow.pdf");
         std::fs::write(
             &path,
             deck(&[scene(vec![
@@ -1010,10 +1017,6 @@ mod tests {
         std::fs::remove_file(&path).unwrap();
         let output = match result {
             Ok(output) => output,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                eprintln!("qpdf is unavailable; skipping PDF validation");
-                return;
-            }
             Err(error) => panic!("could not run qpdf: {error}"),
         };
         assert!(
