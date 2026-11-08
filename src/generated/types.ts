@@ -398,11 +398,12 @@ export type IdentityPhotoManifest = { id: string, name: string, width: number, h
 
 export type IdentitySelection = { fileIds: Array<string>, fits: boolean, message: string | null, needsSettings: boolean, };
 
-export type IdentitySource = { id: string, name: string, sha256: string, files: Array<IdentityFileManifest>, skipped: Array<string>, photos: Array<IdentityPhotoManifest>, pages: Array<SourcePage>, };
+export type IdentitySource = { id: string, name: string, sha256: string, files: Array<IdentityFileManifest>, skipped: Array<SkippedFile>, photos: Array<IdentityPhotoManifest>, pages: Array<SourcePage>, };
 
 export type IdentitySourceAsset = { id: string, name: string, mime: string, dataUri: string, sha256: string, };
 
-export type ImageAccess = { available: ImageAvailability, checkedAt: number, reason: string, };
+export type ImageAccess = { available: ImageAvailability, checkedAt: number, reason: string,
+organizationVerification: boolean, };
 
 export type ImageAvailability = "yes"
   | "no"
@@ -667,6 +668,19 @@ export type SizePreset = "phone"
 export type SizingMode = "fixed"
   | "fit"
   | "fill";
+
+export type SkipReason = { "kind": "private" }
+  | { "kind": "overLimit" }
+  | { "kind": "notNeeded" }
+  | { "kind": "notSelected" }
+  | { "kind": "unreadable" }
+  | { "kind": "symlink" }
+  | { "kind": "duplicate" }
+  | { "kind": "omitted", count: number, }
+  | { "kind": "notice", message: string, };
+
+export type SkippedFile = {
+path: string, reason: SkipReason, };
 
 export type SourcePage = { path: string, title: string, url?: string | null, kind: string, photoCount: number, itemCount: number, };
 

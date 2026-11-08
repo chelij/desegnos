@@ -289,7 +289,7 @@ export function AiSettings({ current, refresh, update, manageUsage, pollingError
             <button type="button" disabled={busy || pending || !imageKey.trim()} onClick={() => { void connectImageKey(); }}>Connect image key</button>
           </div>}
           {view.provider === 'openai' && view.imageKey.configured && view.imageKey.vaultError && <Notice variant="error" message={userError(view.imageKey.vaultError)} />}
-          {view.provider === 'openai' && view.imageAccess?.available !== 'yes' && [view.imageKeyAccess, view.mainImageAccess].find(access => access?.reason.includes('API Organization Verification')) && <Notice variant="error" message="Verify your OpenAI account to create pictures." />}
+          {view.provider === 'openai' && view.imageAccess?.available !== 'yes' && [view.imageKeyAccess, view.mainImageAccess].find(access => access?.organizationVerification) && <Notice variant="error" message="Verify your OpenAI account to create pictures." />}
           <div className="ai-feature-row"><span>Web search</span><StatusChip tone={provider?.capabilities.webSearch ? 'neutral' : 'warning'}>{provider?.capabilities.webSearch ? 'Available' : 'Not available'}</StatusChip></div>
         </section>
         <Disclosure className="ai-advanced" summary="Advanced" open={advanced} onToggle={setAdvanced}><fieldset className="advanced-settings"><legend>Model details</legend>{usesChatgpt && account && <p className="small muted">Registration: <span className="source-url">{account.id}</span></p>}{model && !model.pricingRequired && <div className="model-details">{!usesChatgpt && <p className="small">Standard input: USD {model.inputUsdPerMillion} / million tokens · Standard output: USD {model.outputUsdPerMillion} / million tokens</p>}

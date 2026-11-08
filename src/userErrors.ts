@@ -21,30 +21,25 @@ export function generationError(request = ''): string {
   return `The AI could not complete ${subject} as requested.`;
 }
 
-// Model explanations may use punctuation and questions freely but must not leak internals.
-// App-generated fallback text is also recognised so a rejected reply never looks like a question.
-const modelJargon = /[\n\r<>`{}\[\]\\]|\b[\da-f]{8}-[\da-f-]{27,}\b|\barea [0-9a-f]{8,}[^\s]*|data-desegnos|\bgeneration result\b|\brequired format\b|\brequirements format\b|\bgenerated source\b|\bconflicted page\b|\bomitted a requested layer\b|\b(?:regions?|candidates?|schemas?|validat(?:e|ed|es|ion|or)|selectors?|dossiers?|revisions?|excerpts?|DOM|CSS|HTML|JavaScript|stack|finite)\b/i;
+// A model explanation may use punctuation and questions freely but must not leak internals.
+const modelJargon = /[\n\r<>`{}\[\]\\]|\b[\da-f]{8}-[\da-f-]{27,}\b|data-desegnos|\b(?:regions?|candidates?|schemas?|validat(?:e|ed|es|ion|or)|selectors?|dossiers?|revisions?|excerpts?|DOM|CSS|HTML|JavaScript|stack|finite)\b/i;
 // Case-sensitive: camelCase identifiers such as pageId leak implementation names.
 const camelCase = /\b[a-z]+[A-Z]\w*\b/;
-// App-issued conflict text names the area (and sometimes the page) before its own reason.
-const appPrefix = /^Area\s+[0-9a-f][0-9a-f-]{7,}(?:\s*,\s*page\s+[0-9a-f][0-9a-f-]{7,})?\s*[:,]\s*/i;
-const pagePrefix = /^Area\s+[0-9a-f][0-9a-f-]{7,}\s*,\s*page\s+/i;
 
 function reasonText(reason: string): string {
-  return String(reason ?? '').split(/\bExcerpt:/i)[0].replace(appPrefix, '').replace(/\s+/g, ' ').trim();
+  return String(reason ?? '').replace(/\s+/g, ' ').trim();
 }
 
-/// A validation explanation names implementation details; a model explanation is plain prose.
+/// A model explanation that names implementation details is not plain prose.
 export function technicalReason(reason: string): boolean {
-  const raw = String(reason ?? '');
   const text = reasonText(reason);
-  return pagePrefix.test(raw) || camelCase.test(text) || modelJargon.test(text);
+  return camelCase.test(text) || modelJargon.test(text);
 }
 
 export function outcomeReason(reason: string, request = 'this request'): string {
   const value = reasonText(reason);
   if (!value) return generationError(request);
-  if (modelJargon.test(value) || camelCase.test(value)) return generationError(request);
+  if (technicalReason(value)) return generationError(request);
   const first = value.match(/^.*?[.!?](?=\s|$)/)?.[0] ?? value;
   const sentence = first.length > 200 ? `${first.slice(0, 197).trimEnd()}…` : first;
   return /[.!?…]$/.test(sentence) ? sentence : `${sentence}.`;

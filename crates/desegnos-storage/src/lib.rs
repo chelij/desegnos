@@ -10,8 +10,8 @@ pub mod website_export;
 pub mod website_snapshot;
 use desegnos_core::{Error, Result};
 pub use identity_source::{
-    IdentitySource, IdentitySourceAsset, IdentitySourceFile, collect_identity_source,
-    identity_source_from_files,
+    IdentitySource, IdentitySourceAsset, IdentitySourceFile, SkipReason, SkippedFile,
+    collect_identity_source, identity_source_from_files,
 };
 pub use project_db::{
     AutosaveProject, BranchSummary, CompactReport, FileStamp, LoadedProject, ProjectDatabase,

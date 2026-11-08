@@ -3664,11 +3664,7 @@ async fn image_probe_uses_invalid_size_and_classifies_access_without_generating(
                 .await;
             assert_eq!(access.available, *expected, "{body}");
             if body.to_string().to_lowercase().contains("verif") {
-                assert!(
-                    access
-                        .reason
-                        .starts_with("API Organization Verification required:")
-                );
+                assert!(access.organization_verification);
             }
             assert_eq!(server.count.load(Ordering::SeqCst), 1);
             let request = server.request();

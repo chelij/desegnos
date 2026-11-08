@@ -36,6 +36,41 @@ const MIN_PHOTO_EDGE: u32 = 200;
 const PHOTO_EDGE: u32 = 1280;
 const THUMBNAIL_EDGE: u32 = 256;
 
+/// A file the snapshot left out, and why. The editor words each reason for the user.
+#[derive(ts_rs::TS, Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SkippedFile {
+    /// Empty when the entry is a notice about the whole source rather than one file.
+    pub path: String,
+    pub reason: SkipReason,
+}
+
+#[derive(ts_rs::TS, Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
+pub enum SkipReason {
+    /// A credential or private key, so it was not read.
+    Private,
+    /// A size, count or budget limit was reached.
+    OverLimit,
+    /// Not useful for reading the brand, or excluded by type or location.
+    NotNeeded,
+    /// A logo candidate that lost to better ones.
+    NotSelected,
+    /// The content could not be read as text or as a picture.
+    Unreadable,
+    Symlink,
+    /// The same picture as another file.
+    Duplicate,
+    /// More entries than the report holds.
+    Omitted {
+        count: usize,
+    },
+    /// A note about the whole source, already worded for the user.
+    Notice {
+        message: String,
+    },
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct IdentitySource {
@@ -43,7 +78,7 @@ pub struct IdentitySource {
     pub name: String,
     pub sha256: String,
     pub files: Vec<IdentitySourceFile>,
-    pub skipped: Vec<String>,
+    pub skipped: Vec<SkippedFile>,
     /// Pictures that are not logos (portfolio, products, people), resized for the project.
     #[serde(default)]
     pub photos: Vec<IdentitySourcePhoto>,
@@ -94,14 +129,14 @@ struct Collector {
     photo_aliases: BTreeMap<String, Vec<String>>,
     page_overrides: BTreeMap<String, desegnos_core::SourcePage>,
     collected_bytes: usize,
-    skipped: Vec<String>,
+    skipped: Vec<SkippedFile>,
     omitted_reports: usize,
 }
 
 impl Collector {
     fn add(&mut self, name: String, bytes: Vec<u8>) {
         if bytes.len() > MAX_TEXT_BYTES {
-            self.skip(&name, "exceeds the 256 KiB source file limit");
+            self.skip(&name, SkipReason::OverLimit);
             return;
         }
         self.collected_bytes += bytes.len();
@@ -118,13 +153,7 @@ impl Collector {
                 .expect("the nonempty snapshot exceeds its budget");
             let removed = self.candidates.swap_remove(index);
             self.collected_bytes -= removed.bytes.len();
-            self.skip(
-                &removed.name,
-                &format!(
-                    "the {} MiB collection snapshot budget is full",
-                    MAX_COLLECTED_BYTES / 1024 / 1024
-                ),
-            );
+            self.skip(&removed.name, SkipReason::OverLimit);
         }
     }
 
@@ -140,27 +169,25 @@ impl Collector {
                     .iter()
                     .any(|item| item.photo.sha256 == photo.photo.sha256)
                 {
-                    self.skip(&name, "same photo as another file");
+                    self.skip(&name, SkipReason::Duplicate);
                 } else {
                     self.photos.push(photo);
                 }
             }
-            Err(reason) => self.skip(&name, &reason),
+            Err(reason) => self.skip(&name, reason),
         }
     }
 
-    fn skip_reason(&mut self, reason: String) {
-        if self.skipped.len() < MAX_SKIPPED {
-            self.skipped.push(reason);
-        } else {
-            self.omitted_reports += 1;
-        }
+    fn skip(&mut self, name: &str, reason: SkipReason) {
+        self.skip_file(SkippedFile {
+            path: display_name(name),
+            reason,
+        });
     }
 
-    fn skip(&mut self, name: &str, reason: &str) {
+    fn skip_file(&mut self, file: SkippedFile) {
         if self.skipped.len() < MAX_SKIPPED {
-            self.skipped
-                .push(format!("{}: {reason}", display_name(name)));
+            self.skipped.push(file);
         } else {
             self.omitted_reports += 1;
         }
@@ -173,7 +200,7 @@ impl Collector {
         let mut candidates = std::mem::take(&mut self.candidates);
         candidates.retain(|candidate| {
             if asset_app_code(&candidate.name) && !scripts.contains(&candidate.name) {
-                self.skip(&candidate.name, "app or game code; not a site script");
+                self.skip(&candidate.name, SkipReason::NotNeeded);
                 false
             } else {
                 true
@@ -191,42 +218,36 @@ impl Collector {
             let mut asset = None;
             if is_text(&candidate.name) {
                 if candidate.bytes.len() > MAX_TEXT_BYTES {
-                    self.skip(&candidate.name, "exceeds the 256 KiB text limit");
+                    self.skip(&candidate.name, SkipReason::OverLimit);
                 } else if let Ok(value) = std::str::from_utf8(&candidate.bytes) {
                     if value.contains('\0') {
-                        self.skip(&candidate.name, "binary content is not source text");
+                        self.skip(&candidate.name, SkipReason::Unreadable);
                     } else if contains_secret(value) {
-                        self.skip(
-                            &candidate.name,
-                            "possible credential or private key; excluded",
-                        );
+                        self.skip(&candidate.name, SkipReason::Private);
                     } else if value.trim().is_empty() {
-                        self.skip(&candidate.name, "empty source");
+                        self.skip(&candidate.name, SkipReason::NotNeeded);
                     } else if total_text + value.len() > MAX_TOTAL_TEXT {
-                        self.skip(&candidate.name, "the 2 MiB source text budget is full");
+                        self.skip(&candidate.name, SkipReason::OverLimit);
                     } else {
                         total_text += value.len();
                         text = Some(value.to_owned());
                     }
                 } else {
-                    self.skip(&candidate.name, "source is not UTF-8 text");
+                    self.skip(&candidate.name, SkipReason::Unreadable);
                 }
             }
             if is_image(&candidate.name) {
                 if let Some(value) = selected_assets.get(&candidate.name) {
                     asset = Some(value.clone());
                 } else {
-                    self.skip(
-                        &candidate.name,
-                        "not selected: only four safe, distinct logo assets are included",
-                    );
+                    self.skip(&candidate.name, SkipReason::NotSelected);
                 }
             }
             if text.is_none() && asset.is_none() {
                 continue;
             }
             if files.len() == MAX_FILES {
-                self.skip(&candidate.name, "the 128 source file limit is full");
+                self.skip(&candidate.name, SkipReason::OverLimit);
                 continue;
             }
             let fingerprint = digest(&candidate.bytes);
@@ -295,10 +316,12 @@ impl Collector {
         self.skipped.sort();
         self.skipped.dedup();
         if self.omitted_reports > 0 {
-            self.skipped.push(format!(
-                "{} additional excluded entries were omitted from this report.",
-                self.omitted_reports
-            ));
+            self.skipped.push(SkippedFile {
+                path: String::new(),
+                reason: SkipReason::Omitted {
+                    count: self.omitted_reports,
+                },
+            });
         }
         // Hash only the immutable, ordered snapshot, including image bytes via
         // their data URIs. It does not depend on timestamps, selection order,
@@ -326,17 +349,20 @@ impl Collector {
 pub fn identity_source_from_files(
     name: &str,
     files: Vec<(String, Vec<u8>)>,
-    skipped: Vec<String>,
+    notices: Vec<String>,
 ) -> Result<IdentitySource> {
     let mut collector = Collector::default();
-    for reason in skipped {
-        collector.skip_reason(reason);
+    for message in notices {
+        collector.skip_file(SkippedFile {
+            path: String::new(),
+            reason: SkipReason::Notice { message },
+        });
     }
     for (path, bytes) in files {
         collector.inventory.insert(path.clone());
         if source_excluded(&path, SourcePurpose::Identity) || !(relevant(&path) || is_photo(&path))
         {
-            collector.skip(&path, "not needed to read your brand");
+            collector.skip(&path, SkipReason::NotNeeded);
         } else if is_photo(&path) {
             collector.add_photo(path, &bytes);
         } else {
@@ -408,30 +434,24 @@ fn collect_folder(
         let path = child.path();
         let relative = path.strip_prefix(root).map_err(io)?;
         let Some(name) = portable_name(relative) else {
-            collector.skip(
-                &relative.to_string_lossy(),
-                "unsupported or unsafe filename",
-            );
+            collector.skip(&relative.to_string_lossy(), SkipReason::NotNeeded);
             continue;
         };
         collector.inventory.insert(name.clone());
         let metadata = fs::symlink_metadata(&path).map_err(io)?;
         if metadata.file_type().is_symlink() {
-            collector.skip(&name, "symbolic link; excluded");
+            collector.skip(&name, SkipReason::Symlink);
         } else if source_excluded(&name, SourcePurpose::Identity)
             || !include_build && build_path(&name)
         {
-            collector.skip(
-                &name,
-                "private, generated, dependency, or unsupported source",
-            );
+            collector.skip(&name, SkipReason::NotNeeded);
         } else if metadata.is_dir() && separate_site(&path) {
-            collector.skip(&name, "nested independent website");
+            collector.skip(&name, SkipReason::NotNeeded);
         } else if metadata.is_dir() {
             collect_folder(root, &path, entries, collector, include_build)?;
         } else if metadata.is_file() && is_photo(&name) {
             if metadata.len() > MAX_PHOTO_FILE_BYTES as u64 {
-                collector.skip(&name, "photo exceeds the 30 MiB file limit");
+                collector.skip(&name, SkipReason::OverLimit);
             } else {
                 let canonical = path.canonicalize().map_err(io)?;
                 if !canonical.starts_with(root) {
@@ -443,7 +463,7 @@ fn collect_folder(
             }
         } else if metadata.is_file() && relevant(&name) {
             if metadata.len() > MAX_TEXT_BYTES as u64 {
-                collector.skip(&name, "exceeds the 256 KiB source file limit");
+                collector.skip(&name, SkipReason::OverLimit);
             } else {
                 let canonical = path.canonicalize().map_err(io)?;
                 if !canonical.starts_with(root) {
@@ -454,7 +474,7 @@ fn collect_folder(
                 collector.add(name, bytes);
             }
         } else if !metadata.is_dir() {
-            collector.skip(&name, "unsupported file type");
+            collector.skip(&name, SkipReason::NotNeeded);
         }
     }
     Ok(())
@@ -519,19 +539,16 @@ fn collect_zip(path: &Path, metadata: &Metadata, collector: &mut Collector) -> R
             source_excluded(&name, SourcePurpose::Identity) || has_sources && build_path(&name);
         if !skip && is_photo(&name) {
             if entry.size() > MAX_PHOTO_FILE_BYTES as u64 {
-                collector.skip(&name, "photo exceeds the 30 MiB file limit");
+                collector.skip(&name, SkipReason::OverLimit);
             } else {
                 let expected = entry.size();
                 let bytes = read_exact_bounded(&mut entry, expected, MAX_PHOTO_FILE_BYTES)?;
                 collector.add_photo(name, &bytes);
             }
         } else if skip || !relevant(&name) {
-            collector.skip(
-                &name,
-                "private, generated, dependency, or unsupported source",
-            );
+            collector.skip(&name, SkipReason::NotNeeded);
         } else if entry.size() > MAX_TEXT_BYTES as u64 {
-            collector.skip(&name, "exceeds the 256 KiB source file limit");
+            collector.skip(&name, SkipReason::OverLimit);
         } else {
             let expected = entry.size();
             let bytes = read_exact_bounded(&mut entry, expected, MAX_TEXT_BYTES)?;
@@ -607,29 +624,24 @@ fn jpeg(image: &image::DynamicImage, quality: u8) -> Option<Vec<u8>> {
 
 /// Decodes a photo within pixel limits, applies its camera orientation, and keeps a JPEG within
 /// `PHOTO_EDGE` and `MAX_PROJECT_PHOTO_BYTES` plus a small thumbnail. Transparent areas become white.
-fn prepare_photo(name: &str, bytes: &[u8]) -> std::result::Result<IdentitySourcePhoto, String> {
+fn prepare_photo(name: &str, bytes: &[u8]) -> std::result::Result<IdentitySourcePhoto, SkipReason> {
     use image::{ImageDecoder, ImageReader, imageops::FilterType};
     let reader = ImageReader::new(std::io::Cursor::new(bytes))
         .with_guessed_format()
-        .map_err(|_| "the photo could not be read".to_owned())?;
-    let mut decoder = reader
-        .into_decoder()
-        .map_err(|_| "the photo format is not supported".to_owned())?;
+        .map_err(|_| SkipReason::Unreadable)?;
+    let mut decoder = reader.into_decoder().map_err(|_| SkipReason::Unreadable)?;
     let (width, height) = decoder.dimensions();
     if u64::from(width) * u64::from(height) > MAX_PHOTO_PIXELS {
-        return Err(format!(
-            "the photo exceeds {} million pixels",
-            MAX_PHOTO_PIXELS / 1_000_000
-        ));
+        return Err(SkipReason::OverLimit);
     }
     if width.min(height) < MIN_PHOTO_EDGE {
-        return Err("too small to be a photo".to_owned());
+        return Err(SkipReason::NotNeeded);
     }
     let orientation = decoder
         .orientation()
         .unwrap_or(image::metadata::Orientation::NoTransforms);
     let mut picture =
-        image::DynamicImage::from_decoder(decoder).map_err(|_| "the photo could not be decoded")?;
+        image::DynamicImage::from_decoder(decoder).map_err(|_| SkipReason::Unreadable)?;
     picture.apply_orientation(orientation);
     if picture.color().has_alpha() {
         let mut flat = image::RgbaImage::from_pixel(
@@ -649,7 +661,7 @@ fn prepare_photo(name: &str, bytes: &[u8]) -> std::result::Result<IdentitySource
             picture.clone()
         };
         for quality in [82, 74, 66] {
-            let bytes = jpeg(&resized, quality).ok_or("the photo could not be compressed")?;
+            let bytes = jpeg(&resized, quality).ok_or(SkipReason::Unreadable)?;
             if bytes.len() <= MAX_PROJECT_PHOTO_BYTES {
                 encoded = Some((bytes, resized.width(), resized.height()));
                 break 'sizes;
@@ -657,12 +669,12 @@ fn prepare_photo(name: &str, bytes: &[u8]) -> std::result::Result<IdentitySource
         }
         edge = edge * 3 / 4;
     }
-    let (bytes, width, height) = encoded.ok_or("the photo could not be made small enough")?;
+    let (bytes, width, height) = encoded.ok_or(SkipReason::OverLimit)?;
     let thumbnail = jpeg(
         &picture.resize(THUMBNAIL_EDGE, THUMBNAIL_EDGE, FilterType::Triangle),
         70,
     )
-    .ok_or("the photo could not be compressed")?;
+    .ok_or(SkipReason::Unreadable)?;
     let sha256 = digest(&bytes);
     Ok(IdentitySourcePhoto {
         photo: ProjectPhoto {

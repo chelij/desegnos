@@ -72,7 +72,7 @@ pub struct IdentitySourceManifest {
     name: String,
     sha256: String,
     files: Vec<IdentityFileManifest>,
-    skipped: Vec<String>,
+    skipped: Vec<desegnos_storage::SkippedFile>,
     photos: Vec<IdentityPhotoManifest>,
     pages: Vec<desegnos_core::SourcePage>,
 }
@@ -330,12 +330,12 @@ fn source_digest(source: &IdentitySource) -> NativeResult<String> {
 fn normalize_source(mut source: IdentitySource) -> NativeResult<IdentitySource> {
     for file in &mut source.files {
         if let Some(asset) = &file.asset
-            && let Err(reason) = portable(asset).validate()
+            && portable(asset).validate().is_err()
         {
-            source.skipped.push(format!(
-                "{}: image excluded from portable identity: {reason}",
-                file.name
-            ));
+            source.skipped.push(desegnos_storage::SkippedFile {
+                path: file.name.clone(),
+                reason: desegnos_storage::SkipReason::Unreadable,
+            });
             file.asset = None;
         }
     }
@@ -400,8 +400,11 @@ fn validate_source(source: &IdentitySource) -> NativeResult<()> {
     for item in &source.photos {
         item.photo.validate().map_err(error)?;
     }
-    for value in &source.skipped {
-        text(value, 8192, false)?;
+    for file in &source.skipped {
+        text(&file.path, 8192, false)?;
+        if let desegnos_storage::SkipReason::Notice { message } = &file.reason {
+            text(message, 8192, false)?;
+        }
     }
     Ok(())
 }
@@ -1657,12 +1660,20 @@ mod strict_schema_tests {
                 ("brand.md".into(), notes.as_bytes().to_vec()),
             ],
             pages: Vec::new(),
-            skipped: vec!["hero.png: not needed to read your brand".into()],
+            skipped: vec!["Only the first 2 pages are imported".into()],
         };
 
         let retained = service.retain_import_snapshot(&snapshot, None).unwrap();
         assert_eq!(retained.name, "Acme site");
-        assert_eq!(retained.skipped, snapshot.skipped);
+        assert_eq!(
+            retained.skipped,
+            [desegnos_storage::SkippedFile {
+                path: String::new(),
+                reason: desegnos_storage::SkipReason::Notice {
+                    message: snapshot.skipped[0].clone()
+                },
+            }]
+        );
         let mut files: Vec<(String, usize)> = retained
             .files
             .iter()

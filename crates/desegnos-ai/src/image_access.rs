@@ -28,6 +28,9 @@ pub struct ImageAccess {
     pub available: ImageAvailability,
     pub checked_at: u64,
     pub reason: String,
+    /// The account's organization must be verified before it may create pictures.
+    #[serde(default)]
+    pub organization_verification: bool,
 }
 impl ImageAccess {
     pub fn new(available: ImageAvailability, reason: &str) -> Self {
@@ -35,6 +38,7 @@ impl ImageAccess {
             available,
             checked_at: image_access_now(),
             reason: reason.into(),
+            organization_verification: false,
         }
     }
     pub fn expired(&self, now: u64) -> bool {
@@ -138,18 +142,16 @@ pub(crate) fn image_access_error(status: u16, body: &Value, key: &ApiKey) -> Ima
         .collect::<String>();
     let detail = scrubbed.split_whitespace().collect::<Vec<_>>().join(" ");
     let organization = body.to_string().to_ascii_lowercase();
-    let prefix = if organization.contains("organization")
-        && (organization.contains("verif") || organization.contains("enrolled"))
-    {
-        "API Organization Verification required: "
-    } else {
-        ""
-    };
-    let reason = format!("{prefix}http_{status}:{detail}")
+    let organization_verification = organization.contains("organization")
+        && (organization.contains("verif") || organization.contains("enrolled"));
+    let reason = format!("http_{status}:{detail}")
         .chars()
         .take(200)
         .collect::<String>();
-    ImageAccess::new(available, &reason)
+    ImageAccess {
+        organization_verification,
+        ..ImageAccess::new(available, &reason)
+    }
 }
 
 impl OpenAiClient {

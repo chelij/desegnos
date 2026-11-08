@@ -25,8 +25,8 @@ try {
     assert.equal(review.blocked.length, 1);
     assert.equal(review.blocked[0].fix, 'aiSettings');
   });
-  await test('an app rejection and a technical explanation stay retryable', () => {
-    const rejected = { ...job, candidate: { summary: 'Rejected', requests: [{ elementId: 'a', status: 'conflict', explanation: 'The generation result omitted a requested layer.' }] } };
+  await test('a technical explanation stays retryable', () => {
+    const rejected = { ...job, candidate: { summary: 'Rejected', requests: [{ elementId: 'a', status: 'conflict', explanation: 'The validator rejected the pageId selector.' }] } };
     assert.equal(areaOutcome(rejected, 'a', 'Add scrolling chat').retryable, true);
     assert.deepEqual(jobOutcome(rejected, () => 'Add scrolling chat').retryable, ['a']);
     assert.deepEqual(jobOutcome(rejected, () => 'Add scrolling chat').blocked, []);

@@ -21,7 +21,7 @@ const pickCalls = calls => calls.filter(call => /pick|fetch/.test(call.command))
 function mountFlow({ connected = true, previous = false, initialSource = null, pageCount = 0, fail = '', deferred = '', pageWarnings = ['A picture was skipped.'], answerFrames = true } = {}) {
   const calls = [], kept = [], imported = [], answered = new Set();
   let closed = 0, completeDeferred;
-  const source = { id: 'shared', name: 'Studio', files: [{ id: 'html', name: 'index.html', textBytes: 50, asset: null }], skipped: ['secret.txt: credential'], photos: [], pages: [], content: [] };
+  const source = { id: 'shared', name: 'Studio', files: [{ id: 'html', name: 'index.html', textBytes: 50, asset: null }], skipped: [{ path: 'secret.txt', reason: { kind: 'private' } }], photos: [], pages: [], content: [] };
   const website = { id: 'website', name: 'Studio', baseUrl: 'http://localhost:1234/', extractorUrl: 'http://localhost:1234/extract',
     pages: Array.from({ length: pageCount }, (_, i) => ({ route: i ? '/page' + i : '/', title: i ? 'Page ' + i : 'Home', url: 'http://localhost:1234/page' + i + '.html' })),
     totalPages: pageCount, skipped: ['large.png: size limit'], identitySource: source, identityError: null };

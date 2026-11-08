@@ -5,35 +5,29 @@ import { Notice } from './ProblemBanner.js';
 import { userError, needsAiSettings } from './userErrors.js';
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { native } from './api';
-import type { AiSettingsView, IdentityAnalysis, IdentityCandidate, IdentitySelection, IdentitySource, WebsiteImportResultView, WebsiteImportSourceView } from './types';
+import type { AiSettingsView, IdentityAnalysis, IdentityCandidate, IdentitySelection, IdentitySource, SkippedFile, WebsiteImportResultView, WebsiteImportSourceView } from './types';
 import { groupIdentityPages, selectedPageContent, findingSection, parseColours, parseFonts, parseTone, type IdentityFinding } from './identityReview';
 import { useWebsiteImport, WebsiteImportStatus } from './WebsiteImport';
 import { Icon } from './icons';
 import './importContext.css';
 
 // One source supplies the page import and the optional brand review.
-function skippedSummary(skipped: string[]) {
-  const counts = { build: 0, code: 0, other: 0 };
-  for (const item of skipped) {
-    if (/(^|\/|\b)(node_modules|dist|build|out|\.astro|\.next|\.git|vendor|cache|coverage)(\/|:|\b)|lockfile|\.lock|lock\.(json|yaml)/i.test(item)) counts.build += 1;
-    else if (/\.(js|jsx|ts|tsx|mjs|cjs)(:|\b)/i.test(item)) counts.code += 1;
-    else counts.other += 1;
+function skippedCopy(reason: SkippedFile['reason']): string {
+  switch (reason.kind) {
+    case 'private': return 'May contain private information';
+    case 'overLimit': return 'Left out to make room for the most useful files';
+    case 'notNeeded': return 'Not needed to read your brand';
+    case 'notSelected': return 'We picked other logos';
+    case 'unreadable': return "Couldn't read this file";
+    case 'symlink': return 'A shortcut to another file or folder';
+    case 'duplicate': return 'The same picture as another file';
+    case 'omitted': return `${reason.count} more files were left out.`;
+    case 'notice': return reason.message;
   }
-  return Object.entries(counts).filter(([, count]) => count > 0).map(([kind, count]) => `${count} ${kind} file${count === 1 ? '' : 's'}`).join(', ');
 }
-function skippedFile(value: string) {
-  const separator = value.indexOf(': ');
-  if (separator < 0) return /additional excluded entries/.test(value) ? value.replace('excluded entries were omitted from this report.', 'more files were left out.') : value;
-  const name = value.slice(0, separator);
-  const reason = value.slice(separator + 2);
-  const explanation = /credential|private key/.test(reason) ? 'May contain private information'
-    : /limit|budget/.test(reason) ? 'Left out to make room for the most useful files'
-    : /unsupported file type|not needed|private, generated|app or game code/.test(reason) ? 'Not needed to read your brand'
-    : /not selected/.test(reason) ? 'We picked other logos'
-    : /UTF-8|binary content/.test(reason) ? "Couldn't read this as text"
-    : /symbolic link/.test(reason) ? 'A shortcut to another file or folder'
-    : reason;
-  return `${name}: ${explanation}`;
+function skippedFile(file: SkippedFile) {
+  const copy = skippedCopy(file.reason);
+  return file.path ? `${file.path}: ${copy}` : copy;
 }
 type Props = { initialSource?: IdentitySource | null; busy: boolean; settings: AiSettingsView | null; openSettings: () => void; importInto: (analysisId: string, findings: number[], assets: string[], photos: string[], items: number[], pages: string[], attachMatching: boolean) => Promise<void>; onPagesImported: (result: WebsiteImportResultView) => void; close: () => void };
 
@@ -336,7 +330,7 @@ export function ImportContext({ busy, settings, openSettings, importInto, onPage
         {!source && previousReadError && <Notice variant="error" message={userError(previousReadError)} action={{ label: 'Try loading again', disabled: !!locked || previousBrand.status === 'reading', onClick: () => { void readPrevious(previousReadError); } }} />}
         {!source && previousBrand.status === 'ready' && previousBrand.analysis && <button type="button" disabled={locked} onClick={() => { const previous = previousBrand.analysis; if (previous) resume(previous); }}>Continue with my previous brand</button>}
         </>
-        {source && source.skipped.length > 0 && <details><summary>See all skipped files · {skippedSummary(source.skipped)}</summary><ul className="identity-skipped">{source.skipped.map((reason, index) => <li key={index}>{skippedFile(reason)}</li>)}</ul></details>}
+        {source && source.skipped.length > 0 && <details><summary>See all skipped files</summary><ul className="identity-skipped">{source.skipped.map((file, index) => <li key={index}>{skippedFile(file)}</li>)}</ul></details>}
         <WebsiteImportStatus flow={pages} busy={busy} />
         {pages.source && pages.source.pages.length > 0 && <section className="website-import-pages" aria-label="Pages to import">
           <p>{pages.source.totalPages} {pages.source.totalPages === 1 ? 'page' : 'pages'} found.{pages.source.totalPages > MAX_IMPORT_PAGES ? ` The ${MAX_IMPORT_PAGES} closest to the home page are imported.` : ''}</p>
