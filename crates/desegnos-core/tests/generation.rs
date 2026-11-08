@@ -155,7 +155,7 @@ fn apply_generation_assigns_ids_records_history_clears_pending_and_classifies_pl
     let (project, page, target, _) = setup();
     let pointer = project.pointers[0].id;
     let snapshot = project.prepare_requirements().unwrap();
-    assert!(project.element_has_pending_request(target));
+    assert!(!project.requests.is_empty());
     let reply = candidate(&snapshot, target, page, pointer);
     reply.validate(&snapshot, &project).unwrap();
 
@@ -168,7 +168,6 @@ fn apply_generation_assigns_ids_records_history_clears_pending_and_classifies_pl
     assert_eq!(child.text, "Hello");
     assert_ne!(child.id, target);
     assert_ne!(child.id, project.pages[0].elements[1].id);
-    assert!(!applied.element_has_pending_request(target));
     assert_eq!(target_element.meta.requests.len(), 1);
     assert_eq!(
         target_element.meta.requests[0].prompt,
@@ -184,8 +183,6 @@ fn apply_generation_assigns_ids_records_history_clears_pending_and_classifies_pl
             .as_deref()
             .is_some_and(|id| id == reply.job_id.to_string())
     );
-    assert!(!applied.element_has_pending_request(target));
-    assert_eq!(applied.pending_request_count(), 0);
     assert!(applied.requests.is_empty());
 
     let pointer = applied
@@ -261,11 +258,11 @@ fn applying_a_generation_reply_is_one_undo_step() {
         .unwrap();
     assert_eq!(session.history().position, before + 1);
     assert!(session.project().element(target).unwrap().1.children.len() == 1);
-    assert!(!session.project().element_has_pending_request(target));
+    assert!(session.project().requests.is_empty());
     session.undo().unwrap();
     let (_, undone) = session.project().element(target).unwrap();
     assert!(undone.children.is_empty());
-    assert!(session.project().element_has_pending_request(target));
+    assert!(!session.project().requests.is_empty());
     assert!(session.project().pointers[0].play.is_none());
     session.redo().unwrap();
     assert!(

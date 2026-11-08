@@ -95,6 +95,23 @@ pub async fn bound_account(
     }
 }
 
+/// Best effort: a failed discovery stays visible in the account's model status.
+pub async fn refresh_chatgpt_models(
+    chatgpt: &ChatgptState,
+    settings: &Mutex<AiSettingsStore>,
+    account: Uuid,
+) {
+    let Ok(client) = settings.locked().client() else {
+        return;
+    };
+    let Ok(manager) = chatgpt.manager() else {
+        return;
+    };
+    let _ = manager
+        .discover_models(account, &client, &CancellationToken::new())
+        .await;
+}
+
 async fn active_account(chatgpt: &ChatgptState, action: &str) -> NativeResult<Uuid> {
     let view = chatgpt.view().await;
     let account = view

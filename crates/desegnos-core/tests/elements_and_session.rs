@@ -417,7 +417,6 @@ fn linked_copies_resolve_one_definition_and_edit_together() {
     assert_eq!(location.definition, definition.id);
     assert_eq!(location.instance, left);
     assert_eq!(location.path, vec![0]);
-    assert!(!location.is_copy());
     assert!(next.element_subtree_ids(left).contains(&nested_id));
 
     // Unlinking one copy detaches it with the current content.

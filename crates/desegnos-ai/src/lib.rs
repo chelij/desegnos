@@ -9,6 +9,7 @@ mod model_discovery;
 mod net;
 mod providers;
 mod public_fetch;
+pub mod redact;
 mod request;
 mod retry;
 mod schema_wire;
@@ -59,10 +60,10 @@ pub(crate) use error::{
     CorrelationCause, ResponseBodyKind, ResponseCorrelation, ResponseFormat, TerminalOutput,
 };
 pub(crate) use identity::estimate_identity_for_auth;
+pub(crate) use request::estimate_for_auth;
 pub(crate) use settings::{
     CHATGPT_MAX_OUTPUT_TOKENS, CONTEXT_WINDOW_TOKENS, DEFAULT_MAX_OUTPUT_TOKENS, MAX_OUTPUT_TOKENS,
-    MAX_REQUEST_BYTES, MAX_SCHEMA_BYTES, WINDOW_BYTES_PER_TOKEN, estimate_for_auth,
-    model_catalogue,
+    MAX_REQUEST_BYTES, MAX_SCHEMA_BYTES, WINDOW_BYTES_PER_TOKEN, model_catalogue,
 };
 
 #[cfg(test)]

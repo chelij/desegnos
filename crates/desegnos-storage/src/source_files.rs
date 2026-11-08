@@ -6,7 +6,6 @@ use std::{
     io::Read,
     path::{Component, Path},
 };
-pub(crate) const MAX_WEBSITE_BYTES: usize = 128 * 1024 * 1024;
 #[derive(Clone, Copy)]
 pub(crate) enum SourcePurpose {
     Identity,

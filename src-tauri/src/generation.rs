@@ -4,7 +4,7 @@ use crate::{
         Failure, interrupted_notice, signed_out_notice, stopped_notice, unsaved_cancel_notice,
     },
     chatgpt::ChatgptState,
-    native_files::{LockExt, NativeResult, message, regular_file},
+    native_files::{LockExt, NativeResult, message, now, regular_file},
     workspace::{Workspace, WorkspaceState, WorkspaceView},
 };
 
@@ -22,7 +22,7 @@ use std::{
     sync::Mutex,
 };
 use tauri::{AppHandle, Manager, State};
-use time::{OffsetDateTime, format_description::well_known::Rfc3339};
+use time::OffsetDateTime;
 use uuid::Uuid;
 
 type GenerationState<'a> = State<'a, Mutex<GenerationService>>;
@@ -58,12 +58,6 @@ fn resolve_current(view: &GenerationJobView, project: &Project) -> NativeResult<
         .validate(view.request_requirements(), project)
         .map_err(message)?;
     Ok(())
-}
-
-fn now() -> String {
-    OffsetDateTime::now_utc()
-        .format(&Rfc3339)
-        .expect("UTC timestamps fit RFC3339")
 }
 
 const UNREADABLE_REPLY_RETRY_MESSAGE: &str = "Retrying after an unreadable reply…";
@@ -1335,7 +1329,8 @@ pub async fn prepare_generation(
         .await
         .map_err(crate::native_error::NativeErrorKind::AiSettings.failure())?;
     ai_view.require_ready()?;
-    let result: NativeResult<GenerationJobView> = async {
+    crate::native_error::NativeErrorKind::Command
+        .run_async(async {
     let (authentication, provider) = {
         let service = settings.locked();
         (service.authentication, service.provider)
@@ -1355,8 +1350,8 @@ pub async fn prepare_generation(
         service.prepare_requests(&ai, project, account_id, None, None, references)
     }
 
-    }.await;
-    result.map_err(crate::native_error::NativeErrorKind::Command.failure())
+    })
+        .await
 }
 
 #[tauri::command]
@@ -1595,9 +1590,9 @@ pub async fn start_generation(
     chatgpt: State<'_, ChatgptState>,
     job_id: Uuid,
 ) -> Result<GenerationJobView, crate::native_error::NativeFailure> {
-    let result: NativeResult<GenerationJobView> =
-        async { submit(app, workspace, state, chatgpt, job_id, false).await }.await;
-    result.map_err(crate::native_error::NativeErrorKind::Command.failure())
+    crate::native_error::NativeErrorKind::Command
+        .run_async(async { submit(app, workspace, state, chatgpt, job_id, false).await })
+        .await
 }
 
 #[tauri::command]
@@ -1608,9 +1603,9 @@ pub async fn retry_generation(
     chatgpt: State<'_, ChatgptState>,
     job_id: Uuid,
 ) -> Result<GenerationJobView, crate::native_error::NativeFailure> {
-    let result: NativeResult<GenerationJobView> =
-        async { submit(app, workspace, state, chatgpt, job_id, true).await }.await;
-    result.map_err(crate::native_error::NativeErrorKind::Command.failure())
+    crate::native_error::NativeErrorKind::Command
+        .run_async(async { submit(app, workspace, state, chatgpt, job_id, true).await })
+        .await
 }
 
 #[tauri::command]
@@ -1659,61 +1654,75 @@ pub async fn apply_generation(
     job_id: Uuid,
     accepted_decision_indices: Vec<usize>,
 ) -> Result<WorkspaceView, crate::native_error::NativeFailure> {
-    let result: NativeResult<WorkspaceView> = async {
-        let prepared = {
-            let workspace = workspace.locked();
-            let project = workspace.project()?;
-            if project.applied_job_ids.contains(&job_id) {
-                return Ok(workspace.view());
-            }
-            let ai = settings.locked();
-            let mut service = state.locked();
-            let record = service.record(project, job_id)?;
-            if record.view.status != JobStatus::Ready {
-                return Err("Only a current candidate with a ready reply can be applied.".into());
-            }
-            let candidate = record
-                .view
-                .candidate
-                .clone()
-                .ok_or("The candidate is unavailable.")?;
-            let snapshot = record.view.request_requirements().clone();
-            snapshot.validate_current(project).map_err(message)?;
-            let images_enabled = snapshot
-                .capabilities
-                .as_ref()
-                .and_then(|capabilities| capabilities.image_generation.as_ref())
-                .is_some_and(|images| !images.sizes.is_empty());
-            let image_requests: Vec<(String, String)> = if images_enabled {
-                candidate
-                    .images
-                    .iter()
-                    .map(|image| (image.key.clone(), image.prompt.clone()))
-                    .collect()
-            } else {
-                vec![]
+    crate::native_error::NativeErrorKind::Command
+        .run_async(async {
+            let prepared = {
+                let workspace = workspace.locked();
+                let project = workspace.project()?;
+                if project.applied_job_ids.contains(&job_id) {
+                    return Ok(workspace.view());
+                }
+                let ai = settings.locked();
+                let mut service = state.locked();
+                let record = service.record(project, job_id)?;
+                if record.view.status != JobStatus::Ready {
+                    return Err(
+                        "Only a current candidate with a ready reply can be applied.".into(),
+                    );
+                }
+                let candidate = record
+                    .view
+                    .candidate
+                    .clone()
+                    .ok_or("The candidate is unavailable.")?;
+                let snapshot = record.view.request_requirements().clone();
+                snapshot.validate_current(project).map_err(message)?;
+                let images_enabled = snapshot
+                    .capabilities
+                    .as_ref()
+                    .and_then(|capabilities| capabilities.image_generation.as_ref())
+                    .is_some_and(|images| !images.sizes.is_empty());
+                let image_requests: Vec<(String, String)> = if images_enabled {
+                    candidate
+                        .images
+                        .iter()
+                        .map(|image| (image.key.clone(), image.prompt.clone()))
+                        .collect()
+                } else {
+                    vec![]
+                };
+                let client = if image_requests.is_empty() {
+                    None
+                } else {
+                    Some(ai.client.clone())
+                };
+                let authentication = record.view.authentication;
+                let provider = record.view.provider;
+                let account_id = record.view.chatgpt_account_id;
+                let image_key = if image_requests.is_empty() || !provider.supports_image_api() {
+                    None
+                } else {
+                    Some(ai.image_credentials.key())
+                };
+                let main_key = if image_requests.is_empty() || !provider.supports_image_api() {
+                    None
+                } else if authentication == AuthenticationMethod::ApiKey {
+                    Some(ai.credentials.key())
+                } else {
+                    None
+                };
+                (
+                    snapshot,
+                    candidate,
+                    image_requests,
+                    client,
+                    authentication,
+                    account_id,
+                    image_key,
+                    main_key,
+                )
             };
-            let client = if image_requests.is_empty() {
-                None
-            } else {
-                Some(ai.client.clone())
-            };
-            let authentication = record.view.authentication;
-            let provider = record.view.provider;
-            let account_id = record.view.chatgpt_account_id;
-            let image_key = if image_requests.is_empty() || provider != ProviderId::Openai {
-                None
-            } else {
-                Some(ai.image_credentials.key())
-            };
-            let main_key = if image_requests.is_empty() || provider != ProviderId::Openai {
-                None
-            } else if authentication == AuthenticationMethod::ApiKey {
-                Some(ai.credentials.key())
-            } else {
-                None
-            };
-            (
+            let (
                 snapshot,
                 candidate,
                 image_requests,
@@ -1722,108 +1731,101 @@ pub async fn apply_generation(
                 account_id,
                 image_key,
                 main_key,
-            )
-        };
-        let (
-            snapshot,
-            candidate,
-            image_requests,
-            client,
-            authentication,
-            account_id,
-            image_key,
-            main_key,
-        ) = prepared;
-        let mut image_failures = Vec::new();
-        let generated = if image_requests.is_empty() {
-            BTreeMap::new()
-        } else {
-            let key = match (image_key, main_key) {
-                (Some(Ok(key)), _) | (_, Some(Ok(key))) => Ok(key),
-                (Some(Err(error)), _) | (_, Some(Err(error))) => Err(message(error)),
-                (None, None) if authentication == AuthenticationMethod::Chatgpt => match account_id
-                {
-                    Some(account) => chatgpt
-                        .manager()?
-                        .bearer(account, &CancellationToken::new())
-                        .await
-                        .map_err(message),
-                    None => Err("This ChatGPT request has no bound account.".to_owned()),
-                },
-                (None, None) => Err("No key is available for picture generation.".to_owned()),
+            ) = prepared;
+            let mut image_failures = Vec::new();
+            let generated = if image_requests.is_empty() {
+                BTreeMap::new()
+            } else {
+                let key = match (image_key, main_key) {
+                    (Some(Ok(key)), _) | (_, Some(Ok(key))) => Ok(key),
+                    (Some(Err(error)), _) | (_, Some(Err(error))) => Err(message(error)),
+                    (None, None) if authentication == AuthenticationMethod::Chatgpt => {
+                        match account_id {
+                            Some(account) => chatgpt
+                                .manager()?
+                                .bearer(account, &CancellationToken::new())
+                                .await
+                                .map_err(message),
+                            None => Err("This ChatGPT request has no bound account.".to_owned()),
+                        }
+                    }
+                    (None, None) => Err("No key is available for picture generation.".to_owned()),
+                };
+                match (client, key) {
+                    (Some(Ok(client)), Ok(key)) => {
+                        client
+                            .generate_requested_images(
+                                &image_requests,
+                                &key,
+                                &CancellationToken::new(),
+                            )
+                            .await
+                    }
+                    (client, key) => {
+                        let reason = key
+                            .err()
+                            .or(client.and_then(Result::err))
+                            .unwrap_or_default();
+                        image_failures.extend(
+                            image_requests
+                                .iter()
+                                .map(|(name, _)| format!("Image {name}: {reason}")),
+                        );
+                        BTreeMap::new()
+                    }
+                }
             };
-            match (client, key) {
-                (Some(Ok(client)), Ok(key)) => {
-                    client
-                        .generate_requested_images(&image_requests, &key, &CancellationToken::new())
-                        .await
-                }
-                (client, key) => {
-                    let reason = key
-                        .err()
-                        .or(client.and_then(Result::err))
-                        .unwrap_or_default();
-                    image_failures.extend(
-                        image_requests
-                            .iter()
-                            .map(|(name, _)| format!("Image {name}: {reason}")),
-                    );
-                    BTreeMap::new()
-                }
+            let generated = generated
+                .into_iter()
+                .filter_map(|(name, result)| match result {
+                    Ok(uri) => Some((name, uri)),
+                    Err(error) => {
+                        image_failures.push(format!("Image {name}: {error}"));
+                        None
+                    }
+                })
+                .collect();
+            let mut workspace = workspace.locked();
+            let mut service = state.locked();
+            let record = service.record(workspace.project()?, job_id)?;
+            if record.view.status != JobStatus::Ready {
+                return Err("Only a current candidate with a ready reply can be applied.".into());
             }
-        };
-        let generated = generated
-            .into_iter()
-            .filter_map(|(name, result)| match result {
-                Ok(uri) => Some((name, uri)),
-                Err(error) => {
-                    image_failures.push(format!("Image {name}: {error}"));
-                    None
-                }
-            })
-            .collect();
-        let mut workspace = workspace.locked();
-        let mut service = state.locked();
-        let record = service.record(workspace.project()?, job_id)?;
-        if record.view.status != JobStatus::Ready {
-            return Err("Only a current candidate with a ready reply can be applied.".into());
-        }
-        workspace
-            .apply_generated(
-                &snapshot,
-                &candidate,
-                &accepted_decision_indices,
-                &generated,
-            )
-            .map_err(message)?;
-        let mut record = service.record(workspace.project()?, job_id)?;
-        let warnings: Vec<_> = record
-            .view
-            .validation_events
-            .iter()
-            .filter(|event| matches!(event.disposition.as_str(), "dropped" | "warning"))
-            .map(|event| event.message.as_str())
-            .collect();
-        record.view.problem_kind = (!warnings.is_empty() || !image_failures.is_empty())
-            .then_some(GenerationProblemKind::Partial);
-        record.view.message = if warnings.is_empty() {
-            "Layers updated.".into()
-        } else {
-            format!("Layers updated with warnings. {}", warnings.join(" "))
-        };
-        if !image_failures.is_empty() {
-            record
+            workspace
+                .apply_generated(
+                    &snapshot,
+                    &candidate,
+                    &accepted_decision_indices,
+                    &generated,
+                )
+                .map_err(message)?;
+            let mut record = service.record(workspace.project()?, job_id)?;
+            let warnings: Vec<_> = record
                 .view
-                .message
-                .push_str(&format!(" {}", image_failures.join(" ")));
-        }
-        record.transition(JobStatus::Applied);
-        record.view.accepted_decision_indices = accepted_decision_indices;
-        service.store.persist(record)?;
-        Ok(workspace.view())
-    }
-    .await;
-    result.map_err(crate::native_error::NativeErrorKind::Command.failure())
+                .validation_events
+                .iter()
+                .filter(|event| matches!(event.disposition.as_str(), "dropped" | "warning"))
+                .map(|event| event.message.as_str())
+                .collect();
+            record.view.problem_kind = (!warnings.is_empty() || !image_failures.is_empty())
+                .then_some(GenerationProblemKind::Partial);
+            record.view.message = if warnings.is_empty() {
+                "Layers updated.".into()
+            } else {
+                format!("Layers updated with warnings. {}", warnings.join(" "))
+            };
+            if !image_failures.is_empty() {
+                record
+                    .view
+                    .message
+                    .push_str(&format!(" {}", image_failures.join(" ")));
+            }
+            record.transition(JobStatus::Applied);
+            record.view.accepted_decision_indices = accepted_decision_indices;
+            service.store.persist(record)?;
+            Ok(workspace.view())
+        })
+        .await
 }
 
 #[cfg(test)]

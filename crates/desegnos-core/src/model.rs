@@ -300,6 +300,11 @@ pub struct PendingRequest {
 }
 
 impl PendingRequest {
+    /// A request with words is waiting for Generate; an empty one is still being drafted.
+    pub fn is_described(&self) -> bool {
+        !self.text.trim().is_empty()
+    }
+
     /// The layer this request is asked of when it targets that layer alone.
     pub(crate) fn sole_layer(&self) -> Option<Uuid> {
         match self.targets.as_slice() {
@@ -968,10 +973,6 @@ impl Pointer {
             ensure(!boundary.is_nil(), "A go-to pointer needs a boundary.")?;
         }
         Ok(())
-    }
-
-    pub fn is_broken(&self, project: &Project) -> bool {
-        crate::pointers::pointer_is_broken(project, self)
     }
 }
 

@@ -126,7 +126,7 @@ fn broken_detection_survives_deletion_and_reference_cards() {
             ),
         },
     );
-    assert!(desegnos_core::broken_pointers(&project).contains(&url_id));
+    assert!(broken_pointers(&project).contains(&url_id));
 
     let project = apply(
         &project,
@@ -135,7 +135,7 @@ fn broken_detection_survives_deletion_and_reference_cards() {
             picture_data_uri: None,
         },
     );
-    assert!(!desegnos_core::broken_pointers(&project).contains(&url_id));
+    assert!(!broken_pointers(&project).contains(&url_id));
     assert!(
         !project
             .pointer_states()
@@ -170,7 +170,7 @@ fn broken_detection_survives_deletion_and_reference_cards() {
             .state,
         PointerState::Broken
     );
-    assert_eq!(desegnos_core::broken_pointers(&removed).len(), 2);
+    assert_eq!(broken_pointers(&removed).len(), 2);
 }
 
 #[test]
@@ -590,4 +590,13 @@ fn behaviours_require_change_and_are_unique_per_source() {
         size_id: Some(Uuid::new_v4()),
     };
     assert!(!own.is_behaviour());
+}
+
+fn broken_pointers(project: &Project) -> Vec<Uuid> {
+    project
+        .pointers
+        .iter()
+        .filter(|pointer| pointer.is_broken(project))
+        .map(|pointer| pointer.id)
+        .collect()
 }

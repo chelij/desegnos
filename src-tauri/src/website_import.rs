@@ -7,7 +7,6 @@
 use crate::local_site::{LocalSite, decode_path as decode_site_path};
 use crate::native_files::{LockExt, NativeResult, message};
 use crate::workspace::WorkspaceState;
-use base64::{Engine, engine::general_purpose::STANDARD};
 use desegnos_ai::WebUrl as Url;
 use desegnos_core::WebCapture;
 use desegnos_storage::{WebsiteSnapshot, new_import_folder, write_website_snapshot};
@@ -25,11 +24,9 @@ use uuid::Uuid;
 type ImportState<'a> = State<'a, Mutex<WebsiteImportState>>;
 
 use desegnos_core::limits::{
-    DEFAULT_PICTURE_WIDTH, MAX_IMPORT_CAPTURES, MAX_IMPORT_PAGES, MAX_WEBSITE_FILE_BYTES,
+    DEFAULT_PICTURE_WIDTH, MAX_IMPORT_CAPTURES, MAX_IMPORT_PAGES, MAX_IMPORTED_PICTURE_TOTAL,
+    MAX_IMPORTED_PICTURES, MAX_WEBSITE_BYTES, MAX_WEBSITE_FILE_BYTES,
 };
-const MAX_IMPORTED_PICTURES: usize = 160;
-const MAX_IMPORTED_PICTURE_TOTAL: usize = 64 * 1024 * 1024;
-const SERVED_FILE_LIMIT: usize = 128 * 1024 * 1024;
 
 struct ImportSource {
     folder: PathBuf,
@@ -175,7 +172,7 @@ fn install(
     state.clear();
     let base_url = state
         .site
-        .serve(&folder, SERVED_FILE_LIMIT)
+        .serve(&folder, MAX_WEBSITE_BYTES)
         .map_err(message)?;
     let id = Uuid::new_v4();
     let view = WebsiteImportView {
@@ -211,14 +208,14 @@ pub async fn prepare_website_import_url(
     url: String,
     extractor: String,
 ) -> Result<WebsiteImportView, crate::native_error::NativeFailure> {
-    let result: NativeResult<WebsiteImportView> = async {
-        let revision = begin_read(&state)?;
-        let fetcher = crate::testing::website_fetcher()?;
-        let snapshot = fetcher.fetch_website_snapshot(&url).await?;
-        install(&state, revision, snapshot, &identity, None, &extractor)
-    }
-    .await;
-    result.map_err(crate::native_error::NativeErrorKind::Command.failure())
+    crate::native_error::NativeErrorKind::Command
+        .run_async(async {
+            let revision = begin_read(&state)?;
+            let fetcher = crate::testing::website_fetcher()?;
+            let snapshot = fetcher.fetch_website_snapshot(&url).await?;
+            install(&state, revision, snapshot, &identity, None, &extractor)
+        })
+        .await
 }
 
 #[tauri::command]
@@ -229,62 +226,64 @@ pub async fn pick_website_import_source(
     kind: WebsiteSourceKind,
     extractor: String,
 ) -> Result<Option<WebsiteImportView>, crate::native_error::NativeFailure> {
-    let result: NativeResult<Option<WebsiteImportView>> = async {
-        let revision = begin_read(&state)?;
-        let picked = tauri::async_runtime::spawn_blocking(move || {
-            let dialog = app.dialog().file();
-            let picked = crate::file_dialogs::picked(match kind {
-                WebsiteSourceKind::Folder => dialog.blocking_pick_folder().map(|path| vec![path]),
-                WebsiteSourceKind::File => dialog
-                    .add_filter("HTML files", &["html", "htm"])
-                    .add_filter("Desegnos project", &["desegnos"])
-                    .blocking_pick_files(),
-                WebsiteSourceKind::Zip => dialog
-                    .add_filter("Website ZIP", &["zip"])
-                    .blocking_pick_file()
-                    .map(|path| vec![path]),
-            })?;
-            let Some(picked) = picked else {
-                return Ok(None);
-            };
-            let paths = picked
-                .into_iter()
-                .map(|path| path.into_path().map_err(message))
-                .collect::<NativeResult<Vec<_>>>()?;
-            if matches!(kind, WebsiteSourceKind::File)
-                && paths.len() == 1
-                && paths[0]
-                    .extension()
-                    .is_some_and(|ext| ext.eq_ignore_ascii_case("desegnos"))
-            {
-                let source =
-                    desegnos_storage::collect_identity_source(&paths[0]).map_err(message)?;
-                let snapshot = WebsiteSnapshot {
-                    name: source.name.clone(),
-                    ..Default::default()
+    crate::native_error::NativeErrorKind::Command
+        .run_async(async {
+            let revision = begin_read(&state)?;
+            let picked = tauri::async_runtime::spawn_blocking(move || {
+                let dialog = app.dialog().file();
+                let picked = crate::file_dialogs::picked(match kind {
+                    WebsiteSourceKind::Folder => {
+                        dialog.blocking_pick_folder().map(|path| vec![path])
+                    }
+                    WebsiteSourceKind::File => dialog
+                        .add_filter("HTML files", &["html", "htm"])
+                        .add_filter("Desegnos project", &["desegnos"])
+                        .blocking_pick_files(),
+                    WebsiteSourceKind::Zip => dialog
+                        .add_filter("Website ZIP", &["zip"])
+                        .blocking_pick_file()
+                        .map(|path| vec![path]),
+                })?;
+                let Some(picked) = picked else {
+                    return Ok(None);
                 };
-                return Ok(Some((snapshot, Some(source))));
-            }
-            let snapshot = if matches!(kind, WebsiteSourceKind::File) {
-                desegnos_storage::website_snapshot::collect_import_html(&paths)
-            } else {
-                desegnos_storage::website_snapshot::collect_import_snapshot(
-                    paths.first().ok_or("Choose a website folder or ZIP.")?,
-                )
-            }
-            .map_err(message)?;
-            Ok::<_, String>(Some((snapshot, None)))
+                let paths = picked
+                    .into_iter()
+                    .map(|path| path.into_path().map_err(message))
+                    .collect::<NativeResult<Vec<_>>>()?;
+                if matches!(kind, WebsiteSourceKind::File)
+                    && paths.len() == 1
+                    && paths[0]
+                        .extension()
+                        .is_some_and(|ext| ext.eq_ignore_ascii_case("desegnos"))
+                {
+                    let source =
+                        desegnos_storage::collect_identity_source(&paths[0]).map_err(message)?;
+                    let snapshot = WebsiteSnapshot {
+                        name: source.name.clone(),
+                        ..Default::default()
+                    };
+                    return Ok(Some((snapshot, Some(source))));
+                }
+                let snapshot = if matches!(kind, WebsiteSourceKind::File) {
+                    desegnos_storage::website_snapshot::collect_import_html(&paths)
+                } else {
+                    desegnos_storage::website_snapshot::collect_import_snapshot(
+                        paths.first().ok_or("Choose a website folder or ZIP.")?,
+                    )
+                }
+                .map_err(message)?;
+                Ok::<_, String>(Some((snapshot, None)))
+            })
+            .await
+            .map_err(message)??;
+            picked
+                .map(|(snapshot, project)| {
+                    install(&state, revision, snapshot, &identity, project, &extractor)
+                })
+                .transpose()
         })
         .await
-        .map_err(message)??;
-        picked
-            .map(|(snapshot, project)| {
-                install(&state, revision, snapshot, &identity, project, &extractor)
-            })
-            .transpose()
-    }
-    .await;
-    result.map_err(crate::native_error::NativeErrorKind::Command.failure())
 }
 
 #[tauri::command]
@@ -338,10 +337,6 @@ fn local_image(folder: &Path, base_url: &str, source: &str) -> Option<Vec<u8>> {
     fs::read(canonical).ok()
 }
 
-fn data_uri(mime: &str, bytes: &[u8]) -> String {
-    format!("data:{mime};base64,{}", STANDARD.encode(bytes))
-}
-
 fn element_count(page: &desegnos_core::Page) -> usize {
     fn count(elements: &[desegnos_core::Element]) -> usize {
         elements
@@ -358,7 +353,8 @@ pub async fn import_website_pages(
     workspace: WorkspaceState<'_>,
     captures: Vec<WebCapture>,
 ) -> Result<WebsiteImportResultView, crate::native_error::NativeFailure> {
-    let result: NativeResult<WebsiteImportResultView> = async {
+    crate::native_error::NativeErrorKind::Command
+        .run_async(async {
     if captures.is_empty() {
         return Err("Render at least one page before importing it.".into());
     }
@@ -433,7 +429,7 @@ pub async fn import_website_pages(
             warnings.push("Picture downloads reached the import size limit.".into());
             break;
         }
-        let uri = data_uri(&mime, &bytes);
+        let uri = desegnos_core::limits::image_data_uri(&mime, &bytes);
         let (picture, stored) =
             desegnos_core::Project::prepare_picture(&uri, DEFAULT_PICTURE_WIDTH)
                 .map_err(message)?;
@@ -463,12 +459,11 @@ pub async fn import_website_pages(
         warnings,
     })
 
-    }.await;
-    result.map_err(crate::native_error::NativeErrorKind::Command.failure())
+    })
+        .await
 }
 
 fn parse_data_uri(uri: &str) -> Option<(String, Vec<u8>)> {
-    let (header, encoded) = uri.strip_prefix("data:")?.split_once(";base64,")?;
-    let bytes = STANDARD.decode(encoded).ok()?;
-    Some((header.to_owned(), bytes))
+    let (mime, bytes) = desegnos_core::limits::decode_image_data_uri(uri).ok()?;
+    Some((mime.to_owned(), bytes))
 }

@@ -40,13 +40,13 @@ test-results/                Local evidence from smoke, startup and vault runs (
 
 ## `desegnos-core`
 
-[lib.rs](../crates/desegnos-core/src/lib.rs) declares modules and re-exports the externally consumed API; internal callers import the owning module directly.
+[lib.rs](../crates/desegnos-core/src/lib.rs) declares modules and re-exports the API the app uses and what core's own integration tests import; internal callers import the owning module directly.
 
 | Module | Owns |
 | --- | --- |
 | [model.rs](../crates/desegnos-core/src/model.rs) | `Project`, `Page` (the spec's boundary) and `PageSize`, reference items, pointers and wiring, pending requests with their targets and areas, brief, decisions, exceptions, export records, `CanvasTemplate` and project validation. |
 | [elements.rs](../crates/desegnos-core/src/elements.rs) | `Element` tree, element kinds, styles, free/stack/grid layout, per-size overrides, linked definitions, `resolve_element`, shared style resolution and nested ids. |
-| [limits.rs](../crates/desegnos-core/src/limits.rs) | Shared limits and URL, colour, SHA-256 and embedded-image validation. |
+| [limits.rs](../crates/desegnos-core/src/limits.rs) | Shared limits (including the website-import caps) and URL, colour, SHA-256 and embedded-image validation and `data:` URI building/parsing. |
 | [commands.rs](../crates/desegnos-core/src/commands.rs) | `Command`, labels, burst history policy and the project edit interpreter. |
 | [element_edit.rs](../crates/desegnos-core/src/element_edit.rs) | Element patches/moves, project tree editing, linked-size resolution, outlines and layer naming. |
 | [project_new.rs](../crates/desegnos-core/src/project_new.rs) | Project construction and template initialization. |
@@ -110,10 +110,11 @@ test-results/                Local evidence from smoke, startup and vault runs (
 | [model_discovery.rs](../crates/desegnos-ai/src/model_discovery.rs) | Provider discovery profiles, model parsing, authorization, shared connectivity probes and ChatGPT catalogue discovery. |
 | [retry.rs](../crates/desegnos-ai/src/retry.rs) | Pre-output retry budgets, backoff and bounded Retry-After handling, including token revocation. |
 | [schema_wire.rs](../crates/desegnos-ai/src/schema_wire.rs) | Wire-only schema property ordering, independent of persisted canonical hashes. |
-| [settings.rs](../crates/desegnos-ai/src/settings.rs) | `ProviderSettings`, model catalogue, request bodies, token/size limits, cost estimates and billed output caps. |
-| [request.rs](../crates/desegnos-ai/src/request.rs) | Shared frozen-packet/schema validation and task content: instructions, documents, images and reply schema before provider-specific encoding. |
+| [settings.rs](../crates/desegnos-ai/src/settings.rs) | `ProviderSettings`, model catalogue, token/size limits and billed output caps. |
+| [request.rs](../crates/desegnos-ai/src/request.rs) | Shared frozen-packet/schema validation and task content: instructions, documents, images and reply schema, plus the OpenAI Responses request body, size checks and cost estimate. |
+| [redact.rs](../crates/desegnos-ai/src/redact.rs) | The one credential pattern list (token prefixes, secret names) used by provider messages, diagnostic replies and crash reports. |
 | [credentials.rs](../crates/desegnos-ai/src/credentials.rs) | `ApiKey`, `CredentialManager`, system/session storage, masked identifiers and credential status. |
-| [error.rs](../crates/desegnos-ai/src/error.rs) | `ProviderError`, error kinds, submission outcomes, diagnostics scrubbing and authentication context. |
+| [error.rs](../crates/desegnos-ai/src/error.rs) | `ProviderError`, error kinds, submission outcomes, diagnostics scrubbing and authentication context; `ErrorKind::NEEDS_AI_SETTINGS` feeds the generated TS contract. |
 | [sse.rs](../crates/desegnos-ai/src/sse.rs) | Bounded SSE decoder, event framing, terminal output extraction and stream validation. |
 | [identity.rs](../crates/desegnos-ai/src/identity.rs) | Brand analysis bodies/budgets, logo and photo images, identity schema checks and estimates. |
 | [website.rs](../crates/desegnos-ai/src/website.rs) | `WebsiteFetcher` snapshot and image methods under public-address, size, redirect and timeout rules. |
@@ -380,6 +381,7 @@ Every top-level test file runs under one of these scripts. Packages are installe
 | Test file | Covers |
 | --- | --- |
 | [hug_synchronization.rs](../crates/desegnos-core/tests/hug_synchronization.rs) | Fixed-geometry edits and Hug synchronization in descendants and size overrides; replaces the former timing probe. |
+| [template_projects.rs](../crates/desegnos-core/examples/template_projects.rs) | Example binary that prints the starter template projects; `tests/editor-shell-ssr.test.mjs` runs it. |
 | [play.test.mjs](../tests/play.test.mjs) | Play click routing, pointer precedence and ancestor targets. |
 | [build-release.test.mjs](../tests/build-release.test.mjs) | Release orchestration, `--dist` profile and failure stopping. |
 | [behaviours.test.mjs](../tests/behaviours.test.mjs) | Behaviour pointers, add/update/remove edits and Built/Runs dock status. |

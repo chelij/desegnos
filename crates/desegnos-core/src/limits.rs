@@ -245,6 +245,16 @@ pub const MAX_PHOTOS: usize = 32;
 
 pub const MAX_WEBSITE_LINKS: usize = 128;
 
+/// A website snapshot read from disk or served to the import preview.
+pub const MAX_WEBSITE_BYTES: usize = 128 * 1024 * 1024;
+/// What fetching a live site may download; kept under `MAX_WEBSITE_BYTES` so the snapshot still loads.
+pub const MAX_SNAPSHOT_PAGE_BYTES: usize = 1024 * 1024;
+pub const MAX_DISCOVERED_PAGES: usize = 256;
+pub const MAX_SNAPSHOT_ASSETS: usize = 240;
+pub const MAX_SNAPSHOT_TOTAL_BYTES: usize = 96 * 1024 * 1024;
+pub const MAX_IMPORTED_PICTURES: usize = 160;
+pub const MAX_IMPORTED_PICTURE_TOTAL: usize = 64 * 1024 * 1024;
+
 pub const MAX_REQUEST_ATTACHMENTS: usize = 32;
 pub const MAX_IMPORTED_PAGE_CONTEXTS: usize = 10_000;
 

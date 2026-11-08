@@ -222,7 +222,6 @@ pub(crate) fn public_address(ip: IpAddr) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use base64::{Engine, engine::general_purpose::STANDARD};
     use desegnos_core::limits::MAX_DOWNLOADED_IMAGE_BYTES;
     use image::ImageFormat;
     use std::io::Cursor;
@@ -238,7 +237,7 @@ mod tests {
             })
             .await
             .ok()?;
-        Some(format!("data:{mime};base64,{}", STANDARD.encode(bytes)))
+        Some(desegnos_core::limits::image_data_uri(&mime, &bytes))
     }
 
     use std::sync::{Arc, Mutex};

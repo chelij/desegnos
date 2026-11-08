@@ -1,8 +1,8 @@
 use crate::{
     AuthenticationMethod, CostEstimate, ErrorKind, MAX_REQUEST_BYTES, ProviderError,
     ProviderSettings, Result,
+    request::estimate_response_value,
     request::{RequestContent, RequestPart},
-    settings::estimate_response_value,
 };
 use desegnos_core::RequirementsSnapshot;
 use serde_json::{Value, json};
@@ -80,7 +80,7 @@ fn identity_wire(
 ) -> Result<(Vec<u8>, CostEstimate)> {
     settings.validate_for_auth(authentication)?;
     let mut body = identity_content(snapshot, schema, images)?.responses_body();
-    crate::settings::configure_response_body(&mut body, authentication, settings);
+    crate::request::configure_response_body(&mut body, authentication, settings);
     let bytes = crate::schema_wire::serialize_body(&body)
         .map_err(|_| ProviderError::before(ErrorKind::InvalidRequirements))?;
     if bytes.len() > MAX_REQUEST_BYTES {

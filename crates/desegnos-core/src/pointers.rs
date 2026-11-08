@@ -460,21 +460,11 @@ fn pointer_target_missing(project: &Project, target: &PointerTarget) -> bool {
     }
 }
 
-/// Pure: a pointer is broken when either endpoint no longer exists. Pointers are never
-/// deleted with what they reference, so this decides how they are shown and offered.
-pub fn pointer_is_broken(project: &Project, pointer: &Pointer) -> bool {
-    pointer_source_missing(project, &pointer.from) || pointer_target_missing(project, &pointer.to)
-}
-
-pub fn broken_pointers(project: &Project) -> Vec<Uuid> {
-    project
-        .pointers
-        .iter()
-        .filter(|pointer| pointer.is_broken(project))
-        .map(|pointer| pointer.id)
-        .collect()
-}
 impl crate::model::Pointer {
+    /// Pointers are never deleted with what they reference, so this decides how they are shown and offered.
+    pub fn is_broken(&self, project: &Project) -> bool {
+        pointer_source_missing(project, &self.from) || pointer_target_missing(project, &self.to)
+    }
     pub(crate) fn source_endpoint(&self) -> (Uuid, Option<Uuid>) {
         match self.from {
             crate::model::PointerSource::Element {

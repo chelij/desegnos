@@ -39,6 +39,27 @@ pub enum ErrorKind {
     ChatgptUserUnavailable,
 }
 
+impl ErrorKind {
+    /// Failures the user fixes in AI settings rather than by retrying.
+    pub const NEEDS_AI_SETTINGS: [ErrorKind; 11] = [
+        Self::Authentication,
+        Self::InvalidCredential,
+        Self::MissingCredential,
+        Self::Quota,
+        Self::ModelUnavailable,
+        Self::InvalidSettings,
+        Self::VaultUnavailable,
+        Self::SpendingLimit,
+        Self::ChatgptUsageLimit,
+        Self::ChatgptPermission,
+        Self::ChatgptInvalidUser,
+    ];
+
+    pub fn needs_ai_settings(self) -> bool {
+        Self::NEEDS_AI_SETTINGS.contains(&self)
+    }
+}
+
 #[derive(ts_rs::TS, Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum SubmissionOutcome {
@@ -533,15 +554,7 @@ fn safe_provider_message(key: &ApiKey, value: Option<&str>) -> Option<Box<str>> 
                     || matches!(character, '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
             })
     })?;
-    let lower = value.to_ascii_lowercase();
-    if lower.contains("bearer")
-        || lower.contains("sk-")
-        || lower.contains("access_token")
-        || lower.contains("refresh_token")
-        || value
-            .split_whitespace()
-            .any(|word| word.starts_with("eyJ") && word.matches('.').count() >= 2)
-    {
+    if crate::redact::contains_secret(value) {
         return None;
     }
     Some(
@@ -579,26 +592,9 @@ pub fn scrub_diagnostic_reply(text: &str, key: Option<&ApiKey>) -> String {
             rest = &rest[ch.len_utf8()..];
         } else {
             let word = &rest[..end];
-            let lower = word.to_ascii_lowercase();
-            let secret = redact_next
-                || ["sk-", "ghp_", "gho_", "github_pat_", "AIza"]
-                    .iter()
-                    .any(|prefix| word.starts_with(prefix))
-                || (word.starts_with("eyJ") && word.matches('.').count() == 2);
+            let secret = redact_next || crate::redact::is_secret_word(word);
             output.push_str(if secret { "[redacted]" } else { word });
-            redact_next = matches!(
-                lower.as_str(),
-                "bearer"
-                    | "authorization"
-                    | "api_key"
-                    | "apikey"
-                    | "access_token"
-                    | "accesstoken"
-                    | "refresh_token"
-                    | "refreshtoken"
-                    | "client_secret"
-                    | "password"
-            );
+            redact_next = crate::redact::SECRET_NAMES.contains(&word.to_ascii_lowercase().as_str());
             rest = &rest[end..];
         }
         if output.len() > LIMIT {

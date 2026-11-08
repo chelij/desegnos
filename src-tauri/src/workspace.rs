@@ -577,7 +577,7 @@ impl Workspace {
                     && !project
                         .requests
                         .iter()
-                        .any(|request| !request.text.trim().is_empty())
+                        .any(|request| request.is_described())
             }),
             pointer_states: self
                 .session()
@@ -1673,37 +1673,37 @@ pub async fn pick_project_save_path(
     state: WorkspaceState<'_>,
     name: String,
 ) -> Result<Option<PathBuf>, crate::native_error::NativeFailure> {
-    let result: NativeResult<Option<PathBuf>> = async {
-        let directory = {
-            let state = state.locked();
-            state.project_location().ok()
-        };
-        let suggested = format!(
-            "{}.desegnos",
-            desegnos_storage::sanitize_project_name(&name)
-        );
-        let picked = tauri::async_runtime::spawn_blocking(move || {
-            let mut dialog = app
-                .dialog()
-                .file()
-                .add_filter(
-                    "Desegnos project",
-                    &desegnos_storage::PROJECT_FILE_EXTENSIONS,
-                )
-                .set_file_name(suggested);
-            if let Some(directory) = directory {
-                dialog = dialog.set_directory(directory);
-            }
-            crate::file_dialogs::picked(dialog.blocking_save_file())
+    crate::native_error::NativeErrorKind::SaveLocation
+        .run_async(async {
+            let directory = {
+                let state = state.locked();
+                state.project_location().ok()
+            };
+            let suggested = format!(
+                "{}.desegnos",
+                desegnos_storage::sanitize_project_name(&name)
+            );
+            let picked = tauri::async_runtime::spawn_blocking(move || {
+                let mut dialog = app
+                    .dialog()
+                    .file()
+                    .add_filter(
+                        "Desegnos project",
+                        &desegnos_storage::PROJECT_FILE_EXTENSIONS,
+                    )
+                    .set_file_name(suggested);
+                if let Some(directory) = directory {
+                    dialog = dialog.set_directory(directory);
+                }
+                crate::file_dialogs::picked(dialog.blocking_save_file())
+            })
+            .await
+            .map_err(message)??;
+            picked
+                .map(|picked| picked.into_path().map_err(message))
+                .transpose()
         })
         .await
-        .map_err(message)??;
-        picked
-            .map(|picked| picked.into_path().map_err(message))
-            .transpose()
-    }
-    .await;
-    result.map_err(crate::native_error::NativeErrorKind::SaveLocation.failure())
 }
 
 #[tauri::command]
@@ -1991,35 +1991,35 @@ pub async fn save_project_checked(
     save_as: bool,
     label: Option<String>,
 ) -> Result<SaveProjectOutcome, crate::native_error::NativeFailure> {
-    let result: NativeResult<SaveProjectOutcome> = async {
-        let (project, choose_path) = {
-            let mut state = state.locked();
-            let project = state.project()?.clone();
-            state.invalidate_pending_save();
-            (project, save_as)
-        };
-        let picked = if choose_path {
-            let suggested = format!(
-                "{}.desegnos",
-                desegnos_storage::sanitize_project_name(&project.name)
-            );
-            let Some(path) = choose_save_path(app, suggested).await? else {
-                return Ok(SaveProjectOutcome::Cancelled);
+    crate::native_error::NativeErrorKind::SaveLocation
+        .run_async(async {
+            let (project, choose_path) = {
+                let mut state = state.locked();
+                let project = state.project()?.clone();
+                state.invalidate_pending_save();
+                (project, save_as)
             };
-            Some(path)
-        } else {
-            None
-        };
-        let mut state = state.locked();
-        if let Some(session) = state.session_mut() {
-            session.end_history_step();
-        }
-        state.check_snapshot(&project)?;
-        let picked = copy_destination(picked)?;
-        state.save_snapshot_checked(&project, picked, choose_path, label)
-    }
-    .await;
-    result.map_err(crate::native_error::NativeErrorKind::SaveLocation.failure())
+            let picked = if choose_path {
+                let suggested = format!(
+                    "{}.desegnos",
+                    desegnos_storage::sanitize_project_name(&project.name)
+                );
+                let Some(path) = choose_save_path(app, suggested).await? else {
+                    return Ok(SaveProjectOutcome::Cancelled);
+                };
+                Some(path)
+            } else {
+                None
+            };
+            let mut state = state.locked();
+            if let Some(session) = state.session_mut() {
+                session.end_history_step();
+            }
+            state.check_snapshot(&project)?;
+            let picked = copy_destination(picked)?;
+            state.save_snapshot_checked(&project, picked, choose_path, label)
+        })
+        .await
 }
 
 #[tauri::command]
@@ -2029,40 +2029,40 @@ pub async fn resolve_save_conflict(
     token: Uuid,
     choice: SaveConflictChoice,
 ) -> Result<SaveProjectOutcome, crate::native_error::NativeFailure> {
-    let result: NativeResult<SaveProjectOutcome> = async {
-        match choice {
-            SaveConflictChoice::Replace => state.locked().replace_save_conflict(token),
-            SaveConflictChoice::Cancel => {
-                state.locked().cancel_save_conflict(token)?;
-                Ok(SaveProjectOutcome::Cancelled)
-            }
-            SaveConflictChoice::Copy => {
-                let (project, suggested, label) = {
+    crate::native_error::NativeErrorKind::SaveLocation
+        .run_async(async {
+            match choice {
+                SaveConflictChoice::Replace => state.locked().replace_save_conflict(token),
+                SaveConflictChoice::Cancel => {
+                    state.locked().cancel_save_conflict(token)?;
+                    Ok(SaveProjectOutcome::Cancelled)
+                }
+                SaveConflictChoice::Copy => {
+                    let (project, suggested, label) = {
+                        let mut state = state.locked();
+                        let pending = state.take_save_conflict(token)?;
+                        let stem = state
+                            .destination_path(&pending.destination)?
+                            .file_stem()
+                            .map(|name| name.to_string_lossy().into_owned())
+                            .unwrap_or_else(|| "project".into());
+                        (
+                            state.project()?.clone(),
+                            format!("{stem}-copy.desegnos"),
+                            pending.label,
+                        )
+                    };
+                    let Some(path) = choose_save_path(app, suggested).await? else {
+                        return Ok(SaveProjectOutcome::Cancelled);
+                    };
                     let mut state = state.locked();
-                    let pending = state.take_save_conflict(token)?;
-                    let stem = state
-                        .destination_path(&pending.destination)?
-                        .file_stem()
-                        .map(|name| name.to_string_lossy().into_owned())
-                        .unwrap_or_else(|| "project".into());
-                    (
-                        state.project()?.clone(),
-                        format!("{stem}-copy.desegnos"),
-                        pending.label,
-                    )
-                };
-                let Some(path) = choose_save_path(app, suggested).await? else {
-                    return Ok(SaveProjectOutcome::Cancelled);
-                };
-                let mut state = state.locked();
-                state.check_snapshot(&project)?;
-                let path = copy_destination(Some(path))?;
-                state.save_snapshot_checked(&project, path, true, label)
+                    state.check_snapshot(&project)?;
+                    let path = copy_destination(Some(path))?;
+                    state.save_snapshot_checked(&project, path, true, label)
+                }
             }
-        }
-    }
-    .await;
-    result.map_err(crate::native_error::NativeErrorKind::SaveLocation.failure())
+        })
+        .await
 }
 
 #[tauri::command]
@@ -2281,29 +2281,29 @@ pub async fn save_project_copy(
     app: AppHandle,
     state: WorkspaceState<'_>,
 ) -> Result<Option<WorkspaceView>, crate::native_error::NativeFailure> {
-    let result: NativeResult<Option<WorkspaceView>> = async {
-        let (project, suggested) = {
-            let state = state.locked();
-            let project = state.project()?.clone();
-            let suggested = format!(
-                "{}-copy.desegnos",
-                desegnos_storage::sanitize_project_name(&project.name)
-            );
-            (project, suggested)
-        };
-        let Some(path) = choose_save_path(app, suggested).await? else {
-            return Ok(None);
-        };
-        let path = copy_destination(Some(path))?;
-        let mut state = state.locked();
-        state.check_snapshot(&project)?;
-        if let Some(path) = path {
-            state.save_copy(&project, path)?;
-        }
-        Ok(Some(state.view()))
-    }
-    .await;
-    result.map_err(crate::native_error::NativeErrorKind::SaveLocation.failure())
+    crate::native_error::NativeErrorKind::SaveLocation
+        .run_async(async {
+            let (project, suggested) = {
+                let state = state.locked();
+                let project = state.project()?.clone();
+                let suggested = format!(
+                    "{}-copy.desegnos",
+                    desegnos_storage::sanitize_project_name(&project.name)
+                );
+                (project, suggested)
+            };
+            let Some(path) = choose_save_path(app, suggested).await? else {
+                return Ok(None);
+            };
+            let path = copy_destination(Some(path))?;
+            let mut state = state.locked();
+            state.check_snapshot(&project)?;
+            if let Some(path) = path {
+                state.save_copy(&project, path)?;
+            }
+            Ok(Some(state.view()))
+        })
+        .await
 }
 
 /// Keep recent versions in full, thin out older ones, drop unreferenced blobs and shrink.

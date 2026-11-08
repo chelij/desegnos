@@ -33,24 +33,6 @@ impl Project {
         None
     }
 
-    /// A request waiting for Generate that names this layer as a target.
-    pub fn element_has_pending_request(&self, id: Uuid) -> bool {
-        self.requests.iter().any(|request| {
-            !request.text.trim().is_empty()
-                && request
-                    .targets
-                    .iter()
-                    .any(|target| matches!(target, crate::model::RequestTarget::Element { id: target_id, .. } if *target_id == id))
-        })
-    }
-
-    pub fn pending_request_count(&self) -> usize {
-        self.requests
-            .iter()
-            .filter(|request| !request.text.trim().is_empty())
-            .count()
-    }
-
     /// Element ids in a layer's subtree, including the layer itself and the layers a linked
     /// copy resolves from its definition.
     pub fn element_subtree_ids(&self, element_id: Uuid) -> BTreeSet<Uuid> {

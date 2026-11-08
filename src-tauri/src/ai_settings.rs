@@ -169,7 +169,7 @@ fn catalogue_identity(
     key: &ApiKey,
 ) -> desegnos_ai::Result<String> {
     let mut id = key.image_access_cache_key();
-    if provider == ProviderId::Local {
+    if provider.is_local() {
         id.push_str(&digest(desegnos_ai::local_endpoint(settings)?.as_bytes()));
     }
     Ok(id)
@@ -180,7 +180,7 @@ pub(super) fn provider_key(
     local_authentication: bool,
     credentials: &CredentialManager,
 ) -> desegnos_ai::Result<ApiKey> {
-    if provider == ProviderId::Local && !local_authentication {
+    if provider.is_local() && !local_authentication {
         return Ok(ApiKey::local_anonymous());
     }
     credentials.key()
@@ -235,7 +235,7 @@ pub(super) async fn refresh_api_models(state: &Mutex<AiSettingsStore>) -> Native
 
 impl AiSettingsStore {
     fn image_cache_id(&self, account: Option<Uuid>) -> Option<String> {
-        if self.provider != ProviderId::Openai {
+        if !self.provider.supports_image_api() {
             return None;
         }
         match self.authentication {
@@ -255,7 +255,7 @@ impl AiSettingsStore {
     }
     pub(super) fn selected_image_cache_id(&self, account: Option<Uuid>) -> Option<String> {
         let main = self.image_cache_id(account);
-        if self.provider != ProviderId::Openai {
+        if !self.provider.supports_image_api() {
             return main;
         }
         let image = self.image_key_cache_id();
@@ -390,7 +390,7 @@ impl AiSettingsStore {
     }
 
     fn settings_path(&self, provider: ProviderId) -> PathBuf {
-        if provider == ProviderId::Openai {
+        if provider.supports_sign_in() {
             self.directory.join("settings.json")
         } else {
             self.directory.join(format!(
@@ -434,7 +434,7 @@ impl AiSettingsStore {
     fn select_provider(&mut self, provider: ProviderId, persist: bool) -> NativeResult<()> {
         self.switch_guard.ensure_switch_allowed()?;
 
-        let authentication = if provider == ProviderId::Openai {
+        let authentication = if provider.supports_sign_in() {
             let path = self.directory.join("authentication.json");
             if path.exists() {
                 let p: AuthenticationPreference = read_json(&path, 4096)?;
@@ -539,7 +539,7 @@ impl AiSettingsStore {
         &mut self,
         authentication: AuthenticationMethod,
     ) -> NativeResult<()> {
-        if self.provider != ProviderId::Openai {
+        if !self.provider.supports_sign_in() {
             return Err("Choose OpenAI before changing its sign-in method.".into());
         }
         write_json(
@@ -564,7 +564,7 @@ pub(super) async fn refresh_image_access(
     refresh_main_image_access(state, chatgpt, force).await?;
     let probe = {
         let mut service = state.locked();
-        if service.provider != ProviderId::Openai {
+        if !service.provider.supports_image_api() {
             return Ok(());
         }
         let Ok(key) = service.image_credentials.key() else {
@@ -709,17 +709,16 @@ pub(super) async fn settings_view(
     let connection_settings = settings.clone();
     let local_authentication = settings.local_authentication;
     let (credential, credential_id) = tauri::async_runtime::spawn_blocking(move || {
-        let credential =
-            if provider == ProviderId::Local && !connection_settings.local_authentication {
-                CredentialInfo {
-                    configured: true,
-                    storage: desegnos_ai::CredentialLocation::None,
-                    masked_identifier: Some("Local server".into()),
-                    vault_error: None,
-                }
-            } else {
-                credentials.status()
-            };
+        let credential = if provider.is_local() && !connection_settings.local_authentication {
+            CredentialInfo {
+                configured: true,
+                storage: desegnos_ai::CredentialLocation::None,
+                masked_identifier: Some("Local server".into()),
+                vault_error: None,
+            }
+        } else {
+            credentials.status()
+        };
         let identity = provider_key(
             provider,
             connection_settings.local_authentication,
@@ -891,34 +890,25 @@ pub async fn get_ai_settings(
     chatgpt: State<'_, ChatgptState>,
     refresh_models: Option<bool>,
 ) -> Result<AiSettingsView, crate::native_error::NativeFailure> {
-    let result: NativeResult<AiSettingsView> = async {
-        if refresh_models.unwrap_or(false) {
-            let (authentication, client) = {
-                let service = state.locked();
-                (service.authentication, service.client.clone())
-            };
-            let view = chatgpt.view().await;
-            if authentication == AuthenticationMethod::ApiKey {
-                refresh_api_models(&state).await?;
+    crate::native_error::NativeErrorKind::AiSettings
+        .run_async(async {
+            if refresh_models.unwrap_or(false) {
+                let authentication = state.locked().authentication;
+                let view = chatgpt.view().await;
+                if authentication == AuthenticationMethod::ApiKey {
+                    refresh_api_models(&state).await?;
+                }
+                if authentication == AuthenticationMethod::Chatgpt
+                    && let Some(account) = view.accounts.iter().find(|account| {
+                        Some(account.id) == view.active_account_id && account.usable()
+                    })
+                {
+                    crate::ai_access::refresh_chatgpt_models(&chatgpt, &state, account.id).await;
+                }
             }
-            if authentication == AuthenticationMethod::Chatgpt
-                && let Some(account) = view
-                    .accounts
-                    .iter()
-                    .find(|account| Some(account.id) == view.active_account_id && account.usable())
-                && let Ok(client) = client
-            {
-                // Discovery errors remain visible in models_error; retain the settings view.
-                let _ = chatgpt
-                    .manager()?
-                    .discover_models(account.id, &client, &CancellationToken::new())
-                    .await;
-            }
-        }
-        settings_view(&state, &chatgpt).await
-    }
-    .await;
-    result.map_err(crate::native_error::NativeErrorKind::AiSettings.failure())
+            settings_view(&state, &chatgpt).await
+        })
+        .await
 }
 
 #[tauri::command]
@@ -927,13 +917,13 @@ pub async fn set_ai_provider(
     chatgpt: State<'_, ChatgptState>,
     provider: ProviderId,
 ) -> Result<AiSettingsView, crate::native_error::NativeFailure> {
-    let result: NativeResult<AiSettingsView> = async {
-        state.locked().select_provider(provider, true)?;
-        refresh_api_models(&state).await?;
-        settings_view(&state, &chatgpt).await
-    }
-    .await;
-    result.map_err(crate::native_error::NativeErrorKind::AiSettings.failure())
+    crate::native_error::NativeErrorKind::AiSettings
+        .run_async(async {
+            state.locked().select_provider(provider, true)?;
+            refresh_api_models(&state).await?;
+            settings_view(&state, &chatgpt).await
+        })
+        .await
 }
 
 #[tauri::command]
@@ -943,66 +933,67 @@ pub async fn save_ai_settings(
     settings: ProviderSettings,
     connection_only: Option<bool>,
 ) -> Result<AiSettingsView, crate::native_error::NativeFailure> {
-    let result: NativeResult<AiSettingsView> = async {
-        if connection_only.unwrap_or(false) {
+    crate::native_error::NativeErrorKind::AiSettings
+        .run_async(async {
+            if connection_only.unwrap_or(false) {
+                {
+                    let mut service = state.locked();
+                    if !service.provider.is_local() {
+                        return Err("Choose Local before changing its server address.".into());
+                    }
+                    service.switch_guard.ensure_switch_allowed()?;
+                    let endpoint = desegnos_ai::local_endpoint(&settings).map_err(|_| {
+                        format!(
+                            "Use a local server address ending in /v1, such as {}.",
+                            desegnos_ai::DEFAULT_LOCAL_ENDPOINT
+                        )
+                    })?;
+                    let mut next = service.settings.clone();
+                    next.endpoint = Some(endpoint);
+                    next.local_authentication = settings.local_authentication;
+                    write_json(&service.settings_path(ProviderId::Local), &next)?;
+                    service.settings = next;
+                    service.configuration_error = None;
+                }
+                refresh_api_models(&state).await?;
+                return settings_view(&state, &chatgpt).await;
+            }
+            let account = chatgpt.view().await;
+            let (provider, authentication) = {
+                let service = state.locked();
+                (service.provider, service.authentication)
+            };
+            if authentication == AuthenticationMethod::ApiKey {
+                let key = credential_key(&state, provider, &settings).await?;
+                api_model_for_key(&state, provider, &settings, &key, &CancellationToken::new())
+                    .await
+                    .map_err(message)?;
+            }
             {
                 let mut service = state.locked();
-                if service.provider != ProviderId::Local {
-                    return Err("Choose Local before changing its server address.".into());
+                if service.provider != provider || service.authentication != authentication {
+                    return Err(
+                        "The AI connection changed. Review the current settings and save again."
+                            .into(),
+                    );
                 }
-                service.switch_guard.ensure_switch_allowed()?;
-                let endpoint = desegnos_ai::local_endpoint(&settings).map_err(|_| {
-                    format!(
-                        "Use a local server address ending in /v1, such as {}.",
-                        desegnos_ai::DEFAULT_LOCAL_ENDPOINT
-                    )
-                })?;
-                let mut next = service.settings.clone();
-                next.endpoint = Some(endpoint);
-                next.local_authentication = settings.local_authentication;
-                write_json(&service.settings_path(ProviderId::Local), &next)?;
-                service.settings = next;
+                service
+                    .provider
+                    .validate(&settings, service.authentication)
+                    .map_err(message)?;
+                if service.authentication == AuthenticationMethod::Chatgpt {
+                    account.selected_model(&settings).map_err(message)?;
+                }
+                write_json(&service.settings_path(service.provider), &settings)?;
+                service.settings = settings;
                 service.configuration_error = None;
+                if service.client.is_err() {
+                    service.client = OpenAiClient::new().map_err(message);
+                }
             }
-            refresh_api_models(&state).await?;
-            return settings_view(&state, &chatgpt).await;
-        }
-        let account = chatgpt.view().await;
-        let (provider, authentication) = {
-            let service = state.locked();
-            (service.provider, service.authentication)
-        };
-        if authentication == AuthenticationMethod::ApiKey {
-            let key = credential_key(&state, provider, &settings).await?;
-            api_model_for_key(&state, provider, &settings, &key, &CancellationToken::new())
-                .await
-                .map_err(message)?;
-        }
-        {
-            let mut service = state.locked();
-            if service.provider != provider || service.authentication != authentication {
-                return Err(
-                    "The AI connection changed. Review the current settings and save again.".into(),
-                );
-            }
-            service
-                .provider
-                .validate(&settings, service.authentication)
-                .map_err(message)?;
-            if service.authentication == AuthenticationMethod::Chatgpt {
-                account.selected_model(&settings).map_err(message)?;
-            }
-            write_json(&service.settings_path(service.provider), &settings)?;
-            service.settings = settings;
-            service.configuration_error = None;
-            if service.client.is_err() {
-                service.client = OpenAiClient::new().map_err(message);
-            }
-        }
-        settings_view(&state, &chatgpt).await
-    }
-    .await;
-    result.map_err(crate::native_error::NativeErrorKind::AiSettings.failure())
+            settings_view(&state, &chatgpt).await
+        })
+        .await
 }
 
 #[tauri::command]
@@ -1013,30 +1004,30 @@ pub async fn set_ai_key(
     key: String,
     storage: CredentialStorage,
 ) -> Result<AiSettingsView, crate::native_error::NativeFailure> {
-    let result: NativeResult<AiSettingsView> = async {
-        let (credentials, provider) = {
-            let service = state.locked();
-            if image.unwrap_or(false) {
-                (service.image_credentials.clone(), service.provider)
-            } else {
-                (service.credentials.clone(), service.provider)
+    crate::native_error::NativeErrorKind::AiSettings
+        .run_async(async {
+            let (credentials, provider) = {
+                let service = state.locked();
+                if image.unwrap_or(false) {
+                    (service.image_credentials.clone(), service.provider)
+                } else {
+                    (service.credentials.clone(), service.provider)
+                }
+            };
+            tauri::async_runtime::spawn_blocking(move || credentials.set_key(key, storage))
+                .await
+                .map_err(message)?
+                .map_err(message)?;
+            if provider.is_local() && !image.unwrap_or(false) {
+                state.locked().set_local_authentication(true)?;
             }
-        };
-        tauri::async_runtime::spawn_blocking(move || credentials.set_key(key, storage))
-            .await
-            .map_err(message)?
-            .map_err(message)?;
-        if provider == ProviderId::Local && !image.unwrap_or(false) {
-            state.locked().set_local_authentication(true)?;
-        }
-        if !image.unwrap_or(false) {
-            refresh_api_models(&state).await?;
-        }
-        refresh_image_access(&state, &chatgpt, true).await?;
-        settings_view(&state, &chatgpt).await
-    }
-    .await;
-    result.map_err(crate::native_error::NativeErrorKind::AiSettings.failure())
+            if !image.unwrap_or(false) {
+                refresh_api_models(&state).await?;
+            }
+            refresh_image_access(&state, &chatgpt, true).await?;
+            settings_view(&state, &chatgpt).await
+        })
+        .await
 }
 
 #[tauri::command]
@@ -1045,27 +1036,27 @@ pub async fn remove_ai_key(
     chatgpt: State<'_, ChatgptState>,
     image: Option<bool>,
 ) -> Result<AiSettingsView, crate::native_error::NativeFailure> {
-    let result: NativeResult<AiSettingsView> = async {
-        let (credentials, provider) = {
-            let service = state.locked();
-            if image.unwrap_or(false) {
-                (service.image_credentials.clone(), service.provider)
-            } else {
-                (service.credentials.clone(), service.provider)
+    crate::native_error::NativeErrorKind::AiSettings
+        .run_async(async {
+            let (credentials, provider) = {
+                let service = state.locked();
+                if image.unwrap_or(false) {
+                    (service.image_credentials.clone(), service.provider)
+                } else {
+                    (service.credentials.clone(), service.provider)
+                }
+            };
+            tauri::async_runtime::spawn_blocking(move || credentials.remove_key())
+                .await
+                .map_err(message)?
+                .map_err(message)?;
+            if provider.is_local() && !image.unwrap_or(false) {
+                state.locked().set_local_authentication(false)?;
+                refresh_api_models(&state).await?;
             }
-        };
-        tauri::async_runtime::spawn_blocking(move || credentials.remove_key())
-            .await
-            .map_err(message)?
-            .map_err(message)?;
-        if provider == ProviderId::Local && !image.unwrap_or(false) {
-            state.locked().set_local_authentication(false)?;
-            refresh_api_models(&state).await?;
-        }
-        settings_view(&state, &chatgpt).await
-    }
-    .await;
-    result.map_err(crate::native_error::NativeErrorKind::AiSettings.failure())
+            settings_view(&state, &chatgpt).await
+        })
+        .await
 }
 
 #[derive(ts_rs::TS, Serialize)]
@@ -1080,7 +1071,8 @@ pub async fn test_ai_access(
     state: SettingsState<'_>,
     chatgpt: State<'_, ChatgptState>,
 ) -> Result<AccessResult, crate::native_error::NativeFailure> {
-    let result: NativeResult<AccessResult> = async {
+    crate::native_error::NativeErrorKind::AiSettings
+        .run_async(async {
     refresh_image_access(&state, &chatgpt, true).await?;
     let (client, settings, authentication, provider) = {
         let service = state.locked();
@@ -1136,8 +1128,8 @@ pub async fn test_ai_access(
         },
     })
 
-    }.await;
-    result.map_err(crate::native_error::NativeErrorKind::AiSettings.failure())
+    })
+        .await
 }
 
 #[cfg(test)]

@@ -1133,12 +1133,6 @@ pub struct LinkLocation {
     pub path: Vec<usize>,
 }
 
-impl LinkLocation {
-    pub fn is_copy(&self) -> bool {
-        self.path.is_empty()
-    }
-}
-
 /// Finds a stored layer's definition, or the definition behind one of a copy's nested layers.
 pub fn link_location(project: &Project, id: Uuid) -> Option<LinkLocation> {
     for page in &project.pages {
