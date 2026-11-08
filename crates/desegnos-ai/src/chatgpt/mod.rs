@@ -284,9 +284,7 @@ impl ChatgptManager {
                 .registrations
                 .iter()
                 .any(|registration| Some(registration.id) == active && !registration.welcomed);
-        let can_use_plan = selected.is_some_and(|account| {
-            account.connected && account.plan_enabled && !account.storage_repair_required
-        });
+        let can_use_plan = selected.is_some_and(ChatgptAccount::usable);
         ChatgptView {
             accounts,
             active_account_id: active,

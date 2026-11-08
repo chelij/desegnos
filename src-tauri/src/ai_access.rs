@@ -8,7 +8,7 @@ use crate::{
     native_files::{LockExt, NativeResult, message},
 };
 use desegnos_ai::{
-    ApiKey, AuthenticationMethod, CancellationToken, ChatgptModel, CostEstimate, ErrorKind,
+    ApiKey, AuthenticationMethod, CancellationToken, ChatgptAccount, ChatgptModel, CostEstimate, ErrorKind,
     ModelInfo, ProviderClient, ProviderError, ProviderId, ProviderSettings, SubmissionOutcome,
 };
 use desegnos_core::{GenerationMode, RequirementsSnapshot};
@@ -88,27 +88,17 @@ pub async fn active_account(chatgpt: &ChatgptState, action: &str) -> NativeResul
         .iter()
         .find(|account| Some(account.id) == view.active_account_id)
         .ok_or_else(|| format!("Sign in to ChatGPT before {action}."))?;
-    check_account(
-        account.connected,
-        account.plan_enabled,
-        account.storage_repair_required,
-        action,
-    )?;
+    check_account(account, action)?;
     Ok(account.id)
 }
 
-pub(super) fn check_account(
-    connected: bool,
-    plan_enabled: bool,
-    repair_required: bool,
-    action: &str,
-) -> NativeResult<()> {
-    if !connected || !plan_enabled {
+fn check_account(account: &ChatgptAccount, action: &str) -> NativeResult<()> {
+    if !account.connected || !account.plan_enabled {
         return Err(format!(
             "Sign in to this ChatGPT account and grant plan usage before {action}."
         ));
     }
-    if repair_required {
+    if account.storage_repair_required {
         return Err(format!(
             "Keep Desegnos open and repair this account's secure storage in AI settings before {action}."
         ));
@@ -162,12 +152,7 @@ async fn resolve_credentials(
             .iter()
             .find(|account| account.id == account_id)
             .ok_or("This ChatGPT account is no longer connected.")?;
-        check_account(
-            account.connected,
-            account.plan_enabled,
-            account.storage_repair_required,
-            "sending",
-        )?;
+        check_account(account, "sending")?;
         if view.models.is_empty() {
             view = manager
                 .discover_models(account_id, &openai, cancellation)

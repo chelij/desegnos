@@ -625,12 +625,10 @@ async fn refresh_main_image_access(
             return Ok(());
         }
         if service.authentication == AuthenticationMethod::Chatgpt
-            && !view.accounts.iter().any(|account| {
-                Some(account.id) == view.active_account_id
-                    && account.connected
-                    && account.plan_enabled
-                    && !account.storage_repair_required
-            })
+            && !view
+                .accounts
+                .iter()
+                .any(|account| Some(account.id) == view.active_account_id && account.usable())
         {
             return Ok(());
         }
@@ -758,11 +756,11 @@ pub(super) async fn settings_view(
     };
     let chatgpt = chatgpt_state.view().await;
     let catalogue = if authentication == AuthenticationMethod::Chatgpt {
-        if chatgpt.accounts.iter().any(|account| {
-            Some(account.id) == chatgpt.active_account_id
-                && account.connected
-                && account.plan_enabled
-        }) {
+        if chatgpt
+            .accounts
+            .iter()
+            .any(|account| Some(account.id) == chatgpt.active_account_id && account.usable())
+        {
             chatgpt_model_catalogue(&chatgpt.models)
         } else {
             vec![]
@@ -826,16 +824,7 @@ pub(super) async fn settings_view(
         .accounts
         .iter()
         .map(|account| {
-            (
-                account.id,
-                crate::ai_access::check_account(
-                    account.connected,
-                    account.plan_enabled,
-                    account.storage_repair_required,
-                    "generating",
-                )
-                .is_ok(),
-            )
+            (account.id, account.usable())
         })
         .collect();
     let connection_ready = if authentication == AuthenticationMethod::Chatgpt {
@@ -917,10 +906,7 @@ pub async fn get_ai_settings(
             }
             if authentication == AuthenticationMethod::Chatgpt
                 && let Some(account) = view.accounts.iter().find(|account| {
-                    Some(account.id) == view.active_account_id
-                        && account.connected
-                        && account.plan_enabled
-                        && !account.storage_repair_required
+                    Some(account.id) == view.active_account_id && account.usable()
                 })
                 && let Ok(client) = client
             {

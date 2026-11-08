@@ -146,7 +146,7 @@ pub async fn select_chatgpt_account(
         if view
             .accounts
             .iter()
-            .any(|account| account.id == account_id && account.connected && account.plan_enabled)
+            .any(|account| account.id == account_id && account.usable())
         {
             let client = state.locked().client();
             if let Ok(client) = client {

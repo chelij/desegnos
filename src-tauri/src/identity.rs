@@ -11,7 +11,7 @@ use crate::{
     },
 };
 use desegnos_ai::{
-    AuthenticationMethod, CancellationToken, ChatgptView, ErrorKind, IdentityImage, ProviderId,
+    AuthenticationMethod, CancellationToken, ChatgptAccount, ChatgptView, ErrorKind, IdentityImage, ProviderId,
     ProviderProgress, ProviderResponse, ProviderSettings, TokenUsage,
 };
 use desegnos_core::{
@@ -1441,9 +1441,7 @@ fn validate_identity_account(
         .iter()
         .find(|account| account.id == account_id);
     if view.active_account_id != Some(account_id)
-        || !account.is_some_and(|account| {
-            account.connected && account.plan_enabled && !account.storage_repair_required
-        })
+        || !account.is_some_and(ChatgptAccount::usable)
         || !view.models.iter().any(|available| available.id == model)
     {
         return Err("The selected ChatGPT account, its plan permission, secure storage, or model changed while checking access. Review AI settings and explicitly analyze again.".into());
