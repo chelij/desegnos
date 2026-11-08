@@ -1,52 +1,37 @@
 use crate::{
-    ai_access::{Access, AccessFailure, Connection, active_account, credential_key, resolve},
+    ai_access::{AccessFailure, Connection, active_account, resolve},
     ai_job::{
-        ActiveJobs, Failure, interrupted_notice, lock, signed_out_notice, stopped_notice,
-        unsaved_cancel_notice,
+        Failure, interrupted_notice, lock, signed_out_notice, stopped_notice, unsaved_cancel_notice,
     },
     chatgpt::ChatgptState,
-    native_files::{
-        self, NativeResult, message, private_directory, read_bytes, regular_directory,
-        regular_file,
-    },
+    native_files::{NativeResult, message, regular_file},
     workspace::{Workspace, WorkspaceView},
 };
 
 use desegnos_ai::{
-    ApiKey, AuthenticationMethod, CancellationToken, ChatgptView, CredentialInfo,
-    CredentialManager, CredentialStorage, ErrorKind, ModelInfo, OpenAiClient, ProviderClient,
-    ProviderDescriptor, ProviderError, ProviderId, ProviderResponse, ProviderSettings,
-    SubmissionOutcome, TokenUsage, chatgpt_model_catalogue, provider_catalogue,
+    AuthenticationMethod, CancellationToken, ErrorKind, ProviderError, ProviderId,
+    ProviderResponse, ProviderSettings, SubmissionOutcome, TokenUsage,
 };
 use desegnos_core::{GenerationCandidate, GenerationMode, Project, RequirementsSnapshot, digest};
 use desegnos_storage::write_markdown;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
-    fs::{self, File},
-    io::Read,
+    fs,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::Mutex,
 };
 use tauri::{AppHandle, Manager, State};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use uuid::Uuid;
 
-pub(crate) type AiState<'a> = State<'a, Mutex<GenerationService>>;
+type AiState<'a> = State<'a, Mutex<GenerationService>>;
+#[path = "generation_job_store.rs"]
+mod job_store;
+use crate::ai_settings::{AiSettingsStore, AiState as SettingsState, refresh_image_access};
 type WorkspaceState<'a> = State<'a, Mutex<Workspace>>;
-const MAX_JOB_BYTES: u64 = 768 * 1024 * 1024;
-const MAX_CACHED_JOBS: usize = 16;
 const MAX_ATTEMPTS: usize = 20;
-
-const RECORD: &str = "generation record";
-
-fn read_json<T: for<'de> Deserialize<'de>>(path: &Path, limit: u64) -> NativeResult<T> {
-    native_files::read_json(path, limit, RECORD)
-}
-
-fn write_json(path: &Path, value: &impl Serialize) -> NativeResult<()> {
-    native_files::write_json(path, value, MAX_JOB_BYTES, RECORD)
-}
+use job_store::{MAX_JOB_BYTES, read_job_record, read_json, write_json};
 
 fn collect_generation_targets(
     page_id: Uuid,
@@ -65,7 +50,6 @@ fn collect_generation_targets(
     }
 }
 
-/// A stored candidate is usable when it still belongs to its frozen request.
 fn resolve_current(view: &GenerationJobView, project: &Project) -> NativeResult<()> {
     let candidate = view
         .candidate
@@ -171,7 +155,7 @@ fn candidate_status(text: &str, record: &mut JobRecord, original: &Project) -> J
                 .view
                 .validation_events
                 .push(desegnos_core::ValidationEvent {
-                    kind: desegnos_core::validation_failure_kind(&error).into(),
+                    kind: desegnos_core::validation_failure_kind(&error),
                     disposition: "conflicted".into(),
                     element_id,
                     message: error.to_string(),
@@ -186,7 +170,7 @@ fn candidate_status(text: &str, record: &mut JobRecord, original: &Project) -> J
                 .view
                 .validation_events
                 .push(desegnos_core::ValidationEvent {
-                    kind: desegnos_core::validation_failure_kind(&error).into(),
+                    kind: desegnos_core::validation_failure_kind(&error),
                     disposition: "conflicted".into(),
                     element_id: None,
                     message: error.to_string(),
@@ -370,7 +354,6 @@ pub struct GenerationAttempt {
 }
 
 impl GenerationAttempt {
-    /// Record the response id and token usage a provider call reported, returning the usage.
     fn note_receipt(
         &mut self,
         result: &Result<ProviderResponse, ProviderError>,
@@ -536,211 +519,8 @@ struct LatestJob {
     job_id: Uuid,
 }
 
-/// The project's request-history index. The format tag names the requirements format that
-/// produced the entries, so an index written by another format is ignored instead of being
-/// mixed into a current request.
-#[derive(Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct RequestHistoryIndex {
-    format: u8,
-    entries: Vec<desegnos_core::EarlierRequest>,
-}
-
-/// Reads only the frozen requirements heading, before the complete record is decoded.
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct JobFormatProbe {
-    view: Option<ViewFormatProbe>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ViewFormatProbe {
-    requirements: Option<RequirementsFormatProbe>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct RequirementsFormatProbe {
-    markdown: String,
-}
-
-#[derive(Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct ProviderPreference {
-    version: u32,
-    provider: ProviderId,
-}
-
-#[derive(Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct AuthenticationPreference {
-    version: u32,
-    authentication: AuthenticationMethod,
-}
-
-#[derive(ts_rs::TS, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AiSettingsView {
-    image_credential: Option<String>,
-    image_key: CredentialInfo,
-    main_image_access: Option<desegnos_ai::ImageAccess>,
-    image_key_access: Option<desegnos_ai::ImageAccess>,
-    image_access: Option<desegnos_ai::ImageAccess>,
-    image_access_checking: bool,
-    provider: ProviderId,
-    providers: Vec<ProviderDescriptor>,
-    settings: ProviderSettings,
-    credential: CredentialInfo,
-    catalogue: Vec<ModelInfo>,
-    models_error: Option<String>,
-    models_provider_error: Option<ProviderError>,
-    models_auth_required: bool,
-    configuration_error: Option<String>,
-    authentication: AuthenticationMethod,
-    chatgpt: ChatgptView,
-}
-
-impl AiSettingsView {
-    pub(super) fn with_warning(mut self, warning: Option<String>) -> Self {
-        if let Some(warning) = warning {
-            self.configuration_error = Some(match self.configuration_error.take() {
-                Some(existing) => format!("{existing} {warning}"),
-                None => warning,
-            });
-        }
-        self
-    }
-}
-
 pub struct GenerationService {
-    api_models: BTreeMap<(ProviderId, String), desegnos_ai::Result<Vec<ModelInfo>>>,
-    image_credentials: Arc<CredentialManager>,
-    image_access: BTreeMap<String, desegnos_ai::ImageAccess>,
-    image_access_checking: BTreeMap<String, Uuid>,
-    provider: ProviderId,
-    provider_credentials: BTreeMap<ProviderId, Arc<CredentialManager>>,
-    directory: PathBuf,
-    settings: ProviderSettings,
-    configuration_error: Option<String>,
-    authentication: AuthenticationMethod,
-    authentication_error: Option<String>,
-    credentials: Arc<CredentialManager>,
-    client: Result<OpenAiClient, String>,
-    jobs: BTreeMap<Uuid, JobRecord>,
-    unsaved_jobs: BTreeSet<Uuid>,
-    active: ActiveJobs,
-}
-
-async fn api_catalogue_for_key(
-    state: &Mutex<GenerationService>,
-    provider: ProviderId,
-    settings: &ProviderSettings,
-    key: &ApiKey,
-    cancellation: &CancellationToken,
-    force: bool,
-) -> desegnos_ai::Result<Vec<ModelInfo>> {
-    let credential_id = catalogue_identity(provider, settings, key)?;
-    let client = {
-        let service = state.lock().map_err(|_| {
-            ProviderError::new(ErrorKind::InvalidSettings, SubmissionOutcome::NotSubmitted)
-        })?;
-        if !force
-            && let Some(Ok(cached)) = service.api_models.get(&(provider, credential_id.clone()))
-        {
-            return Ok(cached.clone());
-        }
-        ProviderClient::with_settings(
-            provider,
-            service.client.clone().map_err(|_| {
-                ProviderError::new(ErrorKind::InvalidSettings, SubmissionOutcome::NotSubmitted)
-            })?,
-            settings,
-        )
-        .map_err(|_| {
-            ProviderError::new(ErrorKind::InvalidSettings, SubmissionOutcome::NotSubmitted)
-        })?
-    };
-    let result = client.list_api_models(key, cancellation).await;
-    if !cancellation.is_cancelled()
-        && let Ok(mut service) = state.lock()
-    {
-        service
-            .api_models
-            .insert((provider, credential_id), result.clone());
-    }
-    result
-}
-
-fn catalogue_identity(
-    provider: ProviderId,
-    settings: &ProviderSettings,
-    key: &ApiKey,
-) -> desegnos_ai::Result<String> {
-    let mut id = key.image_access_cache_key();
-    if provider == ProviderId::Local {
-        id.push_str(&digest(desegnos_ai::local_endpoint(settings)?.as_bytes()));
-    }
-    Ok(id)
-}
-
-pub(super) fn provider_key(
-    provider: ProviderId,
-    local_authentication: bool,
-    credentials: &CredentialManager,
-) -> desegnos_ai::Result<ApiKey> {
-    if provider == ProviderId::Local && !local_authentication {
-        return Ok(ApiKey::local_anonymous());
-    }
-    credentials.key()
-}
-
-pub(super) async fn api_model_for_key(
-    state: &Mutex<GenerationService>,
-    provider: ProviderId,
-    settings: &ProviderSettings,
-    key: &ApiKey,
-    cancellation: &CancellationToken,
-) -> desegnos_ai::Result<ModelInfo> {
-    let models = api_catalogue_for_key(state, provider, settings, key, cancellation, false).await?;
-    let model = models
-        .into_iter()
-        .find(|model| model.id == settings.model)
-        .ok_or_else(|| {
-            ProviderError::new(ErrorKind::ModelUnavailable, SubmissionOutcome::NotSubmitted)
-        })?;
-    model.validate_api_settings(settings)?;
-    Ok(model)
-}
-
-pub(super) async fn refresh_api_models(state: &Mutex<GenerationService>) -> NativeResult<()> {
-    let (provider, settings) = {
-        let service = state.lock().map_err(message)?;
-        if service.authentication != AuthenticationMethod::ApiKey {
-            return Ok(());
-        }
-        (service.provider, service.settings.clone())
-    };
-    let key = credential_key(state, provider, &settings).await;
-    if let Ok(key) = key {
-        // Safe provider failures belong in the returned model status, not an API-key fallback.
-        let _ = api_catalogue_for_key(
-            state,
-            provider,
-            &settings,
-            &key,
-            &CancellationToken::new(),
-            true,
-        )
-        .await;
-    } else {
-        state
-            .lock()
-            .map_err(message)?
-            .api_models
-            .retain(|(id, _), _| *id != provider);
-    }
-    Ok(())
+    store: job_store::GenerationJobStore,
 }
 
 #[derive(ts_rs::TS, Serialize)]
@@ -761,800 +541,20 @@ pub struct GenerationHistory {
     truncated: bool,
 }
 
-/// A stored job is absent, not an error, when it was frozen by another requirements format or
-/// cannot be decoded as one. The current format has no compatibility path, so such records are
-/// never shown, resubmitted or upgraded; their files stay untouched on disk.
-fn read_job_record(directory: &Path) -> NativeResult<Option<JobRecord>> {
-    let path = directory.join("job.json");
-    if !path.exists() {
-        return Ok(None);
-    }
-    let bytes = read_bytes(&path, MAX_JOB_BYTES, RECORD)?;
-    let Ok(probe) = serde_json::from_slice::<JobFormatProbe>(&bytes) else {
-        return Ok(None);
-    };
-    let markdown = probe
-        .view
-        .and_then(|view| view.requirements)
-        .map(|requirements| requirements.markdown);
-    if !markdown.is_some_and(|markdown| {
-        markdown.starts_with(&desegnos_core::current_requirements_heading())
-    }) {
-        return Ok(None);
-    }
-    serde_json::from_slice(&bytes).map(Some).map_err(|_| {
-        "A generation record is damaged. The original was preserved; it was not submitted or applied.".into()
-    })
-}
-
 impl GenerationService {
-    fn image_cache_id(&self, account: Option<Uuid>) -> Option<String> {
-        if self.provider != ProviderId::Openai {
-            return None;
-        }
-        match self.authentication {
-            AuthenticationMethod::Chatgpt => account.map(|id| format!("chatgpt:{id}")),
-            AuthenticationMethod::ApiKey => self
-                .credentials
-                .key()
-                .ok()
-                .map(|key| key.image_access_cache_key()),
-        }
-    }
-    fn image_key_cache_id(&self) -> Option<String> {
-        self.image_credentials
-            .key()
-            .ok()
-            .map(|key| key.image_access_cache_key())
-    }
-    fn selected_image_cache_id(&self, account: Option<Uuid>) -> Option<String> {
-        let main = self.image_cache_id(account);
-        if self.provider != ProviderId::Openai {
-            return main;
-        }
-        let image = self.image_key_cache_id();
-        if desegnos_ai::use_image_key(
-            main.as_ref().and_then(|id| self.image_access.get(id)),
-            image.as_ref().and_then(|id| self.image_access.get(id)),
-        ) {
-            image
-        } else {
-            main
-        }
-    }
-    fn store_image_access(
-        &mut self,
-        id: String,
-        access: desegnos_ai::ImageAccess,
-    ) -> NativeResult<()> {
-        self.image_access.insert(id, access);
-        write_json(
-            &self.directory.join("image-api-access.json"),
-            &self.image_access,
-        )
-    }
-    pub(super) fn invalidate_image_account(&mut self, account: Uuid) -> NativeResult<()> {
-        let id = format!("chatgpt:{account}");
-        self.image_access.remove(&id);
-        // A reconnect invalidates any outstanding probe for the previous session.
-        self.image_access_checking.remove(&id);
-        write_json(
-            &self.directory.join("image-api-access.json"),
-            &self.image_access,
-        )
-    }
-    pub fn initialize(data: &Path) -> NativeResult<Self> {
+    pub fn initialize(data: &Path) -> Self {
         Self::from_directory(data.join("generation"))
     }
 
-    fn from_directory(directory: PathBuf) -> NativeResult<Self> {
-        let directory_error = private_directory(&directory, RECORD).err();
-        let path = directory.join("settings.json");
-        let loaded = if let Some(error) = directory_error {
-            Err(error)
-        } else if path.exists() {
-            read_json::<ProviderSettings>(&path, 65_536).and_then(|settings| {
-                settings
-                    .validate_for_auth(AuthenticationMethod::Chatgpt)
-                    .map_err(message)?;
-                Ok(settings)
-            })
-        } else {
-            Ok(ProviderSettings::default())
-        };
-        let (mut settings, mut configuration_error) = match loaded {
-            Ok(settings) => (settings, None),
-            Err(error) => (
-                ProviderSettings::default(),
-                Some(format!(
-                    "Saved AI settings could not be loaded: {error} Review and explicitly save settings before generating. The original file remains on disk."
-                )),
-            ),
-        };
-        let preference_path = directory.join("authentication.json");
-        let preference = if preference_path.exists() {
-            read_json::<AuthenticationPreference>(&preference_path, 4096).and_then(|value| {
-                if value.version == 1 {
-                    Ok(value.authentication)
-                } else {
-                    Err("The authentication preference has an unsupported format.".into())
-                }
-            })
-        } else {
-            Ok(AuthenticationMethod::ApiKey)
-        };
-        let (authentication, authentication_error) = match preference {
-            Ok(authentication) => (authentication, None),
-            Err(error) => (
-                AuthenticationMethod::ApiKey,
-                Some(format!(
-                    "Saved authentication settings could not be loaded: {error} Explicitly choose a generation method before sending. The original file remains on disk."
-                )),
-            ),
-        };
-        if configuration_error.is_none()
-            && let Err(error) = settings.validate_for_auth(authentication)
-        {
-            configuration_error = Some(format!(
-                "Saved AI settings could not be loaded: {error} Review and explicitly save settings before generating. The original file remains on disk."
-            ));
-            settings = ProviderSettings::default();
-        }
-        let credentials = Arc::new(CredentialManager::new());
-        let client = OpenAiClient::new().map_err(message);
-        #[cfg(feature = "native-tests")]
-        let (credentials, client) =
-            if let Ok(endpoint) = std::env::var("DESEGNOS_NATIVE_TEST_OPENAI_ENDPOINT") {
-                (
-                    Arc::new(CredentialManager::isolated_for_tests()),
-                    OpenAiClient::for_loopback(&endpoint).map_err(message),
-                )
-            } else if cfg!(debug_assertions)
-                && std::env::var("DESEGNOS_GENERATION_BENCHMARK").as_deref() == Ok("1")
-            {
-                (Arc::new(CredentialManager::isolated_for_tests()), client)
-            } else {
-                (credentials, client)
-            };
-        let image_cache_path = directory.join("image-api-access.json");
-        let image_access = if image_cache_path.exists() {
-            read_json(&image_cache_path, 1024 * 1024)?
-        } else {
-            BTreeMap::new()
-        };
-        let mut service = Self {
-            api_models: BTreeMap::new(),
-            image_credentials: Arc::new(CredentialManager::for_images()),
-            image_access,
-            image_access_checking: BTreeMap::new(),
-            provider: ProviderId::Openai,
-            provider_credentials: BTreeMap::new(),
-            directory,
-            settings,
-            configuration_error,
-            authentication,
-            authentication_error,
-            credentials,
-            client,
-            jobs: BTreeMap::new(),
-            unsaved_jobs: BTreeSet::new(),
-            active: ActiveJobs::default(),
-        };
-        let preference = service.directory.join("provider.json");
-        if preference.exists() {
-            match read_json::<ProviderPreference>(&preference, 4096).and_then(|p| {
-                if p.version != 1 {
-                    return Err("The saved AI choice has an unsupported format.".into());
-                }
-                service.select_provider(p.provider, false)
-            }) {
-                Ok(()) => (),
-                Err(error) => service.configuration_error = Some(error),
-            }
-        }
-        Ok(service)
-    }
-
-    fn settings_path(&self, provider: ProviderId) -> PathBuf {
-        if provider == ProviderId::Openai {
-            self.directory.join("settings.json")
-        } else {
-            self.directory.join(format!(
-                "settings-{}.json",
-                serde_json::to_value(provider)
-                    .expect("provider is serializable")
-                    .as_str()
-                    .expect("provider is a string")
-            ))
-        }
-    }
-    fn adapter(&self, provider: ProviderId) -> NativeResult<ProviderClient> {
-        ProviderClient::with_settings(provider, self.client.clone()?, &self.settings)
-            .map_err(message)
-    }
-    fn set_local_authentication(&mut self, enabled: bool) -> NativeResult<()> {
-        let path = self.settings_path(ProviderId::Local);
-        let mut settings = if self.provider == ProviderId::Local {
-            self.settings.clone()
-        } else if path.exists() {
-            read_json(&path, 65_536)?
-        } else {
-            ProviderId::Local.defaults()
-        };
-        settings.local_authentication = enabled;
-        write_json(&path, &settings)?;
-        if self.provider == ProviderId::Local {
-            self.settings = settings;
-        }
-        Ok(())
-    }
-    pub(super) fn credentials_for(&mut self, provider: ProviderId) -> Arc<CredentialManager> {
-        if provider == self.provider {
-            return self.credentials.clone();
-        }
-        self.provider_credentials
-            .entry(provider)
-            .or_insert_with(|| Arc::new(CredentialManager::for_provider(provider)))
-            .clone()
-    }
-    fn select_provider(&mut self, provider: ProviderId, persist: bool) -> NativeResult<()> {
-        self.ensure_switch_allowed()?;
-        let authentication = if provider == ProviderId::Openai {
-            let path = self.directory.join("authentication.json");
-            if path.exists() {
-                let p: AuthenticationPreference = read_json(&path, 4096)?;
-                if p.version != 1 {
-                    return Err("The saved sign-in preference is unsupported.".into());
-                }
-                p.authentication
-            } else {
-                AuthenticationMethod::ApiKey
-            }
-        } else {
-            AuthenticationMethod::ApiKey
-        };
-        let path = self.settings_path(provider);
-        let settings = if path.exists() {
-            read_json::<ProviderSettings>(&path, 65_536)?
-        } else {
-            provider.defaults()
-        };
-        provider
-            .validate(&settings, authentication)
-            .map_err(message)?;
-        self.adapter(provider)?;
-        if persist {
-            write_json(
-                &self.directory.join("provider.json"),
-                &ProviderPreference {
-                    version: 1,
-                    provider,
-                },
-            )?;
-        }
-        self.provider_credentials
-            .insert(self.provider, self.credentials.clone());
-        self.credentials = self.credentials_for(provider);
-        self.provider = provider;
-        self.authentication = authentication;
-        self.settings = settings;
-        self.configuration_error = None;
-        self.authentication_error = None;
-        Ok(())
-    }
-
-    /// The selected provider, authentication and settings, with no ChatGPT account bound yet.
-    pub(super) fn connection(&self) -> Connection {
-        Connection {
-            provider: self.provider,
-            authentication: self.authentication,
-            settings: self.settings.clone(),
-            account_id: None,
-        }
-    }
-
-    /// The access was resolved for the connection that is still selected.
-    pub(super) fn is_selected(&self, access: &Access) -> bool {
-        self.authentication == access.authentication
-            && self.provider == access.provider
-            && self.settings == access.settings
-    }
-
-    /// The selected connection, unless its settings or sign-in method are in error.
-    pub(super) fn ready_connection(&self) -> NativeResult<Connection> {
-        if let Some(error) = self
-            .configuration_error
-            .as_ref()
-            .or(self.authentication_error.as_ref())
-        {
-            return Err(error.clone());
-        }
-        self.provider
-            .validate(&self.settings, self.authentication)
-            .map_err(message)?;
-        Ok(self.connection())
-    }
-
-    /// The same complete request check the paid send performs, without credentials or network.
-    pub(super) fn export_estimate(
-        &self,
-        plan: &desegnos_core::ExportPlan,
-        snapshot: &RequirementsSnapshot,
-        mode: GenerationMode,
-    ) -> NativeResult<f64> {
-        let client = self.adapter(self.provider)?;
-        client
-            .estimate(
-                self.authentication,
-                snapshot,
-                mode,
-                &plan.schema,
-                &self.settings,
-            )
-            .map(|estimate| estimate.estimate_usd)
-            .map_err(message)
-    }
-
-    pub(super) fn chatgpt_directory(&self) -> PathBuf {
-        self.directory.join("chatgpt")
-    }
-
-    pub(super) fn client(&self) -> NativeResult<OpenAiClient> {
-        self.client.clone()
-    }
-
-    pub(super) fn set_authentication(
-        &mut self,
-        authentication: AuthenticationMethod,
-    ) -> NativeResult<()> {
-        if self.provider != ProviderId::Openai {
-            return Err("Choose OpenAI before changing its sign-in method.".into());
-        }
-        write_json(
-            &self.directory.join("authentication.json"),
-            &AuthenticationPreference {
-                version: 1,
-                authentication,
-            },
-        )?;
-        self.authentication = authentication;
-        self.authentication_error = None;
-        Ok(())
-    }
-
-    fn job_directory(&self, project_id: Uuid, job_id: Uuid) -> PathBuf {
-        self.directory
-            .join(project_id.to_string())
-            .join(job_id.to_string())
-    }
-
-    fn persist(&mut self, record: JobRecord) -> NativeResult<GenerationJobView> {
-        let directory = self.job_directory(record.view.project_id, record.view.job_id);
-        private_directory(&directory, RECORD)?;
-        // The on-disk REQUIREMENTS.md is the job's first packet; later parts are frozen in the
-        // job record with the summaries they carried forward.
-        let primary = record
-            .view
-            .batches
-            .first()
-            .map_or(&record.view.requirements, |batch| &batch.requirements);
-        let markdown = directory.join("REQUIREMENTS.md");
-        if markdown.exists() {
-            regular_file(&markdown, RECORD)?;
-            let file = File::open(&markdown).map_err(message)?;
-            if file.metadata().map_err(message)?.len()
-                > desegnos_core::MAX_REQUIREMENTS_BYTES as u64
-            {
-                return Err(
-                    "The frozen requirements file exceeds its limit. The original was preserved."
-                        .into(),
-                );
-            }
-            let mut existing = vec![];
-            file.take(desegnos_core::MAX_REQUIREMENTS_BYTES as u64 + 1)
-                .read_to_end(&mut existing)
-                .map_err(message)?;
-            if existing != primary.markdown.as_bytes() {
-                return Err("The frozen requirements file changed on disk. The existing record was preserved.".into());
-            }
-        } else {
-            write_markdown(&markdown, &primary.markdown).map_err(message)?;
-        }
-        if let Some(context) = &record.view.context {
-            if context.markdown.len() > desegnos_core::MAX_REQUIREMENTS_BYTES
-                || context.sha256 != digest(context.markdown.as_bytes())
-                || context.job_id != record.view.job_id
-                || !context
-                    .markdown
-                    .starts_with(&record.view.requirements.markdown)
-            {
-                return Err("The follow-up context is invalid.".into());
-            }
-            let path = directory.join("CONTEXT.md");
-            if path.exists() {
-                regular_file(&path, RECORD)?;
-                if fs::metadata(&path).map_err(message)?.len()
-                    > desegnos_core::MAX_REQUIREMENTS_BYTES as u64
-                    || fs::read(&path).map_err(message)? != context.markdown.as_bytes()
-                {
-                    return Err(
-                        "The saved follow-up context changed. The original was preserved.".into(),
-                    );
-                }
-            } else {
-                write_markdown(&path, &context.markdown).map_err(message)?;
-            }
-        }
-        if let Some(reply) = &record.view.raw_reply {
-            if reply.len() > 64 * 1024 {
-                return Err("The failed reply exceeds its diagnostic limit.".into());
-            }
-            write_markdown(&directory.join("REPLY.txt"), reply).map_err(message)?;
-        }
-        write_json(&directory.join("job.json"), &record)?;
-        let history_path = self.history_path(record.view.project_id);
-        if history_path.exists() {
-            let mut entries = self.saved_history(record.view.project_id)?;
-            entries.retain(|r| {
-                r.project_id == record.view.project_id && r.job_id != record.view.job_id
-            });
-            entries.extend(self.history_entries(&record.view));
-            desegnos_core::compact_request_history(&mut entries);
-            write_json(
-                &history_path,
-                &RequestHistoryIndex {
-                    format: desegnos_core::CURRENT_REQUIREMENTS_FORMAT,
-                    entries,
-                },
-            )?;
-        }
-        let view = record.view.clone();
-        self.unsaved_jobs.remove(&view.job_id);
-        self.jobs.insert(view.job_id, record);
-        self.trim_cache(view.job_id);
-        Ok(view)
-    }
-
-    /// A stored job of another requirements format is absent rather than an error.
-    fn saved_job(&self, project_id: Uuid, job_id: Uuid) -> NativeResult<Option<GenerationJobView>> {
-        let record = if let Some(record) = self.jobs.get(&job_id) {
-            Some(record.clone())
-        } else {
-            read_job_record(&self.job_directory(project_id, job_id))?
-        };
-        let Some(record) = record else {
-            return Ok(None);
-        };
-        let view = record.view;
-        if record.version != 1
-            || view.requirements.validate_format().is_err()
-            || view.project_id != project_id
-            || view.job_id != job_id
-            || view.requirements.project_id != project_id
-            || view.requirements.job_id != job_id
-            || view.requirements.markdown.len() > desegnos_core::MAX_REQUIREMENTS_BYTES
-            || view.requirements.sha256 != digest(view.requirements.markdown.as_bytes())
-        {
-            return Err("The saved generation record is invalid.".into());
-        }
-        Ok(Some(view))
-    }
-
-    fn history_path(&self, project_id: Uuid) -> PathBuf {
-        self.directory
-            .join(project_id.to_string())
-            .join("request-history.json")
-    }
-
-    /// The derived history index is absent when it was written by another requirements format or
-    /// cannot be decoded; the next save replaces it with a current-format index.
-    fn saved_history(&self, project_id: Uuid) -> NativeResult<Vec<desegnos_core::EarlierRequest>> {
-        let path = self.history_path(project_id);
-        if !path.exists() {
-            return Ok(Vec::new());
-        }
-        let bytes = read_bytes(&path, MAX_JOB_BYTES, RECORD)?;
-        let Ok(index) = serde_json::from_slice::<RequestHistoryIndex>(&bytes) else {
-            return Ok(Vec::new());
-        };
-        if index.format != desegnos_core::CURRENT_REQUIREMENTS_FORMAT {
-            return Ok(Vec::new());
-        }
-        Ok(index.entries)
-    }
-
-    fn history_entries(&self, view: &GenerationJobView) -> Vec<desegnos_core::EarlierRequest> {
-        let created = view
-            .created_at
-            .as_deref()
-            .or_else(|| view.attempts.first().map(|a| a.started_at.as_str()))
-            .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok())
-            .map(|t| t.unix_timestamp())
-            .or_else(|| {
-                fs::metadata(
-                    self.job_directory(view.project_id, view.job_id)
-                        .join("job.json"),
-                )
-                .ok()?
-                .modified()
-                .ok()
-                .map(|t| OffsetDateTime::from(t).unix_timestamp())
-            })
-            .unwrap_or(0);
-        let outcome = match view.status {
-            JobStatus::Applied => desegnos_core::RequestHistoryOutcome::Applied,
-            JobStatus::Discarded
-                if view.failure_kind.is_some() || view.provider_error.is_some() =>
-            {
-                desegnos_core::RequestHistoryOutcome::Failed
-            }
-            JobStatus::Discarded => desegnos_core::RequestHistoryOutcome::RejectedByUser,
-            JobStatus::Failed | JobStatus::Unknown | JobStatus::Cancelled => {
-                desegnos_core::RequestHistoryOutcome::Failed
-            }
-            _ => desegnos_core::RequestHistoryOutcome::Drafted,
-        };
-        let mut entries = desegnos_core::earlier_requests(
-            view.request_requirements(),
-            created,
-            outcome,
-            view.candidate
-                .as_ref()
-                .map(|c| c.summary.as_str())
-                .or_else(|| view.first_exchange.as_ref().map(|e| e.summary.as_str()))
-                .filter(|summary| !summary.trim().is_empty())
-                .unwrap_or("No AI summary recorded."),
-            view.candidate
-                .as_ref()
-                .map_or(&[], |c| c.requests.as_slice()),
-        );
-        for entry in &mut entries {
-            // Discarding a blocked result must not turn a validator rejection into user intent.
-            // Only unresolved conflicts count: repaired events and provider errors do not.
-            if view.candidate.as_ref().map_or(
-                matches!(view.status, JobStatus::Blocked | JobStatus::Discarded)
-                    && view.failure_kind.is_none(),
-                |c| {
-                    c.requests.iter().any(|r| {
-                        r.element_id == Some(entry.element_id)
-                            && r.status == desegnos_core::RequestStatus::Conflict
-                    })
-                },
-            ) && let Some(event) = view
-                .validation_events
-                .iter()
-                .rev()
-                .find(|e| e.disposition == "conflicted" && e.element_id == Some(entry.element_id))
-                .or_else(|| {
-                    view.validation_events.iter().rev().find(|e| {
-                        e.disposition == "conflicted"
-                            && e.element_id.is_none()
-                            && !matches!(e.kind.as_str(), "repairProvider" | "repairStorage")
-                    })
-                })
-            {
-                desegnos_core::record_validation_rejection(
-                    entry,
-                    match event.kind.as_str() {
-                        "outsideRequest" => desegnos_core::RejectionKind::OutsideRequest,
-                        "outsideFrame" | "element" => desegnos_core::RejectionKind::OutsideFrame,
-                        "pointer" => desegnos_core::RejectionKind::Pointer,
-                        "image" => desegnos_core::RejectionKind::Image,
-                        _ => desegnos_core::RejectionKind::Other,
-                    },
-                    &event.message,
-                );
-            }
-        }
-        entries
-    }
-
-    pub(crate) fn request_history(
-        &self,
-        project: &Project,
-    ) -> NativeResult<Vec<desegnos_core::EarlierRequest>> {
-        let path = self.history_path(project.id);
-        // A crash can leave current job records durable before their history index.
-        // Reconstruct a missing index only from validated current-format records. An index from
-        // another requirements format is absent, never read as current earlier-request context.
-        let mut entries: Vec<desegnos_core::EarlierRequest> = if path.exists() {
-            self.saved_history(project.id)?
-        } else {
-            let directory = self.directory.join(project.id.to_string());
-            let mut entries = Vec::new();
-            let mut observations = Vec::new();
-            if directory.exists() {
-                regular_directory(&directory, RECORD)?;
-                for entry in fs::read_dir(directory).map_err(message)? {
-                    let entry = entry.map_err(message)?;
-                    let Some(id) = entry
-                        .file_name()
-                        .to_str()
-                        .and_then(|s| Uuid::parse_str(s).ok())
-                    else {
-                        continue;
-                    };
-                    if let Ok(Some(view)) = self.saved_job(project.id, id) {
-                        entries.extend(self.history_entries(&view));
-                        if let Some(context) = &view.requirements.dossier_context {
-                            observations.push((
-                                view.requirements.base_revision,
-                                context.job_id,
-                                context.application_status,
-                            ));
-                        }
-                    }
-                }
-            }
-            // Later frozen dossiers can preserve an undo after the project's latest dossier moved on.
-            observations.sort_by_key(|(revision, _, _)| *revision);
-            for (_, job_id, status) in observations {
-                for entry in entries.iter_mut().filter(|r| r.job_id == job_id) {
-                    match status {
-                        desegnos_core::GenerationApplicationStatus::Undone
-                            if entry.validation_rejection.is_none() =>
-                        {
-                            entry.validation_rejection = None;
-                            entry.outcome = "undone (do not repeat)".into()
-                        }
-                        desegnos_core::GenerationApplicationStatus::Applied
-                            if entry.outcome.starts_with("undone") =>
-                        {
-                            entry.validation_rejection = None;
-                            entry.outcome = "applied".into()
-                        }
-                        _ => {}
-                    }
-                }
-            }
-            entries
-        };
-        entries.retain(|entry| entry.project_id == project.id);
-        // Undo/redo lives in the durable project dossier. Capture it before a newer job replaces it.
-        if let Some(dossier) = &project.latest_generation {
-            for entry in entries.iter_mut().filter(|r| r.job_id == dossier.job_id) {
-                if entry.summary == "No AI summary recorded." {
-                    entry.summary = dossier
-                        .summary
-                        .split_whitespace()
-                        .collect::<Vec<_>>()
-                        .join(" ")
-                        .chars()
-                        .take(200)
-                        .collect();
-                }
-                match dossier.application_status {
-                    desegnos_core::GenerationApplicationStatus::Undone
-                        if entry.validation_rejection.is_none() =>
-                    {
-                        entry.validation_rejection = None;
-                        entry.outcome = "undone (do not repeat)".into()
-                    }
-                    desegnos_core::GenerationApplicationStatus::Applied
-                        if !entry.outcome.starts_with("needs details")
-                            && entry.validation_rejection.is_none() =>
-                    {
-                        entry.validation_rejection = None;
-                        entry.outcome = "applied".into()
-                    }
-                    _ => {}
-                }
-            }
-        }
-        private_directory(path.parent().ok_or("Missing history directory.")?, RECORD)?;
-        desegnos_core::compact_request_history(&mut entries);
-        let index = RequestHistoryIndex {
-            format: desegnos_core::CURRENT_REQUIREMENTS_FORMAT,
-            entries,
-        };
-        write_json(&path, &index)?;
-        Ok(index.entries)
-    }
-
-    fn past_jobs(&self, project_id: Uuid) -> NativeResult<GenerationHistory> {
-        let directory = self.directory.join(project_id.to_string());
-        if !directory.exists() {
-            return Ok(GenerationHistory {
-                jobs: vec![],
-                skipped: 0,
-                truncated: false,
-            });
-        }
-        regular_directory(&directory, RECORD)?;
-        let mut jobs = Vec::new();
-        let mut skipped = 0;
-        let mut count = 0;
-        for entry in fs::read_dir(&directory).map_err(message)? {
-            let entry = entry.map_err(message)?;
-            let Some(id) = entry
-                .file_name()
-                .to_str()
-                .and_then(|name| Uuid::parse_str(name).ok())
-            else {
-                continue;
-            };
-            count += 1;
-            if count > 4096 {
-                break;
-            }
-            match self.saved_job(project_id, id) {
-                Ok(Some(view)) => {
-                    let first_request = view.requirements.first_request_text();
-                    let created_at = view
-                        .created_at
-                        .or_else(|| {
-                            view.attempts
-                                .first()
-                                .map(|attempt| attempt.started_at.clone())
-                        })
-                        .or_else(|| {
-                            fs::metadata(entry.path().join("job.json"))
-                                .ok()?
-                                .modified()
-                                .ok()
-                                .and_then(|time| OffsetDateTime::from(time).format(&Rfc3339).ok())
-                        });
-                    jobs.push(GenerationJobSummary {
-                        job_id: id,
-                        created_at,
-                        status: view.status,
-                        usage: view.usage,
-                        first_request,
-                        summary: view
-                            .candidate
-                            .map_or(view.message, |candidate| candidate.summary),
-                    });
-                }
-                // Another requirements format is absent, not a record that could not be read.
-                Ok(None) => {}
-                Err(_) => skipped += 1,
-            }
-        }
-        jobs.sort_by(|a, b| {
-            b.created_at
-                .cmp(&a.created_at)
-                .then_with(|| b.job_id.cmp(&a.job_id))
-        });
-        let truncated = count > 4096 || jobs.len() > 100;
-        jobs.truncate(100);
-        Ok(GenerationHistory {
-            jobs,
-            skipped,
-            truncated,
-        })
-    }
-
-    fn persist_retaining(&mut self, record: JobRecord) -> NativeResult<GenerationJobView> {
-        match self.persist(record.clone()) {
-            Ok(view) => Ok(view),
-            Err(error) => {
-                self.unsaved_jobs.insert(record.view.job_id);
-                self.jobs.insert(record.view.job_id, record);
-                Err(error)
-            }
-        }
-    }
-
-    fn trim_cache(&mut self, protected_job_id: Uuid) {
-        while self.jobs.len() > MAX_CACHED_JOBS {
-            let expired = self
-                .jobs
-                .keys()
-                .find(|id| {
-                    **id != protected_job_id
-                        && !self.active.contains(**id)
-                        && !self.unsaved_jobs.contains(id)
-                })
-                .copied();
-            let Some(expired) = expired else {
-                break;
-            };
-            self.jobs.remove(&expired);
+    fn from_directory(directory: PathBuf) -> Self {
+        Self {
+            store: job_store::GenerationJobStore::new(directory),
         }
     }
 
     fn latest(&mut self, project: &Project) -> NativeResult<Option<GenerationJobView>> {
         let latest = self
+            .store
             .directory
             .join(project.id.to_string())
             .join("latest.json");
@@ -1562,10 +562,10 @@ impl GenerationService {
             return Ok(None);
         }
         let latest: LatestJob = read_json(&latest, 1024)?;
-        let stored = if let Some(record) = self.jobs.get(&latest.job_id) {
+        let stored = if let Some(record) = self.store.jobs.get(&latest.job_id) {
             Some(record.clone())
         } else {
-            read_job_record(&self.job_directory(project.id, latest.job_id))?
+            read_job_record(&self.store.job_directory(project.id, latest.job_id))?
         };
         let Some(mut record) = stored else {
             return Ok(None);
@@ -1619,16 +619,16 @@ impl GenerationService {
         {
             record.view.message = "Generation already applied.".into();
             record.transition(JobStatus::Applied);
-            return self.persist(record).map(Some);
+            return self.store.persist(record).map(Some);
         }
         if matches!(
             record.view.status,
             JobStatus::Generating | JobStatus::Applying
-        ) && !self.active.contains(record.view.job_id)
+        ) && !self.store.active.contains(record.view.job_id)
         {
             record.view.message = interrupted_notice("This generation");
             record.transition(JobStatus::Unknown);
-            return self.persist(record).map(Some);
+            return self.store.persist(record).map(Some);
         }
         if record.view.status == JobStatus::Ready
             && let Err(error) = resolve_current(&record.view, project)
@@ -1637,7 +637,7 @@ impl GenerationService {
                 "This candidate is stale: {error} Undo the changed requirements to reuse this candidate, or discard it and generate from the current requirements."
             );
             record.transition(JobStatus::Blocked);
-            return self.persist(record).map(Some);
+            return self.store.persist(record).map(Some);
         }
         // A partially failed batched job keeps its finished parts for Try again; it must not
         // become applyable before the failed parts are retried.
@@ -1658,10 +658,10 @@ impl GenerationService {
         {
             record.view.message = "Result ready to apply.".into();
             record.transition(JobStatus::Ready);
-            return self.persist(record).map(Some);
+            return self.store.persist(record).map(Some);
         }
-        if self.unsaved_jobs.contains(&record.view.job_id) {
-            match self.persist_retaining(record.clone()) {
+        if self.store.unsaved_jobs.contains(&record.view.job_id) {
+            match self.store.persist_retaining(record.clone()) {
                 Ok(view) => return Ok(Some(view)),
                 Err(error) => {
                     let mut view = record.view;
@@ -1673,8 +673,8 @@ impl GenerationService {
                 }
             }
         }
-        self.jobs.insert(record.view.job_id, record.clone());
-        self.trim_cache(record.view.job_id);
+        self.store.jobs.insert(record.view.job_id, record.clone());
+        self.store.trim_cache(record.view.job_id);
         Ok(Some(record.view))
     }
 
@@ -1683,7 +683,8 @@ impl GenerationService {
             .latest(project)?
             .filter(|view| view.job_id == job_id)
             .ok_or("This is no longer the active generation request for the project.")?;
-        self.jobs
+        self.store
+            .jobs
             .get(&view.job_id)
             .cloned()
             .ok_or_else(|| "The generation record is unavailable.".into())
@@ -1691,19 +692,20 @@ impl GenerationService {
 
     fn prepare_requests(
         &mut self,
+        ai: &AiSettingsStore,
         project: &Project,
         account_id: Option<Uuid>,
         previous: Option<&GenerationJobView>,
         element_ids: Option<&[Uuid]>,
         reference_ids: Option<&[Uuid]>,
     ) -> NativeResult<GenerationJobView> {
-        let provider = previous.map_or(self.provider, |v| v.provider);
-        let authentication = previous.map_or(self.authentication, |v| v.authentication);
-        let settings = previous.map_or_else(|| self.settings.clone(), |v| v.settings.clone());
-        if let Some(error) = &self.configuration_error {
+        let provider = previous.map_or(ai.provider, |v| v.provider);
+        let authentication = previous.map_or(ai.authentication, |v| v.authentication);
+        let settings = previous.map_or_else(|| ai.settings.clone(), |v| v.settings.clone());
+        if let Some(error) = &ai.configuration_error {
             return Err(error.clone());
         }
-        if let Some(error) = &self.authentication_error {
+        if let Some(error) = &ai.authentication_error {
             return Err(error.clone());
         }
         if (authentication == AuthenticationMethod::Chatgpt) != account_id.is_some()
@@ -1711,7 +713,7 @@ impl GenerationService {
         {
             return Err("Choose a connected ChatGPT account with plan usage enabled before preparing this request.".into());
         }
-        self.client.as_ref().map_err(Clone::clone)?;
+        ai.client.as_ref().map_err(Clone::clone)?;
         if self.latest(project)?.is_some_and(|view| {
             view.status.active() && previous.is_none_or(|old| old.job_id != view.job_id)
         }) {
@@ -1719,11 +721,11 @@ impl GenerationService {
         }
         let capabilities = provider.capabilities_for(
             &settings,
-            self.selected_image_cache_id(account_id)
+            ai.selected_image_cache_id(account_id)
                 .as_ref()
-                .and_then(|id| self.image_access.get(id)),
+                .and_then(|id| ai.image_access.get(id)),
         );
-        let history = self.request_history(project)?;
+        let history = self.store.request_history(project)?;
         let retry_targets: Vec<_> = previous
             .map(|view| view.request_requirements().target_ids())
             .transpose()
@@ -1754,7 +756,7 @@ impl GenerationService {
             .into_iter()
             .map(|(_, element_id)| element_id)
             .collect();
-        let estimate_usd = self
+        let estimate_usd = ai
             .adapter(provider)?
             .estimate(
                 authentication,
@@ -1826,9 +828,10 @@ impl GenerationService {
                 dossier_error: None,
             },
         };
-        let view = self.persist(record)?;
+        let view = self.store.persist(record)?;
         write_json(
             &self
+                .store
                 .directory
                 .join(project.id.to_string())
                 .join("latest.json"),
@@ -1841,6 +844,7 @@ impl GenerationService {
 
     fn begin(
         &mut self,
+        ai: &AiSettingsStore,
         project: &Project,
         job_id: Uuid,
         retry: bool,
@@ -1862,20 +866,21 @@ impl GenerationService {
             || record.view.requirements.validate_current(project).is_err()
         {
             let fresh = self.prepare_requests(
+                ai,
                 project,
                 record.view.chatgpt_account_id,
                 Some(&record.view),
                 None,
                 Some(&record.view.requirements.reference_ids),
             )?;
-            return self.begin(project, fresh.job_id, false);
+            return self.begin(ai, project, fresh.job_id, false);
         }
         record
             .view
             .requirements
             .validate_current(project)
             .map_err(message)?;
-        let estimate = self
+        let estimate = ai
             .adapter(record.view.provider)?
             .estimate(
                 record.view.authentication,
@@ -1894,12 +899,12 @@ impl GenerationService {
         if record.view.attempts.len() >= MAX_ATTEMPTS {
             return Err("This frozen job has reached its twenty-attempt limit. Start a separately reviewed job; earlier paid records remain preserved.".into());
         }
-        if self.active.len() >= 4 {
+        if self.store.active.len() >= 4 {
             return Err("Four provider requests are already running. Wait for or cancel one before sending another.".into());
         }
         if let Some(candidate) = &record.view.candidate {
             write_json(
-                &self.job_directory(project.id, job_id).join(format!(
+                &self.store.job_directory(project.id, job_id).join(format!(
                     "attempt-{}-candidate.json",
                     record.view.attempts.len()
                 )),
@@ -1910,12 +915,13 @@ impl GenerationService {
         if let Some(error) = &record.error {
             write_json(
                 &self
+                    .store
                     .job_directory(project.id, job_id)
                     .join(format!("attempt-{}-error.json", record.view.attempts.len())),
                 error,
             )?;
         }
-        let directory = self.job_directory(project.id, job_id);
+        let directory = self.store.job_directory(project.id, job_id);
         if let Some(context) = &record.view.context {
             write_markdown(
                 &directory.join(format!("attempt-{}-CONTEXT.md", record.view.attempts.len())),
@@ -1924,7 +930,7 @@ impl GenerationService {
             .map_err(message)?;
             let path = directory.join("CONTEXT.md");
             if path.exists() {
-                regular_file(&path, RECORD)?;
+                regular_file(&path, "generation record")?;
                 fs::remove_file(path).map_err(message)?;
             }
         }
@@ -1943,7 +949,7 @@ impl GenerationService {
         record.view.repair_area_count = 0;
         let reply_path = directory.join("REPLY.txt");
         if reply_path.exists() {
-            regular_file(&reply_path, RECORD)?;
+            regular_file(&reply_path, "generation record")?;
             fs::remove_file(reply_path).map_err(message)?;
         }
         record.view.raw_reply = None;
@@ -1966,16 +972,16 @@ impl GenerationService {
             usage: None,
         });
         record.transition(JobStatus::Generating);
-        let view = self.persist(record)?;
-        let cancellation = self.active.start(job_id, ordinal);
+        let view = self.store.persist(record)?;
+        let cancellation = self.store.active.start(job_id, ordinal);
         Ok((view, cancellation))
     }
 
     fn progress(&mut self, job_id: Uuid, ordinal: usize, progress: desegnos_ai::ProviderProgress) {
-        if !self.active.is_current(job_id, ordinal) {
+        if !self.store.active.is_current(job_id, ordinal) {
             return;
         }
-        if let Some(record) = self.jobs.get_mut(&job_id) {
+        if let Some(record) = self.store.jobs.get_mut(&job_id) {
             record.view.received_bytes = progress.received_bytes;
             if !progress.text_delta.is_empty()
                 && record.partial_text.len() + progress.text_delta.len() <= MAX_PARTIAL_REPLY_BYTES
@@ -2009,10 +1015,10 @@ impl GenerationService {
         ordinal: usize,
         usage: Option<TokenUsage>,
     ) {
-        if !self.active.is_current(job_id, ordinal) {
+        if !self.store.active.is_current(job_id, ordinal) {
             return;
         }
-        let Some(record) = self.jobs.get_mut(&job_id) else {
+        let Some(record) = self.store.jobs.get_mut(&job_id) else {
             return;
         };
         record.view.message = UNREADABLE_REPLY_RETRY_MESSAGE.into();
@@ -2021,14 +1027,14 @@ impl GenerationService {
         record.partial_text.clear();
         record.view.usage = usage;
         record.view.validation_events.push(desegnos_core::ValidationEvent {
-            kind: "unreadableReply".into(),
+            kind: desegnos_core::ValidationEventKind::UnreadableReply,
             disposition: "retried".into(),
             element_id: None,
             message: "The AI reply was not readable JSON, so Desegnos sent the same frozen request once more.".into(),
         });
         let record = record.clone();
-        if let Err(error) = self.persist_retaining(record)
-            && let Some(record) = self.jobs.get_mut(&job_id)
+        if let Err(error) = self.store.persist_retaining(record)
+            && let Some(record) = self.store.jobs.get_mut(&job_id)
         {
             record.view.message = format!(
                 "{} Its local record could not be saved: {error}",
@@ -2044,12 +1050,15 @@ impl GenerationService {
         ordinal: usize,
         result: Result<ProviderResponse, ProviderError>,
     ) -> NativeResult<()> {
-        if !self.active.is_registered(job_id, ordinal) {
-            let mut record = if let Some(record) = self.jobs.get(&job_id) {
+        if !self.store.active.is_registered(job_id, ordinal) {
+            let mut record = if let Some(record) = self.store.jobs.get(&job_id) {
                 record.clone()
             } else {
                 read_json::<JobRecord>(
-                    &self.job_directory(original.id, job_id).join("job.json"),
+                    &self
+                        .store
+                        .job_directory(original.id, job_id)
+                        .join("job.json"),
                     MAX_JOB_BYTES,
                 )?
             };
@@ -2072,12 +1081,12 @@ impl GenerationService {
                 if latest {
                     self.record_validation_counts(&mut record);
                 }
-                self.persist_retaining(record)?;
+                self.store.persist_retaining(record)?;
             }
             return Ok(());
         }
-        let cancelled = self.active.is_cancelled(job_id);
-        let Some(mut record) = self.jobs.get(&job_id).cloned() else {
+        let cancelled = self.store.active.is_cancelled(job_id);
+        let Some(mut record) = self.store.jobs.get(&job_id).cloned() else {
             return Err("The active generation record is unavailable.".into());
         };
         if record.view.status != JobStatus::Generating || cancelled {
@@ -2088,9 +1097,9 @@ impl GenerationService {
                 }
                 self.record_validation_counts(&mut record);
                 record.transition(record.view.status);
-                self.persist_retaining(record)?;
+                self.store.persist_retaining(record)?;
             }
-            self.active.remove(job_id);
+            self.store.active.remove(job_id);
             return Ok(());
         }
         let status = match result {
@@ -2104,7 +1113,7 @@ impl GenerationService {
                 // Successful transport has already bounded it and rejected credential echoes.
                 #[cfg(feature = "native-tests")]
                 capture_benchmark_output(
-                    &self.job_directory(original.id, job_id),
+                    &self.store.job_directory(original.id, job_id),
                     ordinal,
                     &response.text,
                     std::env::var("DESEGNOS_GENERATION_BENCHMARK").as_deref() == Ok("1"),
@@ -2153,7 +1162,6 @@ impl GenerationService {
                                 .any(|request| !request.operations.is_empty())
                         });
                         if kept && recovered_status != JobStatus::Blocked {
-                            // Treated as a partial success, not a failed attempt.
                             record.view.provider_error = None;
                             record.view.failure_kind = None;
                             record.error = None;
@@ -2179,8 +1187,8 @@ impl GenerationService {
         };
         record.transition(status);
         self.record_validation_counts(&mut record);
-        self.persist_retaining(record)?;
-        self.active.remove(job_id);
+        self.store.persist_retaining(record)?;
+        self.store.active.remove(job_id);
         Ok(())
     }
 
@@ -2188,7 +1196,7 @@ impl GenerationService {
         if record.view.validation_counts_recorded || record.view.validation_events.is_empty() {
             return;
         }
-        let counter_path = self.directory.join("validation-counts.json");
+        let counter_path = self.store.directory.join("validation-counts.json");
         let mut counts: BTreeMap<String, u64> = if counter_path.exists() {
             match read_json(&counter_path, 64 * 1024) {
                 Ok(counts) => counts,
@@ -2197,7 +1205,7 @@ impl GenerationService {
                         .view
                         .validation_events
                         .push(desegnos_core::ValidationEvent {
-                            kind: "telemetryStorage".into(),
+                            kind: desegnos_core::ValidationEventKind::TelemetryStorage,
                             disposition: "conflicted".into(),
                             element_id: None,
                             message: format!(
@@ -2221,7 +1229,7 @@ impl GenerationService {
                 .view
                 .validation_events
                 .push(desegnos_core::ValidationEvent {
-                    kind: "telemetryStorage".into(),
+                    kind: desegnos_core::ValidationEventKind::TelemetryStorage,
                     disposition: "conflicted".into(),
                     element_id: None,
                     message: format!("Could not save local validation counts: {error}"),
@@ -2231,10 +1239,10 @@ impl GenerationService {
     }
 
     fn handle_finish_error(&mut self, job_id: Uuid, ordinal: usize, error: &str) {
-        if !self.active.is_registered(job_id, ordinal) {
+        if !self.store.active.is_registered(job_id, ordinal) {
             return;
         }
-        if let Some(record) = self.jobs.get_mut(&job_id)
+        if let Some(record) = self.store.jobs.get_mut(&job_id)
             && record.view.status != JobStatus::Cancelled
         {
             record.view.message = format!(
@@ -2242,12 +1250,13 @@ impl GenerationService {
             );
             record.transition(JobStatus::Unknown);
         }
-        self.active.remove(job_id);
+        self.store.active.remove(job_id);
     }
 
     fn cancel(&mut self, project: &Project, job_id: Uuid) -> NativeResult<GenerationJobView> {
-        self.active.cancel(job_id);
+        self.store.active.cancel(job_id);
         let mut record = if let Some(record) = self
+            .store
             .jobs
             .get(&job_id)
             .filter(|record| record.view.project_id == project.id)
@@ -2278,27 +1287,25 @@ impl GenerationService {
         record.view.candidate = None;
         record.transition(JobStatus::Cancelled);
         let job_id = record.view.job_id;
-        self.jobs.insert(job_id, record.clone());
-        match self.persist(record.clone()) {
+        self.store.jobs.insert(job_id, record.clone());
+        match self.store.persist(record.clone()) {
             Ok(view) => view,
             Err(error) => {
                 record.view.message = unsaved_cancel_notice(&error);
                 let view = record.view.clone();
-                self.jobs.insert(job_id, record);
+                self.store.jobs.insert(job_id, record);
                 view
             }
         }
     }
 
-    pub(super) fn ensure_switch_allowed(&self) -> NativeResult<()> {
-        if self.active.any_running() {
-            return Err("Generation is still running. Wait for its result or cancel it before switching projects; local editing and saving remain available.".into());
-        }
-        Ok(())
+    pub(crate) fn bind_switch_guard(&mut self, guard: crate::ai_job::SwitchGuard) {
+        self.store.active.bind_switch_guard(guard);
     }
 
     pub(super) fn cancel_account(&mut self, account_id: Uuid) -> NativeResult<()> {
         let jobs: Vec<_> = self
+            .store
             .jobs
             .values()
             .filter(|record| {
@@ -2311,8 +1318,9 @@ impl GenerationService {
             .map(|record| record.view.job_id)
             .collect();
         for job_id in jobs {
-            self.active.cancel(job_id);
+            self.store.active.cancel(job_id);
             let mut record = self
+                .store
                 .jobs
                 .get(&job_id)
                 .cloned()
@@ -2324,544 +1332,18 @@ impl GenerationService {
     }
 }
 
-/// No lock is held across network I/O. The cache key binds results to the captured credential/account.
-pub(super) async fn refresh_image_access(
-    state: &Mutex<GenerationService>,
-    chatgpt: &ChatgptState,
-    force: bool,
-) -> NativeResult<()> {
-    refresh_main_image_access(state, chatgpt, force).await?;
-    let probe = {
-        let mut service = state.lock().map_err(message)?;
-        if service.provider != ProviderId::Openai {
-            return Ok(());
-        }
-        let Ok(key) = service.image_credentials.key() else {
-            return Ok(());
-        };
-        let id = key.image_access_cache_key();
-        if service.image_access_checking.contains_key(&id)
-            || (!force
-                && service
-                    .image_access
-                    .get(&id)
-                    .is_some_and(|a| !a.expired(desegnos_ai::image_access_now())))
-        {
-            return Ok(());
-        }
-        let client = service.client.clone()?;
-        let probe_id = Uuid::new_v4();
-        service.image_access_checking.insert(id.clone(), probe_id);
-        let prior_access = service.image_access.get(&id).cloned();
-        (id, key, client, probe_id, prior_access)
-    };
-    let (id, key, client, probe_id, prior_access) = probe;
-    let access = client.probe_image_access(&key).await;
-    let mut service = state.lock().map_err(message)?;
-    if service.image_access_checking.get(&id) == Some(&probe_id) {
-        service.image_access_checking.remove(&id);
-        if service.image_key_cache_id().as_ref() == Some(&id)
-            && service.image_access.get(&id) == prior_access.as_ref()
-        {
-            service.store_image_access(id, access)?;
-        }
-    }
-    Ok(())
-}
-
-async fn refresh_main_image_access(
-    state: &Mutex<GenerationService>,
-    chatgpt: &ChatgptState,
-    force: bool,
-) -> NativeResult<()> {
-    let view = chatgpt.view().await;
-    if view.sign_in.status == desegnos_ai::ChatgptSignInStatus::AwaitingBrowser {
-        return Ok(());
-    }
-    let (id, auth, client, credentials, prior_access) = {
-        let service = state.lock().map_err(message)?;
-        let Some(id) = service.image_cache_id(view.active_account_id) else {
-            return Ok(());
-        };
-        if service.image_access_checking.contains_key(&id)
-            || (!force
-                && service
-                    .image_access
-                    .get(&id)
-                    .is_some_and(|access| !access.expired(desegnos_ai::image_access_now())))
-        {
-            return Ok(());
-        }
-        if service.authentication == AuthenticationMethod::Chatgpt
-            && !view.accounts.iter().any(|account| {
-                Some(account.id) == view.active_account_id
-                    && account.connected
-                    && account.plan_enabled
-                    && !account.storage_repair_required
-            })
-        {
-            return Ok(());
-        }
-        (
-            id.clone(),
-            service.authentication,
-            service.client.clone()?,
-            service.credentials.clone(),
-            service.image_access.get(&id).cloned(),
-        )
-    };
-    let key = if auth == AuthenticationMethod::Chatgpt {
-        let Some(account) = view.active_account_id else {
-            return Ok(());
-        };
-        match chatgpt
-            .manager()?
-            .bearer(account, &CancellationToken::new())
-            .await
-        {
-            Ok(key) => key,
-            Err(_) => return Ok(()),
-        }
-    } else {
-        match tauri::async_runtime::spawn_blocking(move || credentials.key())
-            .await
-            .map_err(message)?
-        {
-            Ok(key) => key,
-            Err(_) => return Ok(()),
-        }
-    };
-    if auth == AuthenticationMethod::ApiKey && key.image_access_cache_key() != id {
-        return Ok(());
-    }
-    let probe_id = Uuid::new_v4();
-    {
-        let mut service = state.lock().map_err(message)?;
-        if service.image_access_checking.contains_key(&id) {
-            return Ok(());
-        }
-        service.image_access_checking.insert(id.clone(), probe_id);
-    }
-    let access = client.probe_image_access(&key).await;
-    let mut service = state.lock().map_err(message)?;
-    if service.image_access_checking.get(&id) != Some(&probe_id) {
-        return Ok(());
-    }
-    service.image_access_checking.remove(&id);
-    // A runtime rejection or reconnect during this probe takes precedence over its late answer.
-    if service.image_access.get(&id) != prior_access.as_ref() {
-        return Ok(());
-    }
-    service.store_image_access(id, access)
-}
-
-pub(super) async fn settings_view(
-    state: &AiState<'_>,
-    chatgpt_state: &ChatgptState,
-) -> NativeResult<AiSettingsView> {
-    refresh_image_access(state, chatgpt_state, false).await?;
-    let (settings, credentials, configuration_error, authentication, provider) = {
-        let service = state.lock().map_err(message)?;
-        (
-            service.settings.clone(),
-            service.credentials.clone(),
-            [
-                service.configuration_error.clone(),
-                service.authentication_error.clone(),
-                service.client.as_ref().err().cloned(),
-            ]
-            .into_iter()
-            .flatten()
-            .reduce(|first, next| format!("{first} {next}")),
-            service.authentication,
-            service.provider,
-        )
-    };
-    let connection_settings = settings.clone();
-    let local_authentication = settings.local_authentication;
-    let (credential, credential_id) = tauri::async_runtime::spawn_blocking(move || {
-        let credential =
-            if provider == ProviderId::Local && !connection_settings.local_authentication {
-                CredentialInfo {
-                    configured: true,
-                    storage: desegnos_ai::CredentialLocation::None,
-                    masked_identifier: Some("Local server".into()),
-                    vault_error: None,
-                }
-            } else {
-                credentials.status()
-            };
-        let identity = provider_key(
-            provider,
-            connection_settings.local_authentication,
-            &credentials,
-        )
-        .ok()
-        .and_then(|key| catalogue_identity(provider, &connection_settings, &key).ok());
-        (credential, identity)
-    })
-    .await
-    .map_err(message)?;
-    let (api_catalogue, models_error, models_auth_required, models_provider_error) = {
-        let service = state.lock().map_err(message)?;
-        match credential_id
-            .as_ref()
-            .and_then(|id| service.api_models.get(&(provider, id.clone())))
-        {
-            Some(cache) => match cache {
-                Ok(models) => (models.clone(), None, false, None),
-                Err(error) => (
-                    vec![],
-                    Some(desegnos_ai::models_error(
-                        provider,
-                        local_authentication,
-                        error,
-                    )),
-                    desegnos_ai::models_need_key(provider, local_authentication, error),
-                    Some(error.clone()),
-                ),
-            },
-            None => (vec![], None, false, None),
-        }
-    };
-    let chatgpt = chatgpt_state.view().await;
-    let catalogue = if authentication == AuthenticationMethod::Chatgpt {
-        if chatgpt.accounts.iter().any(|account| {
-            Some(account.id) == chatgpt.active_account_id
-                && account.connected
-                && account.plan_enabled
-        }) {
-            chatgpt_model_catalogue(&chatgpt.models)
-        } else {
-            vec![]
-        }
-    } else {
-        api_catalogue
-    };
-    let (
-        image_access,
-        image_access_checking,
-        image_credential,
-        main_image_access,
-        image_key_access,
-        image_key,
-    ) = {
-        let service = state.lock().map_err(message)?;
-        let main = service.image_cache_id(chatgpt.active_account_id);
-        let image = service.image_key_cache_id();
-        let id = service.selected_image_cache_id(chatgpt.active_account_id);
-        let credential = id
-            .as_ref()
-            .filter(|id| {
-                service.image_access.get(*id).is_some_and(|a| {
-                    a.available == desegnos_ai::ImageAvailability::Yes
-                        && !a.expired(desegnos_ai::image_access_now())
-                })
-            })
-            .map(|id| {
-                if main.as_ref() == Some(id) {
-                    if authentication == AuthenticationMethod::Chatgpt {
-                        "chatgpt"
-                    } else {
-                        "connection"
-                    }
-                } else {
-                    "imageKey"
-                }
-                .to_owned()
-            });
-        (
-            id.as_ref()
-                .and_then(|id| service.image_access.get(id))
-                .cloned(),
-            id.as_ref()
-                .is_some_and(|id| service.image_access_checking.contains_key(id))
-                || image
-                    .as_ref()
-                    .is_some_and(|id| service.image_access_checking.contains_key(id)),
-            credential,
-            main.as_ref()
-                .and_then(|id| service.image_access.get(id))
-                .cloned(),
-            image
-                .as_ref()
-                .and_then(|id| service.image_access.get(id))
-                .cloned(),
-            service.image_credentials.status(),
-        )
-    };
-    Ok(AiSettingsView {
-        image_credential,
-        image_key,
-        main_image_access,
-        image_key_access,
-        image_access,
-        image_access_checking,
-        provider,
-        providers: provider_catalogue(),
-        settings,
-        credential,
-        catalogue,
-        models_error,
-        models_provider_error,
-        models_auth_required,
-        configuration_error,
-        authentication,
-        chatgpt,
-    })
-}
-
-#[tauri::command]
-pub async fn get_ai_settings(
-    state: AiState<'_>,
-    chatgpt: State<'_, ChatgptState>,
-    refresh_models: Option<bool>,
-) -> NativeResult<AiSettingsView> {
-    if refresh_models.unwrap_or(false) {
-        let (authentication, client) = {
-            let service = state.lock().map_err(message)?;
-            (service.authentication, service.client.clone())
-        };
-        let view = chatgpt.view().await;
-        if authentication == AuthenticationMethod::ApiKey {
-            refresh_api_models(&state).await?;
-        }
-        if authentication == AuthenticationMethod::Chatgpt
-            && let Some(account) = view.accounts.iter().find(|account| {
-                Some(account.id) == view.active_account_id
-                    && account.connected
-                    && account.plan_enabled
-                    && !account.storage_repair_required
-            })
-            && let Ok(client) = client
-        {
-            // Discovery errors remain visible in models_error; retain the settings view.
-            let _ = chatgpt
-                .manager()?
-                .discover_models(account.id, &client, &CancellationToken::new())
-                .await;
-        }
-    }
-    settings_view(&state, &chatgpt).await
-}
-
-#[tauri::command]
-pub async fn set_ai_provider(
-    state: AiState<'_>,
-    chatgpt: State<'_, ChatgptState>,
-    provider: ProviderId,
-) -> NativeResult<AiSettingsView> {
-    state
-        .lock()
-        .map_err(message)?
-        .select_provider(provider, true)?;
-    refresh_api_models(&state).await?;
-    settings_view(&state, &chatgpt).await
-}
-
-#[tauri::command]
-pub async fn save_ai_settings(
-    state: AiState<'_>,
-    chatgpt: State<'_, ChatgptState>,
-    settings: ProviderSettings,
-    connection_only: Option<bool>,
-) -> NativeResult<AiSettingsView> {
-    if connection_only.unwrap_or(false) {
-        {
-            let mut service = state.lock().map_err(message)?;
-            if service.provider != ProviderId::Local {
-                return Err("Choose Local before changing its server address.".into());
-            }
-            service.ensure_switch_allowed()?;
-            let endpoint = desegnos_ai::local_endpoint(&settings).map_err(|_| {
-                "Use a local server address ending in /v1, such as http://127.0.0.1:11434/v1."
-                    .to_owned()
-            })?;
-            let mut next = service.settings.clone();
-            next.endpoint = Some(endpoint);
-            next.local_authentication = settings.local_authentication;
-            write_json(&service.settings_path(ProviderId::Local), &next)?;
-            service.settings = next;
-            service.configuration_error = None;
-        }
-        refresh_api_models(&state).await?;
-        return settings_view(&state, &chatgpt).await;
-    }
-    let account = chatgpt.view().await;
-    let (provider, authentication) = {
-        let service = state.lock().map_err(message)?;
-        (service.provider, service.authentication)
-    };
-    if authentication == AuthenticationMethod::ApiKey {
-        let key = credential_key(&state, provider, &settings).await?;
-        api_model_for_key(&state, provider, &settings, &key, &CancellationToken::new())
-            .await
-            .map_err(message)?;
-    }
-    {
-        let mut service = state.lock().map_err(message)?;
-        if service.provider != provider || service.authentication != authentication {
-            return Err(
-                "The AI connection changed. Review the current settings and save again.".into(),
-            );
-        }
-        service
-            .provider
-            .validate(&settings, service.authentication)
-            .map_err(message)?;
-        if service.authentication == AuthenticationMethod::Chatgpt {
-            account.selected_model(&settings).map_err(message)?;
-        }
-        write_json(&service.settings_path(service.provider), &settings)?;
-        service.settings = settings;
-        service.configuration_error = None;
-        if service.client.is_err() {
-            service.client = OpenAiClient::new().map_err(message);
-        }
-    }
-    settings_view(&state, &chatgpt).await
-}
-
-#[tauri::command]
-pub async fn set_ai_key(
-    state: AiState<'_>,
-    chatgpt: State<'_, ChatgptState>,
-    image: Option<bool>,
-    key: String,
-    storage: CredentialStorage,
-) -> NativeResult<AiSettingsView> {
-    let (credentials, provider) = {
-        let service = state.lock().map_err(message)?;
-        if image.unwrap_or(false) {
-            (service.image_credentials.clone(), service.provider)
-        } else {
-            (service.credentials.clone(), service.provider)
-        }
-    };
-    tauri::async_runtime::spawn_blocking(move || credentials.set_key(key, storage))
-        .await
-        .map_err(message)?
-        .map_err(message)?;
-    if provider == ProviderId::Local && !image.unwrap_or(false) {
-        state
-            .lock()
-            .map_err(message)?
-            .set_local_authentication(true)?;
-    }
-    if !image.unwrap_or(false) {
-        refresh_api_models(&state).await?;
-    }
-    refresh_image_access(&state, &chatgpt, true).await?;
-    settings_view(&state, &chatgpt).await
-}
-
-#[tauri::command]
-pub async fn remove_ai_key(
-    state: AiState<'_>,
-    chatgpt: State<'_, ChatgptState>,
-    image: Option<bool>,
-) -> NativeResult<AiSettingsView> {
-    let (credentials, provider) = {
-        let service = state.lock().map_err(message)?;
-        if image.unwrap_or(false) {
-            (service.image_credentials.clone(), service.provider)
-        } else {
-            (service.credentials.clone(), service.provider)
-        }
-    };
-    tauri::async_runtime::spawn_blocking(move || credentials.remove_key())
-        .await
-        .map_err(message)?
-        .map_err(message)?;
-    if provider == ProviderId::Local && !image.unwrap_or(false) {
-        state
-            .lock()
-            .map_err(message)?
-            .set_local_authentication(false)?;
-        refresh_api_models(&state).await?;
-    }
-    settings_view(&state, &chatgpt).await
-}
-
-#[derive(ts_rs::TS, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AccessResult {
-    provider_error: Option<ProviderError>,
-    message: String,
-}
-
-#[tauri::command]
-pub async fn test_ai_access(
-    state: AiState<'_>,
-    chatgpt: State<'_, ChatgptState>,
-) -> NativeResult<AccessResult> {
-    refresh_image_access(&state, &chatgpt, true).await?;
-    let (client, settings, authentication, provider) = {
-        let service = state.lock().map_err(message)?;
-        (
-            service.client.clone()?,
-            service.settings.clone(),
-            service.authentication,
-            service.provider,
-        )
-    };
-    if authentication == AuthenticationMethod::Chatgpt {
-        let manager = chatgpt.manager()?;
-        let account_id = manager
-            .view()
-            .await
-            .active_account_id
-            .ok_or("Sign in to ChatGPT before checking access.")?;
-        let view = manager
-            .discover_models(account_id, &client, &CancellationToken::new())
-            .await
-            .map_err(message)?;
-        if view.active_account_id != Some(account_id) {
-            return Err("The selected ChatGPT account changed while checking access. Test the currently selected account again.".into());
-        }
-        if let Some(error) = view.models_provider_error {
-            return Ok(AccessResult {
-                message: error.message(),
-                provider_error: Some(error),
-            });
-        }
-        view.selected_model(&settings).map_err(message)?;
-        return Ok(AccessResult {
-            provider_error: None,
-            message: "Connected · ChatGPT plan and model access confirmed.".into(),
-        });
-    }
-    let key = credential_key(&state, provider, &settings).await?;
-    let result = async {
-        api_model_for_key(&state, provider, &settings, &key, &CancellationToken::new()).await?;
-        ProviderClient::with_settings(provider, client, &settings)?
-            .test_model_access(&settings, &key, &CancellationToken::new())
-            .await
-    }
-    .await;
-    Ok(match result {
-        Ok(_) => AccessResult {
-            provider_error: None,
-            message: "Connected · Model access confirmed.".into(),
-        },
-        Err(error) => AccessResult {
-            message: error.message(),
-            provider_error: Some(error),
-        },
-    })
-}
-
 #[tauri::command]
 pub async fn prepare_generation(
     workspace: WorkspaceState<'_>,
     state: AiState<'_>,
+    settings: SettingsState<'_>,
     chatgpt: State<'_, ChatgptState>,
     element_ids: Option<Vec<Uuid>>,
     reference_ids: Option<Vec<Uuid>>,
 ) -> NativeResult<GenerationJobView> {
-    refresh_image_access(&state, &chatgpt, false).await?;
+    refresh_image_access(&settings, &chatgpt, false).await?;
     let (authentication, provider) = {
-        let service = state.lock().map_err(message)?;
+        let service = settings.lock().map_err(message)?;
         (service.authentication, service.provider)
     };
     let account_id = if authentication == AuthenticationMethod::Chatgpt {
@@ -2871,15 +1353,16 @@ pub async fn prepare_generation(
     };
     let workspace = workspace.lock().map_err(message)?;
     let project = workspace.project()?;
+    let ai = settings.lock().map_err(message)?;
     let mut service = state.lock().map_err(message)?;
-    if service.authentication != authentication || service.provider != provider {
+    if ai.authentication != authentication || ai.provider != provider {
         return Err("The generation method changed while preparing this request. Review it and prepare again.".into());
     }
     let references = reference_ids.as_deref();
     if let Some(ids) = element_ids {
-        service.prepare_requests(project, account_id, None, Some(&ids), references)
+        service.prepare_requests(&ai, project, account_id, None, Some(&ids), references)
     } else {
-        service.prepare_requests(project, account_id, None, None, references)
+        service.prepare_requests(&ai, project, account_id, None, None, references)
     }
 }
 
@@ -2909,7 +1392,7 @@ pub fn list_generations(
     if workspace.lock().map_err(message)?.project()?.id != project_id {
         return Err("The active project changed.".into());
     }
-    state.lock().map_err(message)?.past_jobs(project_id)
+    state.lock().map_err(message)?.store.past_jobs(project_id)
 }
 
 #[tauri::command]
@@ -2925,6 +1408,7 @@ pub fn get_past_generation(
     state
         .lock()
         .map_err(message)?
+        .store
         .saved_job(project_id, job_id)?
         .ok_or_else(|| "This saved generation record is no longer available.".into())
 }
@@ -2960,7 +1444,7 @@ fn maintain_dossier(
         let mut record = service.record(workspace.project()?, view.job_id)?;
         view.message.clone_from(&record.view.message);
         record.view = view.clone();
-        service.persist(record)?;
+        service.store.persist(record)?;
     }
     Ok(view)
 }
@@ -2986,8 +1470,10 @@ async fn submit(
     let (original, view, cancellation) = chatgpt.with_binding(binding, || {
         let workspace = workspace.lock().map_err(message)?;
         let project = workspace.project()?.clone();
+        let settings = app.state::<Mutex<AiSettingsStore>>();
+        let ai = settings.lock().map_err(message)?;
         let mut service = state.lock().map_err(message)?;
-        let (view, cancellation) = service.begin(&project, job_id, retry)?;
+        let (view, cancellation) = service.begin(&ai, &project, job_id, retry)?;
         Ok((project, view, cancellation))
     })?;
     let job_id = view.job_id;
@@ -3016,7 +1502,7 @@ async fn attempt(
         account_id: request.chatgpt_account_id,
     };
     let access = resolve(
-        &app.state::<Mutex<GenerationService>>(),
+        &app.state::<Mutex<AiSettingsStore>>(),
         &app.state::<ChatgptState>(),
         &connection,
         cancellation,
@@ -3060,9 +1546,8 @@ async fn attempt(
         &request.settings,
         request.estimate_usd,
         |usage| {
-            lock(&app.state::<Mutex<GenerationService>>()).retrying_after_unreadable_reply(
-                job_id, ordinal, usage,
-            );
+            lock(&app.state::<Mutex<GenerationService>>())
+                .retrying_after_unreadable_reply(job_id, ordinal, usage);
         },
     )
     .await;
@@ -3087,10 +1572,10 @@ fn record_attempt(
         .is_ok_and(|project| project.id == original.id);
     if let Err(error) = service.finish(original, job_id, ordinal, result) {
         service.handle_finish_error(job_id, ordinal, &error);
-    } else if still_open && let Some(record) = service.jobs.get(&job_id) {
+    } else if still_open && let Some(record) = service.store.jobs.get(&job_id) {
         let view = record.view.clone();
         if let Err(error) = maintain_dossier(&mut workspace, &mut service, view)
-            && let Some(record) = service.jobs.get_mut(&job_id)
+            && let Some(record) = service.store.jobs.get_mut(&job_id)
         {
             record.view.dossier_error = Some(format!(
                 "The result is preserved, but its project dossier could not be saved: {error}"
@@ -3151,13 +1636,14 @@ pub fn discard_generation(
     }
     record.view.message = "Result discarded.".into();
     record.transition(JobStatus::Discarded);
-    service.persist(record)
+    service.store.persist(record)
 }
 
 #[tauri::command]
 pub async fn apply_generation(
     workspace: WorkspaceState<'_>,
     state: AiState<'_>,
+    settings: SettingsState<'_>,
     chatgpt: State<'_, ChatgptState>,
     job_id: Uuid,
     accepted_decision_indices: Vec<usize>,
@@ -3168,6 +1654,7 @@ pub async fn apply_generation(
         if project.applied_job_ids.contains(&job_id) {
             return Ok(workspace.view());
         }
+        let ai = settings.lock().map_err(message)?;
         let mut service = state.lock().map_err(message)?;
         let record = service.record(project, job_id)?;
         if record.view.status != JobStatus::Ready {
@@ -3197,7 +1684,7 @@ pub async fn apply_generation(
         let client = if image_requests.is_empty() {
             None
         } else {
-            Some(service.client.clone())
+            Some(ai.client.clone())
         };
         let authentication = record.view.authentication;
         let provider = record.view.provider;
@@ -3205,12 +1692,12 @@ pub async fn apply_generation(
         let image_key = if image_requests.is_empty() || provider != ProviderId::Openai {
             None
         } else {
-            Some(service.image_credentials.key())
+            Some(ai.image_credentials.key())
         };
         let main_key = if image_requests.is_empty() || provider != ProviderId::Openai {
             None
         } else if authentication == AuthenticationMethod::ApiKey {
-            Some(service.credentials.key())
+            Some(ai.credentials.key())
         } else {
             None
         };
@@ -3317,7 +1804,7 @@ pub async fn apply_generation(
     }
     record.transition(JobStatus::Applied);
     record.view.accepted_decision_indices = accepted_decision_indices;
-    service.persist(record)?;
+    service.store.persist(record)?;
     Ok(workspace.view())
 }
 
@@ -3446,16 +1933,24 @@ mod unreadable_reply_retry_tests {
 
     fn prepared(
         settings: ProviderSettings,
-    ) -> (GenerationService, Project, Uuid, Uuid, std::path::PathBuf) {
+    ) -> (
+        GenerationService,
+        AiSettingsStore,
+        Project,
+        Uuid,
+        Uuid,
+        std::path::PathBuf,
+    ) {
         let directory =
             std::env::temp_dir().join(format!("desegnos-retry-test-{}", Uuid::new_v4()));
-        let mut service = GenerationService::from_directory(directory.clone()).unwrap();
-        service.settings = settings;
+        let mut service = GenerationService::from_directory(directory.clone());
+        let mut ai = AiSettingsStore::from_directory(directory.clone()).unwrap();
+        ai.settings = settings;
         let (project, element_id) = project_and_element();
         let view = service
-            .prepare_requests(&project, None, None, Some(&[element_id]), Some(&[]))
+            .prepare_requests(&ai, &project, None, None, Some(&[element_id]), Some(&[]))
             .unwrap();
-        (service, project, view.job_id, element_id, directory)
+        (service, ai, project, view.job_id, element_id, directory)
     }
 
     #[test]
@@ -3526,13 +2021,20 @@ mod unreadable_reply_retry_tests {
 
     #[tokio::test]
     async fn malformed_reply_is_retried_once_and_the_valid_layers_are_applied() {
-        let (mut service, project, job_id, element_id, directory) = prepared(settings());
-        let requirements = service.jobs.get(&job_id).unwrap().view.requirements.clone();
-        let estimate = service.jobs.get(&job_id).unwrap().view.estimate_usd;
-        let settings = service.settings.clone();
+        let (mut service, ai, project, job_id, element_id, directory) = prepared(settings());
+        let requirements = service
+            .store
+            .jobs
+            .get(&job_id)
+            .unwrap()
+            .view
+            .requirements
+            .clone();
+        let estimate = service.store.jobs.get(&job_id).unwrap().view.estimate_usd;
+        let settings = ai.settings.clone();
         let valid = candidate_json(&requirements, element_id);
         let malformed = valid[..valid.len() - 1].to_string();
-        let (_, cancellation) = service.begin(&project, job_id, false).unwrap();
+        let (_, cancellation) = service.begin(&ai, &project, job_id, false).unwrap();
         let sends = Arc::new(AtomicUsize::new(0));
         let counter = sends.clone();
         let first = malformed.clone();
@@ -3551,8 +2053,7 @@ mod unreadable_reply_retry_tests {
             &settings,
             estimate,
             |_| {
-                service
-                    .retrying_after_unreadable_reply(job_id, 1, Some(usage(100)));
+                service.retrying_after_unreadable_reply(job_id, 1, Some(usage(100)));
             },
         )
         .await;
@@ -3560,17 +2061,14 @@ mod unreadable_reply_retry_tests {
         assert_eq!(sends.load(Ordering::SeqCst), 2);
         let result = result.unwrap();
         assert_eq!(result.usage.unwrap().total_tokens, 800);
-        service
-            .finish(&project, job_id, 1, Ok(result))
-            .unwrap();
-        let view = &service.jobs.get(&job_id).unwrap().view;
+        service.finish(&project, job_id, 1, Ok(result)).unwrap();
+        let view = &service.store.jobs.get(&job_id).unwrap().view;
         assert!(matches!(view.status, JobStatus::Ready));
         assert_eq!(view.usage.unwrap().total_tokens, 800);
-        assert!(
-            view.validation_events
-                .iter()
-                .any(|event| { event.kind == "unreadableReply" && event.disposition == "retried" })
-        );
+        assert!(view.validation_events.iter().any(|event| {
+            event.kind == desegnos_core::ValidationEventKind::UnreadableReply
+                && event.disposition == "retried"
+        }));
         let applied = apply_generation_output(
             &project,
             view.request_requirements(),
@@ -3585,13 +2083,20 @@ mod unreadable_reply_retry_tests {
 
     #[tokio::test]
     async fn both_malformed_replies_fail_after_exactly_two_sends() {
-        let (mut service, project, job_id, element_id, directory) = prepared(settings());
-        let requirements = service.jobs.get(&job_id).unwrap().view.requirements.clone();
-        let estimate = service.jobs.get(&job_id).unwrap().view.estimate_usd;
-        let settings = service.settings.clone();
+        let (mut service, ai, project, job_id, element_id, directory) = prepared(settings());
+        let requirements = service
+            .store
+            .jobs
+            .get(&job_id)
+            .unwrap()
+            .view
+            .requirements
+            .clone();
+        let estimate = service.store.jobs.get(&job_id).unwrap().view.estimate_usd;
+        let settings = ai.settings.clone();
         let valid = candidate_json(&requirements, element_id);
         let malformed = valid[..valid.len() - 1].to_string();
-        let (_, cancellation) = service.begin(&project, job_id, false).unwrap();
+        let (_, cancellation) = service.begin(&ai, &project, job_id, false).unwrap();
         let sends = Arc::new(AtomicUsize::new(0));
         let counter = sends.clone();
         let (result, retried) = ask_with_one_unreadable_reply_retry(
@@ -3604,25 +2109,21 @@ mod unreadable_reply_retry_tests {
             &settings,
             estimate,
             |_| {
-                service
-                    .retrying_after_unreadable_reply(job_id, 1, Some(usage(100)));
+                service.retrying_after_unreadable_reply(job_id, 1, Some(usage(100)));
             },
         )
         .await;
         assert!(retried);
         assert_eq!(sends.load(Ordering::SeqCst), 2);
-        service
-            .finish(&project, job_id, 1, result)
-            .unwrap();
-        let view = &service.jobs.get(&job_id).unwrap().view;
+        service.finish(&project, job_id, 1, result).unwrap();
+        let view = &service.store.jobs.get(&job_id).unwrap().view;
         assert!(matches!(view.status, JobStatus::Blocked));
         assert!(view.message.starts_with("Desegnos rejected the candidate:"));
         assert_eq!(view.usage.unwrap().total_tokens, 400);
-        assert!(
-            view.validation_events
-                .iter()
-                .any(|event| { event.kind == "unreadableReply" && event.disposition == "retried" })
-        );
+        assert!(view.validation_events.iter().any(|event| {
+            event.kind == desegnos_core::ValidationEventKind::UnreadableReply
+                && event.disposition == "retried"
+        }));
         fs::remove_dir_all(directory).unwrap();
     }
 
@@ -3655,177 +2156,5 @@ mod unreadable_reply_retry_tests {
         assert!(!retried);
         assert_eq!(sends.load(Ordering::SeqCst), 1);
         assert!(result.is_ok());
-    }
-}
-
-#[cfg(test)]
-mod api_model_cache_tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn local_catalogues_are_bound_to_server_and_key_mode() {
-        let directory =
-            std::env::temp_dir().join(format!("desegnos-local-model-cache-{}", Uuid::new_v4()));
-        let mut service = GenerationService::from_directory(directory.clone()).unwrap();
-        let anonymous = ApiKey::local_anonymous();
-        let settings = ProviderId::Local.defaults();
-        let other_server = ProviderSettings {
-            endpoint: Some("http://127.0.0.1:8080/v1".into()),
-            ..settings.clone()
-        };
-        let authenticated = ApiKey::new("synthetic-local-server-key".into()).unwrap();
-        let identity = catalogue_identity(ProviderId::Local, &settings, &anonymous).unwrap();
-        assert_ne!(
-            identity,
-            catalogue_identity(ProviderId::Local, &other_server, &anonymous).unwrap()
-        );
-        assert_ne!(
-            identity,
-            catalogue_identity(ProviderId::Local, &settings, &authenticated).unwrap()
-        );
-        service
-            .api_models
-            .insert((ProviderId::Local, identity), Ok(Vec::new()));
-        // Anonymous mode must not consult the credential store, even when no key exists.
-        assert!(
-            provider_key(
-                ProviderId::Local,
-                false,
-                &service.credentials_for(ProviderId::Local)
-            )
-            .is_ok()
-        );
-        let state = Mutex::new(service);
-        let cancel = CancellationToken::new();
-        cancel.cancel();
-        assert!(
-            api_catalogue_for_key(
-                &state,
-                ProviderId::Local,
-                &settings,
-                &anonymous,
-                &cancel,
-                false
-            )
-            .await
-            .unwrap()
-            .is_empty()
-        );
-        assert_eq!(
-            api_catalogue_for_key(
-                &state,
-                ProviderId::Local,
-                &other_server,
-                &anonymous,
-                &cancel,
-                false
-            )
-            .await
-            .unwrap_err()
-            .kind,
-            ErrorKind::Cancelled
-        );
-        drop(state);
-        fs::remove_dir_all(directory).unwrap();
-    }
-
-    #[tokio::test]
-    async fn api_model_cache_isolates_credentials_and_providers_and_survives_cancelled_refresh() {
-        let directory =
-            std::env::temp_dir().join(format!("desegnos-api-model-cache-{}", Uuid::new_v4()));
-        let mut service = GenerationService::from_directory(directory.clone()).unwrap();
-        let first = ApiKey::new("synthetic-first-provider-key".into()).unwrap();
-        let second = ApiKey::new("synthetic-second-provider-key".into()).unwrap();
-        let openai = ProviderId::Openai.catalogue();
-        let anthropic = ProviderId::Anthropic.catalogue();
-        service.api_models.insert(
-            (ProviderId::Openai, first.image_access_cache_key()),
-            Ok(openai.clone()),
-        );
-        service.api_models.insert(
-            (ProviderId::Anthropic, first.image_access_cache_key()),
-            Ok(anthropic.clone()),
-        );
-        service.api_models.insert(
-            (ProviderId::Openai, second.image_access_cache_key()),
-            Err(ProviderError::new(
-                ErrorKind::Authentication,
-                SubmissionOutcome::NotSubmitted,
-            )),
-        );
-        let state = Mutex::new(service);
-        let cancelled = CancellationToken::new();
-        cancelled.cancel();
-        assert_eq!(
-            api_catalogue_for_key(
-                &state,
-                ProviderId::Openai,
-                &ProviderSettings::default(),
-                &first,
-                &cancelled,
-                false
-            )
-            .await
-            .unwrap(),
-            openai
-        );
-        assert_eq!(
-            api_catalogue_for_key(
-                &state,
-                ProviderId::Anthropic,
-                &ProviderSettings::default(),
-                &first,
-                &cancelled,
-                false
-            )
-            .await
-            .unwrap(),
-            anthropic
-        );
-        for (provider, key) in [(ProviderId::Openai, &second), (ProviderId::Google, &first)] {
-            assert_eq!(
-                api_catalogue_for_key(
-                    &state,
-                    provider,
-                    &ProviderSettings::default(),
-                    key,
-                    &cancelled,
-                    false
-                )
-                .await
-                .unwrap_err()
-                .kind,
-                ErrorKind::Cancelled
-            );
-        }
-        assert_eq!(
-            api_catalogue_for_key(
-                &state,
-                ProviderId::Openai,
-                &ProviderSettings::default(),
-                &first,
-                &cancelled,
-                true
-            )
-            .await
-            .unwrap_err()
-            .kind,
-            ErrorKind::Cancelled
-        );
-        assert_eq!(
-            api_catalogue_for_key(
-                &state,
-                ProviderId::Openai,
-                &ProviderSettings::default(),
-                &first,
-                &cancelled,
-                false
-            )
-            .await
-            .unwrap(),
-            openai
-        );
-        drop(state);
-        fs::remove_dir_all(directory).unwrap();
     }
 }

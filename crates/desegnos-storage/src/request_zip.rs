@@ -5,7 +5,7 @@ use serde::Serialize;
 use std::io::{Read, Seek, SeekFrom};
 use zip::ZipArchive;
 
-pub const MAX_ARCHIVE_BYTES: usize = 32 * 1024 * 1024;
+use desegnos_core::limits::MAX_REQUEST_FILE_BYTES as MAX_ARCHIVE_BYTES;
 const MAX_ENTRIES: usize = 64;
 const MAX_FILE_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_TOTAL_BYTES: u64 = 64 * 1024 * 1024;
@@ -27,9 +27,10 @@ pub fn unpack_request_zip<R: Read + Seek>(
     remaining: usize,
 ) -> Result<ZipAttachments> {
     if reader.seek(SeekFrom::End(0)).map_err(crate::io)? > MAX_ARCHIVE_BYTES as u64 {
-        return Err(Error(
-            "The ZIP exceeds the 32 MiB archive size limit.".into(),
-        ));
+        return Err(Error(format!(
+            "The ZIP exceeds the {} MiB archive size limit.",
+            MAX_ARCHIVE_BYTES / 1024 / 1024
+        )));
     }
     reader.seek(SeekFrom::Start(0)).map_err(crate::io)?;
     let mut zip =

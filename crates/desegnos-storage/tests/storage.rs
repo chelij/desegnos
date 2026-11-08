@@ -1,9 +1,10 @@
 //! Project parts and the `.desegnos` database round trip.
-use desegnos_core::{Appearance, BoundaryKind, Command, ElementKind, PageSize, Project, Rect, Session, Viewport, digest, empty_element};
-use desegnos_storage::project_db::now_millis;
-use desegnos_storage::{
-    ProjectDatabase, join_project, split_project,
+use desegnos_core::{
+    Appearance, BoundaryKind, Command, ElementKind, PageSize, Project, Rect, Session, Viewport,
+    digest, empty_element,
 };
+use desegnos_storage::project_db::now_millis;
+use desegnos_storage::{ProjectDatabase, join_project, split_project};
 use std::fs;
 use std::path::PathBuf;
 use uuid::Uuid;
@@ -12,10 +13,8 @@ struct TempDir(PathBuf);
 
 impl TempDir {
     fn new(label: &str) -> Self {
-        let path = std::env::temp_dir().join(format!(
-            "desegnos-{label}-{}",
-            Uuid::new_v4().simple()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("desegnos-{label}-{}", Uuid::new_v4().simple()));
         fs::create_dir_all(&path).unwrap();
         Self(path)
     }
@@ -198,7 +197,7 @@ fn generated_attachment_picture_survives_acceptance_save_reopen_and_export() {
     assert!(project.pictures.is_empty(), "validation is read-only");
     let mut session = Session::new(project.clone()).unwrap();
     session
-        .apply_generation(&snapshot, &reply, &[], &Default::default(), |_| Ok(()))
+        .apply_generation(&snapshot, &reply, &[], &Default::default())
         .unwrap();
     let applied = session.project().clone();
     assert_eq!(applied.pictures[&picture_id].as_ref(), uri);
@@ -207,7 +206,7 @@ fn generated_attachment_picture_survives_acceptance_save_reopen_and_export() {
         Some(picture_id)
     );
     assert!(applied.requests.is_empty());
-    session.undo(|_| Ok(())).unwrap();
+    session.undo().unwrap();
     assert_eq!(session.project().pictures, project.pictures);
     assert_eq!(session.project().requests, project.requests);
     drop(ProjectDatabase::create(&path, &applied, now_millis()).unwrap());
@@ -360,8 +359,12 @@ fn split_and_join_round_trip_and_unchanged_parts_keep_their_hash() {
 }
 
 fn create_database(directory: &TempDir, project: &Project) -> ProjectDatabase {
-    ProjectDatabase::create(&directory.path("project.desegnos"), project, now_millis() - 60_000)
-        .unwrap()
+    ProjectDatabase::create(
+        &directory.path("project.desegnos"),
+        project,
+        now_millis() - 60_000,
+    )
+    .unwrap()
 }
 
 #[test]
@@ -411,12 +414,12 @@ fn restoring_a_version_is_one_undo_step_in_the_session() {
     renamed.name = "Later".into();
     let mut session = Session::new(renamed).unwrap();
     let before = session.history().position;
-    session.restore(project.clone(), |_| Ok(())).unwrap();
+    session.restore(project.clone()).unwrap();
     assert_eq!(session.history().position, before + 1);
     assert_eq!(session.project().name, "Storage");
-    session.undo(|_| Ok(())).unwrap();
+    session.undo().unwrap();
     assert_eq!(session.project().name, "Later");
-    session.redo(|_| Ok(())).unwrap();
+    session.redo().unwrap();
     assert_eq!(session.project().name, "Storage");
 }
 
@@ -435,17 +438,32 @@ fn alternatives_keep_independent_heads() {
     darker.name = "Darker".into();
     database.save(&darker, &[], Some("Darker")).unwrap();
 
-    let main = database.switch_branch(desegnos_storage::DEFAULT_BRANCH).unwrap();
+    let main = database
+        .switch_branch(desegnos_storage::DEFAULT_BRANCH)
+        .unwrap();
     assert_eq!(main.project.name, "Dark");
     assert_eq!(main.branch, desegnos_storage::DEFAULT_BRANCH);
     let alternative = database.switch_branch("Dark version").unwrap();
     assert_eq!(alternative.project.name, "Darker");
     let history = database.history().unwrap();
     assert_eq!(history.branch, "Dark version");
-    assert!(history.branches.iter().any(|item| item.name == "Dark version" && item.current));
-    assert!(history.branches.iter().any(|item| item.name == "Main" && item.primary));
+    assert!(
+        history
+            .branches
+            .iter()
+            .any(|item| item.name == "Dark version" && item.current)
+    );
+    assert!(
+        history
+            .branches
+            .iter()
+            .any(|item| item.name == "Main" && item.primary)
+    );
 
-    assert!(database.delete_branch("Main").is_err(), "the main branch stays");
+    assert!(
+        database.delete_branch("Main").is_err(),
+        "the main branch stays"
+    );
     assert!(
         database.delete_branch("Dark version").is_err(),
         "the current branch stays"
@@ -472,7 +490,9 @@ fn autosave_is_detected_as_recovery_and_cleared_by_save() {
     assert_eq!(recovery.project.name, "Unsaved");
     assert_eq!(database.load().unwrap().project.name, "Storage");
 
-    database.save(&changed, &[], Some("Saved after recovery")).unwrap();
+    database
+        .save(&changed, &[], Some("Saved after recovery"))
+        .unwrap();
     assert!(database.autosave_work().unwrap().is_none());
     assert_eq!(database.load().unwrap().project.name, "Unsaved");
 }
@@ -487,8 +507,8 @@ fn a_copy_has_one_version_and_no_history() {
     source.save(&changed, &[], Some("Before copy")).unwrap();
 
     let copy_path = directory.path("copy.desegnos");
-    let copy = ProjectDatabase::create(&copy_path, &source.load().unwrap().project, now_millis())
-        .unwrap();
+    let copy =
+        ProjectDatabase::create(&copy_path, &source.load().unwrap().project, now_millis()).unwrap();
     let history = copy.history().unwrap();
     assert_eq!(history.versions.len(), 1);
     assert_eq!(history.versions[0].label, "Created the project");
@@ -516,9 +536,7 @@ fn an_open_saved_project_leaves_only_its_file_in_the_folder() {
     let path = directory.path("Bakery site.desegnos");
     let project = project_with_element();
     let database = ProjectDatabase::create(&path, &project, now_millis()).unwrap();
-    database
-        .save(&project, &[], Some("Saved"))
-        .unwrap();
+    database.save(&project, &[], Some("Saved")).unwrap();
 
     let visible: Vec<String> = fs::read_dir(&directory.0)
         .unwrap()
@@ -540,5 +558,8 @@ fn autosave_reads_without_the_writing_lock() {
     drop(database);
     let recovered = desegnos_storage::read_autosave(&path).unwrap().unwrap();
     assert_eq!(recovered.project.name, "Crash recovery");
-    assert_eq!(desegnos_storage::load_project(&path).unwrap().name, "Storage");
+    assert_eq!(
+        desegnos_storage::load_project(&path).unwrap().name,
+        "Storage"
+    );
 }

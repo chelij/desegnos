@@ -93,11 +93,10 @@ fn editing_size_clears_automatic_and_undo_restores_it() {
                 page_id,
                 patches: vec![patch],
             },
-            |_| Ok(()),
         )
         .unwrap();
     assert!(!session.project().pages[0].elements[0].overrides[&id].automatic);
-    session.undo(|_| Ok(())).unwrap();
+    session.undo().unwrap();
     assert!(session.project().pages[0].elements[0].overrides[&id].automatic);
 }
 #[test]
@@ -164,11 +163,10 @@ fn base_edits_adapt_in_one_undo_step() {
                 page_id,
                 patches: vec![patch],
             },
-            |_| Ok(()),
         )
         .unwrap();
     assert!(session.project().pages[0].elements[0].overrides[&id].automatic);
-    session.undo(|_| Ok(())).unwrap();
+    session.undo().unwrap();
     assert_eq!(session.project().pages, p.pages);
 }
 #[test]
@@ -403,7 +401,6 @@ fn adding_a_linked_size_adapts_without_resizing_the_base_in_one_undo_step() {
                 moves: vec![],
                 reference: vec![],
             },
-            |_| Ok(()),
         )
         .unwrap();
     let page = &session.project().pages[0];
@@ -412,7 +409,7 @@ fn adding_a_linked_size_adapts_without_resizing_the_base_in_one_undo_step() {
     assert!(page.elements[0].overrides[&phone_id].automatic);
     let phone_elements = resolve_for_size(session.project(), page, phone_id);
     assert!(phone_elements[0].rect.width < before.elements[0].rect.width);
-    session.undo(|_| Ok(())).unwrap();
+    session.undo().unwrap();
     assert_eq!(session.project().pages[0], before);
 }
 
@@ -432,7 +429,17 @@ fn letter_by_letter_headline_stays_on_one_line_at_phone() {
     adapt_size(&mut p.pages[0], id).unwrap();
     let phone = resolve_for_size(&p, &p.pages[0], id);
     let width = f64::from(p.pages[0].size(id).unwrap().width);
-    assert!(phone.iter().all(|e| e.rect.y == phone[0].rect.y), "letters wrapped");
-    assert!(phone.iter().all(|e| e.rect.x + e.rect.width <= width), "letters overflow the phone");
-    assert!(phone.iter().all(|e| e.style.text_style.size <= width * 0.16 + 0.01));
+    assert!(
+        phone.iter().all(|e| e.rect.y == phone[0].rect.y),
+        "letters wrapped"
+    );
+    assert!(
+        phone.iter().all(|e| e.rect.x + e.rect.width <= width),
+        "letters overflow the phone"
+    );
+    assert!(
+        phone
+            .iter()
+            .all(|e| e.style.text_style.size <= width * 0.16 + 0.01)
+    );
 }

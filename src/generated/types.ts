@@ -365,7 +365,7 @@ export type GenerationStatus = "prepared"
 
 export type GenerationTarget = { pageId: string, elementId: string, };
 
-export type GenerationValidationEvent = { kind: string, disposition: string, elementId: string | null, message: string, };
+export type GenerationValidationEvent = { kind: ValidationEventKind, disposition: string, elementId: string | null, message: string, };
 
 export type GridSettings = { spacing: number, unit: GridUnit, snap: boolean, };
 
@@ -703,6 +703,16 @@ latest: UpdateRelease | null, newer: boolean, };
 export type UpdateRelease = { 
 version: string, name: string, 
 url: string, publishedAt: string, };
+
+export type ValidationEventKind = "operation"
+  | "boundaryCoverage"
+  | "pagePatch"
+  | "unreadableReply"
+  | "telemetryStorage"
+  | "replyStructure"
+  | "image"
+  | "pointer"
+  | "element";
 
 export type ValidationExchange = { summary: string, requests: Array<RequestOutcome>, usage: TokenUsage | null, };
 

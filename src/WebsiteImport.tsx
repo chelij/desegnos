@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { native } from './api';
 import { Notice } from './ProblemBanner.js';
-import { SIZE_PRESETS } from './generated/limits';
+import { SIZE_PRESETS, MAX_IMPORT_PAGES } from './generated/limits';
 import { EXTRACTOR_SCRIPT } from './websiteImportExtract';
 import type { WebCapture, WebsiteImportPageView, WebsiteImportResultView, WebsiteImportSourceView } from './types';
 
@@ -112,7 +112,7 @@ export function useWebsiteImport(busy: boolean, onImported: (result: WebsiteImpo
     setError(''); setWarnings(source.skipped);
     const captures: WebCapture[] = [];
     const notes: string[] = [...source.skipped];
-    const pages = source.pages.slice(0, 30);
+    const pages = source.pages.slice(0, MAX_IMPORT_PAGES);
     const total = pages.length * 2;
     const report = (progress: Progress) => setPhase(current => current.kind === 'rendering' ? { ...current, progress } : current);
     setPhase({ kind: 'rendering', progress: { done: 0, total, label: `Rendering pages at ${SIZE_PRESETS.desktop.width} px and ${SIZE_PRESETS.phone.width} px…` }, capture: null });

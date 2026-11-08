@@ -1,5 +1,5 @@
 import type { RequestAttachment } from './types';
-import { MAX_ATTACHMENTS, MAX_NAME_CHARS } from './generated/limits';
+import { MAX_ATTACHMENTS, MAX_NAME_CHARS, MAX_REQUEST_FILE_BYTES } from './generated/limits';
 
 export const ATTACHMENT_ACCEPT = 'image/png,image/jpeg,image/webp,image/gif,text/*,.txt,.md,.csv,.json,.htm,.html';
 const id = () => crypto.randomUUID().replace(/-/g, '').slice(0, 16);
@@ -14,6 +14,7 @@ export async function readRequestAttachments(existing: RequestAttachment[], file
   };
   for (const file of files) {
     try {
+      if (file.size > MAX_REQUEST_FILE_BYTES) throw new Error(`Choose a file no larger than ${MAX_REQUEST_FILE_BYTES / 1024 / 1024} MiB.`);
       if (/^image\/(png|jpeg|webp|gif)$/.test(file.type)) {
         const dataUri = await new Promise<string>((resolve, reject) => {
           const reader = new FileReader();

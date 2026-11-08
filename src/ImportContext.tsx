@@ -1,3 +1,4 @@
+import { MAX_IMPORT_PAGES } from './generated/limits';
 import { usePoll } from './usePoll';
 import { needsAiSettings, ProblemBanner, Notice } from './ProblemBanner.js';
 import { userError } from './userErrors.js';
@@ -338,7 +339,7 @@ export function ImportContext({ busy, settings, openSettings, importInto, onPage
         {source && source.skipped.length > 0 && <details><summary>See all skipped files · {skippedSummary(source.skipped)}</summary><ul className="identity-skipped">{source.skipped.map((reason, index) => <li key={index}>{skippedFile(reason)}</li>)}</ul></details>}
         <WebsiteImportStatus flow={pages} busy={busy} />
         {pages.source && pages.source.pages.length > 0 && <section className="website-import-pages" aria-label="Pages to import">
-          <p>{pages.source.totalPages} {pages.source.totalPages === 1 ? 'page' : 'pages'} found.{pages.source.totalPages > 30 ? ' The 30 closest to the home page are imported.' : ''}</p>
+          <p>{pages.source.totalPages} {pages.source.totalPages === 1 ? 'page' : 'pages'} found.{pages.source.totalPages > MAX_IMPORT_PAGES ? ` The ${MAX_IMPORT_PAGES} closest to the home page are imported.` : ''}</p>
           <ul className="website-import-list">{pages.source.pages.map(page => <li key={page.route}><span>{page.title || page.route}</span>{page.title && <span className="muted">{page.route}</span>}</li>)}</ul>
           {pages.phase.kind === 'imported' && <Notice message="Pages imported." />}
         </section>}

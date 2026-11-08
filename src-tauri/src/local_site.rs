@@ -22,7 +22,7 @@ use tokio::sync::Notify;
 use uuid::Uuid;
 
 /// The largest file the loopback server answers with.
-const MAX_FILE_BYTES: u64 = 64 * 1024 * 1024;
+use desegnos_core::limits::MAX_LOCAL_PREVIEW_BYTES as MAX_FILE_BYTES;
 
 struct Running {
     stop: Arc<Notify>,
@@ -154,10 +154,9 @@ async fn answer(
     };
     let mut response = response(StatusCode::OK, content_type, bytes);
     if head {
-        response.headers_mut().insert(
-            "content-length",
-            header(&metadata.len().to_string()),
-        );
+        response
+            .headers_mut()
+            .insert("content-length", header(&metadata.len().to_string()));
     }
     response
 }
@@ -207,9 +206,7 @@ pub fn decode_path(path: &str) -> Option<String> {
     let value = String::from_utf8(decoded).ok()?;
     let rejected = value.contains(['\\', '\0'])
         || value.chars().any(char::is_control)
-        || value
-            .split('/')
-            .any(|part| part == ".." || part == ".");
+        || value.split('/').any(|part| part == ".." || part == ".");
     (!rejected).then_some(value)
 }
 
@@ -228,12 +225,11 @@ fn header(value: &str) -> HeaderValue {
 fn response(status: StatusCode, content_type: HeaderValue, body: Vec<u8>) -> Response<Full<Bytes>> {
     let mut response = Response::new(Full::new(Bytes::from(body)));
     *response.status_mut() = status;
-    response
-        .headers_mut()
-        .insert("content-type", content_type);
-    response
-        .headers_mut()
-        .insert("x-content-type-options", HeaderValue::from_static("nosniff"));
+    response.headers_mut().insert("content-type", content_type);
+    response.headers_mut().insert(
+        "x-content-type-options",
+        HeaderValue::from_static("nosniff"),
+    );
     response
         .headers_mut()
         .insert("cache-control", HeaderValue::from_static("no-store"));
@@ -334,7 +330,13 @@ fn meta_charset(tag: &str) -> Option<String> {
 }
 
 fn mime(path: &str) -> &'static str {
-    match path.rsplit('.').next().unwrap_or_default().to_ascii_lowercase().as_str() {
+    match path
+        .rsplit('.')
+        .next()
+        .unwrap_or_default()
+        .to_ascii_lowercase()
+        .as_str()
+    {
         "html" | "htm" => "text/html; charset=utf-8",
         "css" => "text/css; charset=utf-8",
         "js" | "mjs" => "text/javascript; charset=utf-8",
@@ -371,7 +373,10 @@ mod tests {
         let mut bytes = b"<meta charset=\"windows-1252\"><p>caf\xe9</p>".to_vec();
         bytes.splice(0..0, [0xef, 0xbb, 0xbf]);
         assert_eq!(html_charset(&bytes), "utf-8");
-        assert_eq!(html_charset(&[0xff, 0xfe, b'<', 0, b'p', 0, b'>', 0]), "utf-16le");
+        assert_eq!(
+            html_charset(&[0xff, 0xfe, b'<', 0, b'p', 0, b'>', 0]),
+            "utf-16le"
+        );
     }
 
     #[test]
@@ -407,7 +412,8 @@ mod tests {
 
     #[test]
     fn content_type_sends_the_detected_charset_for_html_only() {
-        let page = b"<meta http-equiv=\"Content-Type\" content=\"text/html; charset=windows-1252\">";
+        let page =
+            b"<meta http-equiv=\"Content-Type\" content=\"text/html; charset=windows-1252\">";
         assert_eq!(
             content_type("PAGE.HTM", page).to_str().unwrap(),
             "text/html; charset=windows-1252"
@@ -425,7 +431,8 @@ mod tests {
     #[test]
     fn serves_uppercase_html_with_its_declared_charset() {
         use std::io::{Read, Write};
-        let folder = std::env::temp_dir().join(format!("desegnos-local-site-{}", uuid::Uuid::new_v4()));
+        let folder =
+            std::env::temp_dir().join(format!("desegnos-local-site-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&folder).unwrap();
         std::fs::write(
             folder.join("INDEX.HTM"),
@@ -440,7 +447,8 @@ mod tests {
             .unwrap();
         let port: u16 = rest.0.parse().unwrap();
         let token = rest.1.trim_end_matches('/');
-        let mut stream = std::net::TcpStream::connect((std::net::Ipv4Addr::LOCALHOST, port)).unwrap();
+        let mut stream =
+            std::net::TcpStream::connect((std::net::Ipv4Addr::LOCALHOST, port)).unwrap();
         stream
             .set_read_timeout(Some(std::time::Duration::from_secs(5)))
             .unwrap();

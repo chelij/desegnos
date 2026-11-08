@@ -28,7 +28,7 @@ const MAX_TOTAL_TEXT: usize = 2 * 1024 * 1024;
 const MAX_ASSET_BYTES: usize = 128 * 1024;
 use desegnos_core::MAX_IDENTITY_ASSETS as MAX_ASSETS;
 const MAX_ASSET_URI_BYTES: usize = 512 * 1024;
-const MAX_COLLECTED_BYTES: usize = 4 * 1024 * 1024;
+use desegnos_core::limits::MAX_IDENTITY_SOURCE_BYTES as MAX_COLLECTED_BYTES;
 const MAX_ARCHIVE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const MAX_EXPANDED_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const MAX_SKIPPED: usize = 256;
@@ -123,7 +123,10 @@ impl Collector {
             self.collected_bytes -= removed.bytes.len();
             self.skip(
                 &removed.name,
-                "the 4 MiB collection snapshot budget is full",
+                &format!(
+                    "the {} MiB collection snapshot budget is full",
+                    MAX_COLLECTED_BYTES / 1024 / 1024
+                ),
             );
         }
     }

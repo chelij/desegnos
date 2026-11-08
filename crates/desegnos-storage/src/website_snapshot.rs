@@ -16,7 +16,7 @@ use zip::ZipArchive;
 
 const MAX_ENTRIES: usize = 50_000;
 const MAX_FILES: usize = 1_500;
-const MAX_FILE_BYTES: u64 = 8 * 1024 * 1024;
+const MAX_FILE_BYTES: u64 = desegnos_core::limits::MAX_WEBSITE_FILE_BYTES as u64;
 const MAX_TOTAL_BYTES: u64 = crate::source_files::MAX_WEBSITE_BYTES as u64;
 
 /// One renderable website snapshot: relative file names and the pages they serve.
@@ -408,7 +408,7 @@ fn select_files(
         .collect::<BTreeMap<_, _>>();
     let mut queue = snapshot_pages(&files)
         .into_iter()
-        .take(30)
+        .take(desegnos_core::limits::MAX_IMPORT_PAGES)
         .map(|page| page.file)
         .collect::<VecDeque<_>>();
     let mut needed = BTreeSet::new();
@@ -451,7 +451,7 @@ fn select_files(
         ));
     }
     if !rejected.is_empty() {
-        skipped.push(format!("Left out {} rendering files to keep the snapshot within 1,500 files, 128 MiB total and 8 MiB per file.", rejected.len()));
+        skipped.push(format!("Left out {} rendering files to keep the snapshot within 1,500 files, 128 MiB total and {} MiB per file.", rejected.len(), MAX_FILE_BYTES / 1024 / 1024));
     }
     Ok(files)
 }
@@ -627,8 +627,11 @@ pub fn collect_import_html(paths: &[PathBuf]) -> Result<WebsiteSnapshot> {
                 "Choose regular HTML files, without symbolic links.".into(),
             ));
         }
-        if metadata.len() > 4 * 1024 * 1024 {
-            return Err(Error("Each chosen file must be at most 4 MiB.".into()));
+        if metadata.len() > desegnos_core::limits::MAX_IDENTITY_SOURCE_BYTES as u64 {
+            return Err(Error(format!(
+                "Each chosen file must be at most {} MiB.",
+                desegnos_core::limits::MAX_IDENTITY_SOURCE_BYTES / 1024 / 1024
+            )));
         }
         if selected.insert(name.clone(), path).is_some() {
             return Err(Error("Choose HTML files with different names.".into()));
@@ -939,16 +942,13 @@ mod tests {
         let mut skipped = Vec::new();
         let selected = select_files(candidates, &mut skipped, |file| {
             Ok(vec![0; file.size as usize])
-        }).unwrap();
+        })
+        .unwrap();
         assert_eq!(selected[0].0, "INDEX.HTM");
         assert_eq!(selected[1].0, "z.css");
         assert!(selected.iter().map(|c| c.1.len() as u64).sum::<u64>() <= MAX_TOTAL_BYTES);
         assert!(selected.iter().any(|c| c.0 == "z.js"));
-        assert!(
-            !selected
-                .iter()
-                .any(|c| download(&c.0) || c.0 == "huge.gif")
-        );
+        assert!(!selected.iter().any(|c| download(&c.0) || c.0 == "huge.gif"));
         assert_eq!(skipped.len(), 2);
     }
 
@@ -1046,7 +1046,12 @@ mod tests {
         assert_eq!(folder.pages.len(), 402);
         assert_eq!(folder.pages[1].file, "pages/z28.htm");
         assert_eq!(folder.pages[29].file, "pages/z00.htm");
-        for page in folder.pages.iter().take(30).skip(1) {
+        for page in folder
+            .pages
+            .iter()
+            .take(desegnos_core::limits::MAX_IMPORT_PAGES)
+            .skip(1)
+        {
             let stem = page
                 .file
                 .strip_prefix("pages/")

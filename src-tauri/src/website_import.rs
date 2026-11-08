@@ -25,7 +25,10 @@ use uuid::Uuid;
 type ImportState<'a> = State<'a, Mutex<WebsiteImportState>>;
 type WorkspaceState<'a> = State<'a, Mutex<Workspace>>;
 
-const MAX_CAPTURE_IMAGE_BYTES: usize = 8 * 1024 * 1024;
+use desegnos_core::limits::{
+    DEFAULT_PICTURE_WIDTH, MAX_IMPORT_CAPTURES, MAX_IMPORT_PAGES,
+    MAX_WEBSITE_FILE_BYTES as MAX_CAPTURE_IMAGE_BYTES,
+};
 const MAX_IMPORTED_PICTURES: usize = 160;
 const MAX_IMPORTED_PICTURE_TOTAL: usize = 64 * 1024 * 1024;
 const SERVED_FILE_LIMIT: usize = 128 * 1024 * 1024;
@@ -173,7 +176,7 @@ fn install(
         })
         .collect::<Vec<_>>();
     let total_pages = pages.len();
-    pages.truncate(30);
+    pages.truncate(MAX_IMPORT_PAGES);
     state.clear();
     let base_url = state
         .site
@@ -387,8 +390,10 @@ pub async fn import_website_pages(
     if captures.is_empty() {
         return Err("Render at least one page before importing it.".into());
     }
-    if captures.len() > 60 {
-        return Err("A website import renders at most 30 pages.".into());
+    if captures.len() > MAX_IMPORT_CAPTURES {
+        return Err(format!(
+            "A website import renders at most {MAX_IMPORT_PAGES} pages at two widths."
+        ));
     }
     let (folder, base_url, pages) = {
         let state = state.lock().map_err(message)?;
@@ -453,7 +458,10 @@ pub async fn import_website_pages(
             continue;
         };
         if bytes.is_empty() || bytes.len() > MAX_CAPTURE_IMAGE_BYTES {
-            warnings.push(format!("A picture over 8 MiB was left out: {source}"));
+            warnings.push(format!(
+                "A picture over {} MiB was left out: {source}",
+                MAX_CAPTURE_IMAGE_BYTES / 1024 / 1024
+            ));
             continue;
         }
         total = total.saturating_add(bytes.len());
@@ -463,7 +471,8 @@ pub async fn import_website_pages(
         }
         let uri = data_uri(&mime, &bytes);
         let (picture, stored) =
-            desegnos_core::Project::prepare_picture(&uri, 1440).map_err(message)?;
+            desegnos_core::Project::prepare_picture(&uri, DEFAULT_PICTURE_WIDTH)
+                .map_err(message)?;
         picture_ids.insert(source, picture);
         pictures.insert(picture, stored);
     }

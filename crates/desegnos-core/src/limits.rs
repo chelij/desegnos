@@ -165,3 +165,15 @@ pub const MAX_REQUEST_IMAGES: usize = 8;
 pub const MAX_REQUIREMENTS_BYTES: usize = 8 * 1024 * 1024;
 pub const MAX_RENDER_EDGE: u32 = 16_384;
 pub const MAX_RENDER_PIXELS: u64 = 64_000_000;
+
+pub const MAX_IMPORT_PAGES: usize = 30;
+pub const MAX_IMPORT_CAPTURES: usize = MAX_IMPORT_PAGES * 2;
+pub const MAX_WEBSITE_FILE_BYTES: usize = 8 * 1024 * 1024;
+pub const MAX_IDENTITY_SOURCE_BYTES: usize = 4 * 1024 * 1024;
+pub const MAX_REQUEST_FILE_BYTES: usize = 32 * 1024 * 1024;
+pub const DEFAULT_PICTURE_WIDTH: u32 = 1440;
+pub const MAX_LOCAL_PREVIEW_BYTES: u64 = 64 * 1024 * 1024;
+
+pub const MAX_IDENTITY_RECORD_BYTES: u64 = 8 * 1024 * 1024;
+pub const MAX_CLIPBOARD_BYTES: usize = 8 * 1024 * 1024;
+pub const MAX_EXPORT_CHECK_BYTES: usize = 8 * 1024 * 1024;

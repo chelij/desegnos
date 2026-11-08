@@ -257,19 +257,18 @@ fn applying_a_generation_reply_is_one_undo_step() {
             &candidate(&snapshot, target, page, pointer),
             &[0],
             &BTreeMap::new(),
-            |_| Ok(()),
         )
         .unwrap();
     assert_eq!(session.history().position, before + 1);
     assert!(session.project().element(target).unwrap().1.children.len() == 1);
     assert!(!session.project().element_has_pending_request(target));
-    session.undo(|_| Ok(())).unwrap();
+    session.undo().unwrap();
     let (_, undone) = session.project().element(target).unwrap();
     assert!(undone.children.is_empty());
     let _ = undone;
     assert!(session.project().element_has_pending_request(target));
     assert!(session.project().pointers[0].play.is_none());
-    session.redo(|_| Ok(())).unwrap();
+    session.redo().unwrap();
     assert!(
         !session
             .project()
@@ -503,11 +502,11 @@ fn set_behaviour_validates_scope_and_creates_updates_removes_in_one_undo_step() 
             let mut session = Session::new(project.clone()).unwrap();
             let before = session.history().position;
             session
-                .apply_generation(&snapshot, &reply, &[0], &BTreeMap::new(), |_| Ok(()))
+                .apply_generation(&snapshot, &reply, &[0], &BTreeMap::new())
                 .unwrap();
             assert_eq!(session.history().position, before + 1);
             let applied = session.project().clone();
-            session.undo(|_| Ok(())).unwrap();
+            session.undo().unwrap();
             assert_eq!(session.project().pointers, project.pointers);
             let own: Vec<_> = applied
                 .pointers
@@ -838,19 +837,19 @@ fn a_website_page_grows_downward_to_fit_inserted_layers() {
     // Growing the boundary is part of the same undo step as the new layers.
     let mut session = Session::new(project.clone()).unwrap();
     session
-        .apply_generation(&snapshot, &reply, &[], &BTreeMap::new(), |_| Ok(()))
+        .apply_generation(&snapshot, &reply, &[], &BTreeMap::new())
         .unwrap();
     assert_eq!(
         session.project().page(page).unwrap().base_size().height,
         1291
     );
-    session.undo(|_| Ok(())).unwrap();
+    session.undo().unwrap();
     assert_eq!(
         session.project().page(page).unwrap().base_size().height,
         600
     );
     assert!(session.project().page(page).unwrap().elements.is_empty());
-    session.redo(|_| Ok(())).unwrap();
+    session.redo().unwrap();
     assert_eq!(
         session.project().page(page).unwrap().base_size().height,
         1291
@@ -992,10 +991,8 @@ fn a_boundary_request_answered_with_insert_on_an_unrelated_layer_is_still_reject
 // pointer the export plan asks for, or Preview reports 0 pointers and no script ships.
 #[test]
 fn a_boundary_behaviour_from_a_generation_reply_is_planned_for_export() {
-    let mut project: Project = serde_json::from_str(include_str!(
-        "fixtures/nightfall/project.json"
-    ))
-    .unwrap();
+    let mut project: Project =
+        serde_json::from_str(include_str!("fixtures/nightfall/project.json")).unwrap();
     let page = project.pages[0].clone();
     let request = Uuid::new_v4();
     project.requests.push(PendingRequest {
@@ -1169,7 +1166,10 @@ fn a_layer_that_leaves_its_parent_names_the_parent_in_the_rejection() {
         error.contains("Panel (Box) at 0,180 sized 300x100"),
         "{error}"
     );
-    assert_eq!(reply.validate(&snapshot, &project).unwrap_err().element_id, Some(target));
+    assert_eq!(
+        reply.validate(&snapshot, &project).unwrap_err().element_id,
+        Some(target)
+    );
 }
 
 #[test]
@@ -1248,10 +1248,22 @@ fn several_boundary_behaviours_in_one_reply_all_survive() {
     reply.validate(&snapshot, &project).unwrap();
     let applied =
         apply_generation_output(&project, &snapshot, &reply, &[], &BTreeMap::new()).unwrap();
-    let behaviours: Vec<_> = applied.pointers.iter().filter(|p| p.is_behaviour()).collect();
+    let behaviours: Vec<_> = applied
+        .pointers
+        .iter()
+        .filter(|p| p.is_behaviour())
+        .collect();
     assert_eq!(behaviours.len(), 1);
-    assert!(behaviours[0].comment.contains("Count down to the new moon."));
-    assert!(behaviours[0].comment.contains("Open one FAQ answer at a time."));
+    assert!(
+        behaviours[0]
+            .comment
+            .contains("Count down to the new moon.")
+    );
+    assert!(
+        behaviours[0]
+            .comment
+            .contains("Open one FAQ answer at a time.")
+    );
 
     // A later generation still replaces the page's behaviour rather than piling onto it.
     let mut next = applied.clone();
@@ -1310,9 +1322,7 @@ fn supplied_foreign_or_malformed_host_echoes_are_rejected() {
 #[test]
 fn missing_required_array_and_nullable_property_are_filled() {
     let reply = json!({"requests": [{"status":"implemented", "explanation":"Done"}]});
-    let parsed =
-        parse_for_job(&reply.to_string(), Uuid::new_v4(), &"a".repeat(64))
-            .unwrap();
+    let parsed = parse_for_job(&reply.to_string(), Uuid::new_v4(), &"a".repeat(64)).unwrap();
     assert!(parsed.requests[0].operations.is_empty());
     assert_eq!(parsed.requests[0].element_id, None);
 }
@@ -1323,10 +1333,9 @@ fn missing_required_number_is_not_invented() {
         "kind":"insertInBoundary", "pageId":Uuid::new_v4(),
         "element":{"kind":"text", "rect":{"y":0,"width":200,"height":40}, "text":"Hello"}
     }]}]});
-    let error =
-        parse_for_job(&reply.to_string(), Uuid::new_v4(), &"a".repeat(64))
-            .unwrap_err()
-            .to_string();
+    let error = parse_for_job(&reply.to_string(), Uuid::new_v4(), &"a".repeat(64))
+        .unwrap_err()
+        .to_string();
     assert!(error.contains("missing field `x`"), "{error}");
 }
 
@@ -1697,7 +1706,7 @@ fn page_properties_and_content_apply_in_one_undo_step() {
     let mut session = Session::new(project).unwrap();
     let before = session.history().position;
     session
-        .apply_generation(&snapshot, &reply, &[], &BTreeMap::new(), |_| Ok(()))
+        .apply_generation(&snapshot, &reply, &[], &BTreeMap::new())
         .unwrap();
     assert_eq!(session.history().position, before + 1);
     assert_eq!(
@@ -1708,7 +1717,7 @@ fn page_properties_and_content_apply_in_one_undo_step() {
     assert_eq!(session.project().page(pages[1]).unwrap().name, "Lineup");
     assert_eq!(session.project().page(pages[1]).unwrap().path, "/lineup");
     assert_eq!(session.project().page(pages[2]).unwrap().path, "/tickets");
-    session.undo(|_| Ok(())).unwrap();
+    session.undo().unwrap();
     assert_eq!(session.project().pages, original_pages);
 }
 
@@ -1799,7 +1808,10 @@ fn a_minimal_page_fill_patch_is_repaired_before_typed_style_parsing() {
     assert_eq!(
         events
             .iter()
-            .filter(|event| event.kind == "pagePatch" && event.disposition == "warning")
+            .filter(
+                |event| event.kind == desegnos_core::ValidationEventKind::PagePatch
+                    && event.disposition == "warning"
+            )
             .count(),
         1
     );
@@ -2025,15 +2037,45 @@ fn generated_children_are_adapted_in_the_generation_undo_step() {
     let snapshot = project.prepare_requirements().unwrap();
     let reply = candidate(&snapshot, target, page, project.pointers[0].id);
     let mut session = Session::new(project.clone()).unwrap();
-    session.apply_generation(&snapshot, &reply, &[], &BTreeMap::new(), |_| Ok(())).unwrap();
+    session
+        .apply_generation(&snapshot, &reply, &[], &BTreeMap::new())
+        .unwrap();
     let child = &session.project().element(target).unwrap().1.children[0];
     assert!(child.overrides[&phone].automatic);
-    assert!(child.overrides[&phone].style.as_ref().unwrap().text_style.size >= 14.0);
-    session.undo(|_| Ok(())).unwrap();
-    assert!(session.project().element(target).unwrap().1.children.is_empty());
+    assert!(
+        child.overrides[&phone]
+            .style
+            .as_ref()
+            .unwrap()
+            .text_style
+            .size
+            >= 14.0
+    );
+    session.undo().unwrap();
+    assert!(
+        session
+            .project()
+            .element(target)
+            .unwrap()
+            .1
+            .children
+            .is_empty()
+    );
     assert_eq!(session.project().pages, project.pages);
 }
 
-fn parse_for_job(source: &str, job_id: Uuid, sha256: &str) -> std::result::Result<GenerationCandidate, desegnos_core::GenerationValidationError> {
-    GenerationCandidate::ingest(source, Some(desegnos_core::GenerationExpectations { job_id, sha256, project: None }), &mut Vec::new())
+fn parse_for_job(
+    source: &str,
+    job_id: Uuid,
+    sha256: &str,
+) -> std::result::Result<GenerationCandidate, desegnos_core::GenerationValidationError> {
+    GenerationCandidate::ingest(
+        source,
+        Some(desegnos_core::GenerationExpectations {
+            job_id,
+            sha256,
+            project: None,
+        }),
+        &mut Vec::new(),
+    )
 }
