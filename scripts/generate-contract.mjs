@@ -1,3 +1,3 @@
-process.env.UPDATE_GENERATED = '1';
-process.argv.splice(2, process.argv.length, 'test', '-p', 'desegnos-desktop', '--bin', 'desegnos', 'generated_typescript_is_current');
-await import('./cargo.mjs');
+import { runCommand } from './run.mjs';
+import { toolchainEnvironment } from './toolchain.mjs';
+await runCommand('cargo', ['test', '-p', 'desegnos-desktop', '--bin', 'desegnos', 'generated_typescript_is_current'], { env: { ...toolchainEnvironment(), UPDATE_GENERATED: '1' } });

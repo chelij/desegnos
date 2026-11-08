@@ -1,19 +1,16 @@
 //! Picture sizes around generation: a small preview for the AI, and after generation a copy
 //! scaled to the size the page shows it at. GIFs are left as they are (they may be animated).
+use crate::limits::{AI_PREVIEW_BYTES, AI_PREVIEW_EDGE};
+#[cfg(test)]
 use base64::{Engine, engine::general_purpose::STANDARD};
 use image::{DynamicImage, ImageDecoder, ImageReader, imageops::FilterType};
 
-pub use crate::limits::AI_PREVIEW_BYTES;
-/// A preview this size costs one image tile on every supported provider (~85–350 tokens).
-pub use crate::limits::AI_PREVIEW_EDGE;
-/// Upper bound reserved per preview when estimating a request.
-pub use crate::limits::AI_PREVIEW_TOKEN_RESERVE;
 /// Rendered pictures keep twice their CSS size so they stay sharp on high-density screens.
 const DISPLAY_DENSITY: u32 = 2;
 
 fn decode(data_uri: &str) -> crate::Result<DynamicImage> {
     let (mime, bytes) = crate::limits::decode_image_data_uri(data_uri)?;
-    crate::ensure(
+    crate::validation::ensure(
         matches!(mime, "image/png" | "image/jpeg" | "image/webp"),
         "This image format cannot be scaled.",
     )?;
@@ -23,7 +20,7 @@ fn decode(data_uri: &str) -> crate::Result<DynamicImage> {
         .into_decoder()
         .map_err(|error| crate::Error(format!("Cannot decode image: {error}")))?;
     let (width, height) = decoder.dimensions();
-    crate::ensure(
+    crate::validation::ensure(
         width > 0
             && height > 0
             && u64::from(width) * u64::from(height) <= crate::limits::MAX_IMAGE_PIXELS,
@@ -80,30 +77,54 @@ fn transparent_share(picture: &DynamicImage) -> f64 {
     count as f64 / (u64::from(picture.width()) * u64::from(picture.height())) as f64
 }
 
-/// Describe the stored image, rather than its downscaled preview.
-pub(crate) fn image_metadata(data_uri: &str) -> serde_json::Value {
-    let mut metadata = serde_json::json!({});
-    if let Some((mime, _)) = data_uri
-        .strip_prefix("data:")
-        .and_then(|s| s.split_once(";base64,"))
-    {
-        metadata["storedFormat"] = serde_json::json!(mime);
-    }
-    if let Ok(picture) = decode(data_uri) {
-        let share = transparent_share(&picture);
-        if share > 0.005 {
-            metadata["transparent"] = serde_json::json!(true);
-            metadata["transparentPercent"] = serde_json::json!((share * 100.0).round() as u8);
-        }
-    }
-    metadata
+#[derive(Debug, Clone, Default, serde::Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PictureFacts {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stored_format: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transparent: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transparent_percent: Option<u8>,
 }
 
-/// A bounded preview for the AI. Meaningfully transparent pictures retain alpha as PNG;
-/// opaque pictures use JPEG. Undecodable pictures (GIF) travel by name only.
-pub fn ai_preview(data_uri: &str) -> Option<String> {
-    let picture = decode(data_uri).ok()?;
-    preview(picture)
+impl PictureFacts {
+    fn from_picture(mime: &str, picture: Option<&DynamicImage>) -> Self {
+        let share = picture.map(transparent_share).unwrap_or(0.0);
+        Self {
+            stored_format: Some(mime.into()),
+            transparent: (share > 0.005).then_some(true),
+            transparent_percent: (share > 0.005).then(|| (share * 100.0).round() as u8),
+        }
+    }
+}
+
+pub(crate) fn image_metadata(data_uri: &str) -> PictureFacts {
+    let Ok((mime, _)) = crate::limits::decode_image_data_uri(data_uri) else {
+        return PictureFacts::default();
+    };
+    PictureFacts::from_picture(mime, decode(data_uri).ok().as_ref())
+}
+
+pub(crate) fn picture_for_request(data_uri: &str) -> crate::Result<Option<(PictureFacts, String)>> {
+    let (mime, _) = crate::limits::decode_image_data_uri(data_uri)?;
+    if matches!(mime, "image/gif" | "image/svg+xml") {
+        return Ok(None);
+    }
+    let picture = decode(data_uri)?;
+    let facts = PictureFacts::from_picture(mime, Some(&picture));
+    let preview = preview(picture)
+        .ok_or_else(|| crate::Error("Cannot encode the request image preview.".into()))?;
+    Ok(Some((facts, preview)))
+}
+
+/// Optional display preview; request freezing reports decoding failures to the caller.
+#[cfg(test)]
+fn ai_preview(data_uri: &str) -> Option<String> {
+    picture_for_request(data_uri)
+        .ok()
+        .flatten()
+        .map(|(_, preview)| preview)
 }
 
 fn preview(picture: DynamicImage) -> Option<String> {
@@ -121,7 +142,7 @@ fn preview(picture: DynamicImage) -> Option<String> {
         }
         let (bytes, mime) = encode(&picture, 75)?;
         if bytes.len() <= AI_PREVIEW_BYTES {
-            return Some(format!("data:{mime};base64,{}", STANDARD.encode(bytes)));
+            return Some(crate::limits::image_data_uri(mime, &bytes));
         }
         // PNG cannot trade quality for size; keep shrinking until it fits.
         let next = (edge * 3 / 4).max(1);
@@ -146,7 +167,7 @@ pub fn scaled_for_display(data_uri: &str, display_width: u32) -> crate::Result<O
     let scaled = picture.resize_exact(target, height, FilterType::Lanczos3);
     let (bytes, mime) = encode(&scaled, 85)
         .ok_or_else(|| crate::Error("Cannot encode the resized image.".into()))?;
-    let uri = format!("data:{mime};base64,{}", STANDARD.encode(bytes));
+    let uri = crate::limits::image_data_uri(mime, &bytes);
     Ok((uri.len() < data_uri.len()).then_some(uri))
 }
 
@@ -175,6 +196,16 @@ mod tests {
         let bytes = STANDARD.decode(uri.split_once(',').unwrap().1).unwrap();
         let picture = image::load_from_memory(&bytes).unwrap();
         (picture.width(), picture.height(), bytes.len())
+    }
+
+    #[test]
+    fn request_previews_report_undecodable_raster_images() {
+        let mut bytes = vec![0; 33];
+        bytes[..8].copy_from_slice(b"\x89PNG\r\n\x1a\n");
+        bytes[12..16].copy_from_slice(b"IHDR");
+        let uri = crate::limits::image_data_uri("image/png", &bytes);
+        assert!(crate::limits::decode_image_data_uri(&uri).is_ok());
+        assert!(picture_for_request(&uri).is_err());
     }
 
     #[test]
@@ -209,7 +240,7 @@ mod tests {
             DynamicImage::ImageRgba8(pixels.clone())
                 .write_to(&mut std::io::Cursor::new(&mut bytes), format)
                 .unwrap();
-            let uri = format!("data:{mime};base64,{}", STANDARD.encode(bytes));
+            let uri = crate::limits::image_data_uri(mime, &bytes);
             let preview = ai_preview(&uri).unwrap();
             assert!(preview.starts_with("data:image/png;base64,"));
             let (width, height, bytes) = size(&preview);
@@ -224,9 +255,11 @@ mod tests {
             assert_eq!(decoded.get_pixel(width - 1, 0)[3], 128);
             assert_eq!(
                 image_metadata(&uri),
-                serde_json::json!({
-                    "storedFormat": mime, "transparent": true, "transparentPercent": 100
-                })
+                PictureFacts {
+                    stored_format: Some(mime.into()),
+                    transparent: Some(true),
+                    transparent_percent: Some(100)
+                }
             );
         }
     }

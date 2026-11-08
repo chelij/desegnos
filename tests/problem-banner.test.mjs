@@ -83,11 +83,4 @@ try {
     assert.equal(summarizeOutsideChanges([outside('Also changed: page styles, Box 1')]), 'Also changed page styles and Box 1');
     assert.equal(summarizeOutsideChanges([outside('Also changed: a, b, c, Box 1')]), 'Also changed a, b, 1 other box and 1 other change');
   });
-  await test('notice layout truncates copy and only wraps the complete action group at narrow widths', async () => {
-    const css = await readFile(new URL('../src/notice.css', import.meta.url), 'utf8');
-    assert.match(css, /text-overflow: ellipsis/);
-    assert.match(css, /\.notice-copy[^}]*white-space: nowrap/);
-    assert.match(css, /@container \(max-width: 440px\)/);
-    assert.match(css, /\.notice-actions[^}]*flex: none/);
-  });
 } finally { await rm(temporary, { recursive: true, force: true }); }

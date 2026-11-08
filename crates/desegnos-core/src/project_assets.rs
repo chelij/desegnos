@@ -1,5 +1,5 @@
 //! Project image bytes stay in Desegnos; elements and reference items reference them by id.
-use crate::{AttachmentKind, Project, Result, ensure};
+use crate::{Result, attachments::AttachmentKind, model::Project, validation::ensure};
 use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
 
@@ -38,12 +38,17 @@ impl Project {
         })
     }
 
-    pub fn store_inline_images(&mut self) -> Result<()> {
-        let mut pictures = self.pictures.clone();
-        let mut used = referenced_ids(&self.pages, &self.reference);
+    fn referenced_picture_ids(&self) -> BTreeSet<Uuid> {
+        let mut ids = referenced_ids(&self.pages, &self.reference);
         for definition in self.linked.values() {
-            collect_element_pictures(std::slice::from_ref(&definition.master), &mut used);
+            collect_element_pictures(std::slice::from_ref(&definition.master), &mut ids);
         }
+        ids
+    }
+
+    pub fn prune_picture_store(&mut self) -> Result<()> {
+        let mut pictures = self.pictures.clone();
+        let used = self.referenced_picture_ids();
         pictures.retain(|id, _| used.contains(id));
         validate_pictures(&pictures)?;
         self.pictures = pictures;
@@ -53,10 +58,7 @@ impl Project {
     /// Runs on every edit, so it only checks that each reference is known. Picture bytes are
     /// verified when they enter the store and when a project is opened.
     pub(crate) fn validate_picture_store(&self) -> Result<()> {
-        let mut referenced = referenced_ids(&self.pages, &self.reference);
-        for definition in self.linked.values() {
-            collect_element_pictures(std::slice::from_ref(&definition.master), &mut referenced);
-        }
+        let referenced = self.referenced_picture_ids();
         for id in referenced {
             let known = self.picture_uri(id).is_some();
             ensure(
@@ -74,13 +76,16 @@ impl Project {
     }
 }
 
-fn referenced_ids(pages: &[crate::Page], reference: &[crate::ReferenceItem]) -> BTreeSet<Uuid> {
+fn referenced_ids(
+    pages: &[crate::model::Page],
+    reference: &[crate::model::ReferenceItem],
+) -> BTreeSet<Uuid> {
     let mut ids = BTreeSet::new();
     for item in reference {
-        if let crate::ReferenceKind::Element { element, .. } = &item.kind {
+        if let crate::model::ReferenceKind::Element { element, .. } = &item.kind {
             collect_element_pictures(std::slice::from_ref(element.as_ref()), &mut ids);
         }
-        if let crate::ReferenceKind::Image { picture, .. } = &item.kind {
+        if let crate::model::ReferenceKind::Image { picture, .. } = &item.kind {
             ids.insert(*picture);
         }
     }
@@ -90,7 +95,10 @@ fn referenced_ids(pages: &[crate::Page], reference: &[crate::ReferenceItem]) -> 
     ids
 }
 
-pub(crate) fn collect_element_pictures(elements: &[crate::Element], ids: &mut BTreeSet<Uuid>) {
+pub(crate) fn collect_element_pictures(
+    elements: &[crate::elements::Element],
+    ids: &mut BTreeSet<Uuid>,
+) {
     for element in elements {
         if let Some(picture) = element.image {
             ids.insert(picture);
@@ -104,33 +112,32 @@ impl Project {
     /// id and the bytes that were actually stored, so the caller can build the picture map.
     pub fn prepare_picture(uri: &str, display_width: u32) -> Result<(Uuid, String)> {
         store_picture_uri(uri)?;
-        let scaled =
-            crate::scaled_for_display(uri, display_width)?.unwrap_or_else(|| uri.to_owned());
+        let scaled = crate::picture_scaling::scaled_for_display(uri, display_width)?
+            .unwrap_or_else(|| uri.to_owned());
         let id = store_picture_uri(&scaled)?;
         Ok((id, scaled))
     }
 }
 
 pub(crate) fn store_picture_uri(uri: &str) -> Result<Uuid> {
-    ensure(valid_picture(uri), "Drop a PNG, JPEG, WebP or GIF picture.")?;
+    ensure(
+        crate::limits::decode_image_data_uri(uri).is_ok(),
+        "Drop a PNG, JPEG, WebP or GIF picture.",
+    )?;
     Ok(inline_image_id(uri))
-}
-
-fn valid_picture(uri: &str) -> bool {
-    crate::limits::decode_image_data_uri(uri).is_ok()
 }
 
 fn validate_pictures(pictures: &BTreeMap<Uuid, std::sync::Arc<str>>) -> Result<()> {
     for (id, uri) in pictures {
         ensure(
-            valid_picture(uri) && *id == inline_image_id(uri),
+            crate::limits::decode_image_data_uri(uri).is_ok() && *id == inline_image_id(uri),
             "A project picture failed its integrity check.",
         )?;
     }
     Ok(())
 }
 
-impl crate::Project {
+impl crate::model::Project {
     /// Promote the frozen requests' original pictures before validating or applying their
     /// generated elements. The live project is unchanged until the whole reply is accepted.
     pub(crate) fn store_request_pictures(&mut self, request_ids: &[uuid::Uuid]) -> Result<()> {

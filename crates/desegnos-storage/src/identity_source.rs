@@ -11,7 +11,7 @@ fn excluded(name: &str) -> bool {
     source_excluded(name, SourcePurpose::Identity)
 }
 use base64::{Engine, engine::general_purpose::STANDARD};
-use desegnos_core::{Error, MAX_PROJECT_PHOTO_BYTES, ProjectPhoto, Result, digest};
+use desegnos_core::{Error, limits::MAX_PROJECT_PHOTO_BYTES, ProjectPhoto, Result, digest};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -26,7 +26,7 @@ const MAX_FILES: usize = 128;
 const MAX_TEXT_BYTES: usize = 256 * 1024;
 const MAX_TOTAL_TEXT: usize = 2 * 1024 * 1024;
 const MAX_ASSET_BYTES: usize = 128 * 1024;
-use desegnos_core::MAX_IDENTITY_ASSETS as MAX_ASSETS;
+use desegnos_core::limits::MAX_IDENTITY_ASSETS as MAX_ASSETS;
 const MAX_ASSET_URI_BYTES: usize = 512 * 1024;
 use desegnos_core::limits::MAX_IDENTITY_SOURCE_BYTES as MAX_COLLECTED_BYTES;
 const MAX_ARCHIVE_BYTES: u64 = 2 * 1024 * 1024 * 1024;

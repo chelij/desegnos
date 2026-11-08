@@ -1,7 +1,9 @@
 use crate::{
-    DecisionProposal, DesignCriticism, Error, GenerationCandidate, MAX_DECISION_PROPOSALS,
-    MAX_DESIGN_CRITICISMS, MAX_GENERATION_REQUESTS, Project, RequirementsSnapshot, Result, Scope,
-    digest, ensure, model::validate_text,
+    Error, Result, generation::DecisionProposal, generation::DesignCriticism,
+    generation::GenerationCandidate, limits::MAX_DECISION_PROPOSALS, limits::MAX_DESIGN_CRITICISMS,
+    limits::MAX_GENERATION_REQUESTS, model::Project, model::Scope,
+    requirements::RequirementsSnapshot, validation::digest, validation::ensure,
+    validation::validate_text,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -36,7 +38,7 @@ pub struct GenerationDossier {
     pub decision_proposals: Vec<DecisionProposal>,
     pub criticism: Vec<DesignCriticism>,
     pub application_status: GenerationApplicationStatus,
-    #[serde(deserialize_with = "crate::required_nullable")]
+    #[serde(deserialize_with = "crate::validation::required_nullable")]
     pub applied_at_revision: Option<u64>,
     pub accepted_decision_indices: Vec<usize>,
 }
@@ -48,13 +50,13 @@ pub struct GenerationDossierContext {
     pub attempt_ordinal: usize,
     pub base_revision: u64,
     pub recorded_at_revision: u64,
-    #[serde(deserialize_with = "crate::required_nullable")]
+    #[serde(deserialize_with = "crate::validation::required_nullable")]
     pub summary: Option<String>,
     pub targets: Vec<DossierTarget>,
     pub decision_proposals: Vec<DecisionProposal>,
     pub criticism: Vec<DesignCriticism>,
     pub application_status: GenerationApplicationStatus,
-    #[serde(deserialize_with = "crate::required_nullable")]
+    #[serde(deserialize_with = "crate::validation::required_nullable")]
     pub applied_at_revision: Option<u64>,
     pub accepted_decision_indices: Vec<usize>,
 }
@@ -71,7 +73,7 @@ impl GenerationDossier {
             let mut notes: Vec<DesignCriticism> = candidate
                 .requests
                 .iter()
-                .filter(|request| request.status == crate::RequestStatus::Conflict)
+                .filter(|request| request.status == crate::generation::RequestStatus::Conflict)
                 .map(|request| DesignCriticism {
                     element_id: request.element_id,
                     message: request.explanation.clone(),
@@ -303,7 +305,7 @@ impl Project {
         )?;
         candidate.validate(snapshot, self)?;
         let mut next = self.clone();
-        next.revision = crate::limits::next_revision(self.revision)?;
+        next.revision = crate::session::next_revision(self.revision)?;
         next.latest_generation = Some(GenerationDossier::from_candidate(
             snapshot,
             candidate,

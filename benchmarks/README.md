@@ -7,16 +7,8 @@ It also checks selected-ancestor suppression, inherited outlines, camera project
 multi-element drop behavior. DOM fixtures count queries; they do **not** measure browser
 layout, React rendering or painting.
 
-Run the native probe with:
-
-```sh
-CARGO_TARGET_DIR=target/worktree-check cargo test -p desegnos-core --release benchmark_canvas_edits -- --nocapture
-```
-
-The native probe reports the mean of ten independent edits of a fixed 640-box project,
-including command argument cloning and validation. It checks element count/placement,
-plus Hug synchronization in descendants and size overrides. Execution takes less than
-0.1 seconds after compilation; no benchmark is added to npm's default test scripts.
+Native edit correctness is covered by `crates/desegnos-core/tests/hug_synchronization.rs`.
+The native measurements below are historical observations, not a regression benchmark.
 
 Local measurements on 2026-10-28 (milliseconds):
 

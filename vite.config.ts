@@ -1,5 +1,9 @@
 import { defineConfig, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
+import { readFileSync } from 'node:fs';
+
+const { build: { devUrl } } = JSON.parse(readFileSync(new URL('./src-tauri/tauri.conf.json', import.meta.url), 'utf8'));
+const development = new URL(devUrl);
 
 // WebKitGTK 2.54 aborts the page (AccessibilityObjectAtspi::selectionChanged → UTF16OffsetToUTF8,
 // WebKit bug 279313) when the caret sits next to a replaced element such as <img> inside a
@@ -19,7 +23,7 @@ function codeMirrorWidgetBufferSpan(): Plugin {
 }
 
 export default defineConfig({ plugins: [codeMirrorWidgetBufferSpan(), react()], clearScreen: false,
-  server: { host: '127.0.0.1', port: 1420, strictPort: true },
+  server: { host: development.hostname, port: Number(development.port), strictPort: true },
   // Pre-bundling would skip the transform above in development.
   optimizeDeps: { exclude: ['@codemirror/view'] },
   envPrefix: ['VITE_'], build: { target: 'es2022' } });

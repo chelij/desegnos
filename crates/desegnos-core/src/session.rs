@@ -1,7 +1,15 @@
+use crate::commands::Command;
+use crate::limits::MAX_UNDO_STEPS;
+pub(crate) fn next_revision(revision: u64) -> Result<u64> {
+    revision
+        .checked_add(1)
+        .ok_or_else(|| Error("Project revision limit reached.".into()))
+}
+
 use crate::dossier::HistoryTransition;
 use crate::{
-    Command, Error, ExportRecord, GenerationCandidate, Project, RequirementsSnapshot, Result,
-    ensure,
+    Error, Result, generation::GenerationCandidate, model::ExportRecord, model::Project,
+    requirements::RequirementsSnapshot, validation::ensure,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,11 +65,9 @@ impl HistoryEntry {
     }
 }
 
-const MAX_UNDO_STEPS: usize = 200;
-
 impl Session {
     pub fn new(mut project: Project) -> Result<Self> {
-        project.store_inline_images()?;
+        project.prune_picture_store()?;
         project.keep_one_request_per_layer();
         project.validate()?;
         let user_revision_floor = project.revision;
@@ -110,7 +116,12 @@ impl Session {
         if candidate.revision == self.project.revision {
             return Ok(());
         }
-        self.commit_or_merge(candidate, policy.burst, policy.label);
+        self.commit_or_merge_at(
+            candidate,
+            policy.burst,
+            std::time::Instant::now(),
+            policy.label,
+        );
         Ok(())
     }
 
@@ -126,8 +137,7 @@ impl Session {
             return Ok(());
         }
         self.project = candidate;
-        self.user_revision_floor = self.project.revision;
-        self.history_version = self.project.revision;
+        self.set_user_floor(self.project.revision);
         self.burst = None;
         Ok(())
     }
@@ -158,7 +168,7 @@ impl Session {
         accepted_decision_indices: &[usize],
         generated_pictures: &std::collections::BTreeMap<String, String>,
     ) -> Result<()> {
-        let next = crate::apply_generation_output(
+        let next = crate::generation_apply::apply_generation_output(
             &self.project,
             snapshot,
             candidate,
@@ -173,7 +183,11 @@ impl Session {
         Ok(())
     }
 
-    pub fn import_context(&mut self, revision: u64, context: crate::ImportedContext) -> Result<()> {
+    pub fn import_context(
+        &mut self,
+        revision: u64,
+        context: crate::identity::ImportedContext,
+    ) -> Result<()> {
         self.assert_revision(revision)?;
         let candidate = self
             .project
@@ -185,15 +199,6 @@ impl Session {
         Ok(())
     }
 
-    fn commit_or_merge(
-        &mut self,
-        candidate: Project,
-        key: Option<crate::commands::HistoryBurst>,
-        label: &str,
-    ) {
-        self.commit_or_merge_at(candidate, key, std::time::Instant::now(), label);
-    }
-
     fn commit_or_merge_at(
         &mut self,
         candidate: Project,
@@ -201,7 +206,7 @@ impl Session {
         now: std::time::Instant,
         label: &str,
     ) {
-        let first_text = key.as_ref().is_some_and(|key| key.ends_after_merge());
+        let first_text = key.as_ref().is_some_and(|key| key.survives_focus_change());
         let continues = key.is_some()
             && !self.undo.is_empty()
             && self.burst.as_ref().is_some_and(|(current, at)| {
@@ -211,8 +216,7 @@ impl Session {
                         .is_none_or(|pause| now.duration_since(*at) < pause)
             });
         if continues {
-            self.user_revision_floor = candidate.revision;
-            self.history_version = candidate.revision;
+            self.set_user_floor(candidate.revision);
             self.project = candidate;
             self.redo.clear();
         } else {
@@ -244,8 +248,7 @@ impl Session {
         self.history_entries
             .push(HistoryEntry::new(label, position));
         self.version_labels.push(label.to_owned());
-        self.user_revision_floor = candidate.revision;
-        self.history_version = candidate.revision;
+        self.set_user_floor(candidate.revision);
         self.undo
             .push(std::mem::replace(&mut self.project, candidate));
         if self.undo.len() > MAX_UNDO_STEPS {
@@ -257,46 +260,60 @@ impl Session {
         self.redo.clear();
     }
 
-    pub fn undo(&mut self) -> Result<()> {
-        let mut candidate = self
-            .undo
-            .last()
-            .cloned()
-            .ok_or_else(|| Error("There is no edit to undo.".into()))?;
-        candidate.revision = crate::limits::next_revision(self.project.revision)?;
-        candidate.carry_metadata(&self.project, HistoryTransition::Undo);
+    fn set_user_floor(&mut self, revision: u64) {
+        self.user_revision_floor = revision;
+        self.history_version = revision;
+    }
+
+    fn move_history(&mut self, transition: HistoryTransition) -> Result<()> {
+        let undo = matches!(transition, HistoryTransition::Undo);
+        let stack = if undo { &self.undo } else { &self.redo };
+        let mut candidate = stack.last().cloned().ok_or_else(|| {
+            Error(
+                if undo {
+                    "There is no edit to undo."
+                } else {
+                    "There is no edit to redo."
+                }
+                .into(),
+            )
+        })?;
+        candidate.revision = next_revision(self.project.revision)?;
+        candidate.carry_metadata(&self.project, transition);
         candidate.validate()?;
         self.burst = None;
-        self.version_labels.push("Undid a change".into());
+        self.version_labels.push(
+            if undo {
+                "Undid a change"
+            } else {
+                "Redid a change"
+            }
+            .into(),
+        );
+        // Traversal changes the current revision, while history version identifies the same timeline.
         self.user_revision_floor = candidate.revision;
-        self.undo.pop();
-        self.redo
-            .push(std::mem::replace(&mut self.project, candidate));
+        let previous = std::mem::replace(&mut self.project, candidate);
+        if undo {
+            self.undo.pop();
+            self.redo.push(previous);
+        } else {
+            self.redo.pop();
+            self.undo.push(previous);
+        }
         Ok(())
     }
 
+    pub fn undo(&mut self) -> Result<()> {
+        self.move_history(HistoryTransition::Undo)
+    }
     pub fn redo(&mut self) -> Result<()> {
-        let mut candidate = self
-            .redo
-            .last()
-            .cloned()
-            .ok_or_else(|| Error("There is no edit to redo.".into()))?;
-        candidate.revision = crate::limits::next_revision(self.project.revision)?;
-        candidate.carry_metadata(&self.project, HistoryTransition::Redo);
-        candidate.validate()?;
-        self.burst = None;
-        self.version_labels.push("Redid a change".into());
-        self.user_revision_floor = candidate.revision;
-        self.redo.pop();
-        self.undo
-            .push(std::mem::replace(&mut self.project, candidate));
-        Ok(())
+        self.move_history(HistoryTransition::Redo)
     }
 
     pub fn restore(&mut self, project: Project) -> Result<()> {
         let mut candidate = project;
         candidate.keep_one_request_per_layer();
-        candidate.revision = crate::limits::next_revision(self.project.revision)?;
+        candidate.revision = crate::session::next_revision(self.project.revision)?;
         candidate.carry_metadata(&self.project, HistoryTransition::Restore);
         candidate.validate()?;
         self.commit(candidate, "Restored a version");
@@ -319,11 +336,11 @@ mod tests {
         Session::new(
             Project::new(
                 "Steps".into(),
-                crate::Viewport {
+                crate::model::Viewport {
                     width: 800,
                     height: 600,
                 },
-                crate::Appearance::Light,
+                crate::model::Appearance::Light,
             )
             .unwrap(),
         )
@@ -399,12 +416,12 @@ mod tests {
             .execute(
                 revision,
                 Command::SetCanvasLayout {
-                    placements: vec![crate::CanvasPlacement {
+                    placements: vec![crate::model::CanvasPlacement {
                         page_id,
                         size_id,
                         x: 80.0,
                         y: 40.0,
-                        kind: crate::BoundaryKind::Screen,
+                        kind: crate::model::BoundaryKind::Screen,
                     }],
                     reference: vec![],
                 },
@@ -419,7 +436,7 @@ mod tests {
             .unwrap();
         assert_eq!(placed.x, 80.0);
         assert_eq!(placed.y, 40.0);
-        assert_eq!(placed.kind, crate::BoundaryKind::Screen);
+        assert_eq!(placed.kind, crate::model::BoundaryKind::Screen);
         session.undo().unwrap();
         let undone = session
             .project()
@@ -429,7 +446,7 @@ mod tests {
             .cloned()
             .unwrap();
         assert_eq!(undone.x, 0.0);
-        assert_eq!(undone.kind, crate::BoundaryKind::Page);
+        assert_eq!(undone.kind, crate::model::BoundaryKind::Page);
         session.redo().unwrap();
         assert_eq!(
             session
@@ -439,22 +456,22 @@ mod tests {
                 .size(size_id)
                 .unwrap()
                 .kind,
-            crate::BoundaryKind::Screen
+            crate::model::BoundaryKind::Screen
         );
     }
 
     #[test]
     fn reference_add_and_update_are_one_undo_step_each() {
         let mut session = session();
-        let item = crate::ReferenceItem {
+        let item = crate::model::ReferenceItem {
             id: uuid::Uuid::new_v4(),
-            rect: crate::Rect {
+            rect: crate::model::Rect {
                 x: 40.0,
                 y: -40.0,
                 width: 200.0,
                 height: 120.0,
             },
-            kind: crate::ReferenceKind::Note {
+            kind: crate::model::ReferenceKind::Note {
                 text: "reference".into(),
             },
         };
@@ -481,7 +498,7 @@ mod tests {
                 session.project().revision,
                 Command::UpdateReferenceItem {
                     item_id,
-                    rect: Some(crate::Rect {
+                    rect: Some(crate::model::Rect {
                         x: 80.0,
                         y: -80.0,
                         width: 240.0,
@@ -497,14 +514,14 @@ mod tests {
         assert_eq!(session.history().position, position + 1, "one history step");
         assert_eq!(
             session.project().reference[0].kind,
-            crate::ReferenceKind::Note {
+            crate::model::ReferenceKind::Note {
                 text: "edited reference".into()
             }
         );
         session.undo().unwrap();
         assert_eq!(
             session.project().reference[0].kind,
-            crate::ReferenceKind::Note {
+            crate::model::ReferenceKind::Note {
                 text: "reference".into()
             }
         );
@@ -522,7 +539,7 @@ mod tests {
         assert_eq!(session.project().reference.len(), 1);
         assert_eq!(
             session.project().reference[0].kind,
-            crate::ReferenceKind::Note {
+            crate::model::ReferenceKind::Note {
                 text: "reference".into()
             }
         );

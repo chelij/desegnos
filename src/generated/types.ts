@@ -459,7 +459,6 @@ export type OpenPageSummary = { id: string, name: string, };
 export type OpenProjectSummary = { id: string, name: string, dirty: boolean, active: boolean, pages: Array<OpenPageSummary>, };
 
 export type OutputType = "webpage"
-  | "appScreen"
   | "slide"
   | "image";
 

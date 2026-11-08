@@ -617,7 +617,7 @@ fn candidate_schema() -> Value {
             "findings":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["topic","value","evidence","confidence"],"properties":{"topic":string,"value":string,"evidence":{"type":"array","items":string},"confidence":{"type":"string","enum":["high","medium","low"]}}}},
             "logoAssetIds":{"type":"array","items":string},"warnings":{"type":"array","items":string},
             "photos":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["id","description"],"properties":{"id":string,"description":string}}},
-            "content":{"type":"array","maxItems":desegnos_core::MAX_IMPORTED_ITEMS,"items":{"type":"object","additionalProperties":false,"required":["kind","title","url","summary","sourcePages"],"properties":{
+            "content":{"type":"array","maxItems":desegnos_core::limits::MAX_IMPORTED_ITEMS,"items":{"type":"object","additionalProperties":false,"required":["kind","title","url","summary","sourcePages"],"properties":{
                 "kind":{"type":"string","enum":["project","tutorial","article","page","product","other"]},"title":string,"url":string,"summary":string,"sourcePages":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["path","title","url"],"properties":{"path":string,"title":string,"url":{"type":["string","null"]}}}}}}}}})
 }
 /// The result format for one analysis: evidence and logos may only name the files actually sent.
@@ -767,7 +767,7 @@ fn validate_candidate(candidate: &IdentityCandidate, record: &AnalysisRecord) ->
     for photo in &candidate.photos {
         text(
             &photo.description,
-            desegnos_core::MAX_PHOTO_DESCRIPTION_CHARS,
+            desegnos_core::limits::MAX_PHOTO_DESCRIPTION_CHARS,
             false,
         )?;
         require(
@@ -781,7 +781,7 @@ fn validate_candidate(candidate: &IdentityCandidate, record: &AnalysisRecord) ->
         )?;
     }
     require(
-        candidate.content.len() <= desegnos_core::MAX_IMPORTED_ITEMS,
+        candidate.content.len() <= desegnos_core::limits::MAX_IMPORTED_ITEMS,
         "The identity reply lists too much existing work.",
     )?;
     for item in &candidate.content {

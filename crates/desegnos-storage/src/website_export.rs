@@ -60,13 +60,13 @@ impl WrittenWebsiteExport {
         Ok(())
     }
 }
-const MAX_BYTES: usize = desegnos_core::MAX_EXPORT_BYTES;
+const MAX_BYTES: usize = desegnos_core::limits::MAX_EXPORT_BYTES;
 fn io(error: impl std::fmt::Display) -> Error {
     Error(format!("The website export could not be written: {error}"))
 }
 pub(crate) fn validate(export: &WebsiteExport) -> Result<()> {
     if export.files.is_empty()
-        || export.files.len() > desegnos_core::MAX_EXPORT_FILES
+        || export.files.len() > desegnos_core::limits::MAX_EXPORT_FILES
         || export.files.values().map(Vec::len).sum::<usize>() > MAX_BYTES
     {
         return Err(Error(

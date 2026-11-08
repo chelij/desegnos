@@ -221,19 +221,18 @@ fn generated_attachment_picture_survives_acceptance_save_reopen_and_export() {
 }
 
 #[test]
-fn legacy_screen_project_keeps_sizes_content_history_and_web_export() {
+fn screen_project_keeps_sizes_content_history_and_web_export() {
     let directory = TempDir::new("legacy-screen");
     let path = directory.path("legacy.desegnos");
     let mut old = project_with_element();
     old.template = desegnos_core::CanvasTemplate::AppScreen;
     old.pages[0].name = "Screen 1".into();
-    old.pages[0].output = desegnos_core::OutputType::AppScreen;
+    old.pages[0].output = desegnos_core::OutputType::Webpage;
     old.pages[0].sizes[0].kind = BoundaryKind::Screen;
     old.pages[0].sizes[0].width = 390;
     old.pages[0].sizes[0].height = 844;
-    // Use the persisted legacy spellings, not an automatic conversion on load.
     let json = serde_json::to_string(&old).unwrap();
-    assert!(json.contains("\"output\":\"appScreen\""));
+    assert!(json.contains("\"output\":\"webpage\""));
     assert!(json.contains("\"kind\":\"screen\""));
     let old: Project = serde_json::from_str(&json).unwrap();
     let expected_parts = split_project(&old).unwrap();

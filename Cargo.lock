@@ -1147,12 +1147,9 @@ name = "desegnos-core"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
- "cssparser",
- "diffy",
  "dom_query",
  "flate2",
  "fontdb",
- "html5ever",
  "image",
  "lightningcss",
  "quick-xml 0.42.0",
@@ -1163,8 +1160,6 @@ dependencies = [
  "swc_common",
  "swc_ecma_ast",
  "swc_ecma_parser",
- "swc_html_ast",
- "swc_html_parser",
  "tiny-skia",
  "ts-rs",
  "ttf-parser",
@@ -1220,15 +1215,6 @@ dependencies = [
  "url",
  "uuid",
  "zip",
-]
-
-[[package]]
-name = "diffy"
-version = "0.5.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3e3dc2f773b6aaa63b1a7684b8589f670a8a0146a510b74d23a401c882364b49"
-dependencies = [
- "hashbrown 0.17.1",
 ]
 
 [[package]]
@@ -5244,44 +5230,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
-]
-
-[[package]]
-name = "swc_html_ast"
-version = "26.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "66332cb009b266aeefe2f88d24a01237fe4caaab288c02cacae16a6f4142b007"
-dependencies = [
- "is-macro",
- "string_enum",
- "swc_atoms",
- "swc_common",
-]
-
-[[package]]
-name = "swc_html_parser"
-version = "26.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f96fffb97504a98422cd41ff9af61733e29becd4ea830592bb139c0cc7acc99a"
-dependencies = [
- "rustc-hash",
- "swc_atoms",
- "swc_common",
- "swc_html_ast",
- "swc_html_utils",
-]
-
-[[package]]
-name = "swc_html_utils"
-version = "17.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0ce2f51482abdf97cf252137a1683f7df9000f0521532bfb0fee9d8ec46a468d"
-dependencies = [
- "once_cell",
- "rustc-hash",
- "serde",
- "serde_json",
- "swc_atoms",
 ]
 
 [[package]]

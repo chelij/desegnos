@@ -46,7 +46,7 @@ export function BoundaryProperties({ page, commit, updateSize, adaptSize, addSiz
   const labelForSize = (size: PageSize) => presets
     ? presets.find(preset => preset.width === size.width && preset.height === size.height)?.label ?? `${size.width} × ${size.height}`
     : size.label;
-  const hasPath = page.output === 'webpage' || page.output === 'appScreen';
+  const hasPath = page.output === 'webpage';
   const selectedSize = page.sizes.find(size => size.id === selectedSizeId) ?? page.sizes[0];
   const minWidth = Math.min(...page.sizes.map(size => size.width));
   const maxWidth = Math.max(...page.sizes.map(size => size.width));

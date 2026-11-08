@@ -232,9 +232,9 @@ export function useExportJobs(context: Context) {
     const project = current.current?.project;
     if (!project || !projectHasPreviewPages(project)) return;
     const previewable = (pageId: string | null | undefined) => project.pages.find(page =>
-      page.id === pageId && (page.output === 'webpage' || page.output === 'appScreen'))?.id;
+      page.id === pageId && (page.output === 'webpage'))?.id;
     const target = previewable(preferredPageId) ?? previewable(canvasFocus) ?? previewable(selectedElementPageId) ?? previewable(project.homePageId)
-      ?? project.pages.find(page => page.output === 'webpage' || page.output === 'appScreen')?.id;
+      ?? project.pages.find(page => page.output === 'webpage')?.id;
     if (!target) return;
     if (playIsActive(play)) setPlay(idlePlay);
     void runExport(target);
