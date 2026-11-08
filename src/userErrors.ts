@@ -98,7 +98,6 @@ export function userError(error: unknown): string {
     [/SyntaxError|unexpected (?:token|identifier|end)|unclosed|unterminated|missing closing/i, 'This code has a writing mistake. Check the highlighted line.'],
     [/stacking|painting rules|move part of its layout/i, 'This item cannot be arranged on its own. Select its containing group.'],
     [/finite.*(?:position|offset|number)/i, 'Enter a valid number.'],
-    [/(?:ZIP|file).*32 MiB/i, 'This file is too large. Choose a file smaller than 32 MB.'],
     [/too large to preview|complete preview.*limit/i, 'This page is too large to preview. Try a smaller page.'],
     [/identity analysis|analyzing identity/i, "Desegnos couldn't read your brand. Try again."],
     [/cancell?ed.*(?:record|receipt)|cancellation.*(?:save|storage|attention)/i, "The request stopped, but Desegnos couldn't save its status. Check that you can save files."],

@@ -1,15 +1,13 @@
-mod web_codegen;
-mod geometry;
-mod text_layout;
-mod element_style;
 mod adapt;
 mod attachments;
 mod commands;
 mod dossier;
 mod element_edit;
+mod element_style;
 mod elements;
 mod export;
 mod generation;
+mod geometry;
 mod identity;
 mod identity_pages;
 mod image_generation;
@@ -28,6 +26,8 @@ mod request_edit;
 mod request_history;
 mod requirements;
 mod session;
+mod text_layout;
+mod web_codegen;
 mod website;
 mod website_import;
 
@@ -53,19 +53,21 @@ pub use export::{
     ExportBundle, ExportPagePlan, ExportPlan, ExportPlanKind, ExportPointerPlan, ExportReply,
     ExportReplyPage, ExportReplyPointer, ExportReplyShared, MAX_EXPORT_BYTES,
     MAX_EXPORT_FILE_BYTES, MAX_EXPORT_FILES, WebsiteExport, ai_export_bundle,
-    behaviour_fingerprint, direct_export_bundle, export_manifest, export_schema, included_pages,
-    file_stem, is_vector_representable, page_file, parse_comment_reply, parse_export_reply, plan_comment, plan_export, plan_snapshot,
-    marked_pointer_code, pointer_fingerprints, preview_page_ids, reused_export_behaviour_count, slide_order,
-    validate_behaviours, validate_export_reply,
+    behaviour_fingerprint, direct_export_bundle, export_manifest, export_schema, file_stem,
+    included_pages, is_vector_representable, marked_pointer_code, page_file, parse_comment_reply,
+    parse_export_reply, plan_comment, plan_export, plan_snapshot, pointer_fingerprints,
+    preview_page_ids, reused_export_behaviour_count, slide_order, validate_behaviours,
+    validate_export_reply,
 };
 pub use generation::{
     ClassifiedAction, DecisionProposal, DesignCriticism, ElementDraft, ElementOperation,
-    GenerationExpectations, GenerationValidationError, ValidationFailureKind,
-    ElementUpdate, GeneratedImage, GenerationCandidate, MAX_APPLIED_JOBS, MAX_DECISION_PROPOSALS,
-    MAX_DESIGN_CRITICISMS, MAX_GENERATED_IMAGES, MAX_GENERATION_BYTES, MAX_GENERATION_REQUESTS,
+    ElementUpdate, GeneratedImage, GenerationCandidate, GenerationExpectations,
+    GenerationValidationError, MAX_APPLIED_JOBS, MAX_DECISION_PROPOSALS, MAX_DESIGN_CRITICISMS,
+    MAX_GENERATED_IMAGES, MAX_GENERATION_BYTES, MAX_GENERATION_REQUESTS,
     MAX_POINTER_CLASSIFICATIONS, MAX_REQUIREMENTS_BYTES, PointerClassification, ReferenceDraft,
-    RequestOutcome, RequestStatus, ValidationEvent, apply_generation_output, candidate_schema,
-    conform_to_schema, result_schema, validation_failure_kind,
+    RequestOutcome, RequestStatus, ValidationEvent, ValidationEventKind, ValidationFailureKind,
+    apply_generation_output, candidate_schema, conform_to_schema, result_schema,
+    validation_failure_kind,
 };
 pub use identity::{
     IdentityAsset, ImportedContext, ImportedIdentity, ImportedItem, ImportedPageContext,
@@ -88,8 +90,8 @@ pub use model::{
     MAX_REQUESTS, MAX_VIEWPORT_SIDE, NamedView, OutputType, Page, PageSize, PendingRequest,
     PlayAction, Pointer, PointerKind, PointerSource, PointerTarget, PointerWiring, Project,
     ProjectStyles, Rect, ReferenceItem, ReferenceKind, ReferencePlacement, RequestArea,
-    RequestPoint, RequestShape, RequestTarget, SCHEMA_VERSION, Scope, SizePreset, TextStyle,
-    TEMPLATE_GAP, Viewport, size_label,
+    RequestPoint, RequestShape, RequestTarget, SCHEMA_VERSION, Scope, SizePreset, TEMPLATE_GAP,
+    TextStyle, Viewport, size_label,
 };
 pub use picture_scaling::{
     AI_PREVIEW_BYTES, AI_PREVIEW_EDGE, AI_PREVIEW_TOKEN_RESERVE, ai_preview, scaled_for_display,
@@ -102,8 +104,7 @@ pub use pointers::{
 pub use project_assets::{PROJECT_ASSET_SCHEME, project_asset_reference};
 pub use render::{
     MAX_RENDER_EDGE, MAX_RENDER_PIXELS, RenderPage, ResolvedFont, Rgba, Scene, boundary_png,
-    boundary_svg, font_families, resolve_font, slide_pdf,
-    standalone_face,
+    boundary_svg, font_families, resolve_font, slide_pdf, standalone_face,
 };
 pub use request_history::{
     EarlierRequest, FrozenLayerRequest, REQUEST_HISTORY_CHARS, RejectionKind,

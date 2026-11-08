@@ -1,3 +1,4 @@
+use crate::native_files::{NativeResult, message, open_lock_file};
 use desegnos_core::{
     Appearance, CanvasTemplate, Command, GenerationCandidate, Project, RequirementsSnapshot,
     Session,
@@ -14,7 +15,6 @@ use std::{
     sync::Mutex,
     time::{Duration, Instant, SystemTime},
 };
-use crate::native_files::{NativeResult, message, open_lock_file};
 use tauri::{AppHandle, Manager, State};
 use tauri_plugin_dialog::DialogExt;
 use uuid::Uuid;
@@ -188,6 +188,7 @@ struct PendingSaveConflict {
 }
 
 pub struct Workspace {
+    pub(crate) switch_guard: crate::ai_job::SwitchGuard,
     directory: PathBuf,
     system_project_location: PathBuf,
     active: Option<OpenProject>,
@@ -198,7 +199,6 @@ pub struct Workspace {
     recent_error: Option<String>,
     /// Other open projects, each with its own undo history, file and autosave.
     parked: Vec<OpenProject>,
-    /// Open projects in tab order.
     order: Vec<Uuid>,
 }
 
@@ -252,7 +252,6 @@ impl Workspace {
     fn session_mut(&mut self) -> Option<&mut Session> {
         self.active.as_mut().map(|open| &mut open.session)
     }
-    /// Run a change on the open project, then keep its unsaved work for recovery.
     fn with_session<T>(
         &mut self,
         change: impl FnOnce(&mut Session) -> desegnos_core::Result<T>,
@@ -300,7 +299,7 @@ impl Workspace {
         &mut self,
         record: desegnos_core::ExportRecord,
     ) -> NativeResult<()> {
-        self.with_session(|session| session.record_export(record, |_| Ok(())))
+        self.with_session(|session| session.record_export(record))
     }
 
     pub(super) fn import_website(
@@ -318,7 +317,6 @@ impl Workspace {
                     pointers: imported.pointers,
                     pictures,
                 },
-                |_| Ok(()),
             )
         })?;
         Ok(self.view())
@@ -344,7 +342,6 @@ impl Workspace {
                     wiring: Some(wiring),
                     comment: Some(comment.to_owned()),
                 },
-                |_| Ok(()),
             )
         })
     }
@@ -355,12 +352,9 @@ impl Workspace {
         candidate: &GenerationCandidate,
         attempt_ordinal: usize,
     ) -> NativeResult<()> {
-        self.with_session(|session| {
-            session.record_generation(snapshot, candidate, attempt_ordinal, |_| Ok(()))
-        })
+        self.with_session(|session| session.record_generation(snapshot, candidate, attempt_ordinal))
     }
 
-    /// Apply one validated reply and its generated pictures as one undo step.
     pub(super) fn apply_generated(
         &mut self,
         snapshot: &RequirementsSnapshot,
@@ -374,7 +368,6 @@ impl Workspace {
                 candidate,
                 accepted_decision_indices,
                 generated_pictures,
-                |_| Ok(()),
             )
         })
     }
@@ -398,6 +391,7 @@ impl Workspace {
         let mut state = Self {
             system_project_location: directory.join("Projects"),
             directory,
+            switch_guard: crate::ai_job::SwitchGuard::default(),
             active: None,
             recoveries: vec![],
             recovery_error: None,
@@ -690,6 +684,7 @@ impl Workspace {
     /// Close one open project tab. Unsaved changes need an explicit discard; discarding drops
     /// the autosave so the edits are no longer offered for recovery.
     fn close_tab(&mut self, project_id: Option<Uuid>, discard: bool) -> NativeResult<()> {
+        self.switch_guard.ensure_switch_allowed()?;
         let Some(target) = project_id.or_else(|| self.session().map(|s| s.project().id)) else {
             return Ok(());
         };
@@ -726,7 +721,6 @@ impl Workspace {
             self.remove_pointer(target);
         }
         let untitled = project.untitled;
-        // Dropping the entry releases its lock and leaves the saved project on disk.
         drop(project);
         if untitled {
             self.remove_untitled_database(target);
@@ -766,7 +760,6 @@ impl Workspace {
             .collect()
     }
 
-    /// Keep the active project open in the background so another one can become active.
     fn park_active(&mut self) {
         if self.active.is_some() {
             self.autosave_if_due();
@@ -784,6 +777,7 @@ impl Workspace {
     }
 
     fn switch_to(&mut self, project_id: Uuid) -> NativeResult<()> {
+        self.switch_guard.ensure_switch_allowed()?;
         if self.session().is_some_and(|s| s.project().id == project_id) {
             return Ok(());
         }
@@ -800,7 +794,11 @@ impl Workspace {
 
     /// Open or create another project in a new tab group. If that fails, the previous
     /// project becomes active again.
-    fn open_tab<T, E>(&mut self, open: impl FnOnce(&mut Self) -> Result<T, E>) -> Result<T, E> {
+    fn open_tab<T, E: From<String>>(
+        &mut self,
+        open: impl FnOnce(&mut Self) -> Result<T, E>,
+    ) -> Result<T, E> {
+        self.switch_guard.ensure_switch_allowed()?;
         let previous = self.session().map(|s| s.project().id);
         self.park_active();
         match open(self) {
@@ -842,6 +840,7 @@ impl Workspace {
     /// Opens a project file in its own tab. Choosing the active project's own file again reloads
     /// it from disk with fresh history, unless it has unsaved edits, which are kept as they are.
     fn open_file_tab(&mut self, path: &std::path::Path, discard_recovery: bool) -> OpenResult<()> {
+        self.switch_guard.ensure_switch_allowed()?;
         if path.is_dir()
             && let Some(file_path) = desegnos_storage::project_in_folder(path).map_err(message)?
         {
@@ -971,6 +970,7 @@ impl Workspace {
         ownership: Option<File>,
         untitled: bool,
     ) -> NativeResult<()> {
+        self.switch_guard.ensure_switch_allowed()?;
         let session = Session::new(project).map_err(message)?;
         let id = session.project().id;
         let stamp = match file.as_ref() {
@@ -1568,14 +1568,9 @@ pub fn get_workspace(state: WorkspaceState<'_>) -> NativeResult<WorkspaceView> {
 #[tauri::command]
 pub fn new_untitled_project(
     state: WorkspaceState<'_>,
-    generation: State<'_, Mutex<crate::generation::GenerationService>>,
     appearance: Option<Appearance>,
     template: Option<CanvasTemplate>,
 ) -> NativeResult<WorkspaceView> {
-    generation
-        .lock()
-        .map_err(message)?
-        .ensure_switch_allowed()?;
     let mut state = state.lock().map_err(message)?;
     state.create_untitled(
         appearance.unwrap_or(Appearance::Light),
@@ -1609,7 +1604,6 @@ pub fn save_untitled_project(
                 Command::RenameProject {
                     name: name.to_owned(),
                 },
-                |_| Ok(()),
             )
         })?;
     }
@@ -1679,15 +1673,7 @@ pub async fn pick_project_save_path(
 }
 
 #[tauri::command]
-pub fn switch_project(
-    state: WorkspaceState<'_>,
-    generation: State<'_, Mutex<crate::generation::GenerationService>>,
-    project_id: Uuid,
-) -> NativeResult<WorkspaceView> {
-    generation
-        .lock()
-        .map_err(message)?
-        .ensure_switch_allowed()?;
+pub fn switch_project(state: WorkspaceState<'_>, project_id: Uuid) -> NativeResult<WorkspaceView> {
     let mut state = state.lock().map_err(message)?;
     state.switch_to(project_id)?;
     Ok(state.view())
@@ -1696,14 +1682,9 @@ pub fn switch_project(
 #[tauri::command]
 pub fn close_project(
     state: WorkspaceState<'_>,
-    generation: State<'_, Mutex<crate::generation::GenerationService>>,
     project_id: Option<Uuid>,
     discard: bool,
 ) -> NativeResult<WorkspaceView> {
-    generation
-        .lock()
-        .map_err(message)?
-        .ensure_switch_allowed()?;
     let mut state = state.lock().map_err(message)?;
     state.close_tab(project_id, discard)?;
     Ok(state.view())
@@ -1738,7 +1719,7 @@ pub fn import_context(
         )?;
     context.attach_matching_pages = attach_matching_pages.unwrap_or(true);
     let mut state = state.lock().map_err(message)?;
-    state.with_session(|session| session.import_context(revision, context, |_| Ok(())))?;
+    state.with_session(|session| session.import_context(revision, context))?;
     state.active.as_mut().expect("active project").prepared = None;
     Ok(state.view())
 }
@@ -1812,7 +1793,7 @@ impl Workspace {
         let session = self
             .session_mut()
             .ok_or("Create or open a project first.")?;
-        session.restore(restored, |_| Ok(())).map_err(message)?;
+        session.restore(restored).map_err(message)?;
         self.active.as_mut().expect("active project").saved_revision =
             Some(session.project().revision);
         self.active.as_mut().expect("active project").stamp = Some(stamp);
@@ -1829,7 +1810,7 @@ pub fn edit_project(
     command: Command,
 ) -> NativeResult<WorkspaceView> {
     let mut state = state.lock().map_err(message)?;
-    state.with_session(|session| session.execute(revision, command, |_| Ok(())))?;
+    state.with_session(|session| session.execute(revision, command))?;
     Ok(state.view())
 }
 
@@ -1858,14 +1839,14 @@ fn preview_link(url: &str) -> NativeResult<desegnos_ai::WebUrl> {
 #[tauri::command(async)]
 pub fn undo_project(state: WorkspaceState<'_>) -> NativeResult<WorkspaceView> {
     let mut state = state.lock().map_err(message)?;
-    state.with_session(|session| session.undo(|_| Ok(())))?;
+    state.with_session(|session| session.undo())?;
     Ok(state.view())
 }
 
 #[tauri::command(async)]
 pub fn redo_project(state: WorkspaceState<'_>) -> NativeResult<WorkspaceView> {
     let mut state = state.lock().map_err(message)?;
-    state.with_session(|session| session.redo(|_| Ok(())))?;
+    state.with_session(|session| session.redo())?;
     Ok(state.view())
 }
 
@@ -1882,15 +1863,10 @@ pub fn end_history_step(state: WorkspaceState<'_>) -> NativeResult<()> {
 pub async fn open_project(
     app: AppHandle,
     state: WorkspaceState<'_>,
-    generation: State<'_, Mutex<crate::generation::GenerationService>>,
     folder: Option<bool>,
     path: Option<PathBuf>,
     discard_recovery: Option<bool>,
 ) -> OpenResult<Option<WorkspaceView>> {
-    generation
-        .lock()
-        .map_err(message)?
-        .ensure_switch_allowed()?;
     let path = if let Some(path) = path {
         path
     } else {
@@ -1917,10 +1893,6 @@ pub async fn open_project(
         picked.into_path().map_err(message)?
     };
     let mut state = state.lock().map_err(message)?;
-    generation
-        .lock()
-        .map_err(message)?
-        .ensure_switch_allowed()?;
     state.open_file_tab(&path, discard_recovery.unwrap_or(false))?;
     Ok(Some(state.view()))
 }
@@ -2060,13 +2032,8 @@ pub fn dismiss_recovery(
 #[tauri::command]
 pub fn recover_project(
     state: WorkspaceState<'_>,
-    generation: State<'_, Mutex<crate::generation::GenerationService>>,
     project_id: Option<Uuid>,
 ) -> NativeResult<WorkspaceView> {
-    generation
-        .lock()
-        .map_err(message)?
-        .ensure_switch_allowed()?;
     let mut state = state.lock().map_err(message)?;
     state.recover(project_id)?;
     Ok(state.view())
@@ -2080,9 +2047,7 @@ pub struct RecentProjectsView {
 }
 
 #[tauri::command]
-pub fn get_recent_projects(
-    state: WorkspaceState<'_>,
-) -> NativeResult<RecentProjectsView> {
+pub fn get_recent_projects(state: WorkspaceState<'_>) -> NativeResult<RecentProjectsView> {
     let state = state.lock().map_err(message)?;
     match crate::recent::read(&state.directory) {
         Ok(projects) => Ok(RecentProjectsView {
@@ -2120,28 +2085,20 @@ impl From<String> for RecentProjectOpenError {
 #[tauri::command(async)]
 pub fn open_recent_project(
     state: WorkspaceState<'_>,
-    generation: State<'_, Mutex<crate::generation::GenerationService>>,
     path: PathBuf,
     discard_recovery: Option<bool>,
 ) -> OpenResult<WorkspaceView> {
-    open_recent(&state, &generation, &path, discard_recovery.unwrap_or(false)).map_err(|error| {
-        match error {
-            ProjectOpenError::Message(message) => RecentProjectOpenError::from(message).into(),
-            error => error,
-        }
+    open_recent(&state, &path, discard_recovery.unwrap_or(false)).map_err(|error| match error {
+        ProjectOpenError::Message(message) => RecentProjectOpenError::from(message).into(),
+        error => error,
     })
 }
 
 fn open_recent(
     state: &WorkspaceState<'_>,
-    generation: &State<'_, Mutex<crate::generation::GenerationService>>,
     path: &Path,
     discard_recovery: bool,
 ) -> OpenResult<WorkspaceView> {
-    generation
-        .lock()
-        .map_err(message)?
-        .ensure_switch_allowed()?;
     let mut state = state.lock().map_err(message)?;
     if !crate::recent::read(&state.directory)?
         .iter()

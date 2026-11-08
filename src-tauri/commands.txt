@@ -56,11 +56,11 @@ rename_alternative
 delete_alternative
 recover_project
 dismiss_recovery
-get_ai_settings
-save_ai_settings
-set_ai_provider
-set_ai_key
-remove_ai_key
+ai_settings::get_ai_settings
+ai_settings::save_ai_settings
+ai_settings::set_ai_provider
+ai_settings::set_ai_key
+ai_settings::remove_ai_key
 chatgpt::set_ai_authentication
 chatgpt::begin_chatgpt_sign_in
 chatgpt::cancel_chatgpt_sign_in
@@ -69,7 +69,7 @@ chatgpt::retry_chatgpt_secure_storage
 chatgpt::sign_out_chatgpt
 chatgpt::acknowledge_chatgpt_welcome
 chatgpt::open_chatgpt_usage
-test_ai_access
+ai_settings::test_ai_access
 prepare_generation
 get_generation
 list_generations

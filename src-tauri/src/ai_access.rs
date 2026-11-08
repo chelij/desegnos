@@ -3,8 +3,8 @@
 //! send performs. Generation, export and identity analysis all go through it, so they cannot
 //! drift apart on repair checks, sign-out epochs or model validation.
 use crate::{
+    ai_settings::{AiSettingsStore, api_model_for_key, provider_key},
     chatgpt::ChatgptState,
-    generation::{GenerationService, api_model_for_key, provider_key},
 };
 use desegnos_ai::{
     ApiKey, AuthenticationMethod, CancellationToken, ChatgptModel, CostEstimate, ErrorKind,
@@ -77,7 +77,10 @@ impl AccessFailure {
     /// The failure as a provider error, for a job that records one.
     pub fn into_provider_error(self) -> ProviderError {
         self.provider_error.map(|error| *error).unwrap_or_else(|| {
-            ProviderError::new(ErrorKind::MissingCredential, SubmissionOutcome::NotSubmitted)
+            ProviderError::new(
+                ErrorKind::MissingCredential,
+                SubmissionOutcome::NotSubmitted,
+            )
         })
     }
 }
@@ -90,7 +93,12 @@ pub async fn active_account(chatgpt: &ChatgptState, action: &str) -> NativeResul
         .iter()
         .find(|account| Some(account.id) == view.active_account_id)
         .ok_or_else(|| format!("Sign in to ChatGPT before {action}."))?;
-    check_account(account.connected, account.plan_enabled, account.storage_repair_required, action)?;
+    check_account(
+        account.connected,
+        account.plan_enabled,
+        account.storage_repair_required,
+        action,
+    )?;
     Ok(account.id)
 }
 
@@ -115,7 +123,7 @@ fn check_account(
 
 /// Resolve the credentials and model for a job. Cancelling stops it with a cancelled error.
 pub async fn resolve(
-    service: &Mutex<GenerationService>,
+    service: &Mutex<AiSettingsStore>,
     chatgpt: &ChatgptState,
     connection: &Connection,
     cancellation: &CancellationToken,
@@ -128,11 +136,13 @@ pub async fn resolve(
             cancellation,
         ))
         .await
-        .unwrap_or_else(|| Err(ProviderError::new(ErrorKind::Cancelled, SubmissionOutcome::NotSubmitted).into()))
+        .unwrap_or_else(|| {
+            Err(ProviderError::new(ErrorKind::Cancelled, SubmissionOutcome::NotSubmitted).into())
+        })
 }
 
 async fn resolve_credentials(
-    service: &Mutex<GenerationService>,
+    service: &Mutex<AiSettingsStore>,
     chatgpt: &ChatgptState,
     connection: &Connection,
     cancellation: &CancellationToken,
@@ -144,7 +154,8 @@ async fn resolve_credentials(
         account_id,
     } = connection;
     let openai = service.lock().map_err(message)?.client()?;
-    let client = ProviderClient::with_settings(*provider, openai.clone(), settings).map_err(message)?;
+    let client =
+        ProviderClient::with_settings(*provider, openai.clone(), settings).map_err(message)?;
     let (key, account, account_model) = if *authentication == AuthenticationMethod::Chatgpt {
         let account_id = account_id
             .ok_or("This ChatGPT request has no bound account. Prepare a new request.")?;
@@ -181,7 +192,11 @@ async fn resolve_credentials(
             .map_err(message)?;
         (key, Some((account_id, epoch)), Some(model))
     } else {
-        (credential_key(service, *provider, settings).await?, None, None)
+        (
+            credential_key(service, *provider, settings).await?,
+            None,
+            None,
+        )
     };
     let api_model = if *authentication == AuthenticationMethod::ApiKey {
         Some(api_model_for_key(service, *provider, settings, &key, cancellation).await?)
@@ -202,7 +217,7 @@ async fn resolve_credentials(
 
 /// The API key for a provider, read off the async runtime.
 pub async fn credential_key(
-    service: &Mutex<GenerationService>,
+    service: &Mutex<AiSettingsStore>,
     provider: ProviderId,
     settings: &ProviderSettings,
 ) -> NativeResult<ApiKey> {

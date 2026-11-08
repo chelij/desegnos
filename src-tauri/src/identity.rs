@@ -3,8 +3,8 @@
 use crate::{
     ai_access::{Access, AccessFailure, active_account, resolve},
     ai_job::{ActiveJobs, Failure, interrupted_notice, stopped_notice},
+    ai_settings::AiSettingsStore,
     chatgpt::ChatgptState,
-    generation::GenerationService,
     native_files::{
         self, NativeResult, message as error, open_lock_file, private_directory, regular_file,
     },
@@ -30,7 +30,7 @@ use uuid::Uuid;
 
 type IdentityState<'a> = State<'a, Mutex<IdentityService>>;
 const MAX_IDENTITY_MARKDOWN_BYTES: usize = 512 * 1024;
-const MAX_RECORD_BYTES: u64 = 8 * 1024 * 1024;
+use desegnos_core::limits::MAX_IDENTITY_RECORD_BYTES as MAX_RECORD_BYTES;
 const MAX_CANDIDATE_BYTES: usize = 256 * 1024;
 const MAX_SOURCES: usize = 8;
 /// An identity analysis is a single attempt.
@@ -389,7 +389,8 @@ fn validate_source(source: &IdentitySource) -> NativeResult<()> {
         }
     }
     require(
-        bytes <= 4 * 1024 * 1024 && assets <= 4,
+        bytes <= desegnos_core::limits::MAX_IDENTITY_SOURCE_BYTES
+            && assets <= desegnos_core::limits::MAX_IDENTITY_ASSETS,
         "The frozen identity source exceeds its storage bounds.",
     )?;
     for page in &source.pages {
@@ -578,7 +579,7 @@ fn select_files(
 #[tauri::command]
 pub fn prepare_identity_selection(
     state: IdentityState<'_>,
-    generation: State<'_, Mutex<GenerationService>>,
+    generation: State<'_, Mutex<AiSettingsStore>>,
     source_id: Uuid,
     file_ids: Option<Vec<Uuid>>,
 ) -> NativeResult<IdentitySelection> {
@@ -794,6 +795,10 @@ fn validate_candidate(candidate: &IdentityCandidate, record: &AnalysisRecord) ->
 }
 
 impl IdentityService {
+    pub(crate) fn bind_switch_guard(&mut self, guard: crate::ai_job::SwitchGuard) {
+        self.active.bind_switch_guard(guard);
+    }
+
     pub fn initialize(data: &Path) -> Self {
         Self::recover_or_report(data.join("identity"))
     }
@@ -860,7 +865,7 @@ impl IdentityService {
         let (snapshot, _) = freeze(&record.source, &record.file_ids, record.requirements.job_id)?;
         require(
             snapshot == record.requirements
-                && record.received_bytes <= 8 * 1024 * 1024
+                && record.received_bytes <= desegnos_ai::MAX_OUTPUT_BYTES
                 && (record.authentication == Some(AuthenticationMethod::Chatgpt))
                     == record.account_id.is_some(),
             "The saved identity analysis failed its frozen-input or authentication check.",
@@ -987,7 +992,9 @@ impl IdentityService {
                 job_id: record.requirements.job_id,
             },
         )?;
-        let cancellation = self.active.start(record.requirements.job_id, ANALYSIS_ATTEMPT);
+        let cancellation = self
+            .active
+            .start(record.requirements.job_id, ANALYSIS_ATTEMPT);
         let view = record.view();
         self.latest = Some(record);
         self.startup_error = None;
@@ -1042,7 +1049,7 @@ impl IdentityService {
             && let Some(record) = &mut self.latest
             && record.requirements.job_id == job_id
         {
-            record.received_bytes = progress.received_bytes.min(8 * 1024 * 1024);
+            record.received_bytes = progress.received_bytes.min(desegnos_ai::MAX_OUTPUT_BYTES);
         }
     }
     fn finish(
@@ -1145,7 +1152,9 @@ impl IdentityService {
         )?;
         self.active.cancel(job_id);
         let mut record = record.clone();
-        let authentication = record.authentication.unwrap_or(AuthenticationMethod::ApiKey);
+        let authentication = record
+            .authentication
+            .unwrap_or(AuthenticationMethod::ApiKey);
         record.status = AnalysisStatus::Cancelled;
         record.candidate = None;
         record.error = None;
@@ -1361,9 +1370,7 @@ impl IdentityService {
 }
 
 #[tauri::command]
-pub fn get_identity_analysis(
-    state: IdentityState<'_>,
-) -> NativeResult<Option<AnalysisView>> {
+pub fn get_identity_analysis(state: IdentityState<'_>) -> NativeResult<Option<AnalysisView>> {
     let service = state.lock().map_err(error)?;
     if let Some(reason) = &service.startup_error {
         return Err(reason.clone());
@@ -1379,7 +1386,7 @@ pub fn cancel_identity_analysis(
 }
 /// Access for an analysis of the selected connection, confirmed once more after sign-in.
 async fn identity_access(
-    state: &Mutex<GenerationService>,
+    state: &Mutex<AiSettingsStore>,
     chatgpt: &ChatgptState,
     cancellation: &CancellationToken,
 ) -> Result<Access, AccessFailure> {
@@ -1448,7 +1455,7 @@ pub fn analyze_identity(
     let (view, cancellation) = state.lock().map_err(error)?.reserve(source_id, file_ids)?;
     let job_id = view.job_id;
     tauri::async_runtime::spawn(async move {
-        let generation = app.state::<Mutex<GenerationService>>();
+        let generation = app.state::<Mutex<AiSettingsStore>>();
         let chatgpt = app.state::<ChatgptState>();
         let provider = generation
             .lock()

@@ -5,22 +5,23 @@ compile_error!("Release builds must embed the frontend: enable the custom-protoc
 
 mod ai_access;
 mod ai_job;
+mod ai_settings;
 mod chatgpt;
+mod clipboard;
 #[cfg(test)]
 mod contract;
-mod clipboard;
 mod crash_report;
 mod data_location;
 mod export;
 mod file_dialogs;
-mod generation;
 mod fonts;
+mod generation;
 mod identity;
 mod image_drop;
-mod local_site;
-mod native_files;
 #[cfg(target_os = "linux")]
 mod linux_startup;
+mod local_site;
+mod native_files;
 #[cfg(all(target_os = "linux", feature = "portal-dialogs"))]
 mod portal;
 mod project_location;
@@ -62,7 +63,7 @@ fn main() {
                 Err(problem) => quit(&problem),
             };
             crash_report::start(data.path());
-            let (workspace, generation, identity) = loop {
+            let (workspace, settings, generation, identity) = loop {
                 match initialize(app.handle(), data.path()) {
                     Ok(services) => break services,
                     Err(problem) => match data_location::recover(app.handle(), problem) {
@@ -71,15 +72,19 @@ fn main() {
                     },
                 }
             };
-            let exports = export::ExportService::initialize(data.path());
+            let mut exports = export::ExportService::initialize(data.path());
+            exports.bind_switch_guard(workspace.switch_guard.clone());
             app.manage(data);
             app.manage(std::sync::Mutex::new(workspace));
             app.manage(std::sync::Mutex::new(exports));
             app.manage(std::sync::Mutex::new(local_site::LocalSite::default()));
-            app.manage(std::sync::Mutex::new(website_import::WebsiteImportState::default()));
-            app.manage(chatgpt::ChatgptState::initialize(
-                generation.chatgpt_directory(),
+            app.manage(std::sync::Mutex::new(
+                website_import::WebsiteImportState::default(),
             ));
+            app.manage(chatgpt::ChatgptState::initialize(
+                settings.chatgpt_directory(),
+            ));
+            app.manage(std::sync::Mutex::new(settings));
             app.manage(std::sync::Mutex::new(generation));
             app.manage(std::sync::Mutex::new(identity));
             shutdown::install(app.handle().clone())?;
@@ -108,7 +113,12 @@ fn main() {
 }
 
 /// Every service that keeps Desegnos's own files, built before anything is managed.
-type Services = (Workspace, GenerationService, identity::IdentityService);
+type Services = (
+    Workspace,
+    ai_settings::AiSettingsStore,
+    GenerationService,
+    identity::IdentityService,
+);
 
 /// Builds the services on the chosen data folder. A storage failure can then be retried with
 /// another folder without leaving half-managed state behind.
@@ -118,10 +128,14 @@ fn initialize(
 ) -> Result<Services, data_location::Problem> {
     let workspace = Workspace::initialize(app, data.to_owned())
         .map_err(|error| data_location::Problem::error(data, error.as_ref()))?;
-    let generation =
-        GenerationService::initialize(data).map_err(|_| data_location::Problem::unusable(data))?;
-    let identity = identity::IdentityService::initialize(data);
-    Ok((workspace, generation, identity))
+    let mut settings = ai_settings::AiSettingsStore::initialize(data)
+        .map_err(|_| data_location::Problem::unusable(data))?;
+    settings.switch_guard = workspace.switch_guard.clone();
+    let mut generation = GenerationService::initialize(data);
+    generation.bind_switch_guard(workspace.switch_guard.clone());
+    let mut identity = identity::IdentityService::initialize(data);
+    identity.bind_switch_guard(workspace.switch_guard.clone());
+    Ok((workspace, settings, generation, identity))
 }
 
 /// Reports the startup failure on stderr and stops, as the error dialog's Quit offers.

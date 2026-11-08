@@ -44,7 +44,7 @@ const MAX_BRAND_TEXT_BYTES: usize = 2 * 1024 * 1024;
 const MAX_PHOTOS: usize = 32;
 const MAX_PHOTO_BYTES: usize = 2 * 1024 * 1024;
 const MAX_PHOTO_TOTAL_BYTES: usize = 8 * 1024 * 1024;
-const MAX_WEBSITE_IMAGE_BYTES: usize = 8 * 1024 * 1024;
+use desegnos_core::limits::MAX_WEBSITE_FILE_BYTES as MAX_WEBSITE_IMAGE_BYTES;
 
 #[derive(Debug, Default)]
 pub struct WebsiteFiles {
@@ -372,9 +372,9 @@ pub struct WebsiteSnapshotPage {
     pub title: String,
 }
 
-const MAX_SNAPSHOT_PAGES: usize = 30;
+use desegnos_core::limits::MAX_IMPORT_PAGES as MAX_SNAPSHOT_PAGES;
 const MAX_SNAPSHOT_PAGE_BYTES: usize = 1024 * 1024;
-const MAX_SNAPSHOT_ASSET_BYTES: usize = 4 * 1024 * 1024;
+use desegnos_core::limits::MAX_IDENTITY_SOURCE_BYTES as MAX_SNAPSHOT_ASSET_BYTES;
 const MAX_SNAPSHOT_ASSETS: usize = 240;
 const MAX_SNAPSHOT_TOTAL_BYTES: usize = 96 * 1024 * 1024;
 
@@ -443,7 +443,9 @@ fn decoded_path(path: &str) -> Option<String> {
     if value.is_empty()
         || value.contains(['\\', '\0'])
         || value.chars().any(char::is_control)
-        || value.split('/').any(|part| part.is_empty() || part == "." || part == ".." || part.starts_with('.'))
+        || value
+            .split('/')
+            .any(|part| part.is_empty() || part == "." || part == ".." || part.starts_with('.'))
     {
         return None;
     }

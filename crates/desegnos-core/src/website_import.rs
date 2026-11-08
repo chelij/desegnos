@@ -4,6 +4,7 @@
 //! is a pure conversion from that compact tree in the browser to the project's element model.
 //! It never fetches, writes or runs page code. Images arrive as picture ids resolved by the
 //! native layer through the ordinary project picture store.
+use crate::limits::{DEFAULT_PICTURE_WIDTH, MAX_IMPORT_CAPTURES, MAX_IMPORT_PAGES};
 use crate::limits::{
     LINE_HEIGHT_MAX, MAX_FONT_FAMILY_CHARS, MAX_FONT_WEIGHT, MAX_GRID_COLUMNS, MAX_LAYOUT_SPACING,
     MAX_LETTER_SPACING, MAX_RADIUS, MAX_SHADOW_BLUR, MAX_SHADOW_OFFSET, MAX_STROKE_WIDTH,
@@ -1099,8 +1100,8 @@ fn page_plans<'a>(captures: &'a [WebCapture], project: &Project) -> Result<Vec<P
         "Render at least one page before importing it.",
     )?;
     ensure(
-        captures.len() <= 60,
-        "A website import renders at most 30 pages.",
+        captures.len() <= MAX_IMPORT_CAPTURES,
+        &format!("A website import renders at most {MAX_IMPORT_PAGES} pages at two widths."),
     )?;
     let mut grouped: BTreeMap<String, (&WebCapture, Option<&WebCapture>)> = BTreeMap::new();
     for capture in captures {
@@ -1119,7 +1120,7 @@ fn page_plans<'a>(captures: &'a [WebCapture], project: &Project) -> Result<Vec<P
         remaining > 0,
         "This project already holds the maximum number of boundaries.",
     )?;
-    let limit = remaining.min(30);
+    let limit = remaining.min(MAX_IMPORT_PAGES);
     let existing: BTreeSet<String> = project
         .pages
         .iter()
@@ -1418,7 +1419,7 @@ pub fn import_website(
                 width: 390,
                 height: phone_height,
                 kind: BoundaryKind::Page,
-                x: page_x + 1440.0 + 160.0,
+                x: page_x + f64::from(DEFAULT_PICTURE_WIDTH) + 160.0,
                 y: page_y,
             });
             imported.warnings.extend(converter.warnings.iter().cloned());
@@ -1429,7 +1430,7 @@ pub fn import_website(
         let mut sizes = vec![PageSize {
             id: plan.size_id,
             label: "Desktop".into(),
-            width: 1440,
+            width: DEFAULT_PICTURE_WIDTH,
             height: desktop_height,
             kind: BoundaryKind::Page,
             x: page_x,
@@ -1437,9 +1438,9 @@ pub fn import_website(
         }];
         sizes.extend(phone_size);
         let width = if plan.phone.is_some() {
-            1440.0 + 160.0 + 390.0
+            f64::from(DEFAULT_PICTURE_WIDTH) + 160.0 + 390.0
         } else {
-            1440.0
+            f64::from(DEFAULT_PICTURE_WIDTH)
         };
         right = page_x + width + 160.0;
 

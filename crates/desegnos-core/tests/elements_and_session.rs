@@ -139,14 +139,13 @@ fn insert_update_move_reparent_and_remove_are_one_undo_step_each() {
                 picture_data_uri: None,
                 size_id: None,
             },
-            |_| Ok(()),
         )
         .unwrap();
     assert_eq!(step(&session), before + 1);
     assert_eq!(session.project().page(page).unwrap().elements.len(), 2);
-    session.undo(|_| Ok(())).unwrap();
+    session.undo().unwrap();
     assert!(session.project().page(page).unwrap().elements.is_empty());
-    session.redo(|_| Ok(())).unwrap();
+    session.redo().unwrap();
 
     // Update: rect and text in one patch and one history step.
     let before = step(&session);
@@ -160,7 +159,6 @@ fn insert_update_move_reparent_and_remove_are_one_undo_step_each() {
                 page_id: page,
                 patches: vec![update],
             },
-            |_| Ok(()),
         )
         .unwrap();
     assert_eq!(step(&session), before + 1);
@@ -169,7 +167,7 @@ fn insert_update_move_reparent_and_remove_are_one_undo_step_each() {
         "Changed"
     );
     assert_eq!(session.project().element(text_id).unwrap().1.rect.x, 30.0);
-    session.undo(|_| Ok(())).unwrap();
+    session.undo().unwrap();
     assert_eq!(session.project().element(text_id).unwrap().1.text, "Hello");
     assert_eq!(session.project().element(text_id).unwrap().1.rect.x, 10.0);
 
@@ -189,7 +187,6 @@ fn insert_update_move_reparent_and_remove_are_one_undo_step_each() {
                     all_sizes: false,
                 }],
             },
-            |_| Ok(()),
         )
         .unwrap();
     assert_eq!(step(&session), before + 1);
@@ -199,7 +196,7 @@ fn insert_update_move_reparent_and_remove_are_one_undo_step_each() {
         session.project().element(box_id).unwrap().1.children.len(),
         1
     );
-    session.undo(|_| Ok(())).unwrap();
+    session.undo().unwrap();
     assert_eq!(session.project().element(text_id).unwrap().1.rect.x, 10.0);
     assert!(
         session
@@ -220,12 +217,11 @@ fn insert_update_move_reparent_and_remove_are_one_undo_step_each() {
                 page_id: page,
                 ids: vec![text_id],
             },
-            |_| Ok(()),
         )
         .unwrap();
     assert_eq!(step(&session), before + 1);
     assert!(session.project().element(text_id).is_none());
-    session.undo(|_| Ok(())).unwrap();
+    session.undo().unwrap();
     assert!(session.project().element(text_id).is_some());
 }
 
@@ -268,7 +264,6 @@ fn group_and_ungroup_are_one_undo_step_each() {
                 page_id: page,
                 ids: ids.clone(),
             },
-            |_| Ok(()),
         )
         .unwrap();
     assert_eq!(step(&session), before + 1);
@@ -281,9 +276,9 @@ fn group_and_ungroup_are_one_undo_step_each() {
     assert_eq!(roots[0].children[1].rect, rect(140.0, 40.0, 60.0, 60.0));
     let group_id = roots[0].id;
 
-    session.undo(|_| Ok(())).unwrap();
+    session.undo().unwrap();
     assert_eq!(session.project().page(page).unwrap().elements.len(), 2);
-    session.redo(|_| Ok(())).unwrap();
+    session.redo().unwrap();
 
     let before = step(&session);
     session
@@ -293,7 +288,6 @@ fn group_and_ungroup_are_one_undo_step_each() {
                 page_id: page,
                 id: group_id,
             },
-            |_| Ok(()),
         )
         .unwrap();
     assert_eq!(step(&session), before + 1);
@@ -301,7 +295,7 @@ fn group_and_ungroup_are_one_undo_step_each() {
     assert_eq!(roots.len(), 2);
     assert_eq!(roots[0].rect, rect(10.0, 10.0, 100.0, 80.0));
     assert_eq!(roots[1].rect, rect(150.0, 50.0, 60.0, 60.0));
-    session.undo(|_| Ok(())).unwrap();
+    session.undo().unwrap();
     assert_eq!(session.project().page(page).unwrap().elements.len(), 1);
     assert_eq!(
         session.project().page(page).unwrap().elements[0].kind,
@@ -592,7 +586,9 @@ fn size_override_edits_only_that_size_and_all_sizes_edits_clear_overrides() {
         rect(70.0, 80.0, 140.0, 28.0)
     );
     assert!(
-        project.page(page).unwrap().elements[0].overrides[&phone].rect.is_none(),
+        project.page(page).unwrap().elements[0].overrides[&phone]
+            .rect
+            .is_none(),
         "the all-sizes edit removed the manually changed geometry"
     );
 }
@@ -757,7 +753,6 @@ fn placing_text_and_typing_it_is_one_undo_step() {
                 picture_data_uri: None,
                 size_id: None,
             },
-            |_| Ok(()),
         )
         .unwrap();
     // The editor closing ends the step before its text arrives.
@@ -772,7 +767,6 @@ fn placing_text_and_typing_it_is_one_undo_step() {
                 page_id: page,
                 patches: vec![typed],
             },
-            |_| Ok(()),
         )
         .unwrap();
     assert_eq!(step(&session), before + 1);
@@ -786,7 +780,6 @@ fn placing_text_and_typing_it_is_one_undo_step() {
                 page_id: page,
                 patches: vec![edited],
             },
-            |_| Ok(()),
         )
         .unwrap();
     assert_eq!(
@@ -794,8 +787,8 @@ fn placing_text_and_typing_it_is_one_undo_step() {
         before + 2,
         "later text edits are their own step"
     );
-    session.undo(|_| Ok(())).unwrap();
-    session.undo(|_| Ok(())).unwrap();
+    session.undo().unwrap();
+    session.undo().unwrap();
     assert!(session.project().page(page).unwrap().elements.is_empty());
 }
 
@@ -1040,7 +1033,6 @@ fn repeated_nudges_use_current_positions_and_share_one_undo_step() {
                     dx: 1.0,
                     dy: 0.0,
                 },
-                |_| Ok(()),
             )
             .unwrap();
     }
@@ -1049,9 +1041,9 @@ fn repeated_nudges_use_current_positions_and_share_one_undo_step() {
         initial.x + 5.0
     );
     assert_eq!(step(&session), 1);
-    session.undo(|_| Ok(())).unwrap();
+    session.undo().unwrap();
     assert_eq!(session.project().element(id).unwrap().1.rect, initial);
-    session.redo(|_| Ok(())).unwrap();
+    session.redo().unwrap();
     assert_eq!(
         session.project().element(id).unwrap().1.rect.x,
         initial.x + 5.0

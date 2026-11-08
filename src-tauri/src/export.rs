@@ -6,14 +6,13 @@
 //! folder and pointer fingerprints the export produced.
 use crate::ai_access::{Connection, active_account, resolve};
 use crate::ai_job::{signed_out_notice, stopped_notice};
-use crate::generation::AiState;
+use crate::ai_settings::AiState;
 use crate::chatgpt::ChatgptState;
 use crate::local_site::LocalSite;
 use crate::native_files::{NativeResult, message};
 use crate::workspace::Workspace;
 use desegnos_ai::{
-    AuthenticationMethod, CancellationToken, ProviderId, ProviderResponse,
-    TokenUsage,
+    AuthenticationMethod, CancellationToken, ProviderId, ProviderResponse, TokenUsage,
 };
 use desegnos_core::{
     ExportBundle, ExportPlan, ExportPlanKind, ExportRecord, GenerationMode, Project, WebsiteExport,
@@ -37,7 +36,7 @@ type ExportState<'a> = State<'a, Mutex<ExportService>>;
 type SiteState<'a> = State<'a, Mutex<LocalSite>>;
 
 /// The largest export file the clash check reads back.
-const MAX_CHECK_BYTES: usize = 8 * 1024 * 1024;
+use desegnos_core::limits::MAX_EXPORT_CHECK_BYTES as MAX_CHECK_BYTES;
 
 fn now() -> String {
     SystemTime::now()
@@ -181,15 +180,21 @@ fn read_accepted(directory: &Path) -> BTreeMap<Uuid, ExportRecord> {
 
 /// Export jobs and the one preview folder a session keeps.
 pub struct ExportService {
+    switch_guard: crate::ai_job::SwitchGuard,
     directory: PathBuf,
     jobs: BTreeMap<Uuid, ExportJob>,
     accepted: BTreeMap<Uuid, ExportRecord>,
 }
 
 impl ExportService {
+    pub(crate) fn bind_switch_guard(&mut self, guard: crate::ai_job::SwitchGuard) {
+        self.switch_guard = guard;
+    }
+
     pub fn initialize(data: &Path) -> Self {
         let directory = data.join("exports");
         Self {
+            switch_guard: crate::ai_job::SwitchGuard::default(),
             accepted: read_accepted(&directory),
             directory,
             jobs: BTreeMap::new(),
@@ -354,9 +359,7 @@ fn trusted_destination(path: String) -> NativeResult<PathBuf> {
 /// Choose where a full export writes. Renderer-supplied paths never reach the filesystem
 /// without this native picker.
 #[tauri::command]
-pub async fn pick_export_destination(
-    app: AppHandle,
-) -> NativeResult<Option<PickDestination>> {
+pub async fn pick_export_destination(app: AppHandle) -> NativeResult<Option<PickDestination>> {
     let picked = tauri::async_runtime::spawn_blocking(move || {
         crate::file_dialogs::picked(
             app.dialog()
@@ -560,10 +563,7 @@ pub async fn prepare_export(
 }
 
 /// The selected AI connection, bound to the signed-in ChatGPT account when it uses one.
-async fn bound_connection(
-    ai: &AiState<'_>,
-    chatgpt: &ChatgptState,
-) -> NativeResult<Connection> {
+async fn bound_connection(ai: &AiState<'_>, chatgpt: &ChatgptState) -> NativeResult<Connection> {
     let mut connection = ai.lock().map_err(message)?.connection();
     if connection.authentication == AuthenticationMethod::Chatgpt {
         connection.account_id = Some(active_account(chatgpt, "exporting").await?);
@@ -656,7 +656,10 @@ fn commit(
         Some(
             site.lock()
                 .map_err(message)?
-                .serve(&path, 64 * 1024 * 1024)
+                .serve(
+                    &path,
+                    desegnos_core::limits::MAX_LOCAL_PREVIEW_BYTES as usize,
+                )
                 .map_err(message)?
                 + &preview_file,
         )
@@ -725,6 +728,11 @@ pub async fn start_export(
             job.cancellation.clone(),
         )
     };
+    let _running = service
+        .lock()
+        .map_err(message)?
+        .switch_guard
+        .track(cancellation.clone());
     let mut provider_error = None;
     let result = async {
         let access = resolve(&ai, &chatgpt, &connection, &cancellation)
@@ -980,10 +988,7 @@ fn apply_comment(
 }
 
 #[tauri::command]
-pub fn cancel_export(
-    service: ExportState<'_>,
-    job_id: Uuid,
-) -> NativeResult<ExportJobView> {
+pub fn cancel_export(service: ExportState<'_>, job_id: Uuid) -> NativeResult<ExportJobView> {
     let mut service = service.lock().map_err(message)?;
     let job = service
         .jobs
@@ -1075,7 +1080,8 @@ pub async fn keep_pointer_code(
         .last_export
         .clone()
         .ok_or("Export once before rewriting a pointer comment.")?;
-    let files = read_export_folder(&PathBuf::from(&record.destination), MAX_CHECK_BYTES).map_err(message)?;
+    let files = read_export_folder(&PathBuf::from(&record.destination), MAX_CHECK_BYTES)
+        .map_err(message)?;
     let marked = marked_pointer_code(&files, pointer_id);
     if marked.trim().is_empty() {
         return Err(
@@ -1128,10 +1134,7 @@ pub async fn keep_pointer_code(
 }
 
 #[tauri::command]
-pub fn close_preview(
-    service: ExportState<'_>,
-    site: SiteState<'_>,
-) -> NativeResult<()> {
+pub fn close_preview(service: ExportState<'_>, site: SiteState<'_>) -> NativeResult<()> {
     site.lock().map_err(message)?.stop();
     service.lock().map_err(message)?.prune_previews(None);
     Ok(())
@@ -1193,7 +1196,10 @@ pub fn open_in_browser(
     let url = site
         .lock()
         .map_err(message)?
-        .serve(&path, 64 * 1024 * 1024)
+        .serve(
+            &path,
+            desegnos_core::limits::MAX_LOCAL_PREVIEW_BYTES as usize,
+        )
         .map_err(message)?;
     let target = entry_url(&path, &url);
     crate::system_open::open(&target)
@@ -1288,6 +1294,7 @@ mod tests {
             )]),
         };
         let mut service = ExportService {
+            switch_guard: crate::ai_job::SwitchGuard::default(),
             directory: PathBuf::new(),
             jobs: BTreeMap::new(),
             accepted: BTreeMap::from([(project.id, record.clone())]),

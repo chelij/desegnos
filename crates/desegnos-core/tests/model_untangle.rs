@@ -73,16 +73,15 @@ fn colour_scheme_handles_transparent_and_invalid_backgrounds() {
 }
 
 #[test]
-fn failed_durable_write_preserves_history_and_project() {
+fn rejected_command_preserves_history_and_project() {
     let mut session = Session::new(project()).unwrap();
     let before = session.project().clone();
     let history = session.history();
     let result = session.execute(
         before.revision,
         Command::RenameProject {
-            name: "After".into(),
+            name: "x".repeat(desegnos_core::limits::MAX_NAME_CHARS + 1),
         },
-        |_| Err(desegnos_core::Error("Cannot save".into())),
     );
     assert!(result.is_err());
     assert_eq!(session.project(), &before);
@@ -108,11 +107,11 @@ fn restoring_a_version_carries_the_latest_export_metadata() {
         pointers: Default::default(),
         behaviours: Default::default(),
     };
-    session.record_export(record.clone(), |_| Ok(())).unwrap();
-    session.restore(original, |_| Ok(())).unwrap();
+    session.record_export(record.clone()).unwrap();
+    session.restore(original).unwrap();
     assert_eq!(session.project().last_export.as_ref(), Some(&record));
-    session.undo(|_| Ok(())).unwrap();
+    session.undo().unwrap();
     assert_eq!(session.project().last_export.as_ref(), Some(&record));
-    session.redo(|_| Ok(())).unwrap();
+    session.redo().unwrap();
     assert_eq!(session.project().last_export.as_ref(), Some(&record));
 }

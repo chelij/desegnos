@@ -384,8 +384,12 @@ fn recording_an_export_does_not_add_an_undo_step_and_survives_undo() {
         )]),
     };
     let before = session.history().position;
-    session.record_export(record, |_| Ok(())).unwrap();
-    assert_eq!(session.history().position, before, "no history step was added");
+    session.record_export(record).unwrap();
+    assert_eq!(
+        session.history().position,
+        before,
+        "no history step was added"
+    );
     assert!(!session.can_undo());
     assert_eq!(session.project().last_export.as_ref().unwrap().version, 4);
     let wired = session
@@ -404,11 +408,10 @@ fn recording_an_export_does_not_add_an_undo_step_and_survives_undo() {
             Command::RenameProject {
                 name: "Renamed".into(),
             },
-            |_| Ok(()),
         )
         .unwrap();
     assert_eq!(session.history().position, before + 1);
-    session.undo(|_| Ok(())).unwrap();
+    session.undo().unwrap();
     assert_eq!(session.project().name, "Export");
     assert_eq!(session.project().last_export.as_ref().unwrap().version, 4);
     assert!(session.project().pointers[0].wiring.is_some());
@@ -728,12 +731,11 @@ fn importing_a_website_command_is_one_undo_step() {
                 pointers: imported.pointers,
                 pictures: BTreeMap::new(),
             },
-            |_| Ok(()),
         )
         .unwrap();
     assert_eq!(session.history().position, before + 1);
     assert_eq!(session.project().pages.len(), 2);
-    session.undo(|_| Ok(())).unwrap();
+    session.undo().unwrap();
     assert_eq!(session.project().pages.len(), 1);
 }
 
@@ -1257,7 +1259,6 @@ fn website_import_sitemap_clears_existing_boundaries_and_references() {
                 pointers: imported.pointers,
                 pictures: BTreeMap::new(),
             },
-            |_| Ok(()),
         )
         .unwrap();
 }

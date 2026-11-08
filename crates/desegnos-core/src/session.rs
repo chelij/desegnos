@@ -103,28 +103,11 @@ impl Session {
         &self.history_entries
     }
 
-    fn persist_changed(
-        &self,
-        candidate: &Project,
-        durable: impl FnOnce(&Project) -> Result<()>,
-    ) -> Result<bool> {
-        if candidate.revision == self.project.revision {
-            return Ok(false);
-        }
-        durable(candidate)?;
-        Ok(true)
-    }
-
-    pub fn execute(
-        &mut self,
-        revision: u64,
-        command: Command,
-        durable: impl FnOnce(&Project) -> Result<()>,
-    ) -> Result<()> {
+    pub fn execute(&mut self, revision: u64, command: Command) -> Result<()> {
         self.assert_revision(revision)?;
         let policy = command.history(&self.project);
         let candidate = self.project.apply(self.project.revision, command)?;
-        if !self.persist_changed(&candidate, durable)? {
+        if candidate.revision == self.project.revision {
             return Ok(());
         }
         self.commit_or_merge(candidate, policy.burst, policy.label);
@@ -135,15 +118,11 @@ impl Session {
         std::mem::take(&mut self.version_labels)
     }
 
-    pub fn record_export(
-        &mut self,
-        record: ExportRecord,
-        durable: impl FnOnce(&Project) -> Result<()>,
-    ) -> Result<()> {
+    pub fn record_export(&mut self, record: ExportRecord) -> Result<()> {
         let candidate = self
             .project
             .apply(self.project.revision, Command::RecordExport { record })?;
-        if !self.persist_changed(&candidate, durable)? {
+        if candidate.revision == self.project.revision {
             return Ok(());
         }
         self.project = candidate;
@@ -158,12 +137,11 @@ impl Session {
         snapshot: &RequirementsSnapshot,
         candidate: &GenerationCandidate,
         attempt_ordinal: usize,
-        durable: impl FnOnce(&Project) -> Result<()>,
     ) -> Result<()> {
         let next = self
             .project
             .record_generation(snapshot, candidate, attempt_ordinal)?;
-        if !self.persist_changed(&next, durable)? {
+        if next.revision == self.project.revision {
             return Ok(());
         }
         self.project = next;
@@ -179,7 +157,6 @@ impl Session {
         candidate: &GenerationCandidate,
         accepted_decision_indices: &[usize],
         generated_pictures: &std::collections::BTreeMap<String, String>,
-        durable: impl FnOnce(&Project) -> Result<()>,
     ) -> Result<()> {
         let next = crate::apply_generation_output(
             &self.project,
@@ -188,7 +165,7 @@ impl Session {
             accepted_decision_indices,
             generated_pictures,
         )?;
-        if !self.persist_changed(&next, durable)? {
+        if next.revision == self.project.revision {
             return Ok(());
         }
 
@@ -196,17 +173,12 @@ impl Session {
         Ok(())
     }
 
-    pub fn import_context(
-        &mut self,
-        revision: u64,
-        context: crate::ImportedContext,
-        durable: impl FnOnce(&Project) -> Result<()>,
-    ) -> Result<()> {
+    pub fn import_context(&mut self, revision: u64, context: crate::ImportedContext) -> Result<()> {
         self.assert_revision(revision)?;
         let candidate = self
             .project
             .import_context(self.project.revision, context)?;
-        if !self.persist_changed(&candidate, durable)? {
+        if candidate.revision == self.project.revision {
             return Ok(());
         }
         self.commit(candidate, "Imported brand");
@@ -285,7 +257,7 @@ impl Session {
         self.redo.clear();
     }
 
-    pub fn undo(&mut self, durable: impl FnOnce(&Project) -> Result<()>) -> Result<()> {
+    pub fn undo(&mut self) -> Result<()> {
         let mut candidate = self
             .undo
             .last()
@@ -294,9 +266,6 @@ impl Session {
         candidate.revision = crate::limits::next_revision(self.project.revision)?;
         candidate.carry_metadata(&self.project, HistoryTransition::Undo);
         candidate.validate()?;
-        if !self.persist_changed(&candidate, durable)? {
-            return Ok(());
-        }
         self.burst = None;
         self.version_labels.push("Undid a change".into());
         self.user_revision_floor = candidate.revision;
@@ -306,7 +275,7 @@ impl Session {
         Ok(())
     }
 
-    pub fn redo(&mut self, durable: impl FnOnce(&Project) -> Result<()>) -> Result<()> {
+    pub fn redo(&mut self) -> Result<()> {
         let mut candidate = self
             .redo
             .last()
@@ -315,9 +284,6 @@ impl Session {
         candidate.revision = crate::limits::next_revision(self.project.revision)?;
         candidate.carry_metadata(&self.project, HistoryTransition::Redo);
         candidate.validate()?;
-        if !self.persist_changed(&candidate, durable)? {
-            return Ok(());
-        }
         self.burst = None;
         self.version_labels.push("Redid a change".into());
         self.user_revision_floor = candidate.revision;
@@ -327,19 +293,12 @@ impl Session {
         Ok(())
     }
 
-    pub fn restore(
-        &mut self,
-        project: Project,
-        durable: impl FnOnce(&Project) -> Result<()>,
-    ) -> Result<()> {
+    pub fn restore(&mut self, project: Project) -> Result<()> {
         let mut candidate = project;
         candidate.keep_one_request_per_layer();
         candidate.revision = crate::limits::next_revision(self.project.revision)?;
         candidate.carry_metadata(&self.project, HistoryTransition::Restore);
         candidate.validate()?;
-        if !self.persist_changed(&candidate, durable)? {
-            return Ok(());
-        }
         self.commit(candidate, "Restored a version");
         Ok(())
     }
@@ -392,14 +351,12 @@ mod tests {
             .execute(
                 session.project().revision,
                 Command::RenameProject { name: "One".into() },
-                |_| Ok(()),
             )
             .unwrap();
         session
             .execute(
                 session.project().revision,
                 Command::RenameProject { name: "Two".into() },
-                |_| Ok(()),
             )
             .unwrap();
         assert_eq!(
@@ -410,18 +367,17 @@ mod tests {
         let first_label = session.history_entries()[1].label.clone();
         assert!(!first_label.is_empty());
         session.take_version_labels();
-        session.undo(|_| Ok(())).unwrap();
+        session.undo().unwrap();
         assert_eq!(session.history().position, 0);
         assert_eq!(session.history_entries()[1].label, first_label);
-        session.redo(|_| Ok(())).unwrap();
+        session.redo().unwrap();
         assert_eq!(session.history().position, 1);
         assert_eq!(session.history_entries()[1].label, first_label);
-        session.undo(|_| Ok(())).unwrap();
+        session.undo().unwrap();
         session
             .execute(
                 session.project().revision,
                 Command::SetGrid { enabled: false },
-                |_| Ok(()),
             )
             .unwrap();
         assert_eq!(
@@ -452,7 +408,6 @@ mod tests {
                     }],
                     reference: vec![],
                 },
-                |_| Ok(()),
             )
             .unwrap();
         let placed = session
@@ -465,7 +420,7 @@ mod tests {
         assert_eq!(placed.x, 80.0);
         assert_eq!(placed.y, 40.0);
         assert_eq!(placed.kind, crate::BoundaryKind::Screen);
-        session.undo(|_| Ok(())).unwrap();
+        session.undo().unwrap();
         let undone = session
             .project()
             .page(page_id)
@@ -475,7 +430,7 @@ mod tests {
             .unwrap();
         assert_eq!(undone.x, 0.0);
         assert_eq!(undone.kind, crate::BoundaryKind::Page);
-        session.redo(|_| Ok(())).unwrap();
+        session.redo().unwrap();
         assert_eq!(
             session
                 .project()
@@ -512,14 +467,13 @@ mod tests {
                     item,
                     picture_data_uri: None,
                 },
-                |_| Ok(()),
             )
             .unwrap();
         assert_eq!(session.history().position, position + 1, "one history step");
         assert_eq!(session.project().reference.len(), 1);
-        session.undo(|_| Ok(())).unwrap();
+        session.undo().unwrap();
         assert!(session.project().reference.is_empty());
-        session.redo(|_| Ok(())).unwrap();
+        session.redo().unwrap();
         assert_eq!(session.project().reference.len(), 1);
         let position = session.history().position;
         session
@@ -538,7 +492,6 @@ mod tests {
                     title: None,
                     color: None,
                 },
-                |_| Ok(()),
             )
             .unwrap();
         assert_eq!(session.history().position, position + 1, "one history step");
@@ -548,7 +501,7 @@ mod tests {
                 text: "edited reference".into()
             }
         );
-        session.undo(|_| Ok(())).unwrap();
+        session.undo().unwrap();
         assert_eq!(
             session.project().reference[0].kind,
             crate::ReferenceKind::Note {
@@ -561,12 +514,11 @@ mod tests {
             .execute(
                 session.project().revision,
                 Command::RemoveReferenceItems { ids: vec![item_id] },
-                |_| Ok(()),
             )
             .unwrap();
         assert!(session.project().reference.is_empty());
         assert_eq!(session.history().position, position + 1, "one history step");
-        session.undo(|_| Ok(())).unwrap();
+        session.undo().unwrap();
         assert_eq!(session.project().reference.len(), 1);
         assert_eq!(
             session.project().reference[0].kind,
@@ -626,7 +578,7 @@ mod tests {
             "a pause committed a new step"
         );
         assert_eq!(session.undo.len(), 2);
-        session.undo(|_| Ok(())).unwrap();
+        session.undo().unwrap();
         assert_eq!(session.project.name, "Two");
     }
 }

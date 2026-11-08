@@ -1,11 +1,11 @@
-use crate::generation::{AiSettingsView, GenerationService, settings_view};
+use crate::ai_settings::{AiSettingsStore, AiSettingsView, settings_view};
 use desegnos_ai::{AuthenticationMethod, ChatgptManager, ChatgptView, CredentialStorage};
 use std::{collections::BTreeMap, path::PathBuf, sync::Mutex};
 use tauri::{AppHandle, State};
 use uuid::Uuid;
 
 type NativeResult<T> = Result<T, String>;
-type AiState<'a> = State<'a, Mutex<GenerationService>>;
+type AiState<'a> = State<'a, Mutex<AiSettingsStore>>;
 const USAGE_URL: &str = "https://chatgpt.com/settings/usage";
 
 pub struct ChatgptState {
@@ -239,7 +239,7 @@ pub async fn select_chatgpt_account(
                 .await;
         }
     }
-    crate::generation::refresh_image_access(&state, &chatgpt, true).await?;
+    crate::ai_settings::refresh_image_access(&state, &chatgpt, true).await?;
     settings_view(&state, &chatgpt).await
 }
 
@@ -259,6 +259,7 @@ pub async fn retry_chatgpt_secure_storage(
 
 #[tauri::command]
 pub async fn sign_out_chatgpt(
+    generation: State<'_, Mutex<crate::generation::GenerationService>>,
     identity: State<'_, Mutex<crate::identity::IdentityService>>,
     exports: State<'_, Mutex<crate::export::ExportService>>,
     state: AiState<'_>,
@@ -284,7 +285,7 @@ pub async fn sign_out_chatgpt(
         *epoch = epoch
             .checked_add(1)
             .ok_or("Account access state must be restarted before signing out.")?;
-        crate::ai_job::cancel_account(&state, &identity, &exports, account_id)
+        crate::ai_job::cancel_account(&generation, &identity, &exports, account_id)
     };
     let (view, warning) = sign_out_after_cancellation(cancellation, async {
         manager
@@ -301,7 +302,11 @@ async fn sign_out_after_cancellation<T>(
     cancellation: NativeResult<()>,
     sign_out: impl std::future::Future<Output = NativeResult<T>>,
 ) -> NativeResult<(T, Option<String>)> {
-    let warning = cancellation.err().map(|reason| format!("Late output is blocked, but a local cancellation receipt needs attention: {reason}"));
+    let warning = cancellation.err().map(|reason| {
+        format!(
+            "Late output is blocked, but a local cancellation receipt needs attention: {reason}"
+        )
+    });
     let result = sign_out.await;
     match result {
         Ok(value) => Ok((value, warning)),

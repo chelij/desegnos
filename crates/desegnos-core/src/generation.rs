@@ -662,7 +662,7 @@ impl GenerationCandidate {
                             retained_count += 1;
                         }
                         Err(error) => events.push(ValidationEvent {
-                            kind: "operation".into(),
+                            kind: ValidationEventKind::Operation,
                             disposition: "dropped".into(),
                             element_id: error.element_id,
                             message: format!(
@@ -701,7 +701,7 @@ impl GenerationCandidate {
                 let untouched = untouched_boundaries(project, pending, outcome);
                 if !untouched.is_empty() {
                     events.push(ValidationEvent {
-                        kind: "boundaryCoverage".into(),
+                        kind: ValidationEventKind::BoundaryCoverage,
                         disposition: "warning".into(),
                         element_id: None,
                         message: boundary_coverage_message(project, pending, &untouched),
@@ -2012,7 +2012,7 @@ fn normalize_raw_page_patches(
 
 fn page_patch_event(project: &Project, page_id: Uuid, recovered: bool) -> ValidationEvent {
     ValidationEvent {
-        kind: "pagePatch".into(),
+        kind: ValidationEventKind::PagePatch,
         disposition: if recovered { "warning" } else { "dropped" }.into(),
         element_id: None,
         message: format!(
@@ -2842,13 +2842,49 @@ pub fn candidate_schema() -> serde_json::Value {
     schema
 }
 
+#[derive(ts_rs::TS, Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum ValidationEventKind {
+    Operation,
+    BoundaryCoverage,
+    PagePatch,
+    UnreadableReply,
+    TelemetryStorage,
+    ReplyStructure,
+    Image,
+    Pointer,
+    Element,
+}
+
+impl ValidationEventKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Operation => "operation",
+            Self::BoundaryCoverage => "boundaryCoverage",
+            Self::PagePatch => "pagePatch",
+            Self::UnreadableReply => "unreadableReply",
+            Self::TelemetryStorage => "telemetryStorage",
+            Self::ReplyStructure => "replyStructure",
+            Self::Image => "image",
+            Self::Pointer => "pointer",
+            Self::Element => "element",
+        }
+    }
+}
+
+impl std::fmt::Display for ValidationEventKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// One observation about a reply: normalised, repaired or conflicted. Labels are fixed
 /// vocabulary, never user text or selectors.
 #[derive(ts_rs::TS, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[ts(rename = "GenerationValidationEvent")]
 #[serde(rename_all = "camelCase")]
 pub struct ValidationEvent {
-    pub kind: String,
+    pub kind: ValidationEventKind,
     pub disposition: String,
     pub element_id: Option<Uuid>,
     pub message: String,
@@ -2860,16 +2896,6 @@ pub enum ValidationFailureKind {
     Image,
     Pointer,
     Element,
-}
-impl ValidationFailureKind {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::ReplyStructure => "replyStructure",
-            Self::Image => "image",
-            Self::Pointer => "pointer",
-            Self::Element => "element",
-        }
-    }
 }
 #[derive(Debug, Clone)]
 pub struct GenerationValidationError {
@@ -2897,8 +2923,13 @@ impl From<GenerationValidationError> for Error {
         Self(error.message)
     }
 }
-pub fn validation_failure_kind(error: &GenerationValidationError) -> &'static str {
-    error.kind.as_str()
+pub fn validation_failure_kind(error: &GenerationValidationError) -> ValidationEventKind {
+    match error.kind {
+        ValidationFailureKind::ReplyStructure => ValidationEventKind::ReplyStructure,
+        ValidationFailureKind::Image => ValidationEventKind::Image,
+        ValidationFailureKind::Pointer => ValidationEventKind::Pointer,
+        ValidationFailureKind::Element => ValidationEventKind::Element,
+    }
 }
 type GenerationResult<T> = std::result::Result<T, GenerationValidationError>;
 

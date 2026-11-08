@@ -436,7 +436,7 @@ impl SizePreset {
         match self {
             Self::Phone => ("Phone".into(), 390, 844),
             Self::Tablet => ("Tablet".into(), 820, 1180),
-            Self::Desktop => ("Desktop".into(), 1440, 900),
+            Self::Desktop => ("Desktop".into(), crate::limits::DEFAULT_PICTURE_WIDTH, 900),
             Self::Custom => ("Size".into(), width, height),
         }
     }
@@ -488,7 +488,12 @@ impl CanvasTemplate {
             Self::Blank => vec![],
             Self::Website => {
                 // Desktop is the base size; Tablet and Phone inherit from it.
-                let desktop = Self::size(1440, 900, BoundaryKind::Page, 0);
+                let desktop = Self::size(
+                    crate::limits::DEFAULT_PICTURE_WIDTH,
+                    900,
+                    BoundaryKind::Page,
+                    0,
+                );
                 let tablet =
                     Self::size(820, 1180, BoundaryKind::Page, desktop.width + TEMPLATE_GAP);
                 let phone = Self::size(
