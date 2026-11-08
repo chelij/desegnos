@@ -107,7 +107,7 @@ pub(crate) fn checked_path(root: &Path, relative: &str) -> Result<PathBuf> {
 }
 /// Read one file back from an export folder, for pointer clash checks. The path must be a safe
 /// relative name that resolves to an ordinary file inside the folder.
-pub fn read_export_file(root: &Path, relative: &str) -> Result<Vec<u8>> {
+fn read_export_file(root: &Path, relative: &str) -> Result<Vec<u8>> {
     let path = checked_path(root, relative)?;
     let metadata = fs::symlink_metadata(&path).map_err(io)?;
     if !metadata.is_file() || metadata.file_type().is_symlink() || metadata.len() > MAX_BYTES as u64
@@ -146,7 +146,9 @@ fn collect_text_files(
     depth: usize,
 ) -> Result<()> {
     if depth > 2 {
-        return Ok(());
+        return Err(Error(
+            "The export folder is too deeply nested to check.".into(),
+        ));
     }
     let directory = if prefix.is_empty() {
         root.to_path_buf()
@@ -155,7 +157,8 @@ fn collect_text_files(
     };
     let entries = fs::read_dir(&directory)
         .map_err(|error| Error(format!("The export folder could not be read: {error}")))?;
-    for entry in entries.flatten() {
+    for entry in entries {
+        let entry = entry.map_err(io)?;
         let name = entry.file_name().to_string_lossy().into_owned();
         if name.starts_with('.') || name.contains(['/', '\\', '\0']) {
             continue;
@@ -165,13 +168,17 @@ fn collect_text_files(
         } else {
             format!("{prefix}/{name}")
         };
-        let Ok(metadata) = entry.metadata() else {
-            continue;
-        };
+        let metadata = fs::symlink_metadata(entry.path()).map_err(io)?;
+        if metadata.file_type().is_symlink() {
+            return Err(Error("The export folder contains a symbolic link.".into()));
+        }
         if metadata.is_dir() {
             collect_text_files(root, &relative, out, depth + 1)?;
         } else if metadata.is_file()
-            && matches!(name.rsplit('.').next().unwrap_or_default(), "html" | "css" | "js")
+            && matches!(
+                name.rsplit('.').next().unwrap_or_default(),
+                "html" | "css" | "js"
+            )
         {
             out.push(relative);
         }
@@ -221,8 +228,7 @@ pub(crate) fn parent_directory(parent: &Path) -> Result<PathBuf> {
     }
     parent.canonicalize().map_err(io)
 }
-/// The readable base folder name for this project.
-pub fn export_folder_name(name: &str) -> String {
+fn export_folder_name(name: &str) -> String {
     let clean: String = name
         .chars()
         .map(|c| {
@@ -238,18 +244,6 @@ pub fn export_folder_name(name: &str) -> String {
     if clean.is_empty() { "desegnos" } else { clean }.to_owned()
 }
 
-/// A new folder is published only when every file is closed and synced. Existing
-/// files or folders are never selected for replacement, even when empty.
-pub fn write_website_export(
-    parent: &Path,
-    name: &str,
-    export: &WebsiteExport,
-) -> Result<WrittenWebsiteExport> {
-    write_export_named(parent, name, |_| Ok(export.clone()))
-}
-
-const DESTINATION_EXISTS: &str = "The export destination already exists.";
-
 /// Choose the first free readable name and rebuild destination-dependent files on a race.
 pub fn write_export_named(
     parent: &Path,
@@ -258,7 +252,11 @@ pub fn write_export_named(
 ) -> Result<WrittenWebsiteExport> {
     let parent = parent_directory(parent)?;
     let base = export_folder_name(name);
-    for index in 1_u64.. {
+    let mut index = 0_u64;
+    loop {
+        index = index
+            .checked_add(1)
+            .ok_or_else(|| Error("Too many exports share this name.".into()))?;
         let name = if index == 1 {
             base.clone()
         } else {
@@ -272,20 +270,20 @@ pub fn write_export_named(
         }
         let export = build(&path)?;
         match write_export_at(&parent, &name, &export) {
-            Err(error) if error.0 == DESTINATION_EXISTS => continue,
-            result => return result,
+            Ok(None) => continue,
+            Ok(Some(written)) => return Ok(written),
+            Err(error) => return Err(error),
         }
     }
-    unreachable!()
 }
 
 /// Write an export into a specific new folder name. The exporter derives the final folder before
 /// writing, so the manifest inside it can name its own destination.
-pub fn write_export_at(
+fn write_export_at(
     parent: &Path,
     name: &str,
     export: &WebsiteExport,
-) -> Result<WrittenWebsiteExport> {
+) -> Result<Option<WrittenWebsiteExport>> {
     validate(export)?;
     if name.is_empty()
         || name.len() > 128
@@ -301,7 +299,9 @@ pub fn write_export_at(
     let parent = parent_directory(parent)?;
     let name = name.to_owned();
     let stage_name = format!(".desegnos-export-{}", Uuid::new_v4());
-    write_at(&parent, &stage_name, &name, export)?;
+    if !write_at(&parent, &stage_name, &name, export)? {
+        return Ok(None);
+    }
     let path = parent.join(name);
     let metadata = fs::symlink_metadata(&path).map_err(io)?;
     let written = WrittenWebsiteExport {
@@ -321,7 +321,7 @@ pub fn write_export_at(
         },
     };
     written.verify()?;
-    Ok(written)
+    Ok(Some(written))
 }
 
 #[cfg(unix)]
@@ -330,7 +330,7 @@ fn write_at(
     stage_name: &str,
     name: &str,
     export: &WebsiteExport,
-) -> Result<()> {
+) -> Result<bool> {
     use rustix::fs::{
         AtFlags, Mode, OFlags, RenameFlags, mkdirat, open, openat, renameat_with, unlinkat,
     };
@@ -416,22 +416,22 @@ fn write_at(
                 "The destination folder changed while exporting. Choose it again.".into(),
             ));
         }
-        renameat_with(&parent, stage_name, &parent, name, RenameFlags::NOREPLACE)
-            .map_err(|error| {
-                if error == rustix::io::Errno::EXIST || error == rustix::io::Errno::NOTEMPTY {
-                    Error(DESTINATION_EXISTS.into())
-                } else {
-                    io(error)
-                }
-            },
-        )?;
+        match renameat_with(&parent, stage_name, &parent, name, RenameFlags::NOREPLACE) {
+            Ok(()) => {}
+            Err(error)
+                if error == rustix::io::Errno::EXIST || error == rustix::io::Errno::NOTEMPTY =>
+            {
+                return Ok(false);
+            }
+            Err(error) => return Err(io(error)),
+        }
         published = true;
         parent.try_clone().map(File::from).and_then(|file| file.sync_all())
             .map_err(|error| Error(format!("The complete website was written to {}, but its destination could not confirm durable storage: {error}", parent_path.join(name).display())))?;
-        Ok(())
+        Ok(true)
     })();
     let mut cleanup_errors = Vec::new();
-    if result.is_err() && !published {
+    if !published {
         // Cleanup uses descriptor-relative paths and never follows a replaced
         // parent or a symbolic link. Only entries created in our private stage.
         for path in created_files.iter().rev() {
@@ -448,20 +448,17 @@ fn write_at(
             cleanup_errors.push(error.to_string());
         }
     }
-    result.map_err(|error| {
-        if cleanup_errors.is_empty() {
-            error
-        } else {
-            Error(format!(
-                "{error}; export staging cleanup failed: {}",
-                cleanup_errors.join("; ")
-            ))
-        }
-    })
+    if !cleanup_errors.is_empty() {
+        return Err(Error(format!(
+            "Export staging cleanup failed: {}",
+            cleanup_errors.join("; ")
+        )));
+    }
+    result
 }
 
 #[cfg(not(unix))]
-fn write_at(parent: &Path, stage_name: &str, name: &str, export: &WebsiteExport) -> Result<()> {
+fn write_at(parent: &Path, stage_name: &str, name: &str, export: &WebsiteExport) -> Result<bool> {
     // Windows directory rename refuses an existing destination. Fresh private
     // staging paths and create_new prevent replacement of any authored file.
     use std::fs::OpenOptions;
@@ -481,19 +478,21 @@ fn write_at(parent: &Path, stage_name: &str, name: &str, export: &WebsiteExport)
             file.write_all(bytes).map_err(io)?;
             file.sync_all().map_err(io)?;
         }
-        fs::rename(&stage, parent.join(name)).map_err(|error| {
-            if error.kind() == std::io::ErrorKind::AlreadyExists {
-                Error(DESTINATION_EXISTS.into())
-            } else {
-                io(error)
-            }
-        })
+        match fs::rename(&stage, parent.join(name)) {
+            Ok(()) => Ok(true),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
+            Err(error) => Err(io(error)),
+        }
     })();
-    if result.is_err() {
+    if !matches!(result, Ok(true)) {
         if let Err(cleanup) = fs::remove_dir_all(stage) {
             return Err(Error(format!(
                 "{}; export staging cleanup failed: {cleanup}",
-                result.unwrap_err()
+                result
+                    .as_ref()
+                    .err()
+                    .map(ToString::to_string)
+                    .unwrap_or_else(|| "The export destination already exists".into())
             )));
         }
     }
@@ -523,11 +522,11 @@ mod tests {
     fn website_export_writer_commits_exact_files_and_repeated_exports_keep_existing_data() {
         let root = directory();
         fs::write(root.join("keep.txt"), b"original").unwrap();
-        let first = write_website_export(&root, "My site", &website()).unwrap();
-        let second = write_website_export(&root, "My site", &website()).unwrap();
+        let first = write_export_named(&root, "My site", |_| Ok(website())).unwrap();
+        let second = write_export_named(&root, "My site", |_| Ok(website())).unwrap();
         assert_eq!(first.path, root.join("my-site"));
         assert_eq!(second.path, root.join("my-site-2"));
-        let third = write_website_export(&root, "My site", &website()).unwrap();
+        let third = write_export_named(&root, "My site", |_| Ok(website())).unwrap();
         assert_eq!(third.path, root.join("my-site-3"));
         assert_eq!(fs::read(root.join("keep.txt")).unwrap(), b"original");
         assert_eq!(first.page_count, 2);
@@ -570,7 +569,7 @@ mod tests {
             written.path.to_string_lossy().as_bytes()
         );
         fs::remove_dir_all(&written.path).unwrap();
-        let next = write_website_export(&root, "My site", &website()).unwrap();
+        let next = write_export_named(&root, "My site", |_| Ok(website())).unwrap();
         assert_eq!(next.path, root.join("my-site-2"));
         assert_eq!(export_folder_name("???"), "desegnos");
         fs::remove_dir_all(root).unwrap();
@@ -591,15 +590,15 @@ mod tests {
             let mut export = website();
             export.files.insert(path.into(), vec![0]);
             assert!(
-                write_website_export(&root, "bad", &export).is_err(),
+                write_export_named(&root, "bad", |_| Ok(export.clone())).is_err(),
                 "{path}"
             );
         }
         let mut export = website();
         export.files.insert("INDEX.HTML".into(), vec![0]);
-        assert!(write_website_export(&root, "bad", &export).is_err());
+        assert!(write_export_named(&root, "bad", |_| Ok(export.clone())).is_err());
         export.files.clear();
-        assert!(write_website_export(&root, "bad", &export).is_err());
+        assert!(write_export_named(&root, "bad", |_| Ok(export.clone())).is_err());
         assert_eq!(fs::read_dir(&root).unwrap().count(), 0);
         fs::remove_dir_all(root).unwrap();
     }
@@ -608,14 +607,14 @@ mod tests {
         let root = directory();
         let mut export = website();
         export.files.insert("index.html/child".into(), vec![0]);
-        assert!(write_website_export(&root, "bad", &export).is_err());
+        assert!(write_export_named(&root, "bad", |_| Ok(export.clone())).is_err());
         assert_eq!(fs::read_dir(&root).unwrap().count(), 0);
         fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn website_export_receipt_rejects_modified_or_replaced_files() {
         let root = directory();
-        let written = write_website_export(&root, "site", &website()).unwrap();
+        let written = write_export_named(&root, "site", |_| Ok(website())).unwrap();
         fs::write(written.path.join("index.html"), b"changed").unwrap();
         assert!(written.verify().is_err());
         fs::remove_dir_all(root).unwrap();
@@ -629,9 +628,9 @@ mod tests {
         fs::create_dir(&real).unwrap();
         let link = root.join("link");
         symlink(&real, &link).unwrap();
-        assert!(write_website_export(&link, "bad", &website()).is_err());
+        assert!(write_export_named(&link, "bad", |_| Ok(website())).is_err());
         assert_eq!(fs::read_dir(&real).unwrap().count(), 0);
-        let written = write_website_export(&real, "site", &website()).unwrap();
+        let written = write_export_named(&real, "site", |_| Ok(website())).unwrap();
         let index = written.path.join("index.html");
         fs::remove_file(&index).unwrap();
         symlink(root.join("private"), index).unwrap();
@@ -643,11 +642,11 @@ mod tests {
     fn website_export_atomic_publication_refuses_existing_empty_or_populated_destination() {
         let root = directory();
         fs::create_dir(root.join("existing")).unwrap();
-        assert!(write_at(&root, "stage-one", "existing", &website()).is_err());
+        assert!(!write_at(&root, "stage-one", "existing", &website()).unwrap());
         assert!(root.join("existing").is_dir());
         assert!(!root.join("stage-one").exists());
         fs::write(root.join("existing/keep"), b"original").unwrap();
-        assert!(write_at(&root, "stage-two", "existing", &website()).is_err());
+        assert!(!write_at(&root, "stage-two", "existing", &website()).unwrap());
         assert_eq!(fs::read(root.join("existing/keep")).unwrap(), b"original");
         assert!(!root.join("stage-two").exists());
         fs::remove_dir_all(root).unwrap();
@@ -661,7 +660,7 @@ mod tests {
         fs::create_dir(&external).unwrap();
         fs::write(external.join("keep"), b"safe").unwrap();
         symlink(&external, root.join("existing")).unwrap();
-        assert!(write_at(&root, "stage", "existing", &website()).is_err());
+        assert!(!write_at(&root, "stage", "existing", &website()).unwrap());
         assert_eq!(fs::read(external.join("keep")).unwrap(), b"safe");
         assert!(!root.join("stage").exists());
         fs::remove_dir_all(root).unwrap();

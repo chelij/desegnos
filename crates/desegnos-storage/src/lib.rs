@@ -8,33 +8,27 @@ mod source_files;
 pub mod system_tools;
 pub mod website_export;
 pub mod website_snapshot;
-use desegnos_core::{Error, Error as CoreError, Result};
+use desegnos_core::{Error, Result};
 pub use identity_source::{
     IdentitySource, IdentitySourceAsset, IdentitySourceFile, collect_identity_source,
-    identity_source_from_files, identity_source_from_files_attributed,
+    identity_source_from_files,
 };
 pub use project_db::{
-    AUTOSAVE_BRANCH, AutosaveProject, BranchSummary, CompactReport, DEFAULT_BRANCH, FileStamp,
-    LoadedProject, ProjectDatabase, ProjectHistoryView, SaveFailure, SaveFailureKind,
-    VersionSummary, load_project, read_autosave, remove_project_files,
+    AutosaveProject, BranchSummary, CompactReport, FileStamp, LoadedProject, ProjectDatabase,
+    ProjectHistoryView, SaveFailure, SaveFailureKind, VersionSummary, load_project, read_autosave,
+    remove_project_files,
 };
-pub use project_folder::{
-    create_project_folder, is_project_folder, manage_project_folder, project_in_folder,
-    sanitize_project_name,
-};
-pub use project_parts::{PartData, join_project, split_project};
+pub use project_folder::{create_project_folder, project_in_folder, sanitize_project_name};
 use std::{
     fs::{self, File, OpenOptions},
     io::Write,
     path::Path,
 };
 pub use website_export::{
-    WrittenWebsiteExport, export_folder_name, read_export_file, read_export_folder, write_export_at, write_export_into,
-    write_export_named, write_website_export,
+    WrittenWebsiteExport, read_export_folder, write_export_into, write_export_named,
 };
 pub use website_snapshot::{
-    WebsitePage, WebsiteSnapshot, collect_website_snapshot, new_import_folder,
-    write_website_snapshot,
+    WebsitePage, WebsiteSnapshot, new_import_folder, write_website_snapshot,
 };
 
 pub const PROJECT_FILE_EXTENSIONS: [&str; 1] = ["desegnos"];
@@ -51,10 +45,10 @@ pub(crate) fn ensure(condition: bool, message: impl Into<String>) -> Result<()> 
     }
 }
 
-pub fn write_markdown(path: &Path, markdown: &str) -> Result<()> {
+pub fn write_text(path: &Path, text: &str) -> Result<()> {
     atomic_write(
         path,
-        |file| file.write_all(markdown.as_bytes()).map_err(io),
+        |file| file.write_all(text.as_bytes()).map_err(io),
         true,
     )
 }
@@ -116,7 +110,7 @@ fn backup_file(path: &Path) -> Result<()> {
     let previous = path.with_file_name(format!(
         "{}.previous",
         path.file_name()
-            .ok_or_else(|| CoreError("Invalid filename.".into()))?
+            .ok_or_else(|| Error("Invalid filename.".into()))?
             .to_string_lossy()
     ));
     atomic_write(

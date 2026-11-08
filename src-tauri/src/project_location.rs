@@ -73,7 +73,7 @@ fn update_settings(
     let mut settings = read_settings(directory)?;
     change(&mut settings);
     let json = serde_json::to_string(&settings).map_err(|e| e.to_string())?;
-    desegnos_storage::write_markdown(&directory.join("project-settings.json"), &json)
+    desegnos_storage::write_text(&directory.join("project-settings.json"), &json)
         .map_err(|e| e.to_string())?;
     Ok(settings)
 }

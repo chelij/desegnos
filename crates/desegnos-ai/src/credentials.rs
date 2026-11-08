@@ -4,14 +4,16 @@ use std::sync::{Arc, Mutex};
 use zeroize::Zeroizing;
 
 const ACCOUNT: &str = "api-key";
-pub(crate) const LOCAL_ANONYMOUS_KEY: &str = "desegnos-local-no-auth";
 
 #[derive(Clone)]
-pub struct ApiKey(Arc<Zeroizing<String>>);
+pub struct ApiKey(Option<Arc<Zeroizing<String>>>);
 
 impl ApiKey {
     pub fn local_anonymous() -> Self {
-        Self(Arc::new(Zeroizing::new(LOCAL_ANONYMOUS_KEY.into())))
+        Self(None)
+    }
+    pub(crate) fn is_anonymous(&self) -> bool {
+        self.0.is_none()
     }
     pub fn new(value: String) -> Result<Self> {
         Self::bounded(value, 4096)
@@ -30,7 +32,7 @@ impl ApiKey {
         {
             return Err(ProviderError::before(ErrorKind::InvalidCredential));
         }
-        Ok(Self(Arc::new(value)))
+        Ok(Self(Some(Arc::new(value))))
     }
 
     /// Non-secret cache identity; never persist the credential itself.
@@ -39,10 +41,10 @@ impl ApiKey {
     }
 
     pub(crate) fn expose(&self) -> &str {
-        self.0.as_str()
+        self.0.as_deref().map_or("", |value| value.as_str())
     }
     pub(crate) fn appears_in(&self, value: &str) -> bool {
-        value.contains(self.expose())
+        !self.is_anonymous() && value.contains(self.expose())
     }
     fn masked(&self) -> String {
         if self.expose().len() < 8 {
@@ -152,7 +154,10 @@ const FAILED_READ_TTL: std::time::Duration = std::time::Duration::from_secs(30);
 
 impl CredentialState {
     fn system_key(&mut self, vault: &dyn Vault) -> Result<Option<ApiKey>> {
-        let fresh = self.system.as_ref().is_some_and(|(at, result)| result.is_ok() || at.elapsed() < FAILED_READ_TTL);
+        let fresh = self
+            .system
+            .as_ref()
+            .is_some_and(|(at, result)| result.is_ok() || at.elapsed() < FAILED_READ_TTL);
         if !fresh {
             self.system = Some((std::time::Instant::now(), vault.get()));
         }
@@ -469,13 +474,22 @@ mod tests {
     #[test]
     fn the_keyring_is_read_once_and_kept_current_by_this_apps_own_changes() {
         let vault = Arc::new(CountingVault::default());
-        let manager = CredentialManager { state: Mutex::default(), vault: Box::new(vault.clone()) };
+        let manager = CredentialManager {
+            state: Mutex::default(),
+            vault: Box::new(vault.clone()),
+        };
         let reads = || vault.reads.load(std::sync::atomic::Ordering::SeqCst);
         assert!(!manager.status().configured);
         assert!(manager.key().is_err());
         assert!(!manager.status().configured);
-        assert_eq!(reads(), 1, "a slow keyring must not be asked on every settings read");
-        manager.set_key(KEY.into(), CredentialStorage::System).unwrap();
+        assert_eq!(
+            reads(),
+            1,
+            "a slow keyring must not be asked on every settings read"
+        );
+        manager
+            .set_key(KEY.into(), CredentialStorage::System)
+            .unwrap();
         assert!(manager.status().configured);
         assert_eq!(manager.key().unwrap().expose(), KEY);
         manager.remove_key().unwrap();
@@ -485,8 +499,14 @@ mod tests {
 
     #[test]
     fn a_failed_keyring_read_is_remembered_briefly_not_retried_on_every_call() {
-        let vault = Arc::new(CountingVault { fail: true, ..Default::default() });
-        let manager = CredentialManager { state: Mutex::default(), vault: Box::new(vault.clone()) };
+        let vault = Arc::new(CountingVault {
+            fail: true,
+            ..Default::default()
+        });
+        let manager = CredentialManager {
+            state: Mutex::default(),
+            vault: Box::new(vault.clone()),
+        };
         assert!(manager.status().vault_error.is_some());
         assert_eq!(manager.key().unwrap_err().kind, ErrorKind::VaultUnavailable);
         assert_eq!(vault.reads.load(std::sync::atomic::Ordering::SeqCst), 1);

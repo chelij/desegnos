@@ -452,9 +452,7 @@ impl ProviderError {
             ErrorKind::Deadline => {
                 "The provider stopped responding for 90 seconds or ran past 20 minutes. The request may still incur a charge."
             }
-            ErrorKind::Server => {
-                "The provider had a server problem. Try again in a moment."
-            }
+            ErrorKind::Server => "The provider had a server problem. Try again in a moment.",
             ErrorKind::Transport => {
                 "The provider connection failed. A submitted request may have an unknown billing outcome."
             }
@@ -558,7 +556,7 @@ fn safe_provider_message(key: &ApiKey, value: Option<&str>) -> Option<Box<str>> 
 /// Bounded local diagnostics. Scrub before truncation so a secret crossing the limit cannot leak.
 pub fn scrub_diagnostic_reply(text: &str, key: Option<&ApiKey>) -> String {
     const LIMIT: usize = 64 * 1024;
-    let text = key.map_or_else(
+    let text = key.filter(|key| !key.is_anonymous()).map_or_else(
         || text.to_owned(),
         |key| text.replace(key.expose(), "[redacted]"),
     );

@@ -2225,16 +2225,15 @@ fn settings_catalogue_cost_and_loopback_gate_are_explicit_and_bounded() {
         );
     }
     let frozen = snapshot(GenerationMode::Strict);
-    let estimate = estimate_cost(&frozen, GenerationMode::Strict, &schema(), &settings).unwrap();
-    assert!(estimate.estimate_usd.is_finite() && estimate.estimate_usd > 0.0);
-    let mut under_budget = settings.clone();
-    under_budget.spending_limit_usd = estimate.estimate_usd / 2.0;
-    assert_eq!(
-        estimate_cost(&frozen, GenerationMode::Strict, &schema(), &under_budget)
-            .unwrap_err()
-            .kind,
-        ErrorKind::SpendingLimit
-    );
+    let estimate = estimate_for_auth(
+        AuthenticationMethod::ApiKey,
+        &frozen,
+        GenerationMode::Strict,
+        &schema(),
+        &settings,
+    )
+    .unwrap();
+    assert!(estimate.estimate_usd >= f64::from(DEFAULT_MAX_OUTPUT_TOKENS) * 15.0 / 1_000_000.0);
     assert!(estimate.input_token_upper_bound > frozen.markdown.len() as u64);
     for endpoint in [
         "https://api.openai.com/v1",
@@ -2473,7 +2472,16 @@ async fn chatgpt_preflight_preserves_scope_and_reserves_model_output_capacity() 
     let mut capacity = frozen.clone();
     capacity.markdown.push_str(&"a".repeat(extra));
     capacity.sha256 = digest(capacity.markdown.as_bytes());
-    assert!(estimate_cost(&capacity, GenerationMode::Strict, &schema(), &settings).is_ok());
+    assert!(
+        estimate_for_auth(
+            AuthenticationMethod::ApiKey,
+            &capacity,
+            GenerationMode::Strict,
+            &schema(),
+            &settings
+        )
+        .is_ok()
+    );
     assert_eq!(
         generate_plan(&server, &capacity, &settings)
             .await
@@ -2576,7 +2584,14 @@ async fn chatgpt_context_reserves_full_verified_model_output_capacity() {
     let mut capacity = frozen.clone();
     capacity.markdown.push_str(&"a".repeat(added));
     capacity.sha256 = digest(capacity.markdown.as_bytes());
-    let api = estimate_cost(&capacity, GenerationMode::Strict, &schema(), &settings).unwrap();
+    let api = estimate_for_auth(
+        AuthenticationMethod::ApiKey,
+        &capacity,
+        GenerationMode::Strict,
+        &schema(),
+        &settings,
+    )
+    .unwrap();
     assert!(
         api.input_token_upper_bound + u64::from(DEFAULT_MAX_OUTPUT_TOKENS) <= CONTEXT_WINDOW_TOKENS
     );
@@ -2657,7 +2672,14 @@ async fn available_openai_models_remain_selectable_and_reach_the_requested_trans
             let body: Value = serde_json::from_slice(&server.request().body).unwrap();
             assert_eq!(body["model"], model.id);
         }
-        let estimate = estimate_cost(&frozen, GenerationMode::Strict, &schema(), &saved).unwrap();
+        let estimate = estimate_for_auth(
+            AuthenticationMethod::ApiKey,
+            &frozen,
+            GenerationMode::Strict,
+            &schema(),
+            &saved,
+        )
+        .unwrap();
         let expected = ((estimate.input_token_upper_bound as f64
             * model.long_context_input_usd_per_million
             * 1.25
@@ -2672,9 +2694,15 @@ async fn available_openai_models_remain_selectable_and_reach_the_requested_trans
             ..saved
         };
         assert_eq!(
-            estimate_cost(&frozen, GenerationMode::Strict, &schema(), &denied)
-                .unwrap_err()
-                .kind,
+            estimate_for_auth(
+                AuthenticationMethod::ApiKey,
+                &frozen,
+                GenerationMode::Strict,
+                &schema(),
+                &denied
+            )
+            .unwrap_err()
+            .kind,
             ErrorKind::SpendingLimit
         );
     }
@@ -2742,9 +2770,15 @@ async fn newly_discovered_chatgpt_models_need_no_local_catalogue_entry() {
             .validate(&saved, AuthenticationMethod::Chatgpt)
             .unwrap();
         assert_eq!(
-            estimate_cost(&frozen, GenerationMode::Strict, &schema(), &saved)
-                .unwrap_err()
-                .kind,
+            estimate_for_auth(
+                AuthenticationMethod::ApiKey,
+                &frozen,
+                GenerationMode::Strict,
+                &schema(),
+                &saved
+            )
+            .unwrap_err()
+            .kind,
             ErrorKind::InvalidSettings
         );
         let selected = view.selected_model(&saved).unwrap();
@@ -3533,7 +3567,14 @@ fn a_picture_attachment_is_frozen_as_a_preview_and_sent_to_the_provider() {
 fn attachment_previews_are_sent_as_low_detail_images_and_estimated_per_image() {
     let mut frozen = snapshot(GenerationMode::Strict);
     let settings = ProviderSettings::default();
-    let plain = estimate_cost(&frozen, GenerationMode::Strict, &schema(), &settings).unwrap();
+    let plain = estimate_for_auth(
+        AuthenticationMethod::ApiKey,
+        &frozen,
+        GenerationMode::Strict,
+        &schema(),
+        &settings,
+    )
+    .unwrap();
     let preview = format!("data:image/jpeg;base64,{}", "A".repeat(40_000));
     frozen.images = vec![desegnos_core::RequestImage {
         attachment_id: "a1b2c1".into(),
@@ -3557,7 +3598,14 @@ fn attachment_previews_are_sent_as_low_detail_images_and_estimated_per_image() {
     assert_eq!(content[2]["text"], "Preview of image attachment a1b2c1.");
     assert_eq!(content[3]["image_url"], preview);
     assert_eq!(content[3]["detail"], "low");
-    let with_image = estimate_cost(&frozen, GenerationMode::Strict, &schema(), &settings).unwrap();
+    let with_image = estimate_for_auth(
+        AuthenticationMethod::ApiKey,
+        &frozen,
+        GenerationMode::Strict,
+        &schema(),
+        &settings,
+    )
+    .unwrap();
     assert_eq!(
         with_image.input_token_upper_bound - plain.input_token_upper_bound,
         desegnos_core::limits::AI_PREVIEW_TOKEN_RESERVE,
@@ -4539,9 +4587,9 @@ async fn read_only_preflight_network_failures_do_not_claim_an_unknown_generation
     );
     policy.backoff = [Duration::from_millis(20), Duration::from_millis(80)];
     let error = crate::retry::send(client.get(&server.endpoint), &cancel, policy, &|_| {})
-    .await
-    .err()
-    .unwrap();
+        .await
+        .err()
+        .unwrap();
     assert_eq!(error.kind, ErrorKind::Transport);
     assert_eq!(error.outcome, SubmissionOutcome::NotSubmitted);
     assert_eq!(server.count.load(Ordering::SeqCst), 3);
@@ -4550,7 +4598,11 @@ async fn read_only_preflight_network_failures_do_not_claim_an_unknown_generation
 #[tokio::test]
 async fn an_unreachable_provider_fails_at_once_instead_of_retrying() {
     // Bind and drop a listener so the port is closed: the connection is refused immediately.
-    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let port = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
     let client = OpenAiClient::for_loopback(&format!("http://127.0.0.1:{port}/v1")).unwrap();
     let frozen = snapshot(GenerationMode::Strict);
     let updates = Mutex::new(vec![]);
@@ -4571,6 +4623,16 @@ async fn an_unreachable_provider_fails_at_once_instead_of_retrying() {
         .await
         .unwrap_err();
     assert_eq!(error.kind, ErrorKind::Transport);
-    assert!(started.elapsed() < std::time::Duration::from_secs(1), "waited {:?}", started.elapsed());
-    assert!(updates.lock().unwrap().iter().all(|update| update.retry.is_none()));
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(1),
+        "waited {:?}",
+        started.elapsed()
+    );
+    assert!(
+        updates
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|update| update.retry.is_none())
+    );
 }

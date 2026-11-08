@@ -1,5 +1,10 @@
 //! Account model discovery. Metadata is not permission to change endpoints or prices.
-use crate::net::{ERROR_BODY_LIMIT, IDLE, MODELS_BODY_LIMIT, PROBE_IDLE};
+use crate::net::{ERROR_BODY_LIMIT, IDLE, MODELS_BODY_LIMIT, PROBE_IDLE, bounded_body};
+use crate::transport::{authorization, check_status};
+use crate::{AuthenticationMethod, ChatgptModel};
+use reqwest::header::{ACCEPT, AUTHORIZATION};
+use serde::Deserialize;
+const MAX_CHATGPT_MODELS: usize = 2048;
 use crate::{
     ApiKey, CancellationToken, ErrorKind, MAX_OUTPUT_TOKENS, ModelInfo, ProviderError, ProviderId,
     ReasoningEffort, Result,
@@ -18,44 +23,71 @@ enum Pagination {
     Token,
     AfterId,
 }
-struct DiscoveryProfile {
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DiscoveryPricing {
+    Catalogue,
+    Openrouter,
+    Local,
+}
+#[derive(Clone, Copy)]
+pub(crate) struct DiscoveryProfile {
     path: &'static str,
     cursor: &'static str,
     entries: &'static str,
     pagination: Pagination,
     generation_method: Option<&'static str>,
+    id_field: &'static str,
+    id_prefix: Option<&'static str>,
+    name_field: &'static str,
+    context_field: &'static str,
+    output_field: &'static str,
+    pricing: DiscoveryPricing,
 }
-impl DiscoveryProfile {
-    fn for_provider(provider: ProviderId) -> Self {
-        let standard = Self {
-            path: "models",
-            cursor: "after_id",
-            entries: "data",
-            pagination: Pagination::None,
-            generation_method: None,
-        };
-        match provider {
-            ProviderId::Openrouter => Self {
-                path: "models/user",
-                cursor: "offset",
-                pagination: Pagination::Offset(100),
-                ..standard
-            },
-            ProviderId::Google => Self {
-                cursor: "pageToken",
-                entries: "models",
-                pagination: Pagination::Token,
-                generation_method: Some("generateContent"),
-                ..standard
-            },
-            ProviderId::Anthropic => Self {
-                pagination: Pagination::AfterId,
-                ..standard
-            },
-            _ => standard,
-        }
-    }
-}
+pub(crate) const STANDARD_DISCOVERY: DiscoveryProfile = DiscoveryProfile {
+    path: "models",
+    cursor: "after_id",
+    entries: "data",
+    pagination: Pagination::None,
+    generation_method: None,
+    id_field: "id",
+    id_prefix: None,
+    name_field: "display_name",
+    context_field: "context_window",
+    output_field: "max_output_tokens",
+    pricing: DiscoveryPricing::Catalogue,
+};
+pub(crate) const OPENROUTER_DISCOVERY: DiscoveryProfile = DiscoveryProfile {
+    path: "models/user",
+    cursor: "offset",
+    pagination: Pagination::Offset(100),
+    name_field: "name",
+    context_field: "context_length",
+    pricing: DiscoveryPricing::Openrouter,
+    ..STANDARD_DISCOVERY
+};
+pub(crate) const GOOGLE_DISCOVERY: DiscoveryProfile = DiscoveryProfile {
+    cursor: "pageToken",
+    entries: "models",
+    pagination: Pagination::Token,
+    generation_method: Some("generateContent"),
+    id_field: "name",
+    id_prefix: Some("models/"),
+    name_field: "displayName",
+    context_field: "inputTokenLimit",
+    output_field: "outputTokenLimit",
+    ..STANDARD_DISCOVERY
+};
+pub(crate) const ANTHROPIC_DISCOVERY: DiscoveryProfile = DiscoveryProfile {
+    pagination: Pagination::AfterId,
+    context_field: "max_input_tokens",
+    output_field: "max_tokens",
+    ..STANDARD_DISCOVERY
+};
+
+pub(crate) const LOCAL_DISCOVERY: DiscoveryProfile = DiscoveryProfile {
+    pricing: DiscoveryPricing::Local,
+    ..STANDARD_DISCOVERY
+};
 
 pub(crate) async fn list_models(
     provider: ProviderId,
@@ -64,7 +96,7 @@ pub(crate) async fn list_models(
     key: &ApiKey,
     cancel: &CancellationToken,
 ) -> Result<Vec<ModelInfo>> {
-    let profile = DiscoveryProfile::for_provider(provider);
+    let profile = provider.spec().discovery;
     let deadline = Instant::now() + IDLE;
     let mut cursor: Option<String> = None;
     let mut cursors = HashSet::new();
@@ -182,55 +214,98 @@ pub(crate) async fn list_models(
     Err(failure(ErrorKind::OutputLimit))
 }
 
+pub(crate) async fn probe_model(
+    provider: ProviderId,
+    client: &Client,
+    endpoint: &str,
+    model: &str,
+    key: &ApiKey,
+    cancel: &CancellationToken,
+    policy: crate::retry::RetryPolicy,
+) -> Result<()> {
+    if cancel.is_cancelled() {
+        return Err(ProviderError::before(ErrorKind::Cancelled));
+    }
+    let request = authorize(
+        provider,
+        client
+            .get(format!("{endpoint}/models/{model}"))
+            .header("accept", "application/json"),
+        key,
+    )?;
+    let mut response = crate::retry::send(request, cancel, policy, &|_| {}).await?;
+    if !response.status().is_success() {
+        let status = response.status().as_u16();
+        let request_id = crate::net::request_id(response.headers()).map(str::to_owned);
+        let content_type = response
+            .headers()
+            .get("content-type")
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
+        let body = bounded_body(&mut response, ERROR_BODY_LIMIT, cancel, policy.deadline).await?;
+        return Err(crate::providers::foreign_http_error(
+            status,
+            &body,
+            key,
+            content_type.as_deref(),
+            request_id.as_deref(),
+        ));
+    }
+    if provider == ProviderId::Openai {
+        let bytes = bounded_body(&mut response, ERROR_BODY_LIMIT, cancel, policy.deadline).await?;
+        let result: Value = serde_json::from_slice(&bytes)
+            .map_err(|_| ProviderError::before(ErrorKind::Malformed))?;
+        if result.get("id").and_then(Value::as_str) != Some(model)
+            || result.get("object").and_then(Value::as_str) != Some("model")
+        {
+            return Err(ProviderError::before(ErrorKind::ModelUnavailable));
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn authorize(
     provider: ProviderId,
     request: RequestBuilder,
     key: &ApiKey,
 ) -> Result<RequestBuilder> {
-    if provider == ProviderId::Local && key.expose() == crate::credentials::LOCAL_ANONYMOUS_KEY {
-        return Ok(request);
+    use crate::providers::AuthHeader;
+    if key.is_anonymous() {
+        return if provider == ProviderId::Local {
+            Ok(request)
+        } else {
+            Err(failure(ErrorKind::InvalidCredential))
+        };
     }
-    let value = if matches!(
-        provider,
-        ProviderId::Openai | ProviderId::Openrouter | ProviderId::Deepseek | ProviderId::Local
-    ) {
-        zeroize::Zeroizing::new(format!("Bearer {}", key.expose()))
-    } else {
-        zeroize::Zeroizing::new(key.expose().into())
-    };
+    let style = provider.spec().auth;
+    let value = zeroize::Zeroizing::new(match style {
+        AuthHeader::Bearer => format!("Bearer {}", key.expose()),
+        _ => key.expose().to_owned(),
+    });
     let mut header =
         HeaderValue::from_str(&value).map_err(|_| failure(ErrorKind::InvalidCredential))?;
     header.set_sensitive(true);
-    Ok(match provider {
-        ProviderId::Openai | ProviderId::Openrouter | ProviderId::Deepseek | ProviderId::Local => {
-            request.header("authorization", header)
-        }
-        ProviderId::Anthropic => request
+    Ok(match style {
+        AuthHeader::Bearer => request.header("authorization", header),
+        AuthHeader::Anthropic => request
             .header("x-api-key", header)
             .header("anthropic-version", "2023-06-01"),
-        ProviderId::Google => request.header("x-goog-api-key", header),
+        AuthHeader::Google => request.header("x-goog-api-key", header),
     })
 }
 
 fn parse_model(provider: ProviderId, entry: &Value) -> Result<ModelInfo> {
-    let raw = entry[if provider == ProviderId::Google {
-        "name"
-    } else {
-        "id"
-    }]
-    .as_str()
-    .ok_or_else(|| failure(ErrorKind::Malformed))?;
-    let id = if provider == ProviderId::Google {
-        raw.strip_prefix("models/")
-            .ok_or_else(|| failure(ErrorKind::Malformed))?
-    } else {
-        raw
+    let profile = provider.spec().discovery;
+    let raw = entry[profile.id_field]
+        .as_str()
+        .ok_or_else(|| failure(ErrorKind::Malformed))?;
+    let id = match profile.id_prefix {
+        Some(prefix) => raw
+            .strip_prefix(prefix)
+            .ok_or_else(|| failure(ErrorKind::Malformed))?,
+        None => raw,
     };
-    let name = match entry.get(match provider {
-        ProviderId::Google => "displayName",
-        ProviderId::Openrouter => "name",
-        _ => "display_name",
-    }) {
+    let name = match entry.get(profile.name_field) {
         Some(Value::String(name)) => Some(name.as_str()),
         None | Some(Value::Null) => None,
         _ => return Err(failure(ErrorKind::Malformed)),
@@ -266,19 +341,13 @@ fn parse_model(provider: ProviderId, entry: &Value) -> Result<ModelInfo> {
     if let Some(name) = name {
         model.name = name.into();
     }
-    let (context_field, output_field) = match provider {
-        ProviderId::Anthropic => ("max_input_tokens", "max_tokens"),
-        ProviderId::Google => ("inputTokenLimit", "outputTokenLimit"),
-        ProviderId::Openrouter => ("context_length", "max_output_tokens"),
-        _ => ("context_window", "max_output_tokens"),
-    };
-    if let Some(limit) = positive_limit(entry, context_field)? {
+    if let Some(limit) = positive_limit(entry, profile.context_field)? {
         model.context_window_tokens = limit.min(crate::CONTEXT_WINDOW_TOKENS);
     }
-    if let Some(limit) = positive_limit(entry, output_field)? {
+    if let Some(limit) = positive_limit(entry, profile.output_field)? {
         model.max_output_tokens = u32::try_from(limit.min(u64::from(MAX_OUTPUT_TOKENS))).unwrap();
     }
-    if provider == ProviderId::Openrouter {
+    if profile.pricing == DiscoveryPricing::Openrouter {
         if let Some(top) = entry.get("top_provider")
             && let Some(limit) = positive_limit(top, "max_completion_tokens")?
         {
@@ -309,7 +378,7 @@ fn parse_model(provider: ProviderId, entry: &Value) -> Result<ModelInfo> {
             model.source_url = "https://openrouter.ai/api/v1/models/user".into();
         }
     }
-    if provider == ProviderId::Local {
+    if profile.pricing == DiscoveryPricing::Local {
         model.default_pricing = Some(crate::ModelPricing {
             model: model.id.clone(),
             ..Default::default()
@@ -859,4 +928,139 @@ mod tests {
         assert_eq!(requests.len(), 2);
         assert_eq!(requests[0], requests[1]);
     }
+}
+
+impl crate::OpenAiClient {
+    pub async fn list_chatgpt_models(
+        &self,
+        key: &ApiKey,
+        cancellation: &CancellationToken,
+    ) -> Result<Vec<ChatgptModel>> {
+        self.list_chatgpt_models_inner(key, cancellation)
+            .await
+            .map_err(|error| error.with_authentication(AuthenticationMethod::Chatgpt))
+    }
+
+    async fn list_chatgpt_models_inner(
+        &self,
+        key: &ApiKey,
+        cancellation: &CancellationToken,
+    ) -> Result<Vec<ChatgptModel>> {
+        if cancellation.is_cancelled() {
+            return Err(ProviderError::before(ErrorKind::Cancelled));
+        }
+        let deadline = Instant::now() + self.timeouts.deadline.min(crate::net::IDLE);
+        let request = self
+            .client
+            .get(format!("{}/models", self.endpoint))
+            .header(AUTHORIZATION, authorization(key)?)
+            .header(ACCEPT, "application/json");
+        let mut response = crate::retry::send(
+            request,
+            cancellation,
+            crate::retry::RetryPolicy {
+                backoff: self.timeouts.retry_backoff,
+                ..crate::retry::RetryPolicy::new(
+                    deadline,
+                    crate::net::PROBE_IDLE,
+                    MODELS_BODY_LIMIT,
+                )
+            },
+            &|_| {},
+        )
+        .await?;
+        check_status(
+            &mut response,
+            AuthenticationMethod::Chatgpt,
+            key,
+            cancellation,
+            deadline,
+        )
+        .await?;
+        let bytes = bounded_body(&mut response, MODELS_BODY_LIMIT, cancellation, deadline).await?;
+        let catalogue: ChatgptCatalogue = serde_json::from_slice(&bytes)
+            .map_err(|_| ProviderError::before(ErrorKind::Malformed))?;
+        if catalogue.models.len() > MAX_CHATGPT_MODELS {
+            return Err(ProviderError::before(ErrorKind::OutputLimit));
+        }
+        let mut models = Vec::new();
+        let mut slugs = std::collections::HashSet::new();
+        for model in catalogue.models {
+            if !crate::settings::valid_model_id(&model.slug)
+                || model.display_name.trim().is_empty()
+                || model.display_name.len() > 256
+                || model.display_name.chars().any(char::is_control)
+                || model.visibility.is_empty()
+                || model.visibility.len() > 32
+                || !model
+                    .visibility
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte == b'_')
+                || key.appears_in(&model.slug)
+                || key.appears_in(&model.display_name)
+                || key.appears_in(&model.visibility)
+                || model.context_window == Some(0)
+                || model.max_output_tokens == Some(0)
+                || !slugs.insert(model.slug.clone())
+            {
+                return Err(ProviderError::before(ErrorKind::Malformed));
+            }
+            let mut efforts = match model.supported_reasoning_levels {
+                Some(levels) => levels
+                    .into_iter()
+                    .map(|level| level.effort)
+                    .collect::<Vec<_>>(),
+                None => crate::settings::default_reasoning_efforts(),
+            };
+            if efforts.len() > 32
+                || efforts.iter().enumerate().any(|(index, effort)| {
+                    key.appears_in(effort.as_str()) || efforts[..index].contains(effort)
+                })
+            {
+                return Err(ProviderError::before(ErrorKind::Malformed));
+            }
+            if efforts.is_empty() {
+                efforts.push(crate::ReasoningEffort::Other("none".into()));
+            }
+            if model.visibility == "list" {
+                models.push(ChatgptModel {
+                    id: model.slug,
+                    name: model.display_name,
+                    reasoning_efforts: efforts,
+                    context_window_tokens: model.context_window,
+                    max_output_tokens: model.max_output_tokens,
+                });
+            }
+        }
+        if cancellation.is_cancelled() {
+            return Err(ProviderError::before(ErrorKind::Cancelled));
+        }
+        if Instant::now() >= deadline {
+            return Err(ProviderError::before(ErrorKind::Deadline));
+        }
+        Ok(models)
+    }
+}
+
+#[derive(Deserialize)]
+struct ChatgptCatalogue {
+    models: Vec<ChatgptCatalogueModel>,
+}
+
+#[derive(Deserialize)]
+struct ChatgptCatalogueModel {
+    slug: String,
+    display_name: String,
+    visibility: String,
+    #[serde(default)]
+    supported_reasoning_levels: Option<Vec<ChatgptReasoningLevel>>,
+    #[serde(default)]
+    context_window: Option<u64>,
+    #[serde(default)]
+    max_output_tokens: Option<u32>,
+}
+
+#[derive(Deserialize)]
+struct ChatgptReasoningLevel {
+    effort: crate::ReasoningEffort,
 }

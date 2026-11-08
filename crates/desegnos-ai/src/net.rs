@@ -5,6 +5,10 @@ use tokio::time::Instant;
 pub(crate) const DEADLINE: Duration = Duration::from_secs(20 * 60);
 pub(crate) const IDLE: Duration = Duration::from_secs(90);
 pub(crate) const PROBE_IDLE: Duration = Duration::from_secs(30);
+pub(crate) const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
+pub(crate) const PUBLIC_FETCH_TIMEOUT: Duration = Duration::from_secs(8);
+pub(crate) const PUBLIC_CONNECT_TIMEOUT: Duration = Duration::from_secs(4);
+pub(crate) const IMAGE_DEADLINE: Duration = Duration::from_secs(180);
 pub(crate) const ERROR_BODY_LIMIT: usize = 65_536;
 pub(crate) const MODELS_BODY_LIMIT: usize = 1024 * 1024;
 

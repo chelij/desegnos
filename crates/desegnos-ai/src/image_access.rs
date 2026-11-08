@@ -11,6 +11,9 @@ pub fn image_access_now() -> u64 {
         .as_secs()
 }
 
+const UNKNOWN_ACCESS_TTL_SECONDS: u64 = 5 * 60;
+const CONFIRMED_ACCESS_TTL_SECONDS: u64 = 7 * 24 * 60 * 60;
+
 #[derive(ts_rs::TS, Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ImageAvailability {
@@ -37,9 +40,9 @@ impl ImageAccess {
     pub fn expired(&self, now: u64) -> bool {
         // Transient failures are retried later without a polling/request loop.
         let ttl = if self.available == ImageAvailability::Unknown {
-            300
+            UNKNOWN_ACCESS_TTL_SECONDS
         } else {
-            7 * 24 * 60 * 60
+            CONFIRMED_ACCESS_TTL_SECONDS
         };
         now == 0
             || self.checked_at == 0
@@ -163,7 +166,7 @@ impl OpenAiClient {
     async fn probe_images(&self, key: &ApiKey) -> ImageAccess {
         // 16x16 is invalid for every supported model. Do not retry with a valid size:
         // validation proves access without ever authorizing image generation.
-        let body = json!({"model": crate::image_generation::IMAGE_MODELS[0], "prompt": "Access check",
+        let body = json!({"model": crate::image_generation::IMAGE_MODEL, "prompt": "Access check",
             "size": "16x16", "n": 1, "quality": "low", "output_format": "png"});
         let request = serde_json::to_vec(&body)
             .map_err(|_| crate::ProviderError::before(crate::ErrorKind::InvalidRequirements))

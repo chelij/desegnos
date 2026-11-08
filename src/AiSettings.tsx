@@ -205,7 +205,7 @@ export function AiSettings({ current, refresh, update, manageUsage, pollingError
         {(view.providers ?? []).flatMap(item => item.id === 'openai' ? [
           ...(item.signInSupported ? [<option key="openai-chatgpt" value="openai-chatgpt">ChatGPT plan</option>] : []),
           <option key="openai" value="openai">API key</option>,
-        ] : [<option key={item.id} value={item.id} disabled={!item.available}>{item.name}{!item.available ? ' — coming soon' : ''}</option>])}
+        ] : [<option key={item.id} value={item.id}>{item.name}</option>])}
       </select></label>
       {usesLocal && <form className="ai-key-form" onSubmit={connectServer}>
         <label>Server URL<input type="url" aria-label="Local server URL" required maxLength={MAX_HTTP_URL_BYTES} disabled={busy} value={endpoint ?? view.settings.endpoint ?? 'http://127.0.0.1:11434/v1'} onChange={event => setEndpoint(event.target.value)} /></label>

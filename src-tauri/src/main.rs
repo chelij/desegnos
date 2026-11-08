@@ -24,6 +24,7 @@ mod local_site;
 mod native_files;
 #[cfg(all(target_os = "linux", feature = "portal-dialogs"))]
 mod portal;
+mod project_history;
 mod project_location;
 mod recent;
 mod release;

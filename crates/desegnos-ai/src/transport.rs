@@ -1,7 +1,7 @@
-use crate::net::{DEADLINE, ERROR_BODY_LIMIT, IDLE, MODELS_BODY_LIMIT};
+use crate::net::{DEADLINE, ERROR_BODY_LIMIT, IDLE};
 use crate::retry::RetryResponse as Response;
 use crate::{
-    ApiKey, AuthenticationMethod, ChatgptModel, ErrorKind, MODEL_MAX_OUTPUT_TOKENS, ProviderError,
+    ApiKey, AuthenticationMethod, ErrorKind, MODEL_MAX_OUTPUT_TOKENS, ProviderError,
     ProviderSettings, ResponseBodyKind, Result, SubmissionOutcome, TokenUsage,
     identity::prepare_identity_body,
     settings::prepare_body,
@@ -10,7 +10,6 @@ use crate::{
         event_stream_prefix,
     },
 };
-use desegnos_core::RequirementsSnapshot;
 use reqwest::{
     Client, StatusCode,
     header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, HeaderValue},
@@ -20,10 +19,8 @@ use serde_json::Value;
 use std::time::Duration;
 use tokio::{sync::watch, time::Instant};
 
-const ENDPOINT: &str = "https://api.openai.com/v1";
 // A long, high-effort generation can stream for well over five minutes. Give up only when
 // the provider goes silent for IDLE, or after DEADLINE overall.
-const MAX_MODELS: usize = 2048;
 
 #[derive(Clone)]
 pub struct CancellationToken(watch::Sender<bool>);
@@ -125,14 +122,20 @@ impl std::fmt::Debug for ProviderResponse {
 pub struct OpenAiClient {
     pub(crate) client: Client,
     pub(crate) endpoint: String,
-    deadline: Duration,
-    idle: Duration,
-    retry_backoff: [Duration; 2],
+    pub(crate) timeouts: Timeouts,
+}
+
+#[derive(Clone)]
+pub(crate) struct Timeouts {
+    pub deadline: Duration,
+    pub idle: Duration,
+    pub retry_backoff: [Duration; 2],
 }
 
 struct PreparedRequest<'a> {
     authentication: AuthenticationMethod,
-    snapshot: &'a RequirementsSnapshot,
+    job_id: uuid::Uuid,
+    requirements_sha256: &'a str,
     settings: &'a ProviderSettings,
     key: &'a ApiKey,
     cancellation: &'a CancellationToken,
@@ -155,22 +158,28 @@ impl OpenAiClient {
         .await
     }
     pub fn new() -> Result<Self> {
-        Self::build(ENDPOINT.into(), true, DEADLINE)
+        Self::build(
+            crate::ProviderId::Openai.spec().endpoint.into(),
+            true,
+            DEADLINE,
+        )
     }
 
     fn build(endpoint: String, https_only: bool, deadline: Duration) -> Result<Self> {
         let client = crate::net::hardened_client(https_only)
             .timeout(deadline)
             .read_timeout(IDLE)
-            .connect_timeout(Duration::from_secs(20))
+            .connect_timeout(crate::net::CONNECT_TIMEOUT)
             .build()
             .map_err(|_| ProviderError::before(ErrorKind::Transport))?;
         Ok(Self {
             client,
             endpoint,
-            deadline,
-            idle: IDLE,
-            retry_backoff: crate::retry::DEFAULT_BACKOFF,
+            timeouts: Timeouts {
+                deadline,
+                idle: IDLE,
+                retry_backoff: crate::retry::DEFAULT_BACKOFF,
+            },
         })
     }
 
@@ -190,19 +199,19 @@ impl OpenAiClient {
             return Err(ProviderError::before(ErrorKind::InvalidSettings));
         }
         let mut client = Self::build(endpoint.trim_end_matches('/').into(), false, DEADLINE)?;
-        client.retry_backoff = [Duration::from_millis(20), Duration::from_millis(80)];
+        client.timeouts.retry_backoff = [Duration::from_millis(20), Duration::from_millis(80)];
         Ok(client)
     }
 
     #[cfg(test)]
     pub(crate) fn with_test_deadline(mut self, deadline: Duration) -> Self {
-        self.deadline = deadline;
+        self.timeouts.deadline = deadline;
         self
     }
 
     #[cfg(test)]
     pub(crate) fn with_test_idle(mut self, idle: Duration) -> Self {
-        self.idle = idle;
+        self.timeouts.idle = idle;
         self
     }
 
@@ -257,10 +266,11 @@ impl OpenAiClient {
             self.submit_for_auth(
                 PreparedRequest {
                     authentication,
-                    snapshot,
+                    job_id: snapshot.job_id,
+                    requirements_sha256: &snapshot.sha256,
                     settings,
                     key,
-                    cancellation: cancellation,
+                    cancellation,
                     body,
                 },
                 progress,
@@ -294,10 +304,11 @@ impl OpenAiClient {
             self.submit_for_auth(
                 PreparedRequest {
                     authentication,
-                    snapshot,
+                    job_id: snapshot.job_id,
+                    requirements_sha256: &snapshot.sha256,
                     settings,
                     key,
-                    cancellation: cancellation,
+                    cancellation,
                     body,
                 },
                 progress,
@@ -315,7 +326,8 @@ impl OpenAiClient {
     ) -> Result<ProviderResponse> {
         let PreparedRequest {
             authentication,
-            snapshot,
+            job_id,
+            requirements_sha256,
             settings,
             key,
             cancellation,
@@ -324,7 +336,7 @@ impl OpenAiClient {
         if cancellation.is_cancelled() {
             return Err(ProviderError::before(ErrorKind::Cancelled));
         }
-        let deadline = Instant::now() + self.deadline;
+        let deadline = Instant::now() + self.timeouts.deadline;
         let request = self.responses_request(key, body)?;
         progress(ProviderProgress {
             retry: None,
@@ -341,8 +353,8 @@ impl OpenAiClient {
             request,
             cancellation,
             crate::retry::RetryPolicy {
-                backoff: self.retry_backoff,
-                ..crate::retry::RetryPolicy::new(deadline, self.idle, MAX_STREAM_BYTES)
+                backoff: self.timeouts.retry_backoff,
+                ..crate::retry::RetryPolicy::new(deadline, self.timeouts.idle, MAX_STREAM_BYTES)
             },
             &progress,
         )
@@ -358,8 +370,8 @@ impl OpenAiClient {
         let mut stream = ResponseStream::new(
             authentication,
             key,
-            snapshot.job_id.to_string(),
-            &snapshot.sha256,
+            job_id.to_string(),
+            requirements_sha256,
             match authentication {
                 AuthenticationMethod::ApiKey => settings.max_output_tokens,
                 AuthenticationMethod::Chatgpt => MODEL_MAX_OUTPUT_TOKENS,
@@ -386,7 +398,7 @@ impl OpenAiClient {
             let bytes = tokio::select! {
                 biased;
                 _ = cancellation.cancelled() => return Err(stream.error(ErrorKind::Cancelled, SubmissionOutcome::Unknown)),
-                _ = tokio::time::sleep_until(deadline.min(Instant::now() + self.idle)) => return Err(stream.error(ErrorKind::Deadline, SubmissionOutcome::Unknown)),
+                _ = tokio::time::sleep_until(deadline.min(Instant::now() + self.timeouts.idle)) => return Err(stream.error(ErrorKind::Deadline, SubmissionOutcome::Unknown)),
                 result = response.chunk() => result.map_err(|error| stream.error(
                     if error.is_timeout() { ErrorKind::Deadline } else { ErrorKind::Transport }, SubmissionOutcome::Unknown))?,
             };
@@ -492,183 +504,30 @@ impl OpenAiClient {
         cancellation: &CancellationToken,
     ) -> Result<()> {
         settings.validate()?;
-        if cancellation.is_cancelled() {
-            return Err(ProviderError::before(ErrorKind::Cancelled));
-        }
-        let deadline = Instant::now() + Duration::from_secs(90);
-        let request = self
-            .client
-            .get(format!("{}/models/{}", self.endpoint, settings.model))
-            .header(AUTHORIZATION, authorization(key)?)
-            .header(ACCEPT, "application/json");
-        let mut response = crate::retry::send(
-            request,
+        crate::model_discovery::probe_model(
+            crate::ProviderId::Openai,
+            &self.client,
+            &self.endpoint,
+            &settings.model,
+            key,
             cancellation,
             crate::retry::RetryPolicy {
-                backoff: self.retry_backoff,
+                backoff: self.timeouts.retry_backoff,
                 ..crate::retry::RetryPolicy::new(
-                    deadline,
-                    Duration::from_secs(30),
+                    Instant::now() + crate::net::IDLE,
+                    crate::net::PROBE_IDLE,
                     ERROR_BODY_LIMIT,
                 )
             },
-            &|_| {},
         )
-        .await?;
-        check_status(
-            &mut response,
-            AuthenticationMethod::ApiKey,
-            key,
-            cancellation,
-            deadline,
-        )
-        .await?;
-        let bytes = bounded_body(&mut response, ERROR_BODY_LIMIT, cancellation, deadline).await?;
-        let result: Value = serde_json::from_slice(&bytes)
-            .map_err(|_| ProviderError::before(ErrorKind::Malformed))?;
-        if result.get("id").and_then(Value::as_str) != Some(&settings.model)
-            || result.get("object").and_then(Value::as_str) != Some("model")
-        {
-            return Err(ProviderError::before(ErrorKind::ModelUnavailable));
-        }
-        Ok(())
-    }
-
-    pub async fn list_chatgpt_models(
-        &self,
-        key: &ApiKey,
-        cancellation: &CancellationToken,
-    ) -> Result<Vec<ChatgptModel>> {
-        self.list_chatgpt_models_inner(key, cancellation)
-            .await
-            .map_err(|error| error.with_authentication(AuthenticationMethod::Chatgpt))
-    }
-
-    async fn list_chatgpt_models_inner(
-        &self,
-        key: &ApiKey,
-        cancellation: &CancellationToken,
-    ) -> Result<Vec<ChatgptModel>> {
-        if cancellation.is_cancelled() {
-            return Err(ProviderError::before(ErrorKind::Cancelled));
-        }
-        let deadline = Instant::now() + self.deadline.min(Duration::from_secs(90));
-        let request = self
-            .client
-            .get(format!("{}/models", self.endpoint))
-            .header(AUTHORIZATION, authorization(key)?)
-            .header(ACCEPT, "application/json");
-        let mut response = crate::retry::send(
-            request,
-            cancellation,
-            crate::retry::RetryPolicy {
-                backoff: self.retry_backoff,
-                ..crate::retry::RetryPolicy::new(
-                    deadline,
-                    Duration::from_secs(30),
-                    MODELS_BODY_LIMIT,
-                )
-            },
-            &|_| {},
-        )
-        .await?;
-        check_status(
-            &mut response,
-            AuthenticationMethod::Chatgpt,
-            key,
-            cancellation,
-            deadline,
-        )
-        .await?;
-        let bytes = bounded_body(&mut response, MODELS_BODY_LIMIT, cancellation, deadline).await?;
-        let catalogue: ChatgptCatalogue = serde_json::from_slice(&bytes)
-            .map_err(|_| ProviderError::before(ErrorKind::Malformed))?;
-        if catalogue.models.len() > MAX_MODELS {
-            return Err(ProviderError::before(ErrorKind::OutputLimit));
-        }
-        let mut models = Vec::new();
-        let mut slugs = std::collections::HashSet::new();
-        for model in catalogue.models {
-            if !crate::settings::valid_model_id(&model.slug)
-                || model.display_name.trim().is_empty()
-                || model.display_name.len() > 256
-                || model.display_name.chars().any(char::is_control)
-                || model.visibility.is_empty()
-                || model.visibility.len() > 32
-                || !model
-                    .visibility
-                    .bytes()
-                    .all(|byte| byte.is_ascii_lowercase() || byte == b'_')
-                || key.appears_in(&model.slug)
-                || key.appears_in(&model.display_name)
-                || key.appears_in(&model.visibility)
-                || model.context_window == Some(0)
-                || model.max_output_tokens == Some(0)
-                || !slugs.insert(model.slug.clone())
-            {
-                return Err(ProviderError::before(ErrorKind::Malformed));
-            }
-            let mut efforts = match model.supported_reasoning_levels {
-                Some(levels) => levels
-                    .into_iter()
-                    .map(|level| level.effort)
-                    .collect::<Vec<_>>(),
-                None => crate::settings::default_reasoning_efforts(),
-            };
-            if efforts.len() > 32
-                || efforts.iter().enumerate().any(|(index, effort)| {
-                    key.appears_in(effort.as_str()) || efforts[..index].contains(effort)
-                })
-            {
-                return Err(ProviderError::before(ErrorKind::Malformed));
-            }
-            if efforts.is_empty() {
-                efforts.push(crate::ReasoningEffort::Other("none".into()));
-            }
-            if model.visibility == "list" {
-                models.push(ChatgptModel {
-                    id: model.slug,
-                    name: model.display_name,
-                    reasoning_efforts: efforts,
-                    context_window_tokens: model.context_window,
-                    max_output_tokens: model.max_output_tokens,
-                });
-            }
-        }
-        if cancellation.is_cancelled() {
-            return Err(ProviderError::before(ErrorKind::Cancelled));
-        }
-        if Instant::now() >= deadline {
-            return Err(ProviderError::before(ErrorKind::Deadline));
-        }
-        Ok(models)
+        .await
     }
 }
 
-#[derive(Deserialize)]
-struct ChatgptCatalogue {
-    models: Vec<ChatgptCatalogueModel>,
-}
-
-#[derive(Deserialize)]
-struct ChatgptCatalogueModel {
-    slug: String,
-    display_name: String,
-    visibility: String,
-    #[serde(default)]
-    supported_reasoning_levels: Option<Vec<ChatgptReasoningLevel>>,
-    #[serde(default)]
-    context_window: Option<u64>,
-    #[serde(default)]
-    max_output_tokens: Option<u32>,
-}
-
-#[derive(Deserialize)]
-struct ChatgptReasoningLevel {
-    effort: crate::ReasoningEffort,
-}
-
-fn authorization(key: &ApiKey) -> Result<HeaderValue> {
+pub(crate) fn authorization(key: &ApiKey) -> Result<HeaderValue> {
+    if key.is_anonymous() {
+        return Err(ProviderError::before(ErrorKind::InvalidCredential));
+    }
     let text = zeroize::Zeroizing::new(format!("Bearer {}", key.expose()));
     let mut value = HeaderValue::from_str(&text)
         .map_err(|_| ProviderError::before(ErrorKind::InvalidCredential))?;
@@ -821,7 +680,7 @@ pub(crate) fn response_body_kind(body: &[u8], json: Option<&Value>) -> ResponseB
     }
 }
 
-async fn check_status(
+pub(crate) async fn check_status(
     response: &mut Response,
     authentication: AuthenticationMethod,
     key: &ApiKey,

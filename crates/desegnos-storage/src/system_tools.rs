@@ -72,8 +72,9 @@ impl ToolSearch {
         }
     }
 
-    pub fn path(&self) -> OsString {
-        env::join_paths(&self.directories).unwrap_or_default()
+    pub fn path(&self) -> io::Result<OsString> {
+        env::join_paths(&self.directories)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))
     }
 
     pub fn resolve(&self, tool: &str) -> io::Result<PathBuf> {
