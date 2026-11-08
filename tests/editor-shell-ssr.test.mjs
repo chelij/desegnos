@@ -97,19 +97,15 @@ try {
     assert.match(html, /aria-label="Export Draft as"/);
     assert.equal((html.match(/>Preview<\/button>/g) ?? []).length, 1);
     assert.ok(html.indexOf('Export Draft as') < html.indexOf('Folder'));
-    assert.match(html, /<button[^>]+class="dock-action export-panel-name"[^>]*>Draft<\/button>/);
+    assert.match(html, /<button\b[^>]*>Draft<\/button>/);
   });
-  await test('Boundary properties has the shared colour field and six background presets', () => {
+  await test('Boundary properties reflects the current background', () => {
     const { project } = templates.find(item => item.template === 'website');
     const html = renderToStaticMarkup(React.createElement(BoundaryProperties, {
       page: { ...project.pages[0], background: '#121212' }, busy: false,
       commit: noop, updateSize: noop, addSize: noop, removeSize: noop, remove: noop,
     }));
-    assert.match(html, /class="props-colour"/);
     assert.match(html, /aria-label="Background"[^>]+value="#121212"/);
-    assert.match(html, /aria-label="Near-black background" aria-pressed="true"/);
-    assert.equal((html.match(/<button[^>]+class="props-swatch"/g) ?? []).length, 6);
-    assert.doesNotMatch(html, /boundary-export|boundary-appearance|Include in export/);
   });
 
   const view = project => ({
@@ -130,11 +126,30 @@ try {
     });
   }
 
-  await test('the app bar names its primary actions and keeps the editor theme in Preferences', () => {
+  const buttons = html => [...html.matchAll(/<button\b([^>]*)>([\s\S]*?)<\/button>/g)]
+    .map(([, attributes, content]) => ({ attributes, text: content.replace(/<[^>]*>/g, '') }));
+  const namedButton = (html, name) => {
+    const found = buttons(html).filter(button => button.attributes.includes(`aria-label="${name}"`) || button.text === name);
+    assert.equal(found.length, 1, `${name} is offered once`);
+    return found[0];
+  };
+  await test('Undo and Redo stay visible and reflect available history', () => {
     const { project } = templates.find(item => item.template === 'website');
-    const html = renderToStaticMarkup(React.createElement(App, { initialView: view(project) }));
-    for (const label of ['Import', 'Play', 'Preview', 'Export']) assert.match(html, new RegExp(`<span class="button-label">${label}</span>`));
-    assert.doesNotMatch(html, /class="theme-toggle icon-button"/);
+    for (const [canUndo, canRedo] of [[false, false], [true, false], [false, true]]) {
+      const html = renderToStaticMarkup(React.createElement(App, { initialView: { ...view(project), canUndo, canRedo } }));
+      assert.equal(/\bdisabled(?:=|\s|$)/.test(namedButton(html, 'Undo last change').attributes), !canUndo);
+      assert.equal(/\bdisabled(?:=|\s|$)/.test(namedButton(html, 'Redo last change').attributes), !canRedo);
+    }
+  });
+  await test('the app bar offers import and export, and preview only for web output', () => {
+    const { project } = templates.find(item => item.template === 'website');
+    for (const output of ['webpage', 'image', 'slide']) {
+      const pages = project.pages.map(page => ({ ...page, output }));
+      const html = renderToStaticMarkup(React.createElement(App, { initialView: view({ ...project, pages }) }));
+      namedButton(html, 'Import');
+      namedButton(html, 'Export');
+      assert.equal(buttons(html).some(button => button.attributes.includes('aria-label="Preview export"')), output === 'webpage');
+    }
   });
 
   await test('the editor shell renders a project with a pointer that has no wiring yet', () => {

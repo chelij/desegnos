@@ -324,26 +324,28 @@ Named views persist in `Project.views`; commands and validation live in [model.r
 
 | Command | Runs |
 | --- | --- |
-| `npm run dev` | Vite frontend on `127.0.0.1:1420` (strict port). |
-| `npm run desktop` | `scripts/tauri.mjs` → Tauri dev app. |
+| `npm run dev` | Vite frontend on `127.0.0.1:1420` (strict port), derived from `src-tauri/tauri.conf.json` → `build.devUrl`. |
+| `npm run desktop` | `scripts/run.mjs tauri` → Tauri dev app. |
 | `npm run typecheck` | `tsc --noEmit`. |
 | `npm run build` | `tsc --noEmit && vite build`. |
-| `npm test` | `cargo test --workspace` through `scripts/cargo.mjs`. |
+| `npm test` | `cargo test --workspace` through `scripts/run.mjs cargo`. |
 | `npm run check:rust` | Clippy for the workspace, all targets, warnings denied. |
-| `npm run test:canvas` | `tests/project-canvas-geometry.test.mjs` + `tests/canvas-model.test.mjs`. |
-| `npm run test:editor` | The kept React/Node tests: CodeMirror state, crash copy, generation cancellation/conversation/problems/session/status, identity review, import flow, notice summary, number expressions, problem banner, recovery banner, start page, update check, visible actions, workspace surfaces, editor SSR. |
+| `npm run test:canvas` | `tests/project-canvas-geometry.test.mjs`, `tests/canvas-model.test.mjs` and `tests/canvas-fonts.test.mjs`. |
+| `npm run test:editor` | `scripts/test-editor.mjs` discovers every top-level `tests/*.test.mjs` except the three headless-browser suites (AI models, canvas UX, notices). Includes Play, release orchestration and launcher tests. |
 | `npm run test:notices` | `tests/notice-system.test.mjs`: notice queue and layout in headless Chromium (~10s, kept out of `test:editor`). |
 | `npm run test:smoke` | `tests/native/canvas-smoke.mjs`: builds the `native-tests,gtk-dialogs` app and drives the real editor on a guarded Xvfb display and private session bus. Linux only. |
 | `npm run test:vault` | `scripts/test-vault.mjs`: native secret-service vault flow against a loopback provider. |
 | `npm run release:local` | `scripts/build-release.mjs`: Tauri release build (no bundle), then the guarded Linux startup check. `--dist` keeps the full LTO release profile. |
 
-Kept tests not wired into an npm script: `node tests/build-release.test.mjs` (release orchestration without Cargo) and `node tests/tauri-launcher.test.mjs` (launcher environment). `node scripts/startup-test.mjs --binary <path>` runs the guarded startup check directly.
+All top-level test files are wired into npm scripts. `node scripts/startup-test.mjs --binary <path>` runs the guarded startup check directly.
 
 | Test file | Covers |
 | --- | --- |
+| [hug_synchronization.rs](../crates/desegnos-core/tests/hug_synchronization.rs) | Fixed-geometry edits and Hug synchronization in descendants and size overrides; replaces the former timing probe. |
+| [play.test.mjs](../tests/play.test.mjs) | Play click routing, pointer precedence and ancestor targets. |
 | [build-release.test.mjs](../tests/build-release.test.mjs) | Release orchestration, `--dist` profile and failure stopping. |
 | [number-expression.test.mjs](../tests/number-expression.test.mjs) | Pure number-expression parsing and field resolution. |
-| [canvas-model.test.mjs](../tests/canvas-model.test.mjs) | Linked-size helpers, overrides, placeholders, origins, id parity with Rust, keymap uniqueness and CANVAS.md keyboard parity. |
+| [canvas-model.test.mjs](../tests/canvas-model.test.mjs) | Linked-size helpers, overrides, placeholders, origins, id parity with Rust, keymap uniqueness and keyboard dispatch. |
 | [code-mirror-state.test.mjs](../tests/code-mirror-state.test.mjs) | CodeMirror metadata, exact edits, undo/redo and lagging React echoes. |
 | [crash-report.test.mjs](../tests/crash-report.test.mjs) | Crash notice copy and issue-address fallback. |
 | [editor-shell-ssr.test.mjs](../tests/editor-shell-ssr.test.mjs) | Server render of the editor shell with an unwired pointer. |
@@ -381,7 +383,8 @@ Older logs, screenshots and JSON at the root of `test-results/` are historical r
 
 ## Scripts and documents
 
-- [cargo.mjs](../scripts/cargo.mjs), [tauri.mjs](../scripts/tauri.mjs), [toolchain.mjs](../scripts/toolchain.mjs): Cargo/Tauri wrappers and pinned toolchain discovery.
+- [run.mjs](../scripts/run.mjs), [toolchain.mjs](../scripts/toolchain.mjs): shared Cargo/Tauri process runner and pinned toolchain discovery.
+- [test-editor.mjs](../scripts/test-editor.mjs): discovers and runs the non-browser Node test files.
 - [build-release.mjs](../scripts/build-release.mjs), [build-release.sh](../scripts/build-release.sh): local release build and startup check; `--dist` for publishing.
 - [startup-test.mjs](../scripts/startup-test.mjs), [test-vault.mjs](../scripts/test-vault.mjs), [xvfb.mjs](../scripts/xvfb.mjs): guarded native diagnostics.
 - [usage-report.mjs](../scripts/usage-report.mjs): summarises local usage JSONL and generation folders into Markdown. It sends nothing.

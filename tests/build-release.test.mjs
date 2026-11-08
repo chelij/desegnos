@@ -21,9 +21,8 @@ for (const [platform, target, executable, startup] of [
       inspected.push(path); return { size: 123, mtime: new Date(0) };
     } });
     assert.equal(calls[0].program, process.execPath);
-    assert.match(calls[0].args[0], /tauri\.mjs$/);
-    assert.deepEqual(calls[0].args.slice(1, 5), ['build', '--no-bundle', '--features', 'custom-protocol']);
-    assert.deepEqual(JSON.parse(calls[0].args[6]), { build: { beforeBuildCommand: 'npm run build' } });
+    assert.match(calls[0].args[0], /run\.mjs$/);
+    assert.deepEqual(calls[0].args.slice(1), ['tauri', 'build', '--no-bundle', '--features', 'custom-protocol']);
     assert.equal(calls[1].program, 'cargo');
     assert.deepEqual(calls[1].args, ['metadata', '--offline', '--no-deps', '--format-version', '1']);
     const binary = join('custom target', 'directory', ...(target ? [target] : []), 'release', executable);
