@@ -1071,27 +1071,6 @@ impl RequirementsSnapshot {
     }
 }
 
-#[cfg(test)]
-mod content_guidance_tests {
-    use super::content_guidance;
-    use crate::model::OutputType;
-
-    #[test]
-    fn guidance_names_only_the_outputs_in_scope() {
-        let slides = content_guidance(&[OutputType::Slide], false);
-        assert!(slides.contains("`slide`") && !slides.contains("`webpage`"));
-        assert!(!slides.contains("web search"));
-        let site = content_guidance(&[OutputType::Webpage, OutputType::Image], true);
-        assert!(site.contains("`webpage`") && site.contains("`image`"));
-        assert!(site.contains("use web search"));
-        assert!(site.contains("never on the canvas"));
-        assert!(site.contains("## Frames") && site.contains("siteRoutes"));
-        assert!(site.contains("a path from `siteRoutes`: it frames that page live"));
-        assert!(!site.contains("only takes web addresses"));
-        assert!(!slides.contains("## Frames"));
-    }
-}
-
 impl RequirementsSnapshot {
     pub(crate) fn set_request_history(&mut self, section: String) -> Result<()> {
         ensure(
@@ -1149,5 +1128,26 @@ impl Project {
             })).collect::<Vec<_>>(),
             "content":identity.content
         }))
+    }
+}
+
+#[cfg(test)]
+mod content_guidance_tests {
+    use super::content_guidance;
+    use crate::model::OutputType;
+
+    #[test]
+    fn guidance_names_only_the_outputs_in_scope() {
+        let slides = content_guidance(&[OutputType::Slide], false);
+        assert!(slides.contains("`slide`") && !slides.contains("`webpage`"));
+        assert!(!slides.contains("web search"));
+        let site = content_guidance(&[OutputType::Webpage, OutputType::Image], true);
+        assert!(site.contains("`webpage`") && site.contains("`image`"));
+        assert!(site.contains("use web search"));
+        assert!(site.contains("never on the canvas"));
+        assert!(site.contains("## Frames") && site.contains("siteRoutes"));
+        assert!(site.contains("a path from `siteRoutes`: it frames that page live"));
+        assert!(!site.contains("only takes web addresses"));
+        assert!(!slides.contains("## Frames"));
     }
 }

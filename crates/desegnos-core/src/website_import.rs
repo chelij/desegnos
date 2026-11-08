@@ -1091,7 +1091,7 @@ fn page_plans<'a>(captures: &'a [WebCapture], project: &Project) -> Result<Vec<P
     )?;
     ensure(
         captures.len() <= MAX_IMPORT_CAPTURES,
-        &format!("A website import renders at most {MAX_IMPORT_PAGES} pages at two widths."),
+        format!("A website import renders at most {MAX_IMPORT_PAGES} pages at two widths."),
     )?;
     let mut grouped: BTreeMap<String, (&WebCapture, Option<&WebCapture>)> = BTreeMap::new();
     for capture in captures {

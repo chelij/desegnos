@@ -93,12 +93,12 @@ fn atomic_write_unsynced(
     })();
     match operation {
         Err(error) => {
-            if let Err(cleanup) = fs::remove_file(&temporary) {
-                if cleanup.kind() != std::io::ErrorKind::NotFound {
-                    return Err(Error(format!(
-                        "{error}; temporary file cleanup failed: {cleanup}"
-                    )));
-                }
+            if let Err(cleanup) = fs::remove_file(&temporary)
+                && cleanup.kind() != std::io::ErrorKind::NotFound
+            {
+                return Err(Error(format!(
+                    "{error}; temporary file cleanup failed: {cleanup}"
+                )));
             }
             Err(error)
         }

@@ -246,6 +246,25 @@ pub fn open_chatgpt_usage() -> Result<(), crate::native_error::NativeFailure> {
         .map_err(crate::native_error::NativeErrorKind::AiSettings.failure())
 }
 
+/// Sign-out stops running work in every service. All services are attempted; the first
+/// failure to record a cancellation is returned afterwards.
+fn cancel_account(
+    generation: &Mutex<GenerationService>,
+    identity: &Mutex<IdentityService>,
+    exports: &Mutex<ExportService>,
+    account_id: Uuid,
+) -> Result<(), String> {
+    let results = [
+        generation.locked().cancel_account(account_id),
+        identity.locked().cancel_account(account_id),
+        {
+            exports.locked().cancel_account(account_id);
+            Ok(())
+        },
+    ];
+    results.into_iter().collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -305,23 +324,4 @@ mod tests {
             .with_epoch(other, state.epoch(other).unwrap(), || Ok(()))
             .unwrap();
     }
-}
-
-/// Sign-out stops running work in every service. All services are attempted; the first
-/// failure to record a cancellation is returned afterwards.
-fn cancel_account(
-    generation: &Mutex<GenerationService>,
-    identity: &Mutex<IdentityService>,
-    exports: &Mutex<ExportService>,
-    account_id: Uuid,
-) -> Result<(), String> {
-    let results = [
-        generation.locked().cancel_account(account_id),
-        identity.locked().cancel_account(account_id),
-        {
-            exports.locked().cancel_account(account_id);
-            Ok(())
-        },
-    ];
-    results.into_iter().collect()
 }

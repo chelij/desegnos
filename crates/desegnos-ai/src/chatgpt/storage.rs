@@ -235,12 +235,11 @@ impl Store {
             Ok(())
         };
         let result = operation();
-        if result.is_err() {
-            if let Err(error) = fs::remove_file(temporary) {
-                if error.kind() != std::io::ErrorKind::NotFound {
-                    return Err(Kind::Storage.into());
-                }
-            }
+        if result.is_err()
+            && let Err(error) = fs::remove_file(temporary)
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            return Err(Kind::Storage.into());
         }
         result
     }

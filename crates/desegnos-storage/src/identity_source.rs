@@ -443,9 +443,8 @@ fn collect_folder(
             collector.skip(&name, SkipReason::Symlink);
         } else if source_excluded(&name, SourcePurpose::Identity)
             || !include_build && build_path(&name)
+            || metadata.is_dir() && separate_site(&path)
         {
-            collector.skip(&name, SkipReason::NotNeeded);
-        } else if metadata.is_dir() && separate_site(&path) {
             collector.skip(&name, SkipReason::NotNeeded);
         } else if metadata.is_dir() {
             collect_folder(root, &path, entries, collector, include_build)?;

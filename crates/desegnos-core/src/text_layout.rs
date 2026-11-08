@@ -183,12 +183,7 @@ pub(crate) fn resolve_auto_size(
                 children.iter().map(|r| r.x + r.width).fold(0.0, f64::max),
                 children.iter().map(|r| r.y + r.height).fold(0.0, f64::max),
             ),
-            ElementLayout::Stack {
-                direction,
-                gap,
-                padding: _,
-                ..
-            } => {
+            ElementLayout::Stack { direction, gap, .. } => {
                 let padding = effective_padding(element);
                 let sides = padding.left + padding.right;
                 let ends = padding.top + padding.bottom;

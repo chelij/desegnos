@@ -156,10 +156,9 @@ pub(crate) fn image_access_error(status: u16, body: &Value, key: &ApiKey) -> Ima
 
 impl OpenAiClient {
     pub async fn probe_image_access(&self, key: &ApiKey) -> ImageAccess {
-        let access = tokio::time::timeout(Duration::from_secs(25), self.probe_images(key))
+        tokio::time::timeout(Duration::from_secs(25), self.probe_images(key))
             .await
-            .unwrap_or_else(|_| ImageAccess::new(ImageAvailability::Unknown, "network_or_timeout"));
-        access
+            .unwrap_or_else(|_| ImageAccess::new(ImageAvailability::Unknown, "network_or_timeout"))
     }
     async fn probe_images(&self, key: &ApiKey) -> ImageAccess {
         // 16x16 is invalid for every supported model. Do not retry with a valid size:
