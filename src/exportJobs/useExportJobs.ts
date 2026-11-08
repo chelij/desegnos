@@ -7,12 +7,13 @@ import { idlePlay, playIsActive, type PlayState } from '../projectCanvas/play';
 import type { PreviewState } from '../ProjectCanvas';
 import { errorMessage } from '../editorShared';
 import { projectHasPreviewPages } from '../visibleActions';
+import type { EditorPanel, OpenPanel } from '../session/editorPanel';
 
 type Context = {
   view: WorkspaceView | null;
-  panel: import('../session/useEditor').EditorPanel;
-  openPanel: (panel: Exclude<import('../session/useEditor').EditorPanel, { kind: 'closed' }>) => void;
-  closePanel: (kind: import('../session/useEditor').EditorPanel['kind']) => void;
+  panel: EditorPanel;
+  openPanel: (panel: OpenPanel) => void;
+  closePanel: (kind: EditorPanel['kind']) => void;
   current: import("react").RefObject<WorkspaceView | null>;
   panels: import("../dock/panelState").PanelState;
   panelActions: import("../dock/panelState").PanelActions;

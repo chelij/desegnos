@@ -1,5 +1,5 @@
 import type { Command, Pointer, PointerSource, PointerStateKind, Project, Rect } from '../types';
-import { pointerEndpointRect, type PointerWorld } from '../projectCanvasGeometry';
+import { pointerEndpointRect, type PointerWorld } from './pointerGeometry';
 
 /** The two ends of a behaviour pointer are the same layer or boundary. */
 function sameEndpoints(first: PointerSource, second: PointerSource): boolean {

@@ -1,11 +1,11 @@
 import { layoutKind } from './projectCanvas/boundaryDefaults';
 import { boundaryVisible } from './projectCanvas/canvasView';
-import { fitCamera } from './projectCanvasGeometry';
+import { fitCamera } from './projectCanvas/camera';
 import { useProjectCanvas } from './projectCanvas/useProjectCanvas';
 export type { ProjectCanvasHandle, ProjectCanvasProps, PreviewState } from './projectCanvas/interactionTypes';
 import { CORNERS, ProjectCanvasHandle, ProjectCanvasProps } from './projectCanvas/interactionTypes';
 import { forwardRef, useState, type CSSProperties } from 'react';
-import { isTextField } from './WorkspaceSurface';
+import { isTextField } from './textField';
 import { BoundaryLabels } from './projectCanvas/boundaryLabels';
 import { SelectionBar } from './projectCanvas/selectionBar';
 import { BoundaryLayer } from './projectCanvas/boundaries';
@@ -16,14 +16,14 @@ import { Minimap } from './projectCanvas/Minimap';
 import { ElementSelectionOverlay, ElementTextEditor } from './projectCanvas/elements';
 import { LinkChoiceRow, PasteChoiceRow, PlaceholderChoiceRow } from './projectCanvas/linkedChoices';
 import { Notice } from './ProblemBanner';
-import { playIsActive } from './projectCanvas/play';
+import { isPresenting, playIsActive } from './projectCanvas/play';
 
 // A click with the Boundary tool places its default boundary instead of doing nothing.
 
 export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>(function ProjectCanvas({
   edits, editProject, project, openPage, createBoundary, saveView, selection, focused, selectBoundary, selectReference, selectPointer, selectElement, clearSelection,
   removeSelection, removeElements, deleteBoundary, elementToReference, referenceToElement, attachToRequest,
-  selectRequest, groupElements, ungroupElements, focusBehaviour, pointerStates, tool, insertKind, onTool, boundaryKind, requestShape, focusedSize, widthPreview, onZoom, onLayout,
+  selectRequest, groupElements, ungroupElements, focusBehaviour, pointerStates, tool, insertKind, onTool, boundaryKind, requestShape, focusedSize, widthPreview, onZoom,
   play, onPlayBoundary, onPlayElement, onPlayExit, preview, previewClose, previewRefresh, generate,
 }, ref) {
   const [pointerFocus, setPointerFocus] = useState(false);
@@ -41,8 +41,8 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
     cancelRequestDraft, selectedItem, selectedItemScreen, createdItem, startReferenceResize, pasteChoice,
     setPasteChoice, confirmPaste, linkChoice, linkCopies, setLinkChoice, dropNotice,
     setDropNotice,
-  } = useProjectCanvas({ ...edits, editProject, project, openPage, createBoundary, saveView, selection, focused, selectBoundary, selectReference, selectPointer, selectElement, clearSelection, removeSelection, removeElements, deleteBoundary, elementToReference, referenceToElement, attachToRequest, selectRequest, groupElements, ungroupElements, focusBehaviour, pointerStates, tool, insertKind, onTool, boundaryKind, requestShape, focusedSize, widthPreview, onZoom, onLayout, play, onPlayBoundary, onPlayElement, onPlayExit, preview, previewClose, previewRefresh, generate }, ref);
-  const presenting = playIsActive(play) && project.pages.length > 0 && project.pages.every(page => page.output === 'slide');
+  } = useProjectCanvas({ ...edits, editProject, project, openPage, createBoundary, saveView, selection, focused, selectBoundary, selectReference, selectPointer, selectElement, clearSelection, removeSelection, removeElements, deleteBoundary, elementToReference, referenceToElement, attachToRequest, selectRequest, groupElements, ungroupElements, focusBehaviour, pointerStates, tool, insertKind, onTool, boundaryKind, requestShape, focusedSize, widthPreview, onZoom, play, onPlayBoundary, onPlayElement, onPlayExit, preview, previewClose, previewRefresh, generate }, ref);
+  const presenting = isPresenting(project, play);
   const draftRequest = requestDraft ? singleTargetRequest(project, requestDraft.targets) : null;
   const slides = project.pages;
   const slideIndex = Math.max(0, slides.findIndex(page => page.id === play.boundary));

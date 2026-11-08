@@ -1,10 +1,8 @@
 import { defaultText, ELEMENT_KIND_LABELS, findElementIn } from './elementFacts';
-export { ELEMENT_KIND_LABELS, defaultText, elementLabel, defaultLayerNameBase, isDefaultLayerName } from './elementFacts';
-import { GRID_SPACING, MIN_SIZE, snapValue } from '../projectCanvasGeometry';
-export { MIN_SIZE, snapValue, sameRect, unionBounds as unionRects, findElementIn } from '../projectCanvasGeometry';
+import { GRID_SPACING, MIN_SIZE, snapValue } from './camera';
 import { canvasFont } from './fonts';
 import type { Element, ElementKind, ElementLayout, ElementPadding, ElementStyle, InputType, OutputType, Page, Project, Rect } from '../types';
-import type { Point } from '../projectCanvasGeometry';
+import type { Point } from './camera';
 import { resolveElements } from './links';
 import { resolveForSize } from './sizes';
 
@@ -47,7 +45,7 @@ export function withPickedColours(element: Element, surface?: string | null): El
   } };
 }
 
-export function darkBackground(background: string): boolean {
+function darkBackground(background: string): boolean {
   const hex = background.slice(1);
   const rgb = hex.length === 3 ? hex.split('').map(value => value + value).join('') : hex;
   const channels = [0, 2, 4].map(index => {
@@ -79,13 +77,13 @@ export const INSERT_GROUPS: { label: string; kinds: ElementKind[] }[] = [
   { label: 'Code', kinds: ['code'] },
 ];
 
-export const TEXT_KINDS: ElementKind[] = ['text', 'button', 'link', 'input', 'textarea', 'select', 'checkbox', 'radio'];
+const TEXT_KINDS: ElementKind[] = ['text', 'button', 'link', 'input', 'textarea', 'select', 'checkbox', 'radio'];
 export const isTextKind = (kind: ElementKind) => TEXT_KINDS.includes(kind);
 export const holdsChildren = (kind: ElementKind) => kind === 'box' || kind === 'group';
 
 export const DEFAULT_TEXT_STYLE = { fontFamily: 'system-ui', size: 16, weight: 400, italic: false, lineHeight: 1.4, letterSpacing: 0, color: TEXT_COLOUR, align: 'left' as const };
 
-export function defaultStyle(kind: ElementKind): ElementStyle {
+function defaultStyle(kind: ElementKind): ElementStyle {
   // A new button reads as a button: solid, rounded, with a centred label.
   if (kind === 'button') return {
     fill: TEXT_COLOUR, stroke: { color: null, width: 0 }, radius: 8, opacity: 1,

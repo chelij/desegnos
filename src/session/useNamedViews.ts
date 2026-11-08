@@ -1,7 +1,7 @@
 import { useProjectSession } from './useProjectSession';
 import { type ProjectCanvasHandle } from '../ProjectCanvas';
 import { viewNameForSlot } from '../shortcuts';
-import { type CanvasCamera } from '../projectCanvasGeometry';
+import { type CanvasCamera } from '../projectCanvas/camera';
 import type { NamedView, Project } from '../types';
 
 export function useNamedViews(project: Project | null, mutate: ReturnType<typeof useProjectSession>['mutate'], canvasRef: import('react').RefObject<ProjectCanvasHandle | null>, run: (operation: () => Promise<unknown>) => void) {

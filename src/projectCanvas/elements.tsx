@@ -1,7 +1,9 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react';
 import type { Element, ElementKind, Project, Rect } from '../types';
 import { kindFields } from '../types';
-import type { Boundary, CanvasCamera, ElementTarget } from '../projectCanvasGeometry';
+import type { Boundary } from './boundaryLayout';
+import type { CanvasCamera } from './camera';
+import type { ElementTarget } from './canvasTargets';
 import type { ElementCorner } from './elementGeometry';
 import { elementPadding, elementPath, intrinsicElementSize, isTextKind, measureText, pictureUri } from './elementGeometry';
 import { elementOrigin, resolveForSize, sizeAtWidth } from './sizes';
@@ -279,7 +281,7 @@ const ELEMENT_CORNERS: ElementCorner[] = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw',
 export type MeasuredSelection = { elementId: string; sizeId: string; rect: ScreenRect; inherited: boolean };
 
 // One layer draws in every linked size, so a selection measures each of its instances.
-export function measureElementSelection(surface: HTMLElement, selection: ElementTarget[]): MeasuredSelection[] {
+function measureElementSelection(surface: HTMLElement, selection: ElementTarget[]): MeasuredSelection[] {
   const host = surface.getBoundingClientRect();
   const rows: MeasuredSelection[] = [];
   const selected = new Set(selection.map(target => target.elementId));
@@ -305,7 +307,7 @@ export function measureElementSelection(surface: HTMLElement, selection: Element
 }
 
 /** A camera change transforms measured bounds without another DOM/layout read. */
-export function projectMeasuredSelection(rows: MeasuredSelection[], from: CanvasCamera, to: CanvasCamera): MeasuredSelection[] {
+function projectMeasuredSelection(rows: MeasuredSelection[], from: CanvasCamera, to: CanvasCamera): MeasuredSelection[] {
   const scale = to.zoom / from.zoom;
   return rows.map(row => ({ ...row, rect: {
     left: (row.rect.left - from.x) * scale + to.x,

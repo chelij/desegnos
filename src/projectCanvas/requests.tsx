@@ -1,30 +1,17 @@
-import { canvasBoxes } from './canvasView';
 import { useEffect, useRef, useState } from 'react';
-import type { Boundary, Point, RequestBox } from '../projectCanvasGeometry';
-import { pointerRoute } from '../projectCanvasGeometry';
-import { pointerWorld } from './pointers';
+import type { Boundary } from './boundaryLayout';
+import type { Point } from './camera';
+import { pointerRoute } from './pointerGeometry';
+import { elementBoxes, pointerWorld } from './pointerLayout';
 import type { PendingRequest, Project, Rect, ReferenceItem, RequestArea, RequestShape, RequestTarget } from '../types';
 
-import { elementParents, findElementIn } from './elementGeometry';
+import { elementParents } from './elementGeometry';
+import { findElementIn } from './elementFacts';
 import { requestAreaContains, requestShapeBounds, requestShapePath } from './requestGeometry';
 import { MAX_PROMPT_CHARS } from '../generated/limits';
 
-export { requestAreaContains, requestShapeBounds, requestShapePath } from './requestGeometry';
 
 export type RequestDraft = { targets: RequestTarget[]; area: RequestArea | null } | null;
-export type BoundaryShift = { pageId: string; sizeId: string; rect: Rect } | null;
-
-/** A moving boundary offsets its cached geometry; all other boxes retain their identity. */
-export function elementBoxes(project: Project, boundaries: Boundary[], moving: BoundaryShift): RequestBox[] {
-  const boxes = canvasBoxes(project, boundaries);
-  if (!moving) return boxes;
-  const boundary = boundaries.find(boundary => boundary.sizeId === moving.sizeId);
-  if (!boundary) return boxes;
-  return boxes.map(box => box.sizeId === moving.sizeId ? { ...box, rect: { ...box.rect,
-    x: box.rect.x + moving.rect.x - boundary.rect.x, y: box.rect.y + moving.rect.y - boundary.rect.y } } : box);
-}
-
-export const elementBoxesNow = (project: Project, boundaries: Boundary[]): RequestBox[] => elementBoxes(project, boundaries, null);
 
 /** Pending requests in project order, with the size their marker sits in. */
 export function pendingRequests(project: Project): { request: PendingRequest; pageId: string | null; sizeId: string | null }[] {
@@ -37,7 +24,7 @@ export function pendingRequests(project: Project): { request: PendingRequest; pa
 }
 
 /** The world rectangle a request marker sits at: its area, its target, or the canvas centre. */
-export function requestMarkerRect(project: Project, boundaries: Boundary[], request: PendingRequest): Rect {
+function requestMarkerRect(project: Project, boundaries: Boundary[], request: PendingRequest): Rect {
   if (request.area) return requestShapeBounds(request.area.shape);
   for (const target of request.targets) {
     if (target.kind === 'element') {
@@ -57,7 +44,7 @@ export function requestMarkerRect(project: Project, boundaries: Boundary[], requ
 }
 
 /** World rectangles a request highlights for its targets. */
-export function requestTargetRects(project: Project, boundaries: Boundary[], request: PendingRequest): Rect[] {
+function requestTargetRects(project: Project, boundaries: Boundary[], request: PendingRequest): Rect[] {
   const rects: Rect[] = [];
   const elements = elementBoxes(project, boundaries, null);
   for (const target of request.targets) {
@@ -225,7 +212,7 @@ export function RequestLayer({ project, boundaries, selection, draft, draftArea,
   </div>;
 }
 
-export function targetRectsFor(project: Project, boundaries: Boundary[], targets: RequestTarget[]): Rect[] {
+function targetRectsFor(project: Project, boundaries: Boundary[], targets: RequestTarget[]): Rect[] {
   return requestTargetRects(project, boundaries, { id: 'draft', text: '', attachments: [], targets, area: null, requestedAt: '' });
 }
 

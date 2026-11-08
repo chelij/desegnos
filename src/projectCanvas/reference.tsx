@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { useDraftText } from '../DraftText';
-import type { CanvasTarget } from '../projectCanvasGeometry';
+import type { CanvasTarget } from './canvasTargets';
 import type { ReferenceItem, ReferenceKind, Project, Rect } from '../types';
 import { ElementView } from './elements';
 import { resolveElement } from './links';
@@ -10,7 +10,7 @@ import { MAX_PROMPT_CHARS } from '../generated/limits';
 
 export const shownReference = (item: ReferenceItem, movingItems: Record<string, Rect>): Rect => movingItems[item.id] ?? item.rect;
 
-export function pictureSource(project: Project, picture: string): string {
+function pictureSource(project: Project, picture: string): string {
   return project.pictures?.[picture]
     ?? project.importedIdentity?.assets.find(asset => asset.id === picture)?.dataUri
     ?? project.importedIdentity?.photos?.find(photo => photo.id === picture)?.dataUri

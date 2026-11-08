@@ -10,6 +10,13 @@ const modules = await compileModules([
   'src/projectCanvas/links.ts',
   'src/projectCanvas/elementGeometry.ts',
   'src/projectCanvas/minimap.ts',
+  'src/projectCanvas/pointerNames.ts',
+  'src/projectCanvas/autoLinks.ts',
+  'src/projectCanvas/pointerGeometry.ts',
+  'src/projectCanvas/referenceGeometry.ts',
+  'src/projectCanvas/canvasTargets.ts',
+  'src/projectCanvas/boundaryLayout.ts',
+  'src/projectCanvas/camera.ts',
   'src/shortcuts.ts',
 ]);
 try {
@@ -31,7 +38,8 @@ try {
   const sizes = await modules.load('projectCanvas/sizes.js');
   const links = await modules.load('projectCanvas/links.js');
   const elementGeometry = await modules.load('projectCanvas/elementGeometry.js');
-  const geometry = await modules.load('projectCanvasGeometry.js');
+  const geometry = Object.assign({}, ...await Promise.all(['camera', 'boundaryLayout', 'referenceGeometry', 'canvasTargets', 'pointerGeometry', 'pointerNames', 'autoLinks'].map(name => modules.load(`projectCanvas/${name}.js`))));
+  const elementFacts = await modules.load('projectCanvas/elementFacts.js');
   const minimap = await modules.load('projectCanvas/minimap.js');
   const shortcuts = await modules.load('shortcuts.js');
 
@@ -282,12 +290,12 @@ try {
     assert.equal(text.text, 'Hi');
     assert.equal(text.style.fill, null);
     assert.deepEqual(elementGeometry.roundRect({ x: 1.4, y: 1.6, width: 2.5, height: 3.5 }), { x: 1, y: 2, width: 3, height: 4 });
-    assert.equal(elementGeometry.snapValue(13), 16);
+    assert.equal(geometry.snapValue(13), 16);
     assert.deepEqual(elementGeometry.snapPoint({ x: 4, y: 12 }), { x: 8, y: 16 });
-    assert.equal(elementGeometry.sameRect({ x: 0, y: 0, width: 1, height: 1 }, { x: 0, y: 0, width: 1, height: 1 }), true);
-    assert.equal(elementGeometry.sameRect({ x: 0, y: 0, width: 1, height: 1 }, { x: 0, y: 0, width: 2, height: 1 }), false);
-    assert.deepEqual(elementGeometry.unionRects([]), { x: 0, y: 0, width: 0, height: 0 });
-    assert.deepEqual(elementGeometry.unionRects([{ x: 0, y: 0, width: 10, height: 10 }, { x: 20, y: 5, width: 10, height: 10 }]), { x: 0, y: 0, width: 30, height: 15 });
+    assert.equal(geometry.sameRect({ x: 0, y: 0, width: 1, height: 1 }, { x: 0, y: 0, width: 1, height: 1 }), true);
+    assert.equal(geometry.sameRect({ x: 0, y: 0, width: 1, height: 1 }, { x: 0, y: 0, width: 2, height: 1 }), false);
+    assert.deepEqual(geometry.unionBounds([]), { x: 0, y: 0, width: 0, height: 0 });
+    assert.deepEqual(geometry.unionBounds([{ x: 0, y: 0, width: 10, height: 10 }, { x: 20, y: 5, width: 10, height: 10 }]), { x: 0, y: 0, width: 30, height: 15 });
   });
 
   await test('a cloned element never shares ids', () => {
@@ -306,8 +314,8 @@ try {
     const other = makeElement('other', { rect: { x: 500, y: 0, width: 50, height: 50 } });
     const page = makePage('p', 'Home', '/', [makeSize('base', 'Desktop', 1440, 900)], [root, other]);
     const project = makeProject([page]);
-    assert.equal(elementGeometry.findElementIn(page.elements, 'grandchild').text, 'Deep');
-    assert.equal(elementGeometry.findElementIn(page.elements, 'gone'), null);
+    assert.equal(elementFacts.findElementIn(page.elements, 'grandchild').text, 'Deep');
+    assert.equal(elementFacts.findElementIn(page.elements, 'gone'), null);
     const path = elementGeometry.elementPath(project, 'p', 'grandchild');
     assert.deepEqual(path.map(entry => entry.element.id), ['root', 'child', 'grandchild']);
     assert.deepEqual(path[1].origin, { x: 110, y: 220 });
@@ -401,10 +409,10 @@ try {
     assert.equal(elementGeometry.pictureUri({}, null), null);
     assert.equal(elementGeometry.pictureName({ importedIdentity: { assets: [{ id: 'a', dataUri: '', name: 'Logo' }] } }, 'a'), 'Logo');
     assert.equal(elementGeometry.pictureName({}, 'abcdefghijklmnop'), 'Picture abcdefgh');
-    assert.equal(elementGeometry.elementLabel(stored), 'Alt text');
-    assert.equal(elementGeometry.elementLabel(makeElement('a', { text: 'Line one\nLine two' })), 'Line one');
-    assert.equal(elementGeometry.elementLabel(makeElement('a', { kind: 'code', language: 'css', text: '' })), 'css code');
-    assert.equal(elementGeometry.elementLabel(makeElement('a', { kind: 'ellipse', text: '' })), 'Ellipse');
+    assert.equal(elementFacts.elementLabel(stored), 'Alt text');
+    assert.equal(elementFacts.elementLabel(makeElement('a', { text: 'Line one\nLine two' })), 'Line one');
+    assert.equal(elementFacts.elementLabel(makeElement('a', { kind: 'code', language: 'css', text: '' })), 'css code');
+    assert.equal(elementFacts.elementLabel(makeElement('a', { kind: 'ellipse', text: '' })), 'Ellipse');
     assert.equal(elementGeometry.elementKindLabel(makeElement('a', { kind: 'input', inputType: 'email' })), 'email input');
     assert.equal(elementGeometry.elementKindLabel(makeElement('a', { kind: 'ellipse' })), 'Ellipse');
     assert.equal(elementGeometry.commonValue([]), undefined);

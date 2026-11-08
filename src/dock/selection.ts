@@ -1,5 +1,5 @@
 import type { Project, PointerStateView } from '../types';
-import type { CanvasTarget } from '../projectCanvasGeometry';
+import type { CanvasTarget } from '../projectCanvas/canvasTargets';
 import { findPageElement } from '../projectCanvas/elementGeometry';
 
 export function propertySelection(project: Project | null, canvasSelection: CanvasTarget[], canvasFocus: string | null, pointerStateMap: Record<string, PointerStateView>) {

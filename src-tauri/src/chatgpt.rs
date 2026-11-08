@@ -320,19 +320,6 @@ async fn sign_out_after_cancellation<T>(
 }
 
 #[tauri::command]
-pub async fn acknowledge_chatgpt_welcome(
-    state: AiState<'_>,
-    chatgpt: State<'_, ChatgptState>,
-) -> NativeResult<AiSettingsView> {
-    chatgpt
-        .manager()?
-        .acknowledge_welcome()
-        .await
-        .map_err(|error| error.message().to_owned())?;
-    settings_view(&state, &chatgpt).await
-}
-
-#[tauri::command]
 pub fn open_chatgpt_usage(app: AppHandle) -> NativeResult<()> {
     #[cfg(not(feature = "native-tests"))]
     {

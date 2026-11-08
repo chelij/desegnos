@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { native } from './api';
-import type { BranchSummary, ProjectHistoryView, VersionSummary, WorkspaceView } from './types';
-import { MAX_BRANCH_CHARS } from './generated/limits';
+import { native } from '../api';
+import type { BranchSummary, ProjectHistoryView, VersionSummary, WorkspaceView } from '../types';
+import { MAX_BRANCH_CHARS } from '../generated/limits';
 
 function editedAgo(createdAt: number) {
   const elapsed = Date.now() - createdAt;

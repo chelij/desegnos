@@ -3,7 +3,6 @@ import { edit } from '../api';
 import { errorMessage } from '../editorShared';
 import type { Command, Project, WorkspaceView } from '../types';
 
-/** One owner for native workspace publication and serialized project mutations. */
 export function useProjectSession(initialView: WorkspaceView | undefined, setError: (message: string) => void) {
   const [view, setView] = useState<WorkspaceView | null>(initialView ?? null);
   const current = useRef<WorkspaceView | null>(initialView ?? null);

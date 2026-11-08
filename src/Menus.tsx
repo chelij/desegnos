@@ -131,17 +131,3 @@ function MenuLevel({ id, label, items, anchor, last = false, nested = false, bac
     </li>)}
   </ul>;
 }
-
-export function ContextMenu({ label, point, items, close }: { label: string; point: { x: number; y: number }; items: MenuItem[]; close: (restore?: boolean) => void }) {
-  const container = useRef<HTMLDivElement>(null); const id = useId();
-  useEffect(() => {
-    const outside = (event: PointerEvent | FocusEvent) => { if (event.target instanceof Node && !container.current?.contains(event.target)) close(false); };
-    const dismiss = (event: Event) => { if (!(event.target instanceof Node) || !container.current?.contains(event.target)) close(false); };
-    document.addEventListener('pointerdown', outside, true); document.addEventListener('focusin', outside);
-    window.addEventListener('resize', dismiss); window.addEventListener('scroll', dismiss, true);
-    return () => { document.removeEventListener('pointerdown', outside, true); document.removeEventListener('focusin', outside); window.removeEventListener('resize', dismiss); window.removeEventListener('scroll', dismiss, true); };
-  }, []);
-  return <div ref={container} className="element-context-menu" onContextMenu={event => event.preventDefault()}>
-    <MenuLevel id={id} label={label} items={items} anchor={{ getBoundingClientRect: () => DOMRect.fromRect(point) }} rootClose={close} />
-  </div>;
-}

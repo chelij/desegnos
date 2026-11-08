@@ -1,9 +1,9 @@
 import type { Rect } from '../types';
-import type { Point } from '../projectCanvasGeometry';
+import type { Point } from './camera';
 
 // Copying layers leaves a marker on the system clipboard. A paste whose text is not that
 // marker comes from another app, so its content is placed instead of Desegnos' layers.
-export const CLIPBOARD_MARKER = 'desegnos-layers:';
+const CLIPBOARD_MARKER = 'desegnos-layers:';
 
 /** Pasted pictures keep their natural size but never grow wider than this. */
 export const MAX_PASTED_IMAGE_WIDTH = 480;

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
-import { steppedZoom, wheelZoom, clamp, MIN_ZOOM } from '../projectCanvasGeometry';
-import { MAX_ZOOM, fitCamera, panCamera, unionBounds, zoomCameraAt, type Boundary, type CanvasCamera, type Point } from '../projectCanvasGeometry';
+import { steppedZoom, wheelZoom, clamp, MIN_ZOOM } from './camera';
+import { MAX_ZOOM, fitCamera, panCamera, unionBounds, zoomCameraAt, type CanvasCamera, type Point } from './camera';
+import { type Boundary } from './boundaryLayout';
 import type { NativeDrag, NativeFile, Rect } from '../types';
 
 export type { NativeDrag, NativeFile };

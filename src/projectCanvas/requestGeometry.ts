@@ -1,4 +1,4 @@
-import type { Point } from '../projectCanvasGeometry';
+import type { Point } from './camera';
 import type { Rect, RequestShape } from '../types';
 
 /** Axis-aligned bounds of a request outline. */

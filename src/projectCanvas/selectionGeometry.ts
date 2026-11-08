@@ -1,5 +1,5 @@
 import type { Project, Rect } from '../types';
-import type { CanvasTarget } from '../projectCanvasGeometry';
+import type { CanvasTarget } from './canvasTargets';
 import { type ElementEntry, isElementTarget } from './interactionTypes';
 import { elementPath, elementParents } from './elementGeometry';
 import { baseSizeId } from './sizes';

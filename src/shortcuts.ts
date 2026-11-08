@@ -173,6 +173,21 @@ export const actionBinding = (action: ShortcutAction) => BINDING.get(action)!;
 
 const BINDING = new Map(KEYMAP.map(binding => [binding.action, binding]));
 
+/** Actions that only the menu and the command palette reach: no key combination, no help entry. */
+const MENU_ACTIONS = {
+  home: 'Home', backToCanvas: 'Back to canvas', openFolder: 'Open project folder…', saveCopy: 'Save a copy without history…',
+  renameProject: 'Rename project…', recoverUnsaved: 'Recover unsaved projects', openInBrowser: 'Open in browser',
+  aiSettings: 'AI settings', styleGuide: 'Style guide', importContext: 'Import…', projectBrief: 'Project brief',
+  projectLocation: 'Default project location', checkUpdates: 'Check for updates…',
+} as const;
+export type MenuAction = keyof typeof MENU_ACTIONS;
+export type ActionId = ShortcutAction | MenuAction;
+const isMenuAction = (action: ActionId): action is MenuAction => action in MENU_ACTIONS;
+
+export const bindingOf = (action: ActionId) => isMenuAction(action) ? undefined : actionBinding(action);
+export const actionLabel = (action: ActionId): string => isMenuAction(action) ? MENU_ACTIONS[action] : actionBinding(action).label;
+export const actionKeys = (action: ActionId): string => bindingOf(action)?.display ?? '';
+
 export function shortcutLabel(action: ShortcutAction): string {
   return BINDING.get(action)?.display ?? '';
 }

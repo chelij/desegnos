@@ -1,4 +1,5 @@
-import { unionBounds, viewportWorldRect, type Boundary, type CanvasCamera } from '../projectCanvasGeometry';
+import { unionBounds, viewportWorldRect, type CanvasCamera } from './camera';
+import { type Boundary } from './boundaryLayout';
 import type { ReferenceItem, Rect } from '../types';
 
 /** The minimap's fixed screen size. Its SVG viewBox uses the same units. */

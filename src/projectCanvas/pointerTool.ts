@@ -1,12 +1,12 @@
 import type { ProjectCanvasProps } from './interactionTypes';
 import { type PointerEvent as ReactPointerEvent } from 'react';
-import {
-  boundaryAt, pointerRoute, type Boundary, type Point,
-  type RequestBox,
-} from '../projectCanvasGeometry';
+import { boundaryAt, type Boundary } from './boundaryLayout';
+import { pointerRoute } from './pointerGeometry';
+import { type Point } from './camera';
+import { type RequestBox } from './canvasTargets';
 import type { PointerSource, PointerTarget, Project, Rect } from '../types';
 import { shownReference } from './reference';
-import { pointerWorld } from './pointers';
+import { pointerWorld } from './pointerLayout';
 import { Drag, elementAt } from './interactionTypes';
 
 type Context = {
@@ -17,7 +17,7 @@ type Context = {
   project: Project;
   movingItems: Record<string, Rect>;
   boundaryUnder: (point: Point) => Boundary | null;
-  pointerWorldNow: () => import("../projectCanvasGeometry").PointerWorld;
+  pointerWorldNow: () => import("./pointerGeometry").PointerWorld;
   beginPointerSession: (event: { pointerId: number; }) => void;
   worldPoint: (event: { clientX: number; clientY: number; }) => Point;
   drag: { current: Drag | null; };

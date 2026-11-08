@@ -97,7 +97,6 @@ export function EditorDock({ state, actions, properties, layers, history, export
   function togglePanel(key: string) {
     const next = new Set(collapsed);
     if (next.has(key)) next.delete(key); else next.add(key);
-    // Collapsing every panel is the same thing as the dock's icon strip.
     if (panels.every(panel => next.has(panel.key))) { setCollapsed(new Set()); actions.setCollapsed(true); }
     else setCollapsed(next);
   }
@@ -128,7 +127,3 @@ export function EditorDock({ state, actions, properties, layers, history, export
   </aside>;
 }
 
-export { PropsSection } from './dock/sections';
-export { ChoiceRow } from './dock/controls';
-export type { PanelActions } from './dock/panelState';
-export { BehaviourField, type BehaviourProperty } from './dock/properties';

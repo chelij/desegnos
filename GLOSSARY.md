@@ -103,7 +103,7 @@ What each word means in Desegnos, and what it is called in the code. Concept det
 |---|---|---|
 | **Project file** | One `.desegnos` SQLite file holding the design and its history. | `ProjectDatabase`, `crates/desegnos-storage/src/project_db.rs` |
 | **Version** | A saved state of the project, made automatically on save and labelled from its undo steps. | `versions` table, `VersionSummary`, `project_parts.rs` |
-| **History** | The list of versions; restoring one is a single undo step. | `ProjectHistoryView`, `src/HistoryPanel.tsx`, `Session::restore` |
+| **History** | The list of versions; restoring one is a single undo step. | `ProjectHistoryView`, `src/dock/historyPanel.tsx`, `Session::restore` |
 | **Alternative** | A named branch of versions to switch between. | `branches` table, `BranchSummary`, `create_alternative` |
 
 ## Editor
