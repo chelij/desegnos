@@ -211,11 +211,15 @@ mod tests {
     }
     #[test]
     fn mixed_contents_are_images_first_then_sorted_text_and_count_capped() {
+        // Pictures must pass the same signature checks as any attachment, so these are minimal
+        // well-formed headers rather than bare magic numbers.
+        let png = [&b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR"[..], &[0; 17]].concat();
+        let gif = [&b"GIF89a"[..], &[0; 7], b";"].concat();
         let bytes = archive(&[
             ("z.txt", b"last"),
-            ("b.png", b"\x89PNG\r\n\x1a\n"),
+            ("b.png", &png),
             ("a.txt", b"first"),
-            ("a.gif", b"GIF89a"),
+            ("a.gif", &gif),
         ]);
         let result = unpack(bytes.clone(), 3).unwrap();
         assert_eq!(

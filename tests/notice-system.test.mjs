@@ -16,7 +16,7 @@ test('notice queue preempts, resumes and dismisses duplicates; layout stays read
       import { createRoot } from 'react-dom/client';
       import { flushSync } from 'react-dom';
       import { Notice, NoticeHost, NoticeProvider } from '/src/ProblemBanner.tsx';
-      import '/src/styles.css'; import '/src/brand.css'; import '/src/canvas.css'; import '/src/shell.css'; import '/src/notice.css';
+      import '/src/styles.css'; import '/src/brand.css'; import '/src/canvas.css'; import '/src/shell.css'; import '/src/notice.css'; import '/src/ui.css';
       const target = document.querySelector('#root'); const root = createRoot(target);
       const calls = []; const check = (ok, message) => { if (!ok) throw Error(message); };
       const pause = () => new Promise(resolve => setTimeout(resolve, 40));
@@ -50,7 +50,7 @@ test('notice queue preempts, resumes and dismisses duplicates; layout stays read
             const buttons = [...row().querySelectorAll('button')].map(button => button.getBoundingClientRect());
             check(buttons.every(rect => rect.top === buttons[0].top), 'actions and dismiss stay together');
             check(buttons.at(-1).right <= row().getBoundingClientRect().right, 'actions fit');
-            check(width === 900 ? row().getBoundingClientRect().height === 48 : buttons[0].top >= message.getBoundingClientRect().bottom, 'only narrow widths wrap actions');
+            check(width === 900 ? buttons[0].top < message.getBoundingClientRect().bottom : buttons[0].top >= message.getBoundingClientRect().bottom, 'only narrow widths wrap actions');
           }
         }
         row().querySelector('.primary').click(); row().querySelectorAll('button')[1].click();

@@ -1543,7 +1543,8 @@ mod tests {
         assert!(lines.len() > 1);
         assert_eq!(
             heading.rect.height,
-            lines.len() as f64 * line_height(&heading.style.text_style)
+            // Hug height rounds the lines up to a whole pixel and keeps one pixel of slack.
+            (lines.len() as f64 * line_height(&heading.style.text_style)).ceil() + 1.0
         );
         let painted = sized_in(&mut fonts, heading, rect(0.0, 0.0, 390.0, 844.0));
         assert_eq!(painted, heading.rect);

@@ -1,4 +1,4 @@
-use desegnos_core::{Appearance, BoundaryKind, CanvasTemplate, OutputType, Project};
+use desegnos_core::{Appearance, BoundaryKind, CanvasTemplate, OutputType, Project, SizePreset};
 
 fn untitled(template: CanvasTemplate) -> Project {
     Project::untitled("Untitled canvas".into(), Appearance::Light, template).unwrap()
@@ -8,8 +8,8 @@ fn untitled(template: CanvasTemplate) -> Project {
 fn blank_untitled_has_no_boundaries_until_the_first_one_becomes_home() {
     let project = untitled(CanvasTemplate::Blank);
     assert!(project.pages.is_empty());
-    assert_eq!(project.pages[0].viewport().width, 1440);
-    assert_eq!(project.pages[0].viewport().height, 900);
+    // The first boundary a blank project gets starts at the Desktop size.
+    assert_eq!(SizePreset::Desktop.dimensions(0, 0), ("Desktop".into(), 1440, 900));
 }
 
 #[test]

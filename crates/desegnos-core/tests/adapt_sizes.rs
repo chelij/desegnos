@@ -37,16 +37,17 @@ fn text(x: f64, y: f64, w: f64, h: f64) -> Element {
 fn overflowing_row_stacks_and_grows_parent_and_page() {
     let (mut p, id) = project();
     p.pages[0].size_mut(id).unwrap().height = 20;
-    let mut parent = empty_element(ElementKind::Group, rect(0.0, 0.0, 1440.0, 100.0));
+    let mut parent = empty_element(ElementKind::Group, rect(0.0, 0.0, 1440.0, 40.0));
     parent.children = vec![
-        text(20.0, 0.0, 600.0, 100.0),
-        text(700.0, 0.0, 600.0, 100.0),
+        text(20.0, 0.0, 600.0, 40.0),
+        text(700.0, 0.0, 600.0, 40.0),
     ];
     p.pages[0].elements = vec![parent];
     adapt_size(&mut p.pages[0], id).unwrap();
     let e = resolve_for_size(&p, &p.pages[0], id);
     assert!(e[0].children[1].rect.y >= e[0].children[0].rect.y + e[0].children[0].rect.height);
-    assert!(e[0].rect.height > 100.0);
+    assert!(e[0].rect.height > 40.0);
+    assert!(e[0].rect.height >= e[0].children[1].rect.y + e[0].children[1].rect.height);
     assert!(p.pages[0].size(id).unwrap().height >= e[0].rect.height.ceil() as u32);
     assert!(p.pages[0].size(id).unwrap().height > 20);
 }

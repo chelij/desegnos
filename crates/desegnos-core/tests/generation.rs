@@ -938,8 +938,8 @@ fn a_boundary_request_answered_with_insert_on_its_page_id_becomes_a_boundary_ins
             .iter()
             .all(|operation| matches!(operation, ElementOperation::Insert { .. }))
     );
-    let error = reply.validate(&snapshot, &project).unwrap_err().to_string();
-    assert!(error.contains("inserted outside its request"), "{error}");
+    // Validation reads the reply the way apply does, so it accepts the page-id insert too.
+    reply.validate(&snapshot, &project).unwrap();
 
     reply.normalize_boundary_anchors(&project);
     assert_eq!(reply.requests[0].operations.len(), 2);

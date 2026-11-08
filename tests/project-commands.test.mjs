@@ -46,7 +46,7 @@ try {
       assert.deepEqual(state.accepted, []);
       state.result = { project: { id: pending.projectId, viewport: { width: 100, height: 100 } } };
       await open(false, state.pending.path, true);
-      assert.deepEqual(state.calls.at(-1), { command: 'open_project', args: { discard: false, folder: false, path: pending.path, discardRecovery: true } });
+      assert.deepEqual(state.calls.at(-1), { command: 'open_project', args: { folder: false, path: pending.path, discardRecovery: true } });
       assert.equal(state.pending, null);
       assert.deepEqual(state.accepted, [state.result]);
     });
@@ -69,7 +69,7 @@ try {
     await open();
     state.result = { project: { id: pending.projectId, viewport: { width: 100, height: 100 } } };
     await recover(state.pending.projectId);
-    assert.deepEqual(state.calls.at(-1), { command: 'recover_project', args: { projectId: pending.projectId, discard: false } });
+    assert.deepEqual(state.calls.at(-1), { command: 'recover_project', args: { projectId: pending.projectId } });
     assert.equal(state.pending, null);
     assert.equal(state.showRecovery, false);
     assert.deepEqual(state.accepted, [state.result]);

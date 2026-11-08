@@ -4553,16 +4553,13 @@ async fn read_only_preflight_network_failures_do_not_claim_an_unknown_generation
         .retry(reqwest::retry::never())
         .build()
         .unwrap();
-    let error = crate::retry::send(
-        client.get(&server.endpoint),
-        &cancel,
-        crate::retry::RetryPolicy::new(
-            tokio::time::Instant::now() + Duration::from_secs(5),
-            Duration::from_secs(30),
-            1024,
-        ),
-        &|_| {},
-    )
+    let mut policy = crate::retry::RetryPolicy::new(
+        tokio::time::Instant::now() + Duration::from_secs(5),
+        Duration::from_secs(30),
+        1024,
+    );
+    policy.backoff = [Duration::from_millis(20), Duration::from_millis(80)];
+    let error = crate::retry::send(client.get(&server.endpoint), &cancel, policy, &|_| {})
     .await
     .err()
     .unwrap();

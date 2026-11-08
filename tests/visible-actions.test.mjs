@@ -90,7 +90,7 @@ try {
   await test('the editor opens untitled and New opens another tab', async () => {
     const app = await read('App.tsx');
     assert.doesNotMatch(app, /NewProject|showNew/);
-    assert.match(app, /case 'new': event\.preventDefault\(\); void newUntitled\(\)/);
+    assert.match(await read('editorShortcuts.ts'), /new: \(\) => context\(\)\.newUntitled\(\)/);
     assert.match(app, /id: 'open-recent', label: 'Open recent'/);
     assert.match(app, /save_untitled_project/);
     assert.match(app, /id: 'import', label: 'Import…'/);

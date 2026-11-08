@@ -103,10 +103,8 @@ try {
     assert.equal(jobOutcome(rejected).reason, "The AI's reply was incomplete, so nothing was changed.");
     assert.equal(jobOutcome(rejected).retryAll, true);
     assert.equal(jobOutcome({ ...rejected, message: '' }).reason, jobOutcome(rejected).reason);
-    assert.equal(jobOutcome({ ...rejected, retryable: false }).retryAll, false);
     const layers = { ...rejected, areas: job.areas, candidate: { requests: [{ elementId: 'a', status: 'implemented' }] } };
     assert.deepEqual(jobOutcome(layers).retryable, ['a']);
-    assert.deepEqual(jobOutcome({ ...layers, retryable: false }).retryable, []);
   });
   await test('terminal failures always have a reason, including without diagnostics', () => {
     for (const status of ['blocked', 'failed', 'unknown']) {

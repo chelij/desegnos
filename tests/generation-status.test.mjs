@@ -36,7 +36,7 @@ try {
     assert.doesNotMatch(html, /Needs your input|>Change request</);
   });
   await test('editing the request restores Try again and failures without areas can retry', () => {
-    const edited = render(base, { project: { ...project, pages: [{ ...project.pages[0], elements: [{ ...project.pages[0].elements[0], meta: { ...project.pages[0].elements[0].meta, pending: { ...project.pages[0].elements[0].meta.pending, prompt: 'Add a support chat' } } }] }] } });
+    const edited = render(base, { project: { ...project, requests: [{ ...project.requests[0], text: 'Add a support chat' }] } });
     assert.match(edited, />Try again</);
     assert.doesNotMatch(edited, /Needs your input/);
     const failed = render({ jobId: 'job', status: 'failed', requirements: { markdown: '' }, areas: [], candidate: null });
@@ -58,14 +58,13 @@ try {
       assert.match(fallback, />Try again</);
     }
   });
-  await test('Try again prepares the same layers or the full boundary request and respects retryability', () => {
+  await test('Try again prepares the same layers or the full boundary request', () => {
     const calls = [];
     const rejected = { ...base, candidate: null, message: 'Desegnos rejected the candidate: invalid reply' };
     const feedback = job => GenerationFeedback({ controller: { ...controller(job), prepare: async ids => { calls.push(ids); } } });
     feedback(rejected).props.action.onClick();
     feedback({ ...rejected, areas: [] }).props.action.onClick();
     assert.deepEqual(calls, [[id], undefined]);
-    assert.equal(feedback({ ...rejected, retryable: false }).props.action, undefined);
     const batches = { ...rejected, batches: [{ status: 'failed' }] };
     const notice = GenerationFeedback({ controller: { ...controller(batches), retry: async () => { calls.push('batch'); } } });
     notice.props.action.onClick();

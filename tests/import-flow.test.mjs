@@ -15,7 +15,7 @@ try {
   const compiler = fileURLToPath(new URL('bin/tsc', import.meta.resolve('typescript/package.json')));
   const result = spawnSync(process.execPath, [compiler, '--ignoreConfig', '--types', 'vite/client', '--jsx', 'react-jsx', '--module', 'esnext', '--target', 'ES2022', '--moduleResolution', 'bundler', '--skipLibCheck', '--outDir', temporary, 'src/ImportContext.tsx'], { cwd: root, encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr || result.stdout);
-  const code = (await Promise.all(['usePoll.js', 'WebsiteImport.js', 'ImportContext.js'].map(file => readFile(join(temporary, file), 'utf8')))).map(code => code.replace(/^import .*;$/gm, '').replace(/^export /gm, '')).join('\n');
+  const code = (await Promise.all(['generated/limits.js', 'usePoll.js', 'WebsiteImport.js', 'ImportContext.js'].map(file => readFile(join(temporary, file), 'utf8')))).map(code => code.replace(/^import .*;$/gm, '').replace(/^export /gm, '')).join('\n');
   function setup({ connected = true, previous = false, initialSource = null, pageCount = 0, fail = '', deferred = '', pageWarnings = ['A picture was skipped.'] } = {}) {
     let cursor = 0, closed = 0, configured = connected, completeDeferred;
     const state = [], dependencies = [], effects = [], cleanups = [], calls = [], kept = [], imported = [], listeners = new Set();

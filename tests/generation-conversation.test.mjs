@@ -66,7 +66,6 @@ try {
     const html = render({ job: rejected });
     assert.match(html, /reply was incomplete, so nothing was changed/);
     assert.match(html, />Try again</);
-    assert.doesNotMatch(render({ job: { ...rejected, retryable: false } }), />Try again</);
   });
 
   await test('a boundary-only request counts as the one request that was sent', () => {

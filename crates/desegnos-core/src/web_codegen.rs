@@ -91,7 +91,8 @@ fn fallback_family_list(family: &str) -> String {
 /// Whether a formatted font list already ends in a concrete generic family.
 fn ends_with_generic(list: &str) -> bool {
     list.split(',').next_back().is_some_and(|last| {
-        crate::element_style::generic_keyword(last.trim().trim_matches(['\'', '"'])).is_some()
+        let last = last.trim().trim_matches(['\'', '"']).to_ascii_lowercase();
+        crate::element_style::generic_keyword(&last) == Some(last.as_str())
     })
 }
 
@@ -550,7 +551,7 @@ fn declarations(element: &Element, parent: &ElementLayout, fonts: &mut Fonts) ->
     };
     let mut css = Declarations::new();
     css.defaults = common_declarations(fonts);
-    css.set(
+    css.reset(
         "overflow",
         if crate::element_style::clips_content(&element.kind) {
             "hidden"
@@ -811,7 +812,7 @@ fn declarations(element: &Element, parent: &ElementLayout, fonts: &mut Fonts) ->
                 length(padding.left)
             ),
         );
-        css.set(
+        css.reset(
             "white-space",
             if crate::element_style::wraps(&element.kind) {
                 "pre-wrap"
@@ -1140,11 +1141,16 @@ pub(super) fn render(
         } else {
             &format!("<script src=\"{BEHAVIOURS_FILE}\" defer></script>")
         };
-        let embed_guard = format!(
-            r#"<script>(()=>{{const chain=(new URLSearchParams(location.search).get('__desegnosEmbed')||'').split(',').filter(Boolean);if(chain.length>={depth})return;chain.push('{page}');for(const frame of document.querySelectorAll('[data-desegnos-embed-src]')){{if(chain.includes(frame.dataset.desegnosEmbedPage))continue;const url=new URL(frame.dataset.desegnosEmbedSrc,location.href);url.searchParams.set('__desegnosEmbed',chain.join(','));frame.src=url.href;}}}})();</script>"#,
-            depth = crate::element_style::MAX_EMBED_DEPTH - 1,
-            page = page.id
-        );
+        // Only a page that frames another project page needs the loop guard.
+        let embed_guard = if !html.contains("data-desegnos-embed-src") {
+            String::new()
+        } else {
+            format!(
+                r#"<script>(()=>{{const chain=(new URLSearchParams(location.search).get('__desegnosEmbed')||'').split(',').filter(Boolean);if(chain.length>={depth})return;chain.push('{page}');for(const frame of document.querySelectorAll('[data-desegnos-embed-src]')){{if(chain.includes(frame.dataset.desegnosEmbedPage))continue;const url=new URL(frame.dataset.desegnosEmbedSrc,location.href);url.searchParams.set('__desegnosEmbed',chain.join(','));frame.src=url.href;}}}})();</script>"#,
+                depth = crate::element_style::MAX_EMBED_DEPTH - 1,
+                page = page.id
+            )
+        };
         let document = format!(
             "<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"color-scheme\" content=\"{scheme}\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>{}</title><link rel=\"stylesheet\" href=\"{css_file}\">{behaviour_script}</head><body><div class=\"desegnos-viewport\"><main class=\"desegnos-page\" data-desegnos-id=\"{}\"{}>\n{html}</main></div>{embed_guard}</body></html>\n",
             escape(&page.name),
@@ -1885,7 +1891,7 @@ mod tests {
             length(12.0),
             length(16.0)
         )));
-        // Without named sides the layout's all-sides value still wins, so old files are unchanged.
+        // Without named sides the layout's all-sides value still wins, so old files paint the same inset.
         child.style.padding = None;
         child.layout = ElementLayout::Grid {
             columns: 2,
@@ -1902,7 +1908,7 @@ mod tests {
         assert!(
             output[&child.id]
                 .block()
-                .contains(&format!("padding:{};", length(6.0)))
+                .contains(&format!("padding:{0} {0} {0} {0};", length(6.0)))
         );
     }
 
@@ -2301,11 +2307,17 @@ mod tests {
         let html = std::str::from_utf8(&bundle.files["index.html"]).unwrap();
         assert!(
             html.contains(&format!(
-                "data-desegnos-id=\"{}\" sandbox=\"allow-scripts\" title=\"\" src=\"about.html\"",
+                "data-desegnos-id=\"{}\" sandbox=\"allow-scripts\" title=\"\" data-desegnos-embed-page=\"",
                 own.id
             )),
             "{html}"
         );
+        // The guard script frames the file with the chain of pages already open, bounding nesting.
+        assert!(
+            html.contains("data-desegnos-embed-src=\"about.html\""),
+            "{html}"
+        );
+        assert!(html.contains("__desegnosEmbed"), "{html}");
         assert!(
             html.contains(&format!(
                 "data-desegnos-id=\"{}\" sandbox=\"\" title=\"\" src=\"https://example.test/map\"",
