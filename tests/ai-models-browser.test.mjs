@@ -33,6 +33,7 @@ try {
   const emptyKey = {configured: false, storage: 'none', maskedIdentifier: null, vaultError: null};
   let current = {
     authentication: 'chatgpt', provider: 'openai',
+    readiness: {ready: true, apiKeyReady: false, blockedReason: null, canTest: true, canRefreshModels: true, imagesUsable: false, accounts: {first: true, second: true}},
     providers: ['openai','anthropic','google','openrouter','deepseek','local'].map(id => ({id, name:id, available:true, signInSupported:id === 'openai', capabilities:{webSearch:true}})),
     settings: {model:'gpt-6.1-sol', reasoningEffort:'medium', maxOutputTokens:32768, spendingLimitUsd:2, imageGeneration:false},
     catalogue: [model('gpt-6.1-sol'), model('future-account-model', ['adaptive', 'max'])],
