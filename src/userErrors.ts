@@ -1,11 +1,9 @@
 import { errorMessage, nativeErrorKind } from './errorMessage.js';
+import { NEEDS_AI_SETTINGS_ERROR_KINDS } from './generated/limits';
 import type { ProviderError } from './types';
 
 export type ProviderProblem = { message: string; settings: boolean; action: 'AI settings' | 'Try again' };
-const settingsKinds = new Set([
-  'authentication', 'invalidCredential', 'missingCredential', 'quota', 'modelUnavailable',
-  'invalidSettings', 'vaultUnavailable', 'spendingLimit', 'chatgptUsageLimit', 'chatgptPermission', 'chatgptInvalidUser',
-]);
+const settingsKinds = new Set(NEEDS_AI_SETTINGS_ERROR_KINDS);
 
 export function providerProblem(error: ProviderError | null | undefined, message = ''): ProviderProblem | null {
   if (!error) return null;
