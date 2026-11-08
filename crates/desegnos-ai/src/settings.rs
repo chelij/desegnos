@@ -210,6 +210,18 @@ impl Default for ProviderSettings {
 }
 
 impl ProviderSettings {
+    /// The cost of a finished request at the configured pricing; none when unpriced.
+    pub fn usage_cost_usd(&self, usage: TokenUsage) -> Option<f64> {
+        let pricing = self.pricing.as_ref()?;
+        pricing.validate(&self.model).ok()?;
+        Some(
+            (usage.input_tokens as f64 * pricing.input_usd_per_million
+                + usage.output_tokens as f64 * pricing.output_usd_per_million)
+                / 1_000_000.0
+                + pricing.request_usd,
+        )
+    }
+
     pub fn validate(&self) -> Result<()> {
         self.validate_for_auth(AuthenticationMethod::ApiKey)
     }

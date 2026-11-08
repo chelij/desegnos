@@ -385,7 +385,6 @@ fn populated(mut project: Project) -> Project {
                         name: "note.txt".into(),
                         kind: desegnos_core::AttachmentKind::Text,
                         data_uri: None,
-                        preview: None,
                         text: Some("hello".into()),
                         url: None,
                     }],

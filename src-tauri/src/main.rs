@@ -3,6 +3,8 @@
 #[cfg(all(not(debug_assertions), dev))]
 compile_error!("Release builds must embed the frontend: enable the custom-protocol feature.");
 
+mod ai_access;
+mod ai_job;
 mod chatgpt;
 #[cfg(test)]
 mod contract;
@@ -16,6 +18,7 @@ mod fonts;
 mod identity;
 mod image_drop;
 mod local_site;
+mod native_files;
 #[cfg(target_os = "linux")]
 mod linux_startup;
 #[cfg(all(target_os = "linux", feature = "portal-dialogs"))]

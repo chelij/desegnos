@@ -11,7 +11,6 @@ use std::{
     path::Path,
     time::{SystemTime, UNIX_EPOCH},
 };
-use tauri::{Manager, WebviewWindow};
 
 const MAX_EVENTS: usize = 500;
 const MAX_DAY_BYTES: u64 = 2 * 1024 * 1024;
@@ -98,10 +97,7 @@ fn append(directory: &Path, today: i64, events: &[UsageEvent]) -> Result<(), Str
 }
 
 #[tauri::command]
-pub fn record_usage(window: WebviewWindow, events: Vec<UsageEvent>) -> Result<(), String> {
-    if window.label() != "editor" {
-        return Err("Only the Desegnos editor records usage.".into());
-    }
+pub fn record_usage(app: tauri::AppHandle, events: Vec<UsageEvent>) -> Result<(), String> {
     if events.len() > MAX_EVENTS || !events.iter().all(UsageEvent::valid) {
         return Err("The usage record was not in the expected form.".into());
     }
@@ -110,7 +106,7 @@ pub fn record_usage(window: WebviewWindow, events: Vec<UsageEvent>) -> Result<()
         .map_err(|error| error.to_string())?
         .as_secs() as i64
         / 86_400;
-    let directory = crate::data_location::directory(window.app_handle()).join("usage");
+    let directory = crate::data_location::directory(&app).join("usage");
     append(&directory, today, &events)
 }
 

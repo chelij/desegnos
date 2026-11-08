@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::{
-    fs::{File, OpenOptions},
+    fs::File,
     io::Read,
     path::{Path, PathBuf},
 };
@@ -78,19 +78,18 @@ pub fn read(directory: &Path) -> Result<Vec<RecentProject>, String> {
 }
 
 pub fn remember(directory: &Path, path: &Path, name: &str) -> Result<(), String> {
-    remember_destination(directory, path, name, None, true)
+    remember_destination(directory, path, name, true)
 }
 
 /// A save keeps the last-opened time of an existing entry; it only refreshes the name.
 pub fn remember_saved(directory: &Path, path: &Path, name: &str) -> Result<(), String> {
-    remember_destination(directory, path, name, None, false)
+    remember_destination(directory, path, name, false)
 }
 
 fn remember_destination(
     directory: &Path,
     path: &Path,
     name: &str,
-    former: Option<&Path>,
     opened: bool,
 ) -> Result<(), String> {
     let _lock = lock(directory)?;
@@ -112,9 +111,9 @@ fn remember_destination(
     let mut entries = read(directory)?;
     let existing = entries
         .iter()
-        .find(|entry| entry.path == path || Some(entry.path.as_path()) == former)
+        .find(|entry| entry.path == path)
         .cloned();
-    entries.retain(|entry| entry.path != path && Some(entry.path.as_path()) != former);
+    entries.retain(|entry| entry.path != path);
     let opened_at_ms = existing
         .as_ref()
         .filter(|_| !opened)
@@ -137,15 +136,7 @@ fn remember_destination(
 }
 
 fn lock(directory: &Path) -> Result<File, String> {
-    let mut options = OpenOptions::new();
-    options.create(true).truncate(false).read(true).write(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let lock = options
-        .open(directory.join("recent-projects.lock"))
+    let lock = crate::native_files::open_lock_file(&directory.join("recent-projects.lock"))
         .map_err(|error| error.to_string())?;
     // A child process forked by another thread can inherit this descriptor for the instant
     // before exec closes it, so a single try can race. Retry briefly before reporting a real
@@ -204,27 +195,19 @@ pub fn set_pinned(
 
 #[tauri::command]
 pub fn forget_recent_project(
-    window: tauri::WebviewWindow,
     state: tauri::State<'_, std::sync::Mutex<crate::workspace::Workspace>>,
     path: PathBuf,
 ) -> Result<Vec<RecentProject>, String> {
-    if window.label() != "editor" {
-        return Err("Only the editor can remove recent projects.".into());
-    }
     let state = state.lock().map_err(|error| error.to_string())?;
     forget(state.directory(), &path)
 }
 
 #[tauri::command]
 pub fn set_recent_project_pin(
-    window: tauri::WebviewWindow,
     state: tauri::State<'_, std::sync::Mutex<crate::workspace::Workspace>>,
     path: PathBuf,
     pinned: bool,
 ) -> Result<Vec<RecentProject>, String> {
-    if window.label() != "editor" {
-        return Err("Only the editor can pin recent projects.".into());
-    }
     let state = state.lock().map_err(|error| error.to_string())?;
     set_pinned(state.directory(), &path, pinned)
 }

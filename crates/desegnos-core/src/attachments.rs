@@ -18,8 +18,6 @@ pub struct RequestAttachment {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub data_uri: Option<std::sync::Arc<str>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub preview: Option<std::sync::Arc<str>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
@@ -56,19 +54,11 @@ impl RequestAttachment {
                     && self.data_uri.as_deref().is_some_and(|uri| {
                         crate::limits::decode_image_data_uri(uri)
                             .is_ok_and(|(mime, _)| crate::limits::IMAGE_MIME_TYPES.contains(&mime))
-                    })
-                    && self.preview.as_deref().is_none_or(|preview| {
-                        (preview.starts_with("data:image/jpeg;base64,")
-                            || preview.starts_with("data:image/png;base64,"))
-                            && preview.len()
-                                <= crate::limits::base64_encoded_len(crate::AI_PREVIEW_BYTES) + 32
-                            && crate::limits::decode_image_data_uri(preview).is_ok()
                     }),
                 "Attach a PNG, JPEG, WebP or GIF picture.",
             ),
             AttachmentKind::Text => ensure(
                 self.data_uri.is_none()
-                    && self.preview.is_none()
                     && self.url.is_none()
                     && self
                         .text
@@ -78,7 +68,6 @@ impl RequestAttachment {
             ),
             AttachmentKind::Link => ensure(
                 self.data_uri.is_none()
-                    && self.preview.is_none()
                     && self.text.is_none()
                     && self
                         .url

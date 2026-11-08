@@ -1,43 +1,43 @@
 //! Native identity import owns source snapshots and analysis lifecycle. Imported
 //! files are evidence only: they never execute or gain provider/native authority.
 use crate::{
+    ai_access::{Access, AccessFailure, active_account, resolve},
+    ai_job::{ActiveJobs, Failure, interrupted_notice, stopped_notice},
     chatgpt::ChatgptState,
-    generation::{GenerationService, IdentityAccess, identity_access},
+    generation::GenerationService,
+    native_files::{
+        self, NativeResult, message as error, open_lock_file, private_directory, regular_file,
+    },
 };
 use desegnos_ai::{
-    AuthenticationMethod, CancellationToken, ErrorKind, IdentityImage, ProviderId,
-    ProviderProgress, ProviderResponse, ProviderSettings, SubmissionOutcome, TokenUsage,
+    AuthenticationMethod, CancellationToken, ChatgptView, ErrorKind, IdentityImage, ProviderId,
+    ProviderProgress, ProviderResponse, ProviderSettings, TokenUsage,
 };
 use desegnos_core::{
     IdentityAsset, RequirementsSnapshot, digest, fenced_json, parse_structured_reply,
 };
-use desegnos_storage::{
-    IdentitySource, IdentitySourceAsset, write_markdown,
-};
+use desegnos_storage::{IdentitySource, IdentitySourceAsset};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, BTreeSet},
-    fs::{self, File, OpenOptions},
-    io::Read,
+    fs::{self, File},
     path::{Path, PathBuf},
     sync::Mutex,
 };
-use tauri::{AppHandle, Manager, State, WebviewWindow};
+use tauri::{AppHandle, Manager, State};
 use uuid::Uuid;
 
-type NativeResult<T> = Result<T, String>;
 type IdentityState<'a> = State<'a, Mutex<IdentityService>>;
 const MAX_IDENTITY_MARKDOWN_BYTES: usize = 512 * 1024;
 const MAX_RECORD_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_CANDIDATE_BYTES: usize = 256 * 1024;
 const MAX_SOURCES: usize = 8;
+/// An identity analysis is a single attempt.
+const ANALYSIS_ATTEMPT: usize = 0;
 const TOO_MUCH: &str =
     "That's more than the AI can read at once. Untick a few files, or click 'Pick for me'.";
 
-fn error(value: impl std::fmt::Display) -> String {
-    value.to_string()
-}
 fn require(condition: bool, message: &str) -> NativeResult<()> {
     if condition {
         Ok(())
@@ -51,12 +51,6 @@ fn text(value: &str, maximum: usize, required: bool) -> NativeResult<()> {
             && value.chars().count() <= maximum
             && (!required || !value.trim().is_empty()),
         "The identity result contains an empty, invalid, or oversized text field.",
-    )
-}
-fn trusted(window: &WebviewWindow) -> NativeResult<()> {
-    require(
-        window.label() == "editor",
-        "Only the Desegnos editor can import identity.",
     )
 }
 fn portable(asset: &IdentitySourceAsset) -> IdentityAsset {
@@ -267,91 +261,28 @@ pub struct IdentityService {
     sources: BTreeMap<Uuid, IdentitySource>,
     website_files: BTreeMap<Uuid, BTreeMap<String, Vec<u8>>>,
     latest: Option<AnalysisRecord>,
-    active: Option<(Uuid, CancellationToken)>,
+    active: ActiveJobs,
     startup_error: Option<String>,
     ownership: Option<File>,
 }
 
-fn private_directory(path: &Path) -> NativeResult<()> {
-    match fs::symlink_metadata(path) {
-        Ok(metadata) => {
-            return require(
-                metadata.is_dir() && !metadata.file_type().is_symlink(),
-                "The identity data directory is not a regular directory; its original data was preserved.",
-            );
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(value) => return Err(error(value)),
-    }
-    let mut builder = fs::DirBuilder::new();
-    builder.recursive(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::DirBuilderExt;
-        builder.mode(0o700);
-    }
-    builder.create(path).map_err(error)
-}
-fn regular_file(path: &Path) -> NativeResult<()> {
-    let metadata = fs::symlink_metadata(path).map_err(error)?;
-    require(
-        metadata.is_file() && !metadata.file_type().is_symlink(),
-        "An identity record is not a regular file; its original data was preserved.",
-    )?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        require(
-            metadata.nlink() == 1,
-            "An identity record has filesystem aliases; its original data was preserved.",
-        )?;
-    }
-    Ok(())
-}
+const RECORD: &str = "identity record";
+
 fn read_record<T: for<'de> Deserialize<'de>>(path: &Path, limit: u64) -> NativeResult<T> {
-    regular_file(path)?;
-    let file = File::open(path).map_err(error)?;
-    require(
-        file.metadata().map_err(error)?.len() <= limit,
-        "An identity record exceeds its storage limit.",
-    )?;
-    let mut bytes = Vec::new();
-    file.take(limit + 1)
-        .read_to_end(&mut bytes)
-        .map_err(error)?;
-    require(
-        bytes.len() as u64 <= limit,
-        "An identity record exceeds its storage limit.",
-    )?;
-    serde_json::from_slice(&bytes).map_err(|_| {
-        "An identity record is damaged or unsupported; its original data was preserved.".into()
-    })
+    native_files::read_json(path, limit, RECORD)
 }
+
 fn write_record(path: &Path, value: &impl Serialize) -> NativeResult<()> {
-    if path.exists() {
-        regular_file(path)?;
-    }
-    let bytes = serde_json::to_string(value).map_err(error)?;
-    require(
-        bytes.len() as u64 <= MAX_RECORD_BYTES,
-        "The complete identity analysis exceeds its local storage limit.",
-    )?;
-    write_markdown(path, &bytes).map_err(error)
+    native_files::write_json(path, value, MAX_RECORD_BYTES, RECORD)
 }
+
 fn acquire_ownership(directory: &Path) -> NativeResult<File> {
     let path = directory.join("service.lock");
     if path.exists() {
-        regular_file(&path)?;
+        regular_file(&path, RECORD)?;
     }
-    let mut options = OpenOptions::new();
-    options.create(true).truncate(false).read(true).write(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let file = options.open(&path).map_err(error)?;
-    regular_file(&path)?;
+    let file = open_lock_file(&path).map_err(error)?;
+    regular_file(&path, RECORD)?;
     let current = file.metadata().map_err(error)?;
     require(
         current.is_file(),
@@ -646,13 +577,11 @@ fn select_files(
 /// Local preview only: no credentials are loaded and nothing is sent to an AI service.
 #[tauri::command]
 pub fn prepare_identity_selection(
-    window: WebviewWindow,
     state: IdentityState<'_>,
     generation: State<'_, Mutex<GenerationService>>,
     source_id: Uuid,
     file_ids: Option<Vec<Uuid>>,
 ) -> NativeResult<IdentitySelection> {
-    trusted(&window)?;
     let source = state
         .lock()
         .map_err(error)?
@@ -660,8 +589,12 @@ pub fn prepare_identity_selection(
         .get(&source_id)
         .cloned()
         .ok_or("Choose your brand folder or website again.")?;
-    let (provider, authentication, settings) =
-        generation.lock().map_err(error)?.identity_settings();
+    let connection = generation.lock().map_err(error)?.connection();
+    let (provider, authentication, settings) = (
+        connection.provider,
+        connection.authentication,
+        connection.settings,
+    );
     Ok(select_files(&source, file_ids, |ids| {
         check_selection(&source, ids, provider, authentication, &settings)
     }))
@@ -866,7 +799,7 @@ impl IdentityService {
     }
     fn recover_or_report(directory: PathBuf) -> Self {
         Self::from_directory(directory.clone()).unwrap_or_else(|reason| {
-            let ownership = private_directory(&directory)
+            let ownership = private_directory(&directory, RECORD)
                 .and_then(|()| acquire_ownership(&directory))
                 .ok();
             Self {
@@ -874,7 +807,7 @@ impl IdentityService {
                 sources: BTreeMap::new(),
                 website_files: BTreeMap::new(),
                 latest: None,
-                active: None,
+                active: ActiveJobs::default(),
                 startup_error: Some(reason),
                 ownership,
             }
@@ -882,14 +815,14 @@ impl IdentityService {
     }
 
     fn from_directory(directory: PathBuf) -> NativeResult<Self> {
-        private_directory(&directory)?;
+        private_directory(&directory, RECORD)?;
         let ownership = acquire_ownership(&directory)?;
         let mut service = Self {
             directory,
             sources: BTreeMap::new(),
             website_files: BTreeMap::new(),
             latest: None,
-            active: None,
+            active: ActiveJobs::default(),
             startup_error: None,
             ownership: Some(ownership),
         };
@@ -902,13 +835,12 @@ impl IdentityService {
             if record.status == AnalysisStatus::Analyzing {
                 record.status = AnalysisStatus::Unknown;
                 record.candidate = None;
-                record.message = "Identity analysis was interrupted. Its outcome may be uncertain; it will not be sent again automatically. Review the selected sources before explicitly analyzing again.".into();
+                record.message = interrupted_notice("Identity analysis");
                 record.error = Some(
                     "The previous session ended before a durable analysis receipt was recorded."
                         .into(),
                 );
-                // A failed receipt cannot cause a replay: no startup path submits.
-                let _ = service.persist(&record);
+                service.persist_noting(&mut record);
             }
             service
                 .sources
@@ -950,6 +882,21 @@ impl IdentityService {
         }
         Ok(())
     }
+    /// Save the record. A failed save is kept on the record itself, so the user sees that
+    /// the receipt is missing and nothing is sent again automatically.
+    fn persist_noting(&self, record: &mut AnalysisRecord) {
+        let Err(reason) = self.persist(record) else {
+            return;
+        };
+        if record.status != AnalysisStatus::Cancelled && record.submitted {
+            record.status = AnalysisStatus::Unknown;
+            record.candidate = None;
+            record.provider_error = None;
+        }
+        record.error = Some(format!("The analysis receipt could not be saved: {reason}"));
+        record.message = "The analysis could not be safely retained. Restore writable storage before explicitly analyzing again; nothing will resend automatically.".into();
+    }
+
     fn persist(&self, record: &AnalysisRecord) -> NativeResult<()> {
         require(
             self.ownership.is_some(),
@@ -957,7 +904,7 @@ impl IdentityService {
                 .as_deref()
                 .unwrap_or("Identity analysis is unavailable in this window."),
         )?;
-        private_directory(&self.directory)?;
+        private_directory(&self.directory, RECORD)?;
         self.validate_record(record)?;
         write_record(&self.record_path(record.requirements.job_id), record)
     }
@@ -1006,7 +953,7 @@ impl IdentityService {
         file_ids: Vec<Uuid>,
     ) -> NativeResult<(AnalysisView, CancellationToken)> {
         require(
-            self.active.is_none(),
+            self.active.is_empty(),
             "Identity analysis is already running. Wait for it or cancel it before sending another request.",
         )?;
         let source = self
@@ -1040,8 +987,7 @@ impl IdentityService {
                 job_id: record.requirements.job_id,
             },
         )?;
-        let cancellation = CancellationToken::new();
-        self.active = Some((record.requirements.job_id, cancellation.clone()));
+        let cancellation = self.active.start(record.requirements.job_id, ANALYSIS_ATTEMPT);
         let view = record.view();
         self.latest = Some(record);
         self.startup_error = None;
@@ -1050,12 +996,10 @@ impl IdentityService {
     fn begin(
         &mut self,
         job_id: Uuid,
-        access: &IdentityAccess,
+        access: &Access,
     ) -> NativeResult<(RequirementsSnapshot, Vec<IdentityImage>, Value)> {
         require(
-            self.active
-                .as_ref()
-                .is_some_and(|(id, token)| *id == job_id && !token.is_cancelled()),
+            self.active.is_current(job_id, ANALYSIS_ATTEMPT),
             "Identity analysis was cancelled before submission.",
         )?;
         let mut record = self
@@ -1081,19 +1025,12 @@ impl IdentityService {
                 ErrorKind::ContextLimit | ErrorKind::InputLimit => TOO_MUCH.into(),
                 _ => error(reason),
             })?;
-        if let Some(model) = &access.model {
-            model
-                .validate_input(estimate.input_token_upper_bound)
-                .map_err(error)?;
-        }
-        if let Some(model) = &access.api_model {
-            model
-                .validate_api_input(&access.settings, estimate.input_token_upper_bound)
-                .map_err(error)?;
-        }
+        access
+            .validate_input(estimate.input_token_upper_bound)
+            .map_err(error)?;
         record.provider = Some(access.provider);
         record.authentication = Some(access.authentication);
-        record.account_id = access.account_id;
+        record.account_id = access.account_id();
         record.submitted = true;
         record.message = "Reading your brand…".into();
         self.persist(&record)?;
@@ -1101,10 +1038,7 @@ impl IdentityService {
         Ok((requirements, images, schema))
     }
     fn progress(&mut self, job_id: Uuid, progress: ProviderProgress) {
-        if self
-            .active
-            .as_ref()
-            .is_some_and(|(id, token)| *id == job_id && !token.is_cancelled())
+        if self.active.is_current(job_id, ANALYSIS_ATTEMPT)
             && let Some(record) = &mut self.latest
             && record.requirements.job_id == job_id
         {
@@ -1116,11 +1050,7 @@ impl IdentityService {
         job_id: Uuid,
         result: Result<ProviderResponse, desegnos_ai::ProviderError>,
     ) -> NativeResult<()> {
-        if !self
-            .active
-            .as_ref()
-            .is_some_and(|(id, token)| *id == job_id && !token.is_cancelled())
-        {
+        if !self.active.is_current(job_id, ANALYSIS_ATTEMPT) {
             return Ok(());
         }
         let mut record = self
@@ -1165,14 +1095,10 @@ impl IdentityService {
                 }
             }
             Err(failure) => {
-                record.status = if failure.kind == desegnos_ai::ErrorKind::Cancelled {
-                    AnalysisStatus::Cancelled
-                } else if failure.outcome == SubmissionOutcome::Unknown
-                    && !failure.http_status.is_some_and(|status| status >= 400)
-                {
-                    AnalysisStatus::Unknown
-                } else {
-                    AnalysisStatus::Failed
+                record.status = match Failure::of(&failure) {
+                    Failure::Cancelled => AnalysisStatus::Cancelled,
+                    Failure::Unknown => AnalysisStatus::Unknown,
+                    Failure::Failed => AnalysisStatus::Failed,
                 };
                 record.provider_error = Some(failure.clone());
                 record.error = Some(failure.message());
@@ -1181,24 +1107,13 @@ impl IdentityService {
                 record.message = "Identity analysis did not finish. Review its status before explicitly analyzing again; no project was created.".into();
             }
         }
-        let saved = self.persist(&record);
-        self.active = None;
-        if let Err(reason) = &saved {
-            record.status = AnalysisStatus::Unknown;
-            record.candidate = None;
-            record.provider_error = None;
-            record.error = Some(format!("The analysis receipt could not be saved: {reason}"));
-            record.message = "The analysis could not be safely retained. Restore writable storage before explicitly analyzing again; nothing will resend automatically.".into();
-        }
+        self.persist_noting(&mut record);
+        self.active.remove(job_id);
         self.latest = Some(record);
-        saved
+        Ok(())
     }
     fn fail_before_send(&mut self, job_id: Uuid, reason: String) -> NativeResult<()> {
-        if !self
-            .active
-            .as_ref()
-            .is_some_and(|(id, token)| *id == job_id && !token.is_cancelled())
-        {
+        if !self.active.is_current(job_id, ANALYSIS_ATTEMPT) {
             return Ok(());
         }
         let mut record = self
@@ -1210,10 +1125,10 @@ impl IdentityService {
         record.status = AnalysisStatus::Failed;
         record.error = Some(reason);
         record.message = "Identity analysis could not start. Check AI settings and the selected sources, then explicitly analyze again.".into();
-        let result = self.persist(&record);
+        self.persist_noting(&mut record);
         self.latest = Some(record);
-        self.active = None;
-        result
+        self.active.remove(job_id);
+        Ok(())
     }
     fn cancel(&mut self, job_id: Uuid) -> NativeResult<AnalysisView> {
         let record = self
@@ -1228,21 +1143,18 @@ impl IdentityService {
             record.status == AnalysisStatus::Analyzing,
             "This identity analysis has already finished.",
         )?;
-        if let Some((id, token)) = &self.active
-            && *id == job_id
-        {
-            token.cancel();
-        }
+        self.active.cancel(job_id);
         let mut record = record.clone();
+        let authentication = record.authentication.unwrap_or(AuthenticationMethod::ApiKey);
         record.status = AnalysisStatus::Cancelled;
         record.candidate = None;
         record.error = None;
-        record.message = "Identity analysis cancelled. A submitted request may still consume usage; late output cannot be accepted.".into();
-        let saved = self.persist(&record);
-        self.latest = Some(record.clone());
-        self.active = None;
-        saved.map_err(|reason| format!("Identity analysis was cancelled and late output blocked, but its cancellation receipt could not be saved: {reason}"))?;
-        Ok(record.view())
+        record.message = stopped_notice(authentication);
+        self.persist_noting(&mut record);
+        self.active.remove(job_id);
+        let view = record.view();
+        self.latest = Some(record);
+        Ok(view)
     }
     pub(super) fn cancel_account(&mut self, account_id: Uuid) -> NativeResult<()> {
         if let Some(record) = &self.latest
@@ -1450,10 +1362,8 @@ impl IdentityService {
 
 #[tauri::command]
 pub fn get_identity_analysis(
-    window: WebviewWindow,
     state: IdentityState<'_>,
 ) -> NativeResult<Option<AnalysisView>> {
-    trusted(&window)?;
     let service = state.lock().map_err(error)?;
     if let Some(reason) = &service.startup_error {
         return Err(reason.clone());
@@ -1462,22 +1372,79 @@ pub fn get_identity_analysis(
 }
 #[tauri::command]
 pub fn cancel_identity_analysis(
-    window: WebviewWindow,
     state: IdentityState<'_>,
     job_id: Uuid,
 ) -> NativeResult<AnalysisView> {
-    trusted(&window)?;
     state.lock().map_err(error)?.cancel(job_id)
 }
+/// Access for an analysis of the selected connection, confirmed once more after sign-in.
+async fn identity_access(
+    state: &Mutex<GenerationService>,
+    chatgpt: &ChatgptState,
+    cancellation: &CancellationToken,
+) -> Result<Access, AccessFailure> {
+    let mut connection = state.lock().map_err(error)?.ready_connection()?;
+    if connection.authentication == AuthenticationMethod::Chatgpt {
+        connection.account_id = Some(active_account(chatgpt, "analyzing identity").await?);
+    }
+    let access = resolve(state, chatgpt, &connection, cancellation).await?;
+    if let Some((account_id, _)) = access.account {
+        validate_identity_account(&chatgpt.view().await, account_id, &access.settings.model)?;
+        access.while_signed_in(chatgpt, || Ok(()))?;
+    } else {
+        access
+            .client
+            .test_model_access(&access.settings, &access.key, cancellation)
+            .await?;
+    }
+    if cancellation.is_cancelled() {
+        return Err("Identity analysis was cancelled before submission.".into());
+    }
+    let service = state.lock().map_err(error)?;
+    if !service.is_selected(&access) {
+        return Err(
+            "AI settings changed while checking access. Review them and explicitly analyze again."
+                .into(),
+        );
+    }
+    Ok(access)
+}
+
+fn validate_identity_account(
+    view: &ChatgptView,
+    account_id: Uuid,
+    model: &str,
+) -> NativeResult<()> {
+    let account = view
+        .accounts
+        .iter()
+        .find(|account| account.id == account_id);
+    if view.active_account_id != Some(account_id)
+        || !account.is_some_and(|account| {
+            account.connected && account.plan_enabled && !account.storage_repair_required
+        })
+        || !view.models.iter().any(|available| available.id == model)
+    {
+        return Err("The selected ChatGPT account, its plan permission, secure storage, or model changed while checking access. Review AI settings and explicitly analyze again.".into());
+    }
+    Ok(())
+}
+
+/// The background analysis has no caller to return to, so a failure to record its outcome
+/// goes to the log; the record itself already carries any failed save.
+fn report<T>(result: NativeResult<T>) {
+    if let Err(reason) = result {
+        eprintln!("Identity analysis could not record its outcome: {reason}");
+    }
+}
+
 #[tauri::command]
 pub fn analyze_identity(
     app: AppHandle,
-    window: WebviewWindow,
     state: IdentityState<'_>,
     source_id: Uuid,
     file_ids: Vec<Uuid>,
 ) -> NativeResult<AnalysisView> {
-    trusted(&window)?;
     let (view, cancellation) = state.lock().map_err(error)?.reserve(source_id, file_ids)?;
     let job_id = view.job_id;
     tauri::async_runtime::spawn(async move {
@@ -1486,7 +1453,7 @@ pub fn analyze_identity(
         let provider = generation
             .lock()
             .ok()
-            .map(|service| service.identity_settings().0);
+            .map(|service| service.connection().provider);
         let access = match identity_access(&generation, &chatgpt, &cancellation).await {
             Ok(access) => access,
             Err(reason) => {
@@ -1499,7 +1466,7 @@ pub fn analyze_identity(
                         record.provider = provider;
                         record.provider_error = reason.provider_error.map(|error| *error);
                     }
-                    let _ = service.fail_before_send(job_id, reason.message);
+                    report(service.fail_before_send(job_id, reason.message));
                 }
                 return;
             }
@@ -1510,17 +1477,12 @@ pub fn analyze_identity(
                 .map_err(error)?
                 .begin(job_id, &access)
         };
-        let prepared =
-            if let (Some(account), Some(epoch)) = (access.account_id, access.account_epoch) {
-                chatgpt.with_epoch(account, epoch, begin)
-            } else {
-                begin()
-            };
+        let prepared = access.while_signed_in(&chatgpt, begin);
         let (snapshot, images, schema) = match prepared {
             Ok(value) => value,
             Err(reason) => {
                 if let Ok(mut service) = app.state::<Mutex<IdentityService>>().lock() {
-                    let _ = service.fail_before_send(job_id, reason);
+                    report(service.fail_before_send(job_id, reason));
                 }
                 return;
             }
@@ -1551,14 +1513,10 @@ pub fn analyze_identity(
                 .map_err(error)?
                 .finish(job_id, result)
         };
-        if let (Some(account), Some(epoch)) = (access.account_id, access.account_epoch) {
-            if chatgpt.with_epoch(account, epoch, finish).is_err()
-                && let Ok(mut service) = app.state::<Mutex<IdentityService>>().lock()
-            {
-                let _ = service.cancel(job_id);
-            }
-        } else {
-            let _ = finish();
+        if access.while_signed_in(&chatgpt, finish).is_err()
+            && let Ok(mut service) = app.state::<Mutex<IdentityService>>().lock()
+        {
+            report(service.cancel(job_id));
         }
     });
     Ok(view)

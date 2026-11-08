@@ -4,18 +4,22 @@
 //! request, sent only after an explicit paid-send decision. Every write goes
 //! through the storage crate's staged, no-replace writer, and the project records the version,
 //! folder and pointer fingerprints the export produced.
-use crate::generation::{AiState, ExportChatgptState};
+use crate::ai_access::{Connection, active_account, resolve};
+use crate::ai_job::{signed_out_notice, stopped_notice};
+use crate::generation::AiState;
+use crate::chatgpt::ChatgptState;
 use crate::local_site::LocalSite;
+use crate::native_files::{NativeResult, message};
 use crate::workspace::Workspace;
 use desegnos_ai::{
-    AuthenticationMethod, CancellationToken, ProviderId, ProviderResponse, ProviderSettings,
+    AuthenticationMethod, CancellationToken, ProviderId, ProviderResponse,
     TokenUsage,
 };
 use desegnos_core::{
     ExportBundle, ExportPlan, ExportPlanKind, ExportRecord, GenerationMode, Project, WebsiteExport,
-    export_manifest, pointer_fingerprints,
+    export_manifest, marked_pointer_code, pointer_fingerprints,
 };
-use desegnos_storage::{read_export_file, write_export_into, write_export_named};
+use desegnos_storage::{read_export_folder, write_export_into, write_export_named};
 use serde::Serialize;
 use std::{
     collections::BTreeMap,
@@ -24,29 +28,16 @@ use std::{
     sync::Mutex,
     time::{SystemTime, UNIX_EPOCH},
 };
-use tauri::{AppHandle, Manager, State, WebviewWindow};
+use tauri::{AppHandle, Manager, State};
 use tauri_plugin_dialog::DialogExt;
 use uuid::Uuid;
 
-type NativeResult<T> = Result<T, String>;
 type WorkspaceState<'a> = State<'a, Mutex<Workspace>>;
 type ExportState<'a> = State<'a, Mutex<ExportService>>;
 type SiteState<'a> = State<'a, Mutex<LocalSite>>;
 
 /// The largest export file the clash check reads back.
 const MAX_CHECK_BYTES: usize = 8 * 1024 * 1024;
-
-fn message(error: impl std::fmt::Display) -> String {
-    error.to_string()
-}
-
-fn trusted(window: &WebviewWindow) -> NativeResult<()> {
-    if window.label() == "editor" {
-        Ok(())
-    } else {
-        Err("Only the Desegnos editor can export.".into())
-    }
-}
 
 fn now() -> String {
     SystemTime::now()
@@ -55,8 +46,9 @@ fn now() -> String {
         .unwrap_or_else(|_| "0".into())
 }
 
-#[derive(ts_rs::TS, Debug, Clone, Copy, PartialEq, Eq)]
-#[ts(rename = "ExportStatus", rename_all = "lowercase")]
+#[derive(ts_rs::TS, Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[ts(rename = "ExportStatus")]
+#[serde(rename_all = "camelCase")]
 enum JobStatus {
     Prepared,
     Sending,
@@ -66,28 +58,11 @@ enum JobStatus {
     Stale,
 }
 
-impl JobStatus {
-    fn label(self) -> &'static str {
-        match self {
-            Self::Prepared => "prepared",
-            Self::Sending => "sending",
-            Self::Ready => "ready",
-            Self::Failed => "failed",
-            Self::Cancelled => "cancelled",
-            Self::Stale => "stale",
-        }
-    }
-
-    fn parse(label: &str) -> Self {
-        match label {
-            "ready" => Self::Ready,
-            "sending" => Self::Sending,
-            "failed" => Self::Failed,
-            "cancelled" => Self::Cancelled,
-            "stale" => Self::Stale,
-            _ => Self::Prepared,
-        }
-    }
+#[derive(ts_rs::TS, Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase")]
+enum ExportKind {
+    Code,
+    Comment,
 }
 
 #[derive(ts_rs::TS, Clone, Serialize)]
@@ -125,10 +100,8 @@ pub struct ExportJobView {
     job_id: Uuid,
     project_id: Uuid,
     base_revision: u64,
-    #[ts(type = "'code' | 'comment'")]
-    kind: &'static str,
-    #[ts(as = "JobStatus")]
-    status: &'static str,
+    kind: ExportKind,
+    status: JobStatus,
     message: String,
     summary: String,
     estimate_usd: f64,
@@ -151,12 +124,59 @@ struct ExportJob {
     destination: Option<PathBuf>,
     preview: bool,
     preview_folder: Option<PathBuf>,
-    settings: ProviderSettings,
-    authentication: AuthenticationMethod,
-    provider: ProviderId,
-    account_id: Option<Uuid>,
+    /// The AI connection a send uses; a job rendered without AI has none.
+    connection: Option<Connection>,
     mode: GenerationMode,
     cancellation: CancellationToken,
+}
+
+impl ExportJobView {
+    /// A reply arrived: keep its usage as the job's and count the attempt.
+    fn record_received(&mut self, usage: Option<TokenUsage>) {
+        self.usage = usage;
+        self.attempts.push(ExportAttempt {
+            ordinal: self.attempts.len() + 1,
+            status: "received".into(),
+            usage,
+        });
+    }
+}
+
+impl ExportJob {
+    fn authentication(&self) -> AuthenticationMethod {
+        self.connection
+            .as_ref()
+            .map_or(AuthenticationMethod::ApiKey, |connection| {
+                connection.authentication
+            })
+    }
+}
+
+/// The accepted behaviours of earlier exports. A cache that cannot be read is set aside, not
+/// overwritten by the next export, so its code can still be recovered.
+fn read_accepted(directory: &Path) -> BTreeMap<Uuid, ExportRecord> {
+    let path = directory.join("behaviours.json");
+    let bytes = match fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return BTreeMap::new(),
+        Err(error) => {
+            eprintln!("Could not read accepted export behaviours: {error}");
+            return BTreeMap::new();
+        }
+    };
+    serde_json::from_slice(&bytes).unwrap_or_else(|error| {
+        let aside = directory.join("behaviours.unreadable");
+        match fs::rename(&path, &aside) {
+            Ok(()) => eprintln!(
+                "Accepted export behaviours were unreadable ({error}); kept at {}",
+                aside.display()
+            ),
+            Err(rename) => eprintln!(
+                "Accepted export behaviours were unreadable ({error}) and could not be set aside: {rename}"
+            ),
+        }
+        BTreeMap::new()
+    })
 }
 
 /// Export jobs and the one preview folder a session keeps.
@@ -168,13 +188,26 @@ pub struct ExportService {
 
 impl ExportService {
     pub fn initialize(data: &Path) -> Self {
+        let directory = data.join("exports");
         Self {
-            directory: data.join("exports"),
+            accepted: read_accepted(&directory),
+            directory,
             jobs: BTreeMap::new(),
-            accepted: fs::read(data.join("exports/behaviours.json"))
-                .ok()
-                .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-                .unwrap_or_default(),
+        }
+    }
+
+    /// Signing out of an account stops its export sends.
+    pub fn cancel_account(&mut self, account_id: Uuid) {
+        for job in self.jobs.values_mut().filter(|job| {
+            job.view.status == JobStatus::Sending
+                && job
+                    .connection
+                    .as_ref()
+                    .is_some_and(|connection| connection.account_id == Some(account_id))
+        }) {
+            job.cancellation.cancel();
+            job.view.status = JobStatus::Cancelled;
+            job.view.message = signed_out_notice(job.authentication());
         }
     }
 
@@ -323,9 +356,7 @@ fn trusted_destination(path: String) -> NativeResult<PathBuf> {
 #[tauri::command]
 pub async fn pick_export_destination(
     app: AppHandle,
-    window: WebviewWindow,
 ) -> NativeResult<Option<PickDestination>> {
-    trusted(&window)?;
     let picked = tauri::async_runtime::spawn_blocking(move || {
         crate::file_dialogs::picked(
             app.dialog()
@@ -364,10 +395,9 @@ fn page_views(plan: &ExportPlan) -> Vec<ExportPageView> {
 #[allow(clippy::too_many_arguments)]
 pub async fn prepare_export(
     app: AppHandle,
-    window: WebviewWindow,
     workspace: WorkspaceState<'_>,
     ai: AiState<'_>,
-    chatgpt: State<'_, ExportChatgptState>,
+    chatgpt: State<'_, ChatgptState>,
     service: ExportState<'_>,
     site: SiteState<'_>,
     project_id: Uuid,
@@ -377,7 +407,6 @@ pub async fn prepare_export(
     preview: bool,
     build_behaviours: Option<bool>,
 ) -> NativeResult<ExportJobView> {
-    trusted(&window)?;
     let project = {
         let workspace = workspace.lock().map_err(message)?;
         let project = workspace.project()?.clone();
@@ -429,11 +458,11 @@ pub async fn prepare_export(
             service.new_preview_folder()?
         };
         site.lock().map_err(message)?.stop();
-        (Some(folder.clone()), Some(folder))
+        (folder.clone(), Some(folder))
     } else {
         let parent = destination.ok_or("Choose a destination folder before exporting.")?;
         create_default_destination(&app, &parent)?;
-        (Some(trusted_destination(parent)?), None)
+        (trusted_destination(parent)?, None)
     };
     let has_ai = plan.request_count > 0 && (!preview || build_behaviours.unwrap_or(false));
     let reused_behaviour_count = desegnos_core::reused_export_behaviour_count(&project, &plan);
@@ -441,8 +470,8 @@ pub async fn prepare_export(
         job_id,
         project_id,
         base_revision: project.revision,
-        kind: "code",
-        status: JobStatus::Prepared.label(),
+        kind: ExportKind::Code,
+        status: JobStatus::Prepared,
         message: if has_ai {
             "Ready to generate behaviour. Sending uses your provider plan or credits.".into()
         } else {
@@ -470,9 +499,7 @@ pub async fn prepare_export(
             &site,
             &project,
             &bundle,
-            destination_path
-                .as_deref()
-                .ok_or("Choose a destination folder.")?,
+            &destination_path,
             preview_folder.as_deref(),
             preview,
             preview_page.as_deref(),
@@ -481,7 +508,7 @@ pub async fn prepare_export(
             .lock()
             .map_err(message)?
             .remember(&project, &bundle)?;
-        view.status = JobStatus::Ready.label();
+        view.status = JobStatus::Ready;
         view.pointer_count = bundle.behaviours.len();
         view.reused_behaviour_count = bundle.behaviours.len();
         view.message = written.label.clone();
@@ -502,63 +529,58 @@ pub async fn prepare_export(
             ExportJob {
                 view: view.clone(),
                 plan,
-                destination: destination_path,
+                destination: Some(destination_path),
                 preview,
                 preview_folder,
-                settings: ProviderSettings::default(),
-                authentication: AuthenticationMethod::ApiKey,
-                provider: ProviderId::Openai,
-                account_id: None,
+                connection: None,
                 mode: project.generation_mode,
                 cancellation: CancellationToken::new(),
             },
         );
         return Ok(view);
     }
-    let (authentication, provider, settings) = {
-        let ai = ai.lock().map_err(message)?;
-        ai.export_connection()
-    };
-    let account_id = if authentication == AuthenticationMethod::Chatgpt {
-        let view = chatgpt.view().await;
-        let account = view
-            .accounts
-            .iter()
-            .find(|account| Some(account.id) == view.active_account_id)
-            .ok_or("Sign in to ChatGPT before exporting.")?;
-        if !account.connected || !account.plan_enabled {
-            return Err(
-                "Sign in to this ChatGPT account and grant plan usage before exporting.".into(),
-            );
-        }
-        Some(account.id)
-    } else {
-        None
-    };
+    let connection = bound_connection(&ai, &chatgpt).await?;
     let snapshot = desegnos_core::plan_snapshot(&project, &plan);
-    view.estimate_usd = {
-        let ai = ai.lock().map_err(message)?;
-        ai.export_estimate(&plan, &snapshot, project.generation_mode)
-            .map_err(message)?
-    };
+    view.estimate_usd = estimate_export(&ai, &plan, &snapshot, project.generation_mode)?;
     let mut service = service.lock().map_err(message)?;
     service.jobs.insert(
         job_id,
         ExportJob {
             view: view.clone(),
             plan,
-            destination: destination_path,
+            destination: Some(destination_path),
             preview,
             preview_folder,
-            settings,
-            authentication,
-            provider,
-            account_id,
+            connection: Some(connection),
             mode: project.generation_mode,
             cancellation: CancellationToken::new(),
         },
     );
     Ok(view)
+}
+
+/// The selected AI connection, bound to the signed-in ChatGPT account when it uses one.
+async fn bound_connection(
+    ai: &AiState<'_>,
+    chatgpt: &ChatgptState,
+) -> NativeResult<Connection> {
+    let mut connection = ai.lock().map_err(message)?.connection();
+    if connection.authentication == AuthenticationMethod::Chatgpt {
+        connection.account_id = Some(active_account(chatgpt, "exporting").await?);
+    }
+    Ok(connection)
+}
+
+fn estimate_export(
+    ai: &AiState<'_>,
+    plan: &ExportPlan,
+    snapshot: &desegnos_core::RequirementsSnapshot,
+    mode: GenerationMode,
+) -> NativeResult<f64> {
+    ai.lock()
+        .map_err(message)?
+        .export_estimate(plan, snapshot, mode)
+        .map_err(message)
 }
 
 fn export_website(bundle: &ExportBundle) -> WebsiteExport {
@@ -569,7 +591,6 @@ fn export_website(bundle: &ExportBundle) -> WebsiteExport {
     }
 }
 
-/// Write a bundle, serve a preview, and record a full export in the project.
 #[allow(clippy::too_many_arguments)]
 fn commit(
     workspace: &WorkspaceState<'_>,
@@ -668,92 +689,50 @@ fn commit(
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn start_export(
-    window: WebviewWindow,
     workspace: WorkspaceState<'_>,
     ai: AiState<'_>,
-    chatgpt: State<'_, ExportChatgptState>,
+    chatgpt: State<'_, ChatgptState>,
     service: ExportState<'_>,
     site: SiteState<'_>,
     job_id: Uuid,
 ) -> NativeResult<ExportJobView> {
-    trusted(&window)?;
-    let (plan, authentication, provider, account_id, settings, mode, cancellation) = {
+    let (plan, connection, mode, cancellation) = {
         let mut service = service.lock().map_err(message)?;
         let job = service
             .jobs
             .get_mut(&job_id)
             .ok_or("This export is no longer available. Prepare it again.")?;
         if !matches!(
-            JobStatus::parse(job.view.status),
+            job.view.status,
             JobStatus::Prepared | JobStatus::Failed | JobStatus::Cancelled
         ) {
             return Err("Only a prepared or failed export can be sent.".into());
         }
-        job.view.status = JobStatus::Sending.label();
+        let connection = job
+            .connection
+            .clone()
+            .ok_or("This export has nothing to send.")?;
+        job.view.status = JobStatus::Sending;
         job.view.error = None;
         job.view.provider_error = None;
-        job.view.provider = Some(job.provider);
+        job.view.provider = Some(connection.provider);
         job.view.message = "Exporting…".into();
         job.cancellation = CancellationToken::new();
         (
             job.plan.clone(),
-            job.authentication,
-            job.provider,
-            job.account_id,
-            job.settings.clone(),
+            connection,
             job.mode,
             job.cancellation.clone(),
         )
     };
     let mut provider_error = None;
     let result = async {
-        let client = {
-            let ai = ai.lock().map_err(message)?;
-            ai.export_client(provider, &settings).map_err(message)?
-        };
-        let mut account_model = None;
-        let key = if authentication == AuthenticationMethod::Chatgpt {
-            let Some(account_id) = account_id else {
-                return Err("This ChatGPT export has no bound account. Prepare it again.".into());
-            };
-            let mut view = chatgpt.view().await;
-            let account = view
-                .accounts
-                .iter()
-                .find(|account| account.id == account_id)
-                .ok_or("This ChatGPT account is no longer connected.")?;
-            if !account.connected || !account.plan_enabled {
-                return Err(
-                    "Sign in to this ChatGPT account and grant plan usage before exporting.".into(),
-                );
-            }
-            let manager = chatgpt.manager()?;
-            if view.models.is_empty() {
-                let client = ai.lock().map_err(message)?.client()?;
-                view = manager
-                    .discover_models(account_id, &client, &cancellation)
-                    .await
-                    .map_err(message)?;
-            }
-            if view.active_account_id != Some(account_id) {
-                return Err(
-                    "The selected ChatGPT account changed. Prepare the export again.".into(),
-                );
-            }
-            if let Some(error) = view.models_provider_error {
-                provider_error = Some(error.clone());
-                return Err(message(error));
-            }
-            account_model = Some(view.selected_model(&settings).map_err(message)?.clone());
-            chatgpt
-                .manager()?
-                .bearer(account_id, &cancellation)
-                .await
-                .map_err(message)?
-        } else {
-            let mut ai = ai.lock().map_err(message)?;
-            ai.export_key(provider, &settings).map_err(message)?
-        };
+        let access = resolve(&ai, &chatgpt, &connection, &cancellation)
+            .await
+            .map_err(|failure| {
+                provider_error = failure.provider_error.as_deref().cloned();
+                failure.message
+            })?;
         let snapshot = {
             let workspace = workspace.lock().map_err(message)?;
             let project = workspace.project()?;
@@ -762,38 +741,19 @@ pub async fn start_export(
             }
             desegnos_core::plan_snapshot(project, &plan)
         };
-        if authentication == AuthenticationMethod::ApiKey {
-            let model =
-                crate::generation::api_model_for_key(&ai, provider, &settings, &key, &cancellation)
-                    .await
-                    .map_err(|error| {
-                        provider_error = Some(error.clone());
-                        message(error)
-                    })?;
-            let estimate = client
-                .estimate(authentication, &snapshot, mode, &plan.schema, &settings)
-                .map_err(message)?;
-            model
-                .validate_api_input(&settings, estimate.input_token_upper_bound)
-                .map_err(message)?;
-        }
-        if let Some(model) = &account_model {
-            let estimate = client
-                .estimate(authentication, &snapshot, mode, &plan.schema, &settings)
-                .map_err(message)?;
-            model
-                .validate_input(estimate.input_token_upper_bound)
-                .map_err(message)?;
-        }
-        client
+        access
+            .check(&snapshot, mode, &plan.schema)
+            .map_err(message)?;
+        access
+            .client
             .generate(
                 desegnos_ai::GenerationRequest {
-                    authentication,
+                    authentication: access.authentication,
                     snapshot: &snapshot,
                     mode,
                     schema: &plan.schema,
-                    settings: &settings,
-                    key: &key,
+                    settings: &access.settings,
+                    key: &access.key,
                     cancellation: &cancellation,
                 },
                 |_progress| {},
@@ -840,8 +800,8 @@ fn finish(
         let Some(job) = guard.jobs.get_mut(&job_id) else {
             return Err("This export is no longer available.".into());
         };
-        job.view.status = JobStatus::Cancelled.label();
-        job.view.message = "Export cancelled. Work already sent may still be charged.".into();
+        job.view.status = JobStatus::Cancelled;
+        job.view.message = stopped_notice(job.authentication());
         return Ok(job.view.clone());
     }
     // Take the project without holding the export lock, so cancel and status reads stay live.
@@ -850,7 +810,7 @@ fn finish(
         workspace.project()?.clone()
     };
     let project = service.lock().map_err(message)?.with_accepted(project);
-    let _outcome: Result<(), String> = match result {
+    match result {
         Ok(response) => {
             let stale = project.id != plan.project_id || project.revision != plan.base_revision;
             let failure = if stale {
@@ -901,18 +861,13 @@ fn finish(
                                                 "This export is no longer available.".into()
                                             );
                                         };
-                                        job.view.usage = response.usage;
-                                        job.view.attempts.push(ExportAttempt {
-                                            ordinal: job.view.attempts.len() + 1,
-                                            status: "received".into(),
-                                            usage: response.usage,
-                                        });
+                                        job.view.record_received(response.usage);
                                         job.view.pointer_count = bundle.behaviours.len();
                                         job.view.summary = reply.summary.clone();
                                         job.view.warnings = bundle.warnings.clone();
                                         job.view.message = written.label.clone();
                                         job.view.result = Some(written);
-                                        job.view.status = JobStatus::Ready.label();
+                                        job.view.status = JobStatus::Ready;
                                         return Ok(job.view.clone());
                                     }
                                     Err(error) => Some(error),
@@ -927,27 +882,21 @@ fn finish(
             let Some(job) = guard.jobs.get_mut(&job_id) else {
                 return Err("This export is no longer available.".into());
             };
-            job.view.usage = response.usage;
-            job.view.attempts.push(ExportAttempt {
-                ordinal: job.view.attempts.len() + 1,
-                status: "received".into(),
-                usage: response.usage,
-            });
+            job.view.record_received(response.usage);
             match failure {
                 Some(error) => {
                     if stale {
-                        job.view.status = JobStatus::Stale.label();
+                        job.view.status = JobStatus::Stale;
                     } else {
-                        job.view.status = JobStatus::Failed.label();
+                        job.view.status = JobStatus::Failed;
                         job.view.error = Some(error.clone());
                     }
                     job.view.message = error;
                 }
                 None => {
-                    job.view.status = JobStatus::Ready.label();
+                    job.view.status = JobStatus::Ready;
                 }
             }
-            Ok(())
         }
         Err(error) => {
             let mut guard = service.lock().map_err(message)?;
@@ -965,17 +914,15 @@ fn finish(
                 usage: None,
             });
             if cancelled {
-                job.view.status = JobStatus::Cancelled.label();
-                job.view.message =
-                    "Export cancelled. Work already sent may still be charged.".into();
+                job.view.status = JobStatus::Cancelled;
+                job.view.message = stopped_notice(job.authentication());
             } else {
-                job.view.status = JobStatus::Failed.label();
+                job.view.status = JobStatus::Failed;
                 job.view.message = error.clone();
                 job.view.error = Some(error);
             }
-            Ok(())
         }
-    };
+    }
     let guard = service.lock().map_err(message)?;
     guard
         .jobs
@@ -994,13 +941,8 @@ fn record_failure(
     let Some(job) = guard.jobs.get_mut(&job_id) else {
         return Err("This export is no longer available.".into());
     };
-    job.view.usage = response.usage;
-    job.view.attempts.push(ExportAttempt {
-        ordinal: job.view.attempts.len() + 1,
-        status: "received".into(),
-        usage: response.usage,
-    });
-    job.view.status = JobStatus::Failed.label();
+    job.view.record_received(response.usage);
+    job.view.status = JobStatus::Failed;
     job.view.message = error.clone();
     job.view.error = Some(error);
     Ok(job.view.clone())
@@ -1019,7 +961,7 @@ fn apply_comment(
         .as_ref()
         .ok_or("Export once before rewriting a pointer comment.")?;
     let path = PathBuf::from(&record.destination);
-    let files = read_export_files(&path).map_err(message)?;
+    let files = read_export_folder(&path, MAX_CHECK_BYTES).map_err(message)?;
     let fingerprint = pointer_fingerprints(&files)
         .get(&pointer_id)
         .cloned()
@@ -1037,35 +979,29 @@ fn apply_comment(
     Ok(comment)
 }
 
-/// Cancel a running export. A send already submitted may still be charged.
 #[tauri::command]
 pub fn cancel_export(
-    window: WebviewWindow,
     service: ExportState<'_>,
     job_id: Uuid,
 ) -> NativeResult<ExportJobView> {
-    trusted(&window)?;
     let mut service = service.lock().map_err(message)?;
     let job = service
         .jobs
         .get_mut(&job_id)
         .ok_or("This export is no longer available.")?;
     job.cancellation.cancel();
-    if JobStatus::parse(job.view.status) == JobStatus::Sending {
-        job.view.status = JobStatus::Cancelled.label();
-        job.view.message = "Export cancelled. Work already sent may still be charged.".into();
+    if job.view.status == JobStatus::Sending {
+        job.view.status = JobStatus::Cancelled;
+        job.view.message = stopped_notice(job.authentication());
     }
     Ok(job.view.clone())
 }
 
-/// The newest export job for a project, so a reload returns to its review.
 #[tauri::command]
 pub fn get_export_job(
-    window: WebviewWindow,
     service: ExportState<'_>,
     project_id: Uuid,
 ) -> NativeResult<Option<ExportJobView>> {
-    trusted(&window)?;
     let service = service.lock().map_err(message)?;
     Ok(service.latest_for(project_id).map(|job| job.view.clone()))
 }
@@ -1082,11 +1018,9 @@ pub struct ExportCheck {
 
 #[tauri::command]
 pub fn recheck_export(
-    window: WebviewWindow,
     workspace: WorkspaceState<'_>,
     project_id: Uuid,
 ) -> NativeResult<ExportCheck> {
-    trusted(&window)?;
     let project = {
         let workspace = workspace.lock().map_err(message)?;
         let project = workspace.project()?.clone();
@@ -1103,7 +1037,7 @@ pub fn recheck_export(
         });
     };
     let path = PathBuf::from(&record.destination);
-    match read_export_files(&path) {
+    match read_export_folder(&path, MAX_CHECK_BYTES) {
         Ok(files) => Ok(ExportCheck {
             states: project.pointer_states_with_fingerprints(&pointer_fingerprints(&files)),
             last_export: Some(record),
@@ -1117,79 +1051,18 @@ pub fn recheck_export(
     }
 }
 
-/// Every text file of an export folder, bounded, for fingerprint recomputation.
-fn read_export_files(root: &Path) -> desegnos_core::Result<BTreeMap<String, Vec<u8>>> {
-    let mut files = BTreeMap::new();
-    let mut candidates = Vec::new();
-    collect_text_files(root, "", &mut candidates, 0)?;
-    for candidate in candidates {
-        if let Ok(bytes) = read_export_file(root, &candidate)
-            && bytes.len() <= MAX_CHECK_BYTES
-        {
-            files.insert(candidate, bytes);
-        }
-    }
-    Ok(files)
-}
-
-fn collect_text_files(
-    root: &Path,
-    prefix: &str,
-    out: &mut Vec<String>,
-    depth: usize,
-) -> desegnos_core::Result<()> {
-    if depth > 2 {
-        return Ok(());
-    }
-    let directory = if prefix.is_empty() {
-        root.to_path_buf()
-    } else {
-        root.join(prefix)
-    };
-    let entries = fs::read_dir(&directory).map_err(|error| {
-        desegnos_core::Error(format!("The export folder could not be read: {error}"))
-    })?;
-    for entry in entries.flatten() {
-        let name = entry.file_name().to_string_lossy().into_owned();
-        if name.starts_with('.') || name.contains(['/', '\\', '\0']) {
-            continue;
-        }
-        let relative = if prefix.is_empty() {
-            name.clone()
-        } else {
-            format!("{prefix}/{name}")
-        };
-        let metadata = match entry.metadata() {
-            Ok(metadata) => metadata,
-            Err(_) => continue,
-        };
-        if metadata.is_dir() {
-            collect_text_files(root, &relative, out, depth + 1)?;
-        } else if metadata.is_file()
-            && matches!(
-                name.rsplit('.').next().unwrap_or_default(),
-                "html" | "css" | "js"
-            )
-        {
-            out.push(relative);
-        }
-    }
-    Ok(())
-}
-
 /// Rewrite one pointer's comment from the marked code an outside edit left behind. One undo step
 /// when the reply arrives; sending is the usual paid-send decision.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn keep_pointer_code(
-    window: WebviewWindow,
     workspace: WorkspaceState<'_>,
     ai: AiState<'_>,
+    chatgpt: State<'_, ChatgptState>,
     service: ExportState<'_>,
     project_id: Uuid,
     pointer_id: Uuid,
 ) -> NativeResult<ExportJobView> {
-    trusted(&window)?;
     let project = {
         let workspace = workspace.lock().map_err(message)?;
         let project = workspace.project()?.clone();
@@ -1202,8 +1075,8 @@ pub async fn keep_pointer_code(
         .last_export
         .clone()
         .ok_or("Export once before rewriting a pointer comment.")?;
-    let files = read_export_files(&PathBuf::from(&record.destination)).map_err(message)?;
-    let marked = marked_code_for(&files, pointer_id);
+    let files = read_export_folder(&PathBuf::from(&record.destination), MAX_CHECK_BYTES).map_err(message)?;
+    let marked = marked_pointer_code(&files, pointer_id);
     if marked.trim().is_empty() {
         return Err(
             "That pointer's code is no longer in the export folder. Keep the comment instead."
@@ -1213,22 +1086,15 @@ pub async fn keep_pointer_code(
     let job_id = Uuid::new_v4();
     let plan =
         desegnos_core::plan_comment(&project, pointer_id, &marked, job_id).map_err(message)?;
-    let (authentication, provider, settings) = {
-        let ai = ai.lock().map_err(message)?;
-        ai.export_connection()
-    };
+    let connection = bound_connection(&ai, &chatgpt).await?;
     let snapshot = desegnos_core::plan_snapshot(&project, &plan);
-    let estimate_usd = {
-        let ai = ai.lock().map_err(message)?;
-        ai.export_estimate(&plan, &snapshot, project.generation_mode)
-            .map_err(message)?
-    };
+    let estimate_usd = estimate_export(&ai, &plan, &snapshot, project.generation_mode)?;
     let view = ExportJobView {
         job_id,
         project_id,
         base_revision: project.revision,
-        kind: "comment",
-        status: JobStatus::Prepared.label(),
+        kind: ExportKind::Comment,
+        status: JobStatus::Prepared,
         message: "Ready to rewrite the comment. Sending uses your provider plan or credits.".into(),
         summary: String::new(),
         estimate_usd,
@@ -1253,10 +1119,7 @@ pub async fn keep_pointer_code(
             destination: None,
             preview: false,
             preview_folder: None,
-            settings,
-            authentication,
-            provider,
-            account_id: None,
+            connection: Some(connection),
             mode: project.generation_mode,
             cancellation: CancellationToken::new(),
         },
@@ -1264,44 +1127,11 @@ pub async fn keep_pointer_code(
     Ok(view)
 }
 
-fn marked_code_for(files: &BTreeMap<String, Vec<u8>>, pointer_id: Uuid) -> String {
-    let needle = pointer_id.to_string();
-    let mut code = String::new();
-    for (path, bytes) in files {
-        let Ok(text) = std::str::from_utf8(bytes) else {
-            continue;
-        };
-        let mut search = 0;
-        while let Some(found) = text[search..].find(&needle) {
-            let at = search + found;
-            // A marked block wins; an HTML element carrying the attribute starts at its tag.
-            let start = text[..at]
-                .rfind("/* desegnos-pointer:")
-                .or_else(|| text[..at].rfind('<'))
-                .unwrap_or(at);
-            let close = format!("/* /desegnos-pointer:{needle} */");
-            let end = match text[at..].find(&close) {
-                Some(offset) => at + offset + close.len(),
-                None => text[at..]
-                    .find('>')
-                    .map(|offset| at + offset + 1)
-                    .unwrap_or(text.len().min(at + 4000)),
-            };
-            code.push_str(&format!("/* {path} */\n{}\n\n", &text[start..end]));
-            search = end.max(at + needle.len());
-        }
-    }
-    code
-}
-
-/// Close a preview: stop its loopback site and remove the temporary folder.
 #[tauri::command]
 pub fn close_preview(
-    window: WebviewWindow,
     service: ExportState<'_>,
     site: SiteState<'_>,
 ) -> NativeResult<()> {
-    trusted(&window)?;
     site.lock().map_err(message)?.stop();
     service.lock().map_err(message)?.prune_previews(None);
     Ok(())
@@ -1310,12 +1140,10 @@ pub fn close_preview(
 /// Open the last export's folder after checking the renderer's path against the record.
 #[tauri::command]
 pub fn open_export_folder(
-    window: WebviewWindow,
     workspace: WorkspaceState<'_>,
     project_id: Uuid,
     path: String,
 ) -> NativeResult<()> {
-    trusted(&window)?;
     let record = {
         let workspace = workspace.lock().map_err(message)?;
         let project = workspace.project()?;
@@ -1342,12 +1170,10 @@ pub fn open_export_folder(
 /// Serve the last export in the system browser.
 #[tauri::command]
 pub fn open_in_browser(
-    window: WebviewWindow,
     workspace: WorkspaceState<'_>,
     site: SiteState<'_>,
     project_id: Uuid,
 ) -> NativeResult<String> {
-    trusted(&window)?;
     let project = {
         let workspace = workspace.lock().map_err(message)?;
         let project = workspace.project()?;

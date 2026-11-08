@@ -196,7 +196,7 @@ export function createProjectCommands(context: Context) {
     const { queue, accept, setShowStartPage, refreshRecent } = context;
     await openAlongside(async () => {
       await queue(async () => {
-        const opened = await requestProjectOpen(() => native<WorkspaceView | null>('open_project', { discard: false, folder, path: path ?? null, discardRecovery }));
+        const opened = await requestProjectOpen(() => native<WorkspaceView | null>('open_project', { folder, path: path ?? null, discardRecovery }));
         if (opened) { accept(opened); setShowStartPage(false); void refreshRecent(); }
       });
     });
@@ -206,7 +206,7 @@ export function createProjectCommands(context: Context) {
     const { queue, accept, setShowStartPage, refreshRecent } = context;
     await openAlongside(async () => {
       await queue(async () => {
-        const opened = await requestProjectOpen(() => native<WorkspaceView>('open_recent_project', { path, discard: false }));
+        const opened = await requestProjectOpen(() => native<WorkspaceView>('open_recent_project', { path }));
         if (!opened) return;
         accept(opened); setShowStartPage(false);
         void refreshRecent();
@@ -229,7 +229,7 @@ export function createProjectCommands(context: Context) {
     const { queue, accept, setShowStartPage, closePanel, setPendingRecovery, setNotice } = context;
     await openAlongside(async () => {
       await queue(async () => {
-        const recovered = await native<WorkspaceView>('recover_project', { projectId, discard: false });
+        const recovered = await native<WorkspaceView>('recover_project', { projectId });
         accept(recovered);
         setShowStartPage(false); closePanel('recovery'); setPendingRecovery(null);
         setNotice('Project recovered.');

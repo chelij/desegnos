@@ -1,9 +1,17 @@
 use crate::{
+    ai_access::{Access, AccessFailure, Connection, active_account, credential_key, resolve},
+    ai_job::{
+        ActiveJobs, Failure, interrupted_notice, lock, signed_out_notice, stopped_notice,
+        unsaved_cancel_notice,
+    },
     chatgpt::ChatgptState,
+    native_files::{
+        self, NativeResult, message, private_directory, read_bytes, regular_directory,
+        regular_file,
+    },
     workspace::{Workspace, WorkspaceView},
 };
 
-pub(crate) use crate::chatgpt::ChatgptState as ExportChatgptState;
 use desegnos_ai::{
     ApiKey, AuthenticationMethod, CancellationToken, ChatgptView, CredentialInfo,
     CredentialManager, CredentialStorage, ErrorKind, ModelInfo, OpenAiClient, ProviderClient,
@@ -20,20 +28,24 @@ use std::{
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
-use tauri::{AppHandle, Manager, State, WebviewWindow};
+use tauri::{AppHandle, Manager, State};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use uuid::Uuid;
 
-type NativeResult<T> = Result<T, String>;
 pub(crate) type AiState<'a> = State<'a, Mutex<GenerationService>>;
 type WorkspaceState<'a> = State<'a, Mutex<Workspace>>;
-// At most 20 attempts, two bounded 8 MiB replies each, plus reconstructed page source.
 const MAX_JOB_BYTES: u64 = 768 * 1024 * 1024;
 const MAX_CACHED_JOBS: usize = 16;
 const MAX_ATTEMPTS: usize = 20;
 
-fn message(error: impl std::fmt::Display) -> String {
-    error.to_string()
+const RECORD: &str = "generation record";
+
+fn read_json<T: for<'de> Deserialize<'de>>(path: &Path, limit: u64) -> NativeResult<T> {
+    native_files::read_json(path, limit, RECORD)
+}
+
+fn write_json(path: &Path, value: &impl Serialize) -> NativeResult<()> {
+    native_files::write_json(path, value, MAX_JOB_BYTES, RECORD)
 }
 
 fn collect_generation_targets(
@@ -73,7 +85,7 @@ fn capture_benchmark_output(
     enabled: bool,
 ) -> NativeResult<()> {
     if enabled {
-        private_directory(directory)?;
+        private_directory(directory, RECORD)?;
         write_markdown(
             &directory.join(format!("provider-output-{ordinal}.txt")),
             text,
@@ -200,24 +212,13 @@ fn is_unreadable_json(text: &str) -> bool {
     }
 }
 
-fn usage_cost_usd(settings: &ProviderSettings, usage: TokenUsage) -> Option<f64> {
-    let pricing = settings.pricing.as_ref()?;
-    pricing.validate(&settings.model).ok()?;
-    Some(
-        (usage.input_tokens as f64 * pricing.input_usd_per_million
-            + usage.output_tokens as f64 * pricing.output_usd_per_million)
-            / 1_000_000.0
-            + pricing.request_usd,
-    )
-}
-
 fn retry_covers_budget(
     settings: &ProviderSettings,
     estimate_usd: f64,
     usage: Option<TokenUsage>,
 ) -> bool {
     let first = usage
-        .and_then(|usage| usage_cost_usd(settings, usage))
+        .and_then(|usage| settings.usage_cost_usd(usage))
         .unwrap_or(estimate_usd);
     first.is_finite()
         && estimate_usd.is_finite()
@@ -326,14 +327,6 @@ fn accept_completed_candidate(
     result
 }
 
-fn trusted(window: &WebviewWindow) -> NativeResult<()> {
-    if window.label() == "editor" {
-        Ok(())
-    } else {
-        Err("Only the Desegnos editor can perform this operation.".into())
-    }
-}
-
 #[derive(ts_rs::TS, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[ts(rename = "GenerationStatus")]
 #[serde(rename_all = "camelCase")]
@@ -374,6 +367,26 @@ pub struct GenerationAttempt {
     finished_at: Option<String>,
     response_id: Option<String>,
     usage: Option<TokenUsage>,
+}
+
+impl GenerationAttempt {
+    /// Record the response id and token usage a provider call reported, returning the usage.
+    fn note_receipt(
+        &mut self,
+        result: &Result<ProviderResponse, ProviderError>,
+    ) -> Option<TokenUsage> {
+        let (response_id, usage) = match result {
+            Ok(response) => (Some(response.response_id.clone()), response.usage),
+            Err(error) => (error.response_id.clone(), error.usage),
+        };
+        if response_id.is_some() {
+            self.response_id = response_id;
+        }
+        if usage.is_some() {
+            self.usage = usage;
+        }
+        usage
+    }
 }
 
 #[derive(ts_rs::TS, Clone, Serialize, Deserialize)]
@@ -616,7 +629,7 @@ pub struct GenerationService {
     client: Result<OpenAiClient, String>,
     jobs: BTreeMap<Uuid, JobRecord>,
     unsaved_jobs: BTreeSet<Uuid>,
-    active: BTreeMap<Uuid, (usize, CancellationToken)>,
+    active: ActiveJobs,
 }
 
 async fn api_catalogue_for_key(
@@ -671,7 +684,7 @@ fn catalogue_identity(
     Ok(id)
 }
 
-fn provider_key(
+pub(super) fn provider_key(
     provider: ProviderId,
     local_authentication: bool,
     credentials: &CredentialManager,
@@ -701,23 +714,14 @@ pub(super) async fn api_model_for_key(
 }
 
 pub(super) async fn refresh_api_models(state: &Mutex<GenerationService>) -> NativeResult<()> {
-    let (provider, credentials, settings) = {
+    let (provider, settings) = {
         let service = state.lock().map_err(message)?;
         if service.authentication != AuthenticationMethod::ApiKey {
             return Ok(());
         }
-        (
-            service.provider,
-            service.credentials.clone(),
-            service.settings.clone(),
-        )
+        (service.provider, service.settings.clone())
     };
-    let local_authentication = settings.local_authentication;
-    let key = tauri::async_runtime::spawn_blocking(move || {
-        provider_key(provider, local_authentication, &credentials)
-    })
-    .await
-    .map_err(message)?;
+    let key = credential_key(state, provider, &settings).await;
     if let Ok(key) = key {
         // Safe provider failures belong in the returned model status, not an API-key fallback.
         let _ = api_catalogue_for_key(
@@ -735,31 +739,6 @@ pub(super) async fn refresh_api_models(state: &Mutex<GenerationService>) -> Nati
             .map_err(message)?
             .api_models
             .retain(|(id, _), _| *id != provider);
-    }
-    Ok(())
-}
-
-fn private_directory(path: &Path) -> NativeResult<()> {
-    if let Ok(metadata) = fs::symlink_metadata(path) {
-        if !metadata.is_dir() || metadata.file_type().is_symlink() {
-            return Err("Desegnos's generation directory is not a regular directory. The original data was preserved.".into());
-        }
-        return Ok(());
-    }
-    let mut builder = fs::DirBuilder::new();
-    builder.recursive(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::DirBuilderExt;
-        builder.mode(0o700);
-    }
-    builder.create(path).map_err(message)
-}
-
-fn regular_directory(path: &Path) -> NativeResult<()> {
-    let metadata = fs::symlink_metadata(path).map_err(message)?;
-    if !metadata.is_dir() || metadata.file_type().is_symlink() {
-        return Err("The generation folder is not a regular directory.".into());
     }
     Ok(())
 }
@@ -782,48 +761,6 @@ pub struct GenerationHistory {
     truncated: bool,
 }
 
-fn regular_file(path: &Path) -> NativeResult<()> {
-    let metadata = fs::symlink_metadata(path).map_err(message)?;
-    if !metadata.is_file() || metadata.file_type().is_symlink() {
-        return Err(
-            "A generation record is not a regular file. The original was preserved.".into(),
-        );
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        if metadata.nlink() > 1 {
-            return Err("A generation record has unexpected filesystem aliases. The original was preserved.".into());
-        }
-    }
-    Ok(())
-}
-
-fn read_limited(path: &Path, limit: u64) -> NativeResult<Vec<u8>> {
-    regular_file(path)?;
-    let file = File::open(path).map_err(message)?;
-    if file.metadata().map_err(message)?.len() > limit {
-        return Err(
-            "A generation record exceeds its size limit. The original was preserved.".into(),
-        );
-    }
-    let mut bytes = vec![];
-    file.take(limit + 1)
-        .read_to_end(&mut bytes)
-        .map_err(message)?;
-    if bytes.len() as u64 > limit {
-        return Err(
-            "A generation record exceeds its size limit. The original was preserved.".into(),
-        );
-    }
-    Ok(bytes)
-}
-
-fn read_json<T: for<'de> Deserialize<'de>>(path: &Path, limit: u64) -> NativeResult<T> {
-    let bytes = read_limited(path, limit)?;
-    serde_json::from_slice(&bytes).map_err(|_| "A generation record is damaged or uses an unsupported format. The original was preserved.".into())
-}
-
 /// A stored job is absent, not an error, when it was frozen by another requirements format or
 /// cannot be decoded as one. The current format has no compatibility path, so such records are
 /// never shown, resubmitted or upgraded; their files stay untouched on disk.
@@ -832,7 +769,7 @@ fn read_job_record(directory: &Path) -> NativeResult<Option<JobRecord>> {
     if !path.exists() {
         return Ok(None);
     }
-    let bytes = read_limited(&path, MAX_JOB_BYTES)?;
+    let bytes = read_bytes(&path, MAX_JOB_BYTES, RECORD)?;
     let Ok(probe) = serde_json::from_slice::<JobFormatProbe>(&bytes) else {
         return Ok(None);
     };
@@ -848,17 +785,6 @@ fn read_job_record(directory: &Path) -> NativeResult<Option<JobRecord>> {
     serde_json::from_slice(&bytes).map(Some).map_err(|_| {
         "A generation record is damaged. The original was preserved; it was not submitted or applied.".into()
     })
-}
-
-fn write_json(path: &Path, value: &impl Serialize) -> NativeResult<()> {
-    if path.exists() {
-        regular_file(path)?;
-    }
-    let bytes = serde_json::to_string(value).map_err(message)?;
-    if bytes.len() as u64 > MAX_JOB_BYTES {
-        return Err("The complete generation record exceeds its local storage limit.".into());
-    }
-    write_markdown(path, &bytes).map_err(message)
 }
 
 impl GenerationService {
@@ -922,7 +848,7 @@ impl GenerationService {
     }
 
     fn from_directory(directory: PathBuf) -> NativeResult<Self> {
-        let directory_error = private_directory(&directory).err();
+        let directory_error = private_directory(&directory, RECORD).err();
         let path = directory.join("settings.json");
         let loaded = if let Some(error) = directory_error {
             Err(error)
@@ -1012,7 +938,7 @@ impl GenerationService {
             client,
             jobs: BTreeMap::new(),
             unsaved_jobs: BTreeSet::new(),
-            active: BTreeMap::new(),
+            active: ActiveJobs::default(),
         };
         let preference = service.directory.join("provider.json");
         if preference.exists() {
@@ -1062,7 +988,7 @@ impl GenerationService {
         }
         Ok(())
     }
-    fn credentials_for(&mut self, provider: ProviderId) -> Arc<CredentialManager> {
+    pub(super) fn credentials_for(&mut self, provider: ProviderId) -> Arc<CredentialManager> {
         if provider == self.provider {
             return self.credentials.clone();
         }
@@ -1117,30 +1043,36 @@ impl GenerationService {
         Ok(())
     }
 
-    /// The provider, authentication and frozen settings an export job records.
-    pub(super) fn export_connection(&self) -> (AuthenticationMethod, ProviderId, ProviderSettings) {
-        (self.authentication, self.provider, self.settings.clone())
+    /// The selected provider, authentication and settings, with no ChatGPT account bound yet.
+    pub(super) fn connection(&self) -> Connection {
+        Connection {
+            provider: self.provider,
+            authentication: self.authentication,
+            settings: self.settings.clone(),
+            account_id: None,
+        }
     }
 
-    pub(super) fn export_client(
-        &self,
-        provider: ProviderId,
-        settings: &ProviderSettings,
-    ) -> NativeResult<ProviderClient> {
-        ProviderClient::with_settings(provider, self.client.clone()?, settings).map_err(message)
+    /// The access was resolved for the connection that is still selected.
+    pub(super) fn is_selected(&self, access: &Access) -> bool {
+        self.authentication == access.authentication
+            && self.provider == access.provider
+            && self.settings == access.settings
     }
 
-    pub(super) fn export_key(
-        &mut self,
-        provider: ProviderId,
-        settings: &ProviderSettings,
-    ) -> NativeResult<ApiKey> {
-        provider_key(
-            provider,
-            settings.local_authentication,
-            &self.credentials_for(provider),
-        )
-        .map_err(message)
+    /// The selected connection, unless its settings or sign-in method are in error.
+    pub(super) fn ready_connection(&self) -> NativeResult<Connection> {
+        if let Some(error) = self
+            .configuration_error
+            .as_ref()
+            .or(self.authentication_error.as_ref())
+        {
+            return Err(error.clone());
+        }
+        self.provider
+            .validate(&self.settings, self.authentication)
+            .map_err(message)?;
+        Ok(self.connection())
     }
 
     /// The same complete request check the paid send performs, without credentials or network.
@@ -1198,7 +1130,7 @@ impl GenerationService {
 
     fn persist(&mut self, record: JobRecord) -> NativeResult<GenerationJobView> {
         let directory = self.job_directory(record.view.project_id, record.view.job_id);
-        private_directory(&directory)?;
+        private_directory(&directory, RECORD)?;
         // The on-disk REQUIREMENTS.md is the job's first packet; later parts are frozen in the
         // job record with the summaries they carried forward.
         let primary = record
@@ -1208,7 +1140,7 @@ impl GenerationService {
             .map_or(&record.view.requirements, |batch| &batch.requirements);
         let markdown = directory.join("REQUIREMENTS.md");
         if markdown.exists() {
-            regular_file(&markdown)?;
+            regular_file(&markdown, RECORD)?;
             let file = File::open(&markdown).map_err(message)?;
             if file.metadata().map_err(message)?.len()
                 > desegnos_core::MAX_REQUIREMENTS_BYTES as u64
@@ -1240,7 +1172,7 @@ impl GenerationService {
             }
             let path = directory.join("CONTEXT.md");
             if path.exists() {
-                regular_file(&path)?;
+                regular_file(&path, RECORD)?;
                 if fs::metadata(&path).map_err(message)?.len()
                     > desegnos_core::MAX_REQUIREMENTS_BYTES as u64
                     || fs::read(&path).map_err(message)? != context.markdown.as_bytes()
@@ -1308,7 +1240,6 @@ impl GenerationService {
         Ok(Some(view))
     }
 
-    // Compact text-only index of current-format requests.
     fn history_path(&self, project_id: Uuid) -> PathBuf {
         self.directory
             .join(project_id.to_string())
@@ -1322,7 +1253,7 @@ impl GenerationService {
         if !path.exists() {
             return Ok(Vec::new());
         }
-        let bytes = read_limited(&path, MAX_JOB_BYTES)?;
+        let bytes = read_bytes(&path, MAX_JOB_BYTES, RECORD)?;
         let Ok(index) = serde_json::from_slice::<RequestHistoryIndex>(&bytes) else {
             return Ok(Vec::new());
         };
@@ -1433,7 +1364,7 @@ impl GenerationService {
             let mut entries = Vec::new();
             let mut observations = Vec::new();
             if directory.exists() {
-                regular_directory(&directory)?;
+                regular_directory(&directory, RECORD)?;
                 for entry in fs::read_dir(directory).map_err(message)? {
                     let entry = entry.map_err(message)?;
                     let Some(id) = entry
@@ -1510,7 +1441,7 @@ impl GenerationService {
                 }
             }
         }
-        private_directory(path.parent().ok_or("Missing history directory.")?)?;
+        private_directory(path.parent().ok_or("Missing history directory.")?, RECORD)?;
         desegnos_core::compact_request_history(&mut entries);
         let index = RequestHistoryIndex {
             format: desegnos_core::CURRENT_REQUIREMENTS_FORMAT,
@@ -1529,7 +1460,7 @@ impl GenerationService {
                 truncated: false,
             });
         }
-        regular_directory(&directory)?;
+        regular_directory(&directory, RECORD)?;
         let mut jobs = Vec::new();
         let mut skipped = 0;
         let mut count = 0;
@@ -1548,7 +1479,7 @@ impl GenerationService {
             }
             match self.saved_job(project_id, id) {
                 Ok(Some(view)) => {
-                    let first_request = frozen_first_request(&view);
+                    let first_request = view.requirements.first_request_text();
                     let created_at = view
                         .created_at
                         .or_else(|| {
@@ -1611,7 +1542,7 @@ impl GenerationService {
                 .keys()
                 .find(|id| {
                     **id != protected_job_id
-                        && !self.active.contains_key(id)
+                        && !self.active.contains(**id)
                         && !self.unsaved_jobs.contains(id)
                 })
                 .copied();
@@ -1693,9 +1624,9 @@ impl GenerationService {
         if matches!(
             record.view.status,
             JobStatus::Generating | JobStatus::Applying
-        ) && !self.active.contains_key(&record.view.job_id)
+        ) && !self.active.contains(record.view.job_id)
         {
-            record.view.message = "Desegnos stopped before this operation finished. The outcome may be uncertain; no request was automatically repeated. Review the project before an explicit retry.".into();
+            record.view.message = interrupted_notice("This generation");
             record.transition(JobStatus::Unknown);
             return self.persist(record).map(Some);
         }
@@ -1993,7 +1924,7 @@ impl GenerationService {
             .map_err(message)?;
             let path = directory.join("CONTEXT.md");
             if path.exists() {
-                regular_file(&path)?;
+                regular_file(&path, RECORD)?;
                 fs::remove_file(path).map_err(message)?;
             }
         }
@@ -2012,7 +1943,7 @@ impl GenerationService {
         record.view.repair_area_count = 0;
         let reply_path = directory.join("REPLY.txt");
         if reply_path.exists() {
-            regular_file(&reply_path)?;
+            regular_file(&reply_path, RECORD)?;
             fs::remove_file(reply_path).map_err(message)?;
         }
         record.view.raw_reply = None;
@@ -2036,17 +1967,12 @@ impl GenerationService {
         });
         record.transition(JobStatus::Generating);
         let view = self.persist(record)?;
-        let cancellation = CancellationToken::new();
-        self.active.insert(job_id, (ordinal, cancellation.clone()));
+        let cancellation = self.active.start(job_id, ordinal);
         Ok((view, cancellation))
     }
 
     fn progress(&mut self, job_id: Uuid, ordinal: usize, progress: desegnos_ai::ProviderProgress) {
-        if self
-            .active
-            .get(&job_id)
-            .is_none_or(|(active, token)| *active != ordinal || token.is_cancelled())
-        {
+        if !self.active.is_current(job_id, ordinal) {
             return;
         }
         if let Some(record) = self.jobs.get_mut(&job_id) {
@@ -2082,16 +2008,12 @@ impl GenerationService {
         job_id: Uuid,
         ordinal: usize,
         usage: Option<TokenUsage>,
-    ) -> NativeResult<()> {
-        if self
-            .active
-            .get(&job_id)
-            .is_none_or(|(active, token)| *active != ordinal || token.is_cancelled())
-        {
-            return Ok(());
+    ) {
+        if !self.active.is_current(job_id, ordinal) {
+            return;
         }
         let Some(record) = self.jobs.get_mut(&job_id) else {
-            return Ok(());
+            return;
         };
         record.view.message = UNREADABLE_REPLY_RETRY_MESSAGE.into();
         record.view.received_bytes = 0;
@@ -2105,23 +2027,24 @@ impl GenerationService {
             message: "The AI reply was not readable JSON, so Desegnos sent the same frozen request once more.".into(),
         });
         let record = record.clone();
-        self.persist_retaining(record)?;
-        Ok(())
+        if let Err(error) = self.persist_retaining(record)
+            && let Some(record) = self.jobs.get_mut(&job_id)
+        {
+            record.view.message = format!(
+                "{} Its local record could not be saved: {error}",
+                record.view.message
+            );
+        }
     }
 
     fn finish(
         &mut self,
         original: &Project,
-        _current: Option<&Project>,
         job_id: Uuid,
         ordinal: usize,
         result: Result<ProviderResponse, ProviderError>,
     ) -> NativeResult<()> {
-        if self
-            .active
-            .get(&job_id)
-            .is_none_or(|(active, _)| *active != ordinal)
-        {
+        if !self.active.is_registered(job_id, ordinal) {
             let mut record = if let Some(record) = self.jobs.get(&job_id) {
                 record.clone()
             } else {
@@ -2141,18 +2064,9 @@ impl GenerationService {
                 .iter_mut()
                 .find(|attempt| attempt.ordinal == ordinal)
             {
-                let (response_id, usage) = match result {
-                    Ok(response) => (Some(response.response_id), response.usage),
-                    Err(error) => (error.response_id, error.usage),
-                };
-                if response_id.is_some() {
-                    attempt.response_id = response_id;
-                }
-                if usage.is_some() {
-                    attempt.usage = usage;
-                    if latest {
-                        record.view.usage = usage;
-                    }
+                let usage = attempt.note_receipt(&result);
+                if usage.is_some() && latest {
+                    record.view.usage = usage;
                 }
                 attempt.finished_at.get_or_insert_with(now);
                 if latest {
@@ -2162,31 +2076,21 @@ impl GenerationService {
             }
             return Ok(());
         }
-        let cancelled = self
-            .active
-            .get(&job_id)
-            .is_some_and(|(_, token)| token.is_cancelled());
+        let cancelled = self.active.is_cancelled(job_id);
         let Some(mut record) = self.jobs.get(&job_id).cloned() else {
             return Err("The active generation record is unavailable.".into());
         };
         if record.view.status != JobStatus::Generating || cancelled {
             if let Some(attempt) = record.view.attempts.last_mut() {
-                let (response_id, usage) = match result {
-                    Ok(response) => (Some(response.response_id), response.usage),
-                    Err(error) => (error.response_id, error.usage),
-                };
-                if response_id.is_some() {
-                    attempt.response_id = response_id;
-                }
+                let usage = attempt.note_receipt(&result);
                 if usage.is_some() {
-                    attempt.usage = usage;
                     record.view.usage = usage;
                 }
                 self.record_validation_counts(&mut record);
                 record.transition(record.view.status);
                 self.persist_retaining(record)?;
             }
-            self.active.remove(&job_id);
+            self.active.remove(job_id);
             return Ok(());
         }
         let status = match result {
@@ -2218,14 +2122,10 @@ impl GenerationService {
                 if let Some(format) = &error.response_format {
                     record.view.received_bytes = record.view.received_bytes.max(format.body_bytes);
                 }
-                let status = if error.kind == ErrorKind::Cancelled {
-                    JobStatus::Cancelled
-                } else if error.outcome == SubmissionOutcome::Unknown
-                    && !error.http_status.is_some_and(|status| status >= 400)
-                {
-                    JobStatus::Unknown
-                } else {
-                    JobStatus::Failed
+                let status = match Failure::of(&error) {
+                    Failure::Cancelled => JobStatus::Cancelled,
+                    Failure::Unknown => JobStatus::Unknown,
+                    Failure::Failed => JobStatus::Failed,
                 };
                 record.view.message = error.to_string();
                 record.view.usage = error.usage;
@@ -2279,8 +2179,8 @@ impl GenerationService {
         };
         record.transition(status);
         self.record_validation_counts(&mut record);
-        let _ = self.persist_retaining(record);
-        self.active.remove(&job_id);
+        self.persist_retaining(record)?;
+        self.active.remove(job_id);
         Ok(())
     }
 
@@ -2331,11 +2231,7 @@ impl GenerationService {
     }
 
     fn handle_finish_error(&mut self, job_id: Uuid, ordinal: usize, error: &str) {
-        if self
-            .active
-            .get(&job_id)
-            .is_none_or(|(active, _)| *active != ordinal)
-        {
+        if !self.active.is_registered(job_id, ordinal) {
             return;
         }
         if let Some(record) = self.jobs.get_mut(&job_id)
@@ -2346,13 +2242,11 @@ impl GenerationService {
             );
             record.transition(JobStatus::Unknown);
         }
-        self.active.remove(&job_id);
+        self.active.remove(job_id);
     }
 
     fn cancel(&mut self, project: &Project, job_id: Uuid) -> NativeResult<GenerationJobView> {
-        if let Some((_, token)) = self.active.get(&job_id) {
-            token.cancel();
-        }
+        self.active.cancel(job_id);
         let mut record = if let Some(record) = self
             .jobs
             .get(&job_id)
@@ -2374,30 +2268,30 @@ impl GenerationService {
         ) {
             return Err("This request is no longer running. Review or discard its result.".into());
         }
+        record.view.message = stopped_notice(record.view.authentication);
+        Ok(self.record_cancelled(record))
+    }
+
+    /// Keep a cancelled job even when its record cannot be saved: late output stays blocked
+    /// and the message says the receipt is missing.
+    fn record_cancelled(&mut self, mut record: JobRecord) -> GenerationJobView {
         record.view.candidate = None;
-        record.view.message = if record.view.authentication == AuthenticationMethod::Chatgpt {
-            "Stopped. A submitted request may still consume ChatGPT plan allowance or credits. Late output cannot be applied.".into()
-        } else {
-            "Stopped. A submitted request may still incur a charge. Late output cannot be applied."
-                .into()
-        };
         record.transition(JobStatus::Cancelled);
+        let job_id = record.view.job_id;
         self.jobs.insert(job_id, record.clone());
         match self.persist(record.clone()) {
-            Ok(view) => Ok(view),
+            Ok(view) => view,
             Err(error) => {
-                record.view.message = format!(
-                    "Generation cancelled and late output blocked, but its local cancellation record could not be saved: {error} Restore writable storage. A submitted request may still incur a charge; restart will mark it uncertain and never resubmit automatically."
-                );
+                record.view.message = unsaved_cancel_notice(&error);
                 let view = record.view.clone();
                 self.jobs.insert(job_id, record);
-                Ok(view)
+                view
             }
         }
     }
 
     pub(super) fn ensure_switch_allowed(&self) -> NativeResult<()> {
-        if self.active.values().any(|(_, token)| !token.is_cancelled()) {
+        if self.active.any_running() {
             return Err("Generation is still running. Wait for its result or cancel it before switching projects; local editing and saving remain available.".into());
         }
         Ok(())
@@ -2417,41 +2311,17 @@ impl GenerationService {
             .map(|record| record.view.job_id)
             .collect();
         for job_id in jobs {
-            if let Some((_, token)) = self.active.get(&job_id) {
-                token.cancel();
-            }
+            self.active.cancel(job_id);
             let mut record = self
                 .jobs
                 .get(&job_id)
                 .cloned()
                 .ok_or("The account's generation record is unavailable.")?;
-            record.view.message = "Account signed out. Generation was cancelled and late output cannot be applied. A submitted request may still consume ChatGPT plan allowance or credits.".into();
-            record.transition(JobStatus::Cancelled);
-            self.jobs.insert(job_id, record.clone());
-            if let Err(error) = self.persist(record.clone()) {
-                record.view.message = format!(
-                    "Account generation was cancelled and late output blocked, but the local cancellation record could not be saved: {error} Restore writable storage. Restart will never repeat it automatically."
-                );
-                self.jobs.insert(job_id, record);
-            }
+            record.view.message = signed_out_notice(AuthenticationMethod::Chatgpt);
+            self.record_cancelled(record);
         }
         Ok(())
     }
-}
-
-async fn credential_key(
-    state: &AiState<'_>,
-    provider: ProviderId,
-    settings: &ProviderSettings,
-) -> NativeResult<ApiKey> {
-    let credentials = state.lock().map_err(message)?.credentials_for(provider);
-    let local_authentication = settings.local_authentication;
-    tauri::async_runtime::spawn_blocking(move || {
-        provider_key(provider, local_authentication, &credentials)
-    })
-    .await
-    .map_err(message)?
-    .map_err(message)
 }
 
 /// No lock is held across network I/O. The cache key binds results to the captured credential/account.
@@ -2743,12 +2613,10 @@ pub(super) async fn settings_view(
 
 #[tauri::command]
 pub async fn get_ai_settings(
-    window: WebviewWindow,
     state: AiState<'_>,
     chatgpt: State<'_, ChatgptState>,
     refresh_models: Option<bool>,
 ) -> NativeResult<AiSettingsView> {
-    trusted(&window)?;
     if refresh_models.unwrap_or(false) {
         let (authentication, client) = {
             let service = state.lock().map_err(message)?;
@@ -2779,12 +2647,10 @@ pub async fn get_ai_settings(
 
 #[tauri::command]
 pub async fn set_ai_provider(
-    window: WebviewWindow,
     state: AiState<'_>,
     chatgpt: State<'_, ChatgptState>,
     provider: ProviderId,
 ) -> NativeResult<AiSettingsView> {
-    trusted(&window)?;
     state
         .lock()
         .map_err(message)?
@@ -2795,13 +2661,11 @@ pub async fn set_ai_provider(
 
 #[tauri::command]
 pub async fn save_ai_settings(
-    window: WebviewWindow,
     state: AiState<'_>,
     chatgpt: State<'_, ChatgptState>,
     settings: ProviderSettings,
     connection_only: Option<bool>,
 ) -> NativeResult<AiSettingsView> {
-    trusted(&window)?;
     if connection_only.unwrap_or(false) {
         {
             let mut service = state.lock().map_err(message)?;
@@ -2860,14 +2724,12 @@ pub async fn save_ai_settings(
 
 #[tauri::command]
 pub async fn set_ai_key(
-    window: WebviewWindow,
     state: AiState<'_>,
     chatgpt: State<'_, ChatgptState>,
     image: Option<bool>,
     key: String,
     storage: CredentialStorage,
 ) -> NativeResult<AiSettingsView> {
-    trusted(&window)?;
     let (credentials, provider) = {
         let service = state.lock().map_err(message)?;
         if image.unwrap_or(false) {
@@ -2895,12 +2757,10 @@ pub async fn set_ai_key(
 
 #[tauri::command]
 pub async fn remove_ai_key(
-    window: WebviewWindow,
     state: AiState<'_>,
     chatgpt: State<'_, ChatgptState>,
     image: Option<bool>,
 ) -> NativeResult<AiSettingsView> {
-    trusted(&window)?;
     let (credentials, provider) = {
         let service = state.lock().map_err(message)?;
         if image.unwrap_or(false) {
@@ -2932,11 +2792,9 @@ pub struct AccessResult {
 
 #[tauri::command]
 pub async fn test_ai_access(
-    window: WebviewWindow,
     state: AiState<'_>,
     chatgpt: State<'_, ChatgptState>,
 ) -> NativeResult<AccessResult> {
-    trusted(&window)?;
     refresh_image_access(&state, &chatgpt, true).await?;
     let (client, settings, authentication, provider) = {
         let service = state.lock().map_err(message)?;
@@ -2995,36 +2853,19 @@ pub async fn test_ai_access(
 
 #[tauri::command]
 pub async fn prepare_generation(
-    window: WebviewWindow,
     workspace: WorkspaceState<'_>,
     state: AiState<'_>,
     chatgpt: State<'_, ChatgptState>,
     element_ids: Option<Vec<Uuid>>,
     reference_ids: Option<Vec<Uuid>>,
 ) -> NativeResult<GenerationJobView> {
-    trusted(&window)?;
     refresh_image_access(&state, &chatgpt, false).await?;
     let (authentication, provider) = {
         let service = state.lock().map_err(message)?;
         (service.authentication, service.provider)
     };
     let account_id = if authentication == AuthenticationMethod::Chatgpt {
-        let view = chatgpt.view().await;
-        let account = view
-            .accounts
-            .iter()
-            .find(|account| Some(account.id) == view.active_account_id)
-            .ok_or("Sign in to ChatGPT before preparing generation.")?;
-        if !account.connected || !account.plan_enabled {
-            return Err(
-                "Sign in to this ChatGPT account and grant plan usage before generating.".into(),
-            );
-        }
-        if account.storage_repair_required {
-            return Err("Keep Desegnos open and repair this account's secure storage in AI settings before generating.".into());
-        }
-        let account_id = account.id;
-        Some(account_id)
+        Some(active_account(&chatgpt, "generating").await?)
     } else {
         None
     };
@@ -3044,12 +2885,10 @@ pub async fn prepare_generation(
 
 #[tauri::command]
 pub fn get_generation(
-    window: WebviewWindow,
     workspace: WorkspaceState<'_>,
     state: AiState<'_>,
     project_id: Uuid,
 ) -> NativeResult<Option<GenerationJobView>> {
-    trusted(&window)?;
     let mut workspace = workspace.lock().map_err(message)?;
     let project = workspace.project()?;
     if project.id != project_id {
@@ -3063,12 +2902,10 @@ pub fn get_generation(
 
 #[tauri::command]
 pub fn list_generations(
-    window: WebviewWindow,
     workspace: WorkspaceState<'_>,
     state: AiState<'_>,
     project_id: Uuid,
 ) -> NativeResult<GenerationHistory> {
-    trusted(&window)?;
     if workspace.lock().map_err(message)?.project()?.id != project_id {
         return Err("The active project changed.".into());
     }
@@ -3077,13 +2914,11 @@ pub fn list_generations(
 
 #[tauri::command]
 pub fn get_past_generation(
-    window: WebviewWindow,
     workspace: WorkspaceState<'_>,
     state: AiState<'_>,
     project_id: Uuid,
     job_id: Uuid,
 ) -> NativeResult<GenerationJobView> {
-    trusted(&window)?;
     if workspace.lock().map_err(message)?.project()?.id != project_id {
         return Err("The active project changed.".into());
     }
@@ -3130,290 +2965,168 @@ fn maintain_dossier(
     Ok(view)
 }
 
-fn frozen_first_request(view: &GenerationJobView) -> String {
-    let mut fence = None;
-    let mut block = String::new();
-    for line in view.requirements.markdown.lines() {
-        if let Some(end) = &fence {
-            if line == end {
-                if let Ok(value) = serde_json::from_str::<serde_json::Value>(&block)
-                    && value.get("elementId").is_some()
-                    && let Some(prompt) = value.get("request").and_then(|value| value.as_str())
-                {
-                    return prompt.into();
-                }
-                fence = None;
-            } else {
-                block.push_str(line);
-                block.push('\n');
-            }
-        } else if let Some(start) = line.strip_suffix("json")
-            && start.len() >= 3
-            && start.bytes().all(|byte| byte == b'`')
-        {
-            fence = Some(start.to_owned());
-            block.clear();
-        }
-    }
-    String::new()
-}
-
 #[allow(clippy::too_many_arguments)]
 async fn submit(
     app: AppHandle,
-    window: WebviewWindow,
     workspace: WorkspaceState<'_>,
     state: AiState<'_>,
     chatgpt: State<'_, ChatgptState>,
     job_id: Uuid,
     retry: bool,
 ) -> NativeResult<GenerationJobView> {
-    trusted(&window)?;
-    let (authentication, account_id, provider, frozen_settings) = {
+    let account_id = {
         let workspace = workspace.lock().map_err(message)?;
         let mut service = state.lock().map_err(message)?;
-        let record = service.record(workspace.project()?, job_id)?;
-        (
-            record.view.authentication,
-            record.view.chatgpt_account_id,
-            record.view.provider,
-            record.view.settings.clone(),
-        )
+        service
+            .record(workspace.project()?, job_id)?
+            .view
+            .chatgpt_account_id
     };
-    let epoch = account_id.map(|id| chatgpt.epoch(id)).transpose()?;
-    let begin = || {
+    let binding = chatgpt.binding(account_id)?;
+    let (original, view, cancellation) = chatgpt.with_binding(binding, || {
         let workspace = workspace.lock().map_err(message)?;
         let project = workspace.project()?.clone();
         let mut service = state.lock().map_err(message)?;
-        let client =
-            ProviderClient::with_settings(provider, service.client.clone()?, &frozen_settings)
-                .map_err(message)?;
         let (view, cancellation) = service.begin(&project, job_id, retry)?;
-        Ok((project, client, view, cancellation))
-    };
-    let (original, client, view, cancellation) =
-        if let (Some(account_id), Some(epoch)) = (account_id, epoch) {
-            chatgpt.with_epoch(account_id, epoch, begin)?
-        } else {
-            begin()?
-        };
+        Ok((project, view, cancellation))
+    })?;
     let job_id = view.job_id;
     let request = view.clone();
     tauri::async_runtime::spawn(async move {
         let ordinal = request.attempts.len();
-        let result = async {
-            let mut account_model = None;
-            let mut discovery_error = None;
-            // Keep preparation local. All credential refresh/model discovery belongs to
-            // the registered, cancellable attempt, before any paid generation submission.
-            let credentials = async {
-                if authentication == AuthenticationMethod::Chatgpt {
-                    let account_id = account_id.ok_or(
-                        "This ChatGPT request has no bound account. Prepare a new request.",
-                    )?;
-                    let chatgpt = app.state::<ChatgptState>();
-                    let manager = chatgpt.manager()?;
-                    let mut available = chatgpt.view().await;
-                    if available.models.is_empty() {
-                        let client = app
-                            .state::<Mutex<GenerationService>>()
-                            .lock()
-                            .map_err(message)?
-                            .client
-                            .clone()?;
-                        available = manager
-                            .discover_models(account_id, &client, &cancellation)
-                            .await
-                            .map_err(message)?;
-                    }
-                    if available.active_account_id != Some(account_id) {
-                        return Err(
-                            "The selected ChatGPT account changed. Prepare the request again."
-                                .into(),
-                        );
-                    }
-                    if let Some(error) = available.models_provider_error {
-                        let reason = error.message();
-                        discovery_error = Some(error);
-                        return Err(reason);
-                    }
-                    account_model = Some(available.selected_model(&request.settings).cloned());
-                    manager
-                        .bearer(account_id, &cancellation)
-                        .await
-                        .map_err(message)
-                } else {
-                    credential_key(
-                        &app.state::<Mutex<GenerationService>>(),
-                        provider,
-                        &request.settings,
-                    )
-                    .await
-                }
-            };
-            let key = cancellation
-                .run_until_cancelled(credentials)
-                .await
-                .ok_or_else(|| {
-                    ProviderError::new(ErrorKind::Cancelled, SubmissionOutcome::NotSubmitted)
-                })?
-                .map_err(|_| {
-                    discovery_error.unwrap_or_else(|| {
-                        ProviderError::new(
-                            ErrorKind::MissingCredential,
-                            SubmissionOutcome::NotSubmitted,
-                        )
-                    })
-                })?;
-            let account_model = account_model.transpose()?;
-            let api_model = if authentication == AuthenticationMethod::ApiKey {
-                Some(
-                    api_model_for_key(
-                        &app.state::<Mutex<GenerationService>>(),
-                        provider,
-                        &request.settings,
-                        &key,
-                        &cancellation,
-                    )
-                    .await?,
-                )
-            } else {
-                None
-            };
-
-            let (shared_app, request_ref, key_ref, cancel_ref, client_ref) =
-                (&app, &request, &key, &cancellation, &client);
-            let ask = |requirements: &RequirementsSnapshot| {
-                let progress_app = shared_app.clone();
-                let requirements = requirements.clone();
-                let account_model = account_model.clone();
-                let api_model = api_model.clone();
-                async move {
-                    let schema = desegnos_core::result_schema();
-                    if let Some(model) = &account_model {
-                        let estimate = client_ref.estimate(
-                            request_ref.authentication,
-                            &requirements,
-                            request_ref.generation_mode,
-                            &schema,
-                            &request_ref.settings,
-                        )?;
-                        model.validate_input(estimate.input_token_upper_bound)?;
-                    }
-                    if let Some(model) = &api_model {
-                        let estimate = client_ref.estimate(
-                            request_ref.authentication,
-                            &requirements,
-                            request_ref.generation_mode,
-                            &schema,
-                            &request_ref.settings,
-                        )?;
-                        model.validate_api_input(
-                            &request_ref.settings,
-                            estimate.input_token_upper_bound,
-                        )?;
-                    }
-                    client_ref
-                        .generate(
-                            desegnos_ai::GenerationRequest {
-                                authentication: request_ref.authentication,
-                                snapshot: &requirements,
-                                mode: request_ref.generation_mode,
-                                schema: &schema,
-                                settings: &request_ref.settings,
-                                key: key_ref,
-                                cancellation: cancel_ref,
-                            },
-                            move |progress| {
-                                if let Ok(mut service) =
-                                    progress_app.state::<Mutex<GenerationService>>().lock()
-                                {
-                                    service.progress(job_id, ordinal, progress);
-                                }
-                            },
-                        )
-                        .await
-                }
-            };
-            let mut send = || {
-                let response = ask(&request.requirements);
-                async move { accept_completed_candidate(response.await) }
-            };
-            let (result, _) = ask_with_one_unreadable_reply_retry(
-                &mut send,
-                &cancellation,
-                &request.settings,
-                request.estimate_usd,
-                |usage| {
-                    if let Ok(mut service) = app.state::<Mutex<GenerationService>>().lock() {
-                        let _ = service.retrying_after_unreadable_reply(job_id, ordinal, usage);
-                    }
-                },
-            )
-            .await;
-            result
-        }
-        .await;
-        let workspace_state = app.state::<Mutex<Workspace>>();
-        let service_state = app.state::<Mutex<GenerationService>>();
-        if let Ok(mut workspace) = workspace_state.lock()
-            && let Ok(mut service) = service_state.lock()
-        {
-            let current = workspace.project().ok().cloned();
-            if let Err(error) = service.finish(&original, current.as_ref(), job_id, ordinal, result)
-            {
-                service.handle_finish_error(job_id, ordinal, &error);
-            } else if current
-                .as_ref()
-                .is_some_and(|project| project.id == original.id)
-                && let Some(record) = service.jobs.get(&job_id)
-            {
-                let view = record.view.clone();
-                if let Err(error) = maintain_dossier(&mut workspace, &mut service, view)
-                    && let Some(record) = service.jobs.get_mut(&job_id)
-                {
-                    record.view.dossier_error = Some(format!(
-                        "The result is preserved, but its project dossier could not be saved: {error}"
-                    ));
-                }
-            }
-        }
+        let result = attempt(&app, &request, ordinal, &cancellation).await;
+        record_attempt(&app, &original, job_id, ordinal, result);
     });
     Ok(view)
+}
+
+/// Resolve access inside the registered, cancellable attempt, then send the frozen request.
+/// Credential refresh and model discovery happen here, before any paid submission.
+async fn attempt(
+    app: &AppHandle,
+    request: &GenerationJobView,
+    ordinal: usize,
+    cancellation: &CancellationToken,
+) -> Result<ProviderResponse, ProviderError> {
+    let job_id = request.job_id;
+    let connection = Connection {
+        provider: request.provider,
+        authentication: request.authentication,
+        settings: request.settings.clone(),
+        account_id: request.chatgpt_account_id,
+    };
+    let access = resolve(
+        &app.state::<Mutex<GenerationService>>(),
+        &app.state::<ChatgptState>(),
+        &connection,
+        cancellation,
+    )
+    .await
+    .map_err(AccessFailure::into_provider_error)?;
+    let schema = desegnos_core::result_schema();
+    let (access, schema) = (&access, &schema);
+    let ask = |requirements: &RequirementsSnapshot| {
+        let progress_app = app.clone();
+        let requirements = requirements.clone();
+        async move {
+            access.check(&requirements, request.generation_mode, schema)?;
+            access
+                .client
+                .generate(
+                    desegnos_ai::GenerationRequest {
+                        authentication: access.authentication,
+                        snapshot: &requirements,
+                        mode: request.generation_mode,
+                        schema,
+                        settings: &access.settings,
+                        key: &access.key,
+                        cancellation,
+                    },
+                    move |progress| {
+                        lock(&progress_app.state::<Mutex<GenerationService>>())
+                            .progress(job_id, ordinal, progress);
+                    },
+                )
+                .await
+        }
+    };
+    let mut send = || {
+        let response = ask(&request.requirements);
+        async move { accept_completed_candidate(response.await) }
+    };
+    let (result, _) = ask_with_one_unreadable_reply_retry(
+        &mut send,
+        cancellation,
+        &request.settings,
+        request.estimate_usd,
+        |usage| {
+            lock(&app.state::<Mutex<GenerationService>>()).retrying_after_unreadable_reply(
+                job_id, ordinal, usage,
+            );
+        },
+    )
+    .await;
+    result
+}
+
+/// Store an attempt's outcome and, when the project is still open, its dossier. A poisoned
+/// lock must not leave the job stuck in Generating, so both locks recover.
+fn record_attempt(
+    app: &AppHandle,
+    original: &Project,
+    job_id: Uuid,
+    ordinal: usize,
+    result: Result<ProviderResponse, ProviderError>,
+) {
+    let workspace_state = app.state::<Mutex<Workspace>>();
+    let service_state = app.state::<Mutex<GenerationService>>();
+    let mut workspace = lock(&workspace_state);
+    let mut service = lock(&service_state);
+    let still_open = workspace
+        .project()
+        .is_ok_and(|project| project.id == original.id);
+    if let Err(error) = service.finish(original, job_id, ordinal, result) {
+        service.handle_finish_error(job_id, ordinal, &error);
+    } else if still_open && let Some(record) = service.jobs.get(&job_id) {
+        let view = record.view.clone();
+        if let Err(error) = maintain_dossier(&mut workspace, &mut service, view)
+            && let Some(record) = service.jobs.get_mut(&job_id)
+        {
+            record.view.dossier_error = Some(format!(
+                "The result is preserved, but its project dossier could not be saved: {error}"
+            ));
+        }
+    }
 }
 
 #[tauri::command]
 pub async fn start_generation(
     app: AppHandle,
-    window: WebviewWindow,
     workspace: WorkspaceState<'_>,
     state: AiState<'_>,
     chatgpt: State<'_, ChatgptState>,
     job_id: Uuid,
 ) -> NativeResult<GenerationJobView> {
-    submit(app, window, workspace, state, chatgpt, job_id, false).await
+    submit(app, workspace, state, chatgpt, job_id, false).await
 }
 
 #[tauri::command]
 pub async fn retry_generation(
     app: AppHandle,
-    window: WebviewWindow,
     workspace: WorkspaceState<'_>,
     state: AiState<'_>,
     chatgpt: State<'_, ChatgptState>,
     job_id: Uuid,
 ) -> NativeResult<GenerationJobView> {
-    submit(app, window, workspace, state, chatgpt, job_id, true).await
+    submit(app, workspace, state, chatgpt, job_id, true).await
 }
 
 #[tauri::command]
 pub fn cancel_generation(
-    window: WebviewWindow,
     workspace: WorkspaceState<'_>,
     state: AiState<'_>,
     job_id: Uuid,
 ) -> NativeResult<GenerationJobView> {
-    trusted(&window)?;
     let workspace = workspace.lock().map_err(message)?;
     let mut service = state.lock().map_err(message)?;
     service.cancel(workspace.project()?, job_id)
@@ -3421,12 +3134,10 @@ pub fn cancel_generation(
 
 #[tauri::command]
 pub fn discard_generation(
-    window: WebviewWindow,
     workspace: WorkspaceState<'_>,
     state: AiState<'_>,
     job_id: Uuid,
 ) -> NativeResult<GenerationJobView> {
-    trusted(&window)?;
     let workspace = workspace.lock().map_err(message)?;
     let mut service = state.lock().map_err(message)?;
     let mut record = service.record(workspace.project()?, job_id)?;
@@ -3445,14 +3156,12 @@ pub fn discard_generation(
 
 #[tauri::command]
 pub async fn apply_generation(
-    window: WebviewWindow,
     workspace: WorkspaceState<'_>,
     state: AiState<'_>,
     chatgpt: State<'_, ChatgptState>,
     job_id: Uuid,
     accepted_decision_indices: Vec<usize>,
 ) -> NativeResult<WorkspaceView> {
-    trusted(&window)?;
     let prepared = {
         let workspace = workspace.lock().map_err(message)?;
         let project = workspace.project()?;
@@ -3488,7 +3197,7 @@ pub async fn apply_generation(
         let client = if image_requests.is_empty() {
             None
         } else {
-            service.client.clone().ok()
+            Some(service.client.clone())
         };
         let authentication = record.view.authentication;
         let provider = record.view.provider;
@@ -3496,12 +3205,12 @@ pub async fn apply_generation(
         let image_key = if image_requests.is_empty() || provider != ProviderId::Openai {
             None
         } else {
-            service.image_credentials.key().ok()
+            Some(service.image_credentials.key())
         };
         let main_key = if image_requests.is_empty() || provider != ProviderId::Openai {
             None
         } else if authentication == AuthenticationMethod::ApiKey {
-            service.credentials.key().ok()
+            Some(service.credentials.key())
         } else {
             None
         };
@@ -3526,35 +3235,43 @@ pub async fn apply_generation(
         image_key,
         main_key,
     ) = prepared;
+    let mut image_failures = Vec::new();
     let generated = if image_requests.is_empty() {
         BTreeMap::new()
     } else {
-        let key = if let Some(key) = image_key.or(main_key) {
-            Some(key)
-        } else if authentication == AuthenticationMethod::Chatgpt {
-            match account_id {
-                Some(account) => Some(
-                    chatgpt
-                        .manager()?
-                        .bearer(account, &CancellationToken::new())
-                        .await
-                        .map_err(message)?,
-                ),
-                None => None,
-            }
-        } else {
-            None
+        let key = match (image_key, main_key) {
+            (Some(Ok(key)), _) | (_, Some(Ok(key))) => Ok(key),
+            (Some(Err(error)), _) | (_, Some(Err(error))) => Err(message(error)),
+            (None, None) if authentication == AuthenticationMethod::Chatgpt => match account_id {
+                Some(account) => chatgpt
+                    .manager()?
+                    .bearer(account, &CancellationToken::new())
+                    .await
+                    .map_err(message),
+                None => Err("This ChatGPT request has no bound account.".to_owned()),
+            },
+            (None, None) => Err("No key is available for picture generation.".to_owned()),
         };
         match (client, key) {
-            (Some(client), Some(key)) => {
+            (Some(Ok(client)), Ok(key)) => {
                 client
                     .generate_requested_images(&image_requests, &key, &CancellationToken::new())
                     .await
             }
-            _ => BTreeMap::new(),
+            (client, key) => {
+                let reason = key
+                    .err()
+                    .or(client.and_then(Result::err))
+                    .unwrap_or_default();
+                image_failures.extend(
+                    image_requests
+                        .iter()
+                        .map(|(name, _)| format!("Image {name}: {reason}")),
+                );
+                BTreeMap::new()
+            }
         }
     };
-    let mut image_failures = Vec::new();
     let generated = generated
         .into_iter()
         .filter_map(|(name, result)| match result {
@@ -3602,187 +3319,6 @@ pub async fn apply_generation(
     record.view.accepted_decision_indices = accepted_decision_indices;
     service.persist(record)?;
     Ok(workspace.view())
-}
-
-/// Native-only access binding for identity analysis. Credentials never enter an
-/// IPC view, project, source snapshot, or persisted analysis record.
-pub(super) struct IdentityAccess {
-    pub provider: ProviderId,
-    pub authentication: AuthenticationMethod,
-    pub account_id: Option<Uuid>,
-    pub account_epoch: Option<u64>,
-    pub settings: ProviderSettings,
-    pub client: ProviderClient,
-    pub key: ApiKey,
-    pub model: Option<desegnos_ai::ChatgptModel>,
-    pub api_model: Option<ModelInfo>,
-}
-
-impl GenerationService {
-    pub(super) fn identity_settings(&self) -> (ProviderId, AuthenticationMethod, ProviderSettings) {
-        (self.provider, self.authentication, self.settings.clone())
-    }
-}
-
-pub(super) struct IdentityAccessFailure {
-    pub message: String,
-    pub provider_error: Option<Box<ProviderError>>,
-}
-impl From<String> for IdentityAccessFailure {
-    fn from(message: String) -> Self {
-        Self {
-            message,
-            provider_error: None,
-        }
-    }
-}
-impl From<&str> for IdentityAccessFailure {
-    fn from(message: &str) -> Self {
-        message.to_owned().into()
-    }
-}
-impl From<ProviderError> for IdentityAccessFailure {
-    fn from(error: ProviderError) -> Self {
-        Self {
-            message: error.message(),
-            provider_error: Some(Box::new(error)),
-        }
-    }
-}
-
-pub(super) async fn identity_access(
-    state: &Mutex<GenerationService>,
-    chatgpt: &ChatgptState,
-    cancellation: &CancellationToken,
-) -> Result<IdentityAccess, IdentityAccessFailure> {
-    let (authentication, settings, client, credentials, provider) = {
-        let service = state.lock().map_err(message)?;
-        if let Some(error) = service
-            .configuration_error
-            .as_ref()
-            .or(service.authentication_error.as_ref())
-        {
-            return Err(error.clone().into());
-        }
-        service
-            .provider
-            .validate(&service.settings, service.authentication)
-            .map_err(message)?;
-        (
-            service.authentication,
-            service.settings.clone(),
-            service.client.clone()?,
-            service.credentials.clone(),
-            service.provider,
-        )
-    };
-    let mut model = None;
-    let (account_id, account_epoch, key) = if authentication == AuthenticationMethod::Chatgpt {
-        let mut view = chatgpt.view().await;
-        let account = view
-            .accounts
-            .iter()
-            .find(|account| Some(account.id) == view.active_account_id)
-            .ok_or("Sign in to ChatGPT in AI settings before analyzing identity.")?;
-        if !account.connected || !account.plan_enabled {
-            return Err(
-                "Reconnect this ChatGPT account and grant plan use before analyzing identity."
-                    .into(),
-            );
-        }
-        if account.storage_repair_required {
-            return Err(
-                "Repair this account's secure storage in AI settings before analyzing identity."
-                    .into(),
-            );
-        }
-        let account_id = account.id;
-        let epoch = chatgpt.epoch(account_id)?;
-        if view.models.is_empty() {
-            view = chatgpt
-                .manager()?
-                .discover_models(account_id, &client, cancellation)
-                .await
-                .map_err(message)?;
-        }
-        if view.active_account_id != Some(account_id) {
-            return Err("The selected ChatGPT account changed. Prepare the analysis again.".into());
-        }
-        if let Some(error) = view.models_provider_error {
-            return Err(error.into());
-        }
-        model = Some(view.selected_model(&settings).map_err(message)?.clone());
-        let key = chatgpt
-            .manager()?
-            .bearer(account_id, cancellation)
-            .await
-            .map_err(message)?;
-        validate_identity_account(&chatgpt.view().await, account_id, &settings.model)?;
-        chatgpt.with_epoch(account_id, epoch, || Ok(()))?;
-        (Some(account_id), Some(epoch), key)
-    } else {
-        let local_authentication = settings.local_authentication;
-        let key = tauri::async_runtime::spawn_blocking(move || {
-            provider_key(provider, local_authentication, &credentials)
-        })
-        .await
-        .map_err(message)?
-        .map_err(message)?;
-        ProviderClient::with_settings(provider, client.clone(), &settings)
-            .map_err(message)?
-            .test_model_access(&settings, &key, cancellation)
-            .await?;
-        (None, None, key)
-    };
-    if cancellation.is_cancelled() {
-        return Err("Identity analysis was cancelled before submission.".into());
-    }
-    let api_model = if authentication == AuthenticationMethod::ApiKey {
-        Some(api_model_for_key(state, provider, &settings, &key, cancellation).await?)
-    } else {
-        None
-    };
-    let service = state.lock().map_err(message)?;
-    if service.authentication != authentication
-        || service.provider != provider
-        || service.settings != settings
-    {
-        return Err(
-            "AI settings changed while checking access. Review them and explicitly analyze again."
-                .into(),
-        );
-    }
-    Ok(IdentityAccess {
-        provider,
-        authentication,
-        account_id,
-        account_epoch,
-        client: ProviderClient::with_settings(provider, client, &settings).map_err(message)?,
-        settings,
-        key,
-        model,
-        api_model,
-    })
-}
-
-fn validate_identity_account(
-    view: &ChatgptView,
-    account_id: Uuid,
-    model: &str,
-) -> NativeResult<()> {
-    let account = view
-        .accounts
-        .iter()
-        .find(|account| account.id == account_id);
-    if view.active_account_id != Some(account_id)
-        || !account.is_some_and(|account| {
-            account.connected && account.plan_enabled && !account.storage_repair_required
-        })
-        || !view.models.iter().any(|available| available.id == model)
-    {
-        return Err("The selected ChatGPT account, its plan permission, secure storage, or model changed while checking access. Review AI settings and explicitly analyze again.".into());
-    }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -4016,8 +3552,7 @@ mod unreadable_reply_retry_tests {
             estimate,
             |_| {
                 service
-                    .retrying_after_unreadable_reply(job_id, 1, Some(usage(100)))
-                    .unwrap();
+                    .retrying_after_unreadable_reply(job_id, 1, Some(usage(100)));
             },
         )
         .await;
@@ -4026,7 +3561,7 @@ mod unreadable_reply_retry_tests {
         let result = result.unwrap();
         assert_eq!(result.usage.unwrap().total_tokens, 800);
         service
-            .finish(&project, Some(&project), job_id, 1, Ok(result))
+            .finish(&project, job_id, 1, Ok(result))
             .unwrap();
         let view = &service.jobs.get(&job_id).unwrap().view;
         assert!(matches!(view.status, JobStatus::Ready));
@@ -4070,15 +3605,14 @@ mod unreadable_reply_retry_tests {
             estimate,
             |_| {
                 service
-                    .retrying_after_unreadable_reply(job_id, 1, Some(usage(100)))
-                    .unwrap();
+                    .retrying_after_unreadable_reply(job_id, 1, Some(usage(100)));
             },
         )
         .await;
         assert!(retried);
         assert_eq!(sends.load(Ordering::SeqCst), 2);
         service
-            .finish(&project, Some(&project), job_id, 1, result)
+            .finish(&project, job_id, 1, result)
             .unwrap();
         let view = &service.jobs.get(&job_id).unwrap().view;
         assert!(matches!(view.status, JobStatus::Blocked));

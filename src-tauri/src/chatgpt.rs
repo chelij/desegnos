@@ -1,7 +1,7 @@
 use crate::generation::{AiSettingsView, GenerationService, settings_view};
 use desegnos_ai::{AuthenticationMethod, ChatgptManager, ChatgptView, CredentialStorage};
 use std::{collections::BTreeMap, path::PathBuf, sync::Mutex};
-use tauri::{AppHandle, State, WebviewWindow};
+use tauri::{AppHandle, State};
 use uuid::Uuid;
 
 type NativeResult<T> = Result<T, String>;
@@ -59,6 +59,25 @@ impl ChatgptState {
             .unwrap_or(&0))
     }
 
+    /// The account a job is bound to with its current sign-out epoch.
+    pub fn binding(&self, account: Option<Uuid>) -> NativeResult<Option<(Uuid, u64)>> {
+        account
+            .map(|id| self.epoch(id).map(|epoch| (id, epoch)))
+            .transpose()
+    }
+
+    /// Run a step only while the bound account has not been signed out since `binding`.
+    pub fn with_binding<T>(
+        &self,
+        binding: Option<(Uuid, u64)>,
+        operation: impl FnOnce() -> NativeResult<T>,
+    ) -> NativeResult<T> {
+        match binding {
+            Some((account, epoch)) => self.with_epoch(account, epoch, operation),
+            None => operation(),
+        }
+    }
+
     pub fn with_epoch<T>(
         &self,
         account: Uuid,
@@ -73,14 +92,6 @@ impl ChatgptState {
             return Err("This account was signed out while checking access. Sign in again before explicitly sending the request.".into());
         }
         operation()
-    }
-}
-
-fn trusted(window: &WebviewWindow) -> NativeResult<()> {
-    if window.label() == "editor" {
-        Ok(())
-    } else {
-        Err("Only the Desegnos editor can manage ChatGPT access.".into())
     }
 }
 
@@ -151,12 +162,10 @@ async fn open_authorization(_: &AppHandle, url: &str) -> NativeResult<()> {
 
 #[tauri::command]
 pub async fn set_ai_authentication(
-    window: WebviewWindow,
     state: AiState<'_>,
     chatgpt: State<'_, ChatgptState>,
     authentication: AuthenticationMethod,
 ) -> NativeResult<AiSettingsView> {
-    trusted(&window)?;
     state
         .lock()
         .map_err(|_| "AI settings are unavailable.")?
@@ -167,13 +176,11 @@ pub async fn set_ai_authentication(
 #[tauri::command]
 pub async fn begin_chatgpt_sign_in(
     app: AppHandle,
-    window: WebviewWindow,
     state: AiState<'_>,
     chatgpt: State<'_, ChatgptState>,
     storage: CredentialStorage,
     account_id: Option<Uuid>,
 ) -> NativeResult<AiSettingsView> {
-    trusted(&window)?;
     let manager = chatgpt.manager()?;
     state
         .lock()
@@ -198,23 +205,19 @@ pub async fn begin_chatgpt_sign_in(
 
 #[tauri::command]
 pub async fn cancel_chatgpt_sign_in(
-    window: WebviewWindow,
     state: AiState<'_>,
     chatgpt: State<'_, ChatgptState>,
 ) -> NativeResult<AiSettingsView> {
-    trusted(&window)?;
     chatgpt.manager()?.cancel_sign_in().await;
     settings_view(&state, &chatgpt).await
 }
 
 #[tauri::command]
 pub async fn select_chatgpt_account(
-    window: WebviewWindow,
     state: AiState<'_>,
     chatgpt: State<'_, ChatgptState>,
     account_id: Uuid,
 ) -> NativeResult<AiSettingsView> {
-    trusted(&window)?;
     let manager = chatgpt.manager()?;
     let view = manager
         .select_account(account_id)
@@ -242,12 +245,10 @@ pub async fn select_chatgpt_account(
 
 #[tauri::command]
 pub async fn retry_chatgpt_secure_storage(
-    window: WebviewWindow,
     state: AiState<'_>,
     chatgpt: State<'_, ChatgptState>,
     account_id: Uuid,
 ) -> NativeResult<AiSettingsView> {
-    trusted(&window)?;
     chatgpt
         .manager()?
         .retry_secure_storage(account_id)
@@ -259,12 +260,11 @@ pub async fn retry_chatgpt_secure_storage(
 #[tauri::command]
 pub async fn sign_out_chatgpt(
     identity: State<'_, Mutex<crate::identity::IdentityService>>,
-    window: WebviewWindow,
+    exports: State<'_, Mutex<crate::export::ExportService>>,
     state: AiState<'_>,
     chatgpt: State<'_, ChatgptState>,
     account_id: Uuid,
 ) -> NativeResult<AiSettingsView> {
-    trusted(&window)?;
     let manager = chatgpt.manager()?;
     if !manager
         .view()
@@ -284,14 +284,7 @@ pub async fn sign_out_chatgpt(
         *epoch = epoch
             .checked_add(1)
             .ok_or("Account access state must be restarted before signing out.")?;
-        state
-            .lock()
-            .map_err(|_| "AI settings are unavailable.")?
-            .cancel_account(account_id)?;
-        identity
-            .lock()
-            .map_err(|_| "Identity analysis is unavailable.".to_owned())
-            .and_then(|mut service| service.cancel_account(account_id))
+        crate::ai_job::cancel_account(&state, &identity, &exports, account_id)
     };
     let (view, warning) = sign_out_after_cancellation(cancellation, async {
         manager
@@ -308,13 +301,13 @@ async fn sign_out_after_cancellation<T>(
     cancellation: NativeResult<()>,
     sign_out: impl std::future::Future<Output = NativeResult<T>>,
 ) -> NativeResult<(T, Option<String>)> {
-    let warning = cancellation.err().map(|reason| format!("Late identity output is blocked, but its local cancellation receipt needs attention: {reason}"));
+    let warning = cancellation.err().map(|reason| format!("Late output is blocked, but a local cancellation receipt needs attention: {reason}"));
     let result = sign_out.await;
     match result {
         Ok(value) => Ok((value, warning)),
         Err(reason) => Err(match warning {
             Some(warning) => {
-                format!("{reason} Local identity cancellation also needs attention: {warning}")
+                format!("{reason} Local cancellation also needs attention: {warning}")
             }
             None => reason,
         }),
@@ -323,11 +316,9 @@ async fn sign_out_after_cancellation<T>(
 
 #[tauri::command]
 pub async fn acknowledge_chatgpt_welcome(
-    window: WebviewWindow,
     state: AiState<'_>,
     chatgpt: State<'_, ChatgptState>,
 ) -> NativeResult<AiSettingsView> {
-    trusted(&window)?;
     chatgpt
         .manager()?
         .acknowledge_welcome()
@@ -337,8 +328,7 @@ pub async fn acknowledge_chatgpt_welcome(
 }
 
 #[tauri::command]
-pub fn open_chatgpt_usage(app: AppHandle, window: WebviewWindow) -> NativeResult<()> {
-    trusted(&window)?;
+pub fn open_chatgpt_usage(app: AppHandle) -> NativeResult<()> {
     #[cfg(not(feature = "native-tests"))]
     {
         let _ = app;

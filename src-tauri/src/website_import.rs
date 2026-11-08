@@ -4,7 +4,8 @@
 //! rules as brand import, serves the snapshot from a loopback server, and turns the browser's
 //! rendered-tree captures into project elements. Page code never runs: the served page is
 //! rendered inside a script-disabled nested frame, and only our extraction wrapper runs.
-use crate::local_site::ImportSite;
+use crate::local_site::{LocalSite, decode_path as decode_site_path};
+use crate::native_files::{NativeResult, message};
 use crate::workspace::Workspace;
 use base64::{Engine, engine::general_purpose::STANDARD};
 use desegnos_ai::WebUrl as Url;
@@ -17,11 +18,10 @@ use std::{
     path::{Path, PathBuf},
     sync::Mutex,
 };
-use tauri::{AppHandle, State, WebviewWindow};
+use tauri::{AppHandle, State};
 use tauri_plugin_dialog::DialogExt;
 use uuid::Uuid;
 
-type NativeResult<T> = Result<T, String>;
 type ImportState<'a> = State<'a, Mutex<WebsiteImportState>>;
 type WorkspaceState<'a> = State<'a, Mutex<Workspace>>;
 
@@ -29,18 +29,6 @@ const MAX_CAPTURE_IMAGE_BYTES: usize = 8 * 1024 * 1024;
 const MAX_IMPORTED_PICTURES: usize = 160;
 const MAX_IMPORTED_PICTURE_TOTAL: usize = 64 * 1024 * 1024;
 const SERVED_FILE_LIMIT: usize = 128 * 1024 * 1024;
-
-fn message(error: impl std::fmt::Display) -> String {
-    error.to_string()
-}
-
-fn trusted(window: &WebviewWindow) -> NativeResult<()> {
-    if window.label() == "editor" {
-        Ok(())
-    } else {
-        Err("Only the Desegnos editor can import a website.".into())
-    }
-}
 
 struct ImportSource {
     folder: PathBuf,
@@ -58,7 +46,7 @@ struct ImportPage {
 #[derive(Default)]
 pub struct WebsiteImportState {
     revision: u64,
-    site: ImportSite,
+    site: LocalSite,
     source: Option<ImportSource>,
 }
 
@@ -218,16 +206,13 @@ fn install(
     Ok(view)
 }
 
-/// Fetch a public website address, serve its snapshot and list the pages to render.
 #[tauri::command]
 pub async fn prepare_website_import_url(
-    window: WebviewWindow,
     state: ImportState<'_>,
     identity: State<'_, Mutex<crate::identity::IdentityService>>,
     url: String,
     extractor: String,
 ) -> NativeResult<WebsiteImportView> {
-    trusted(&window)?;
     let revision = begin_read(&state)?;
     let fetcher = desegnos_ai::WebsiteFetcher::new();
     #[cfg(feature = "native-tests")]
@@ -271,17 +256,14 @@ pub async fn prepare_website_import_url(
     )
 }
 
-/// Choose a website folder or ZIP archive, serve it and list its HTML pages.
 #[tauri::command]
 pub async fn pick_website_import_source(
     app: AppHandle,
-    window: WebviewWindow,
     state: ImportState<'_>,
     identity: State<'_, Mutex<crate::identity::IdentityService>>,
     kind: WebsiteSourceKind,
     extractor: String,
 ) -> NativeResult<Option<WebsiteImportView>> {
-    trusted(&window)?;
     let revision = begin_read(&state)?;
     let picked = tauri::async_runtime::spawn_blocking(move || {
         let dialog = app.dialog().file();
@@ -353,29 +335,10 @@ fn image_mime(name: &str) -> Option<&'static str> {
     }
 }
 
+/// A site path with no empty, `.` or `..` segment.
 fn decode_path(path: &str) -> Option<String> {
-    let mut bytes = Vec::with_capacity(path.len());
-    let mut chars = path.bytes();
-    while let Some(byte) = chars.next() {
-        bytes.push(if byte == b'%' {
-            let high = (chars.next()? as char).to_digit(16)?;
-            let low = (chars.next()? as char).to_digit(16)?;
-            (high * 16 + low) as u8
-        } else {
-            byte
-        });
-    }
-    let value = String::from_utf8(bytes).ok()?;
-    if value.is_empty()
-        || value.contains(['\\', '\0'])
-        || value.chars().any(char::is_control)
-        || value
-            .split('/')
-            .any(|part| part.is_empty() || part == "." || part == "..")
-    {
-        return None;
-    }
-    Some(value)
+    decode_site_path(path)
+        .filter(|value| !value.is_empty() && value.split('/').all(|part| !part.is_empty()))
 }
 
 fn local_image(folder: &Path, base_url: &str, source: &str) -> Option<Vec<u8>> {
@@ -415,15 +378,12 @@ fn element_count(page: &desegnos_core::Page) -> usize {
     count(&page.elements)
 }
 
-/// Turn the browser captures into canvas elements and apply the whole import as one undo step.
 #[tauri::command]
 pub async fn import_website_pages(
-    window: WebviewWindow,
     state: ImportState<'_>,
     workspace: WorkspaceState<'_>,
     captures: Vec<WebCapture>,
 ) -> NativeResult<WebsiteImportResultView> {
-    trusted(&window)?;
     if captures.is_empty() {
         return Err("Render at least one page before importing it.".into());
     }

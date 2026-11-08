@@ -25,32 +25,15 @@ use uuid::Uuid;
 const MAX_FILE_BYTES: u64 = 64 * 1024 * 1024;
 
 struct Running {
-    folder: Arc<PathBuf>,
     stop: Arc<Notify>,
 }
 
-/// Managed application state: at most one served folder at a time.
 #[derive(Default)]
 pub struct LocalSite {
     running: Option<Running>,
 }
 
-/// A second loopback server, for rendering imported websites while an export preview is open.
-#[derive(Default)]
-pub struct ImportSite(LocalSite);
-
-impl ImportSite {
-    pub fn serve(&mut self, folder: &Path, limit: usize) -> Result<String, String> {
-        self.0.serve(folder, limit)
-    }
-
-    pub fn stop(&mut self) {
-        self.0.stop();
-    }
-}
-
 impl LocalSite {
-    /// Serve a folder and return the URL to open. An earlier site is closed first.
     pub fn serve(&mut self, folder: &Path, limit: usize) -> Result<String, String> {
         let folder = folder
             .canonicalize()
@@ -69,10 +52,9 @@ impl LocalSite {
             .map_err(|error| format!("The local site server could not start: {error}"))?;
         let token = token();
         let stop = Arc::new(Notify::new());
-        let folder = Arc::new(folder);
         let shared = Arc::new(Shared {
             token: token.clone(),
-            folder: Arc::clone(&folder),
+            folder: Arc::new(folder),
             limit: (limit as u64).clamp(1, MAX_FILE_BYTES),
         });
         let stopper = Arc::clone(&stop);
@@ -100,15 +82,13 @@ impl LocalSite {
                 });
             }
         });
-        self.running = Some(Running { folder, stop });
+        self.running = Some(Running { stop });
         Ok(format!("http://127.0.0.1:{}/{token}/", address.port()))
     }
 
-    /// Close the listener. A later `serve` starts a fresh one.
     pub fn stop(&mut self) {
         if let Some(running) = self.running.take() {
             running.stop.notify_one();
-            let _ = running.folder;
         }
     }
 }
@@ -212,7 +192,7 @@ fn lookup(root: &Path, path: &str) -> Option<PathBuf> {
 }
 
 /// Decode percent escapes and reject anything that could address another file.
-fn decode_path(path: &str) -> Option<String> {
+pub fn decode_path(path: &str) -> Option<String> {
     let mut decoded = Vec::with_capacity(path.len());
     let mut bytes = path.bytes();
     while let Some(byte) = bytes.next() {

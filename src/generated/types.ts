@@ -293,7 +293,10 @@ acceptedRevision: number, fingerprint: string, js: string, };
 
 export type ExportCheck = { states: Array<PointerStateView>, lastExport: ExportRecord | null, readable: boolean, };
 
-export type ExportJobView = { jobId: string, projectId: string, baseRevision: number, kind: 'code' | 'comment', status: ExportStatus, message: string, summary: string, estimateUsd: number, usage: TokenUsage | null, attempts: Array<ExportAttemptView>, pages: Array<ExportPageView>, sizeCount: number, pointerCount: number, reusedBehaviourCount: number, warnings: Array<string>, result: ExportResultView | null, error: string | null, providerError: ProviderError | null, provider: ProviderId | null, };
+export type ExportJobView = { jobId: string, projectId: string, baseRevision: number, kind: ExportKind, status: ExportStatus, message: string, summary: string, estimateUsd: number, usage: TokenUsage | null, attempts: Array<ExportAttemptView>, pages: Array<ExportPageView>, sizeCount: number, pointerCount: number, reusedBehaviourCount: number, warnings: Array<string>, result: ExportResultView | null, error: string | null, providerError: ProviderError | null, provider: ProviderId | null, };
+
+export type ExportKind = "code"
+  | "comment";
 
 export type ExportPageView = { pageId: string, name: string, path: string, output: OutputType, file: string, };
 
@@ -558,7 +561,7 @@ export type ReferencePlacement = { item_id: string, x: number, y: number, };
 export type RequestArea = { 
 page?: string | null, size?: string | null, shape: RequestShape, };
 
-export type RequestAttachment = { id: string, name: string, kind: AttachmentKind, dataUri?: string | null, preview?: string | null, text?: string | null, url?: string | null, };
+export type RequestAttachment = { id: string, name: string, kind: AttachmentKind, dataUri?: string | null, text?: string | null, url?: string | null, };
 
 export type RequestImage = { attachmentId: string, dataUri: string, storedFormat?: string | null, transparent?: boolean | null, transparentPercent?: number | null, };
 

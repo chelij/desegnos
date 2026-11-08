@@ -3463,6 +3463,68 @@ async fn citation_annotations_do_not_modify_the_structured_json_answer() {
 }
 
 #[test]
+fn a_picture_attachment_is_frozen_as_a_preview_and_sent_to_the_provider() {
+    use desegnos_core::{
+        Appearance, AttachmentKind, Command, PendingRequest, Project, RequestAttachment,
+        RequestTarget, Viewport,
+    };
+    let png = format!(
+        "data:image/png;base64,{}",
+        "iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAIAAAAmkwkpAAAAEElEQVR4nGM4IScHRwzEcQCxYxBBO0tjggAAAABJRU5ErkJggg=="
+    );
+    let start = Project::new(
+        "Vision".into(),
+        Viewport {
+            width: 800,
+            height: 600,
+        },
+        Appearance::Light,
+    )
+    .unwrap();
+    let page = start.home_page_id;
+    let project = start
+        .apply(
+            start.revision,
+            Command::AddRequest {
+                request: PendingRequest {
+                    boundary_retry_order: Vec::new(),
+                    id: Uuid::new_v4(),
+                    text: "Use my logo.".into(),
+                    attachments: vec![RequestAttachment {
+                        id: "logo1".into(),
+                        name: "logo.png".into(),
+                        kind: AttachmentKind::Image,
+                        data_uri: Some(png.as_str().into()),
+                        text: None,
+                        url: None,
+                    }],
+                    targets: vec![RequestTarget::Boundary { page, size: None }],
+                    area: None,
+                    requested_at: "2026-11-01T00:00:00Z".into(),
+                },
+            },
+        )
+        .unwrap();
+    let frozen = project.prepare_requirements().unwrap();
+    assert_eq!(frozen.images.len(), 1);
+    assert_eq!(frozen.images[0].attachment_id, "logo1");
+    frozen.validate_current(&project).unwrap();
+    let body: Value = serde_json::from_slice(
+        &crate::settings::request_body(
+            AuthenticationMethod::ApiKey,
+            &frozen,
+            project.generation_mode,
+            &schema(),
+            &ProviderSettings::default(),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let content = body["input"][0]["content"].as_array().unwrap();
+    assert_eq!(content[3]["image_url"], frozen.images[0].data_uri);
+}
+
+#[test]
 fn attachment_previews_are_sent_as_low_detail_images_and_estimated_per_image() {
     let mut frozen = snapshot(GenerationMode::Strict);
     let settings = ProviderSettings::default();

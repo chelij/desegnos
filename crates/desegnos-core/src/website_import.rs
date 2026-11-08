@@ -4,6 +4,11 @@
 //! is a pure conversion from that compact tree in the browser to the project's element model.
 //! It never fetches, writes or runs page code. Images arrive as picture ids resolved by the
 //! native layer through the ordinary project picture store.
+use crate::limits::{
+    LINE_HEIGHT_MAX, MAX_FONT_FAMILY_CHARS, MAX_FONT_WEIGHT, MAX_GRID_COLUMNS, MAX_LAYOUT_SPACING,
+    MAX_LETTER_SPACING, MAX_RADIUS, MAX_SHADOW_BLUR, MAX_SHADOW_OFFSET, MAX_STROKE_WIDTH,
+    TEXT_SIZE_RANGE,
+};
 use crate::{
     BoundaryKind, Element, ElementKind, ElementLayout, ElementOverride, ElementShadow,
     ElementStroke, ElementStyle, ElementTextStyle, InputType, OutputType, Page, PageSize, Pointer,
@@ -418,18 +423,23 @@ fn font_family(value: &str) -> String {
     if value.is_empty() {
         "system-ui".into()
     } else {
-        value.chars().take(240).collect()
+        value.chars().take(MAX_FONT_FAMILY_CHARS).collect()
     }
 }
 
 fn text_style(styles: &WebStyles) -> ElementTextStyle {
     ElementTextStyle {
         font_family: font_family(&styles.font_family),
-        size: styles.font_size.clamp(1.0, 400.0),
-        weight: styles.font_weight.clamp(100.0, 900.0).round() as u16,
+        size: styles.font_size.clamp(TEXT_SIZE_RANGE.0, TEXT_SIZE_RANGE.1),
+        weight: styles
+            .font_weight
+            .clamp(1.0, f64::from(MAX_FONT_WEIGHT))
+            .round() as u16,
         italic: styles.italic,
-        line_height: styles.line_height.clamp(0.5, 4.0),
-        letter_spacing: styles.letter_spacing.clamp(-20.0, 100.0),
+        line_height: styles.line_height.clamp(0.0, LINE_HEIGHT_MAX),
+        letter_spacing: styles
+            .letter_spacing
+            .clamp(-MAX_LETTER_SPACING, MAX_LETTER_SPACING),
         color: parse_colour(&styles.color).unwrap_or_else(|| ElementTextStyle::default().color),
         align: text_align(&styles.align),
         decoration: None,
@@ -437,7 +447,7 @@ fn text_style(styles: &WebStyles) -> ElementTextStyle {
 }
 
 fn element_style(styles: &WebStyles, text: bool) -> ElementStyle {
-    let radius = styles.radius.clamp(0.0, 4096.0);
+    let radius = styles.radius.clamp(0.0, MAX_RADIUS);
     ElementStyle {
         flip_x: false,
         flip_y: false,
@@ -457,15 +467,15 @@ fn element_style(styles: &WebStyles, text: bool) -> ElementStyle {
         } else {
             ElementStroke {
                 color: parse_colour(&styles.border_color).filter(|_| styles.border_width >= 0.5),
-                width: styles.border_width.clamp(0.0, 128.0),
+                width: styles.border_width.clamp(0.0, MAX_STROKE_WIDTH),
             }
         },
         radius,
         opacity: styles.opacity.clamp(0.0, 1.0),
         shadow: ElementShadow {
-            x: styles.shadow_x.clamp(-512.0, 512.0),
-            y: styles.shadow_y.clamp(-512.0, 512.0),
-            blur: styles.shadow_blur.clamp(0.0, 512.0),
+            x: styles.shadow_x.clamp(-MAX_SHADOW_OFFSET, MAX_SHADOW_OFFSET),
+            y: styles.shadow_y.clamp(-MAX_SHADOW_OFFSET, MAX_SHADOW_OFFSET),
+            blur: styles.shadow_blur.clamp(0.0, MAX_SHADOW_BLUR),
             color: parse_colour(&styles.shadow_color),
         },
         text_style: text_style(styles),
@@ -501,8 +511,8 @@ fn layout_for(styles: &WebStyles) -> ElementLayout {
         };
         return ElementLayout::Stack {
             direction,
-            gap: gap.clamp(0.0, 4096.0),
-            padding: styles.padding.clamp(0.0, 4096.0),
+            gap: gap.clamp(0.0, MAX_LAYOUT_SPACING),
+            padding: styles.padding.clamp(0.0, MAX_LAYOUT_SPACING),
             align,
             justify,
             wrap: styles.wrap,
@@ -510,9 +520,12 @@ fn layout_for(styles: &WebStyles) -> ElementLayout {
     }
     if display.contains("grid") {
         return ElementLayout::Grid {
-            columns: styles.columns.clamp(1, 64),
-            gap: styles.row_gap.max(styles.column_gap).clamp(0.0, 4096.0),
-            padding: styles.padding.clamp(0.0, 4096.0),
+            columns: styles.columns.clamp(1, MAX_GRID_COLUMNS),
+            gap: styles
+                .row_gap
+                .max(styles.column_gap)
+                .clamp(0.0, MAX_LAYOUT_SPACING),
+            padding: styles.padding.clamp(0.0, MAX_LAYOUT_SPACING),
         };
     }
     ElementLayout::Free
@@ -1067,8 +1080,7 @@ impl Converter<'_> {
                 // link or other inline child keeps its width, so it does not run into them.
                 let mut style = self.node_style(node, true);
                 if node.children.is_empty()
-                    && rect.height
-                        <= node.styles.font_size * node.styles.line_height.clamp(0.5, 4.0) * 1.5
+                    && rect.height <= style.text_style.size * style.text_style.line_height * 1.5
                     && !text.contains('\n')
                 {
                     style.sizing.width = SizingMode::Fit;
