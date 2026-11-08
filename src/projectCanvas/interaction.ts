@@ -24,7 +24,7 @@ import {
   boundaryDrawRect, defaultSize,
 } from './interactionTypes';
 
-type Context = {
+export type InteractionContext = {
   busy: import("react").RefObject<boolean>;
   startPan: (event: ReactPointerEvent<HTMLDivElement>, pageId: string | null) => void;
   pasteChoice: PasteChoice | null;
@@ -105,7 +105,7 @@ type Context = {
   updateReference: (itemId: string, patch: { rect?: Rect; text?: string; url?: string; title?: string; color?: string; }) => void;
 };
 
-export function createCanvasInteraction(context: () => Context) {
+export function createCanvasInteraction(context: () => InteractionContext) {
   function pointerDown(event: ReactPointerEvent<HTMLDivElement>) {
     const { busy, startPan, pasteChoice, linkChoice, setPasteChoice, setLinkChoice, worldPoint, lastPointer, held, drag, painterArmed, project, selection, applyPainterStyle, surface, transitionPainter, selectRequest, latest, tool, requestShape, requestTargetAt, requestDraft, setRequestDraft, requestEditorScreen, setPolygonDraft, polygonDraft, camera, closeRequestArea, boundaryUnder, boundaryNear, pointerSourceAt, pageFor, startEditingElement, editingSizeId, drawElementDrag, insertKind, pendingImage, imagePicker, selectElement, selectBoundary, elementEntries, nextSelectionFor, selectReference, beginMove, boundaries, movingItems } = context();
     if (busy.current) return;

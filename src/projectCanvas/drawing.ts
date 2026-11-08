@@ -23,7 +23,7 @@ export type TextEditingEvent =
   | { kind: 'finish' }
   | { kind: 'retry'; session: TextSession; draft: PendingText };
 
-type Context = {
+export type DrawingContext = {
   transitionText: (event: TextEditingEvent) => void;
   setPendingImage: import("react").Dispatch<import("react").SetStateAction<{ uri: string; width: number; height: number; name: string; } | null>>;
   project: Project;
@@ -43,7 +43,7 @@ type Context = {
   selectBoundary: (pageId: string | null, sizeId?: string | null, additive?: boolean) => void;
 };
 
-export function createDrawingActions(context: () => Context) {
+export function createDrawingActions(context: () => DrawingContext) {
   function chooseImage(file: File | undefined) {
     const { setPendingImage } = context();
     if (!file) return;

@@ -21,7 +21,7 @@ import {
 } from './interactionTypes';
 import { MAX_NAME_CHARS, MAX_PROMPT_CHARS } from '../generated/limits';
 
-type Context = {
+export type PasteDropContext = {
   elementEntries: (targets: CanvasTarget[]) => ElementEntry[];
   selection: CanvasTarget[];
   clipboard: import("react").RefObject<ClipboardEntry[]>;
@@ -56,7 +56,7 @@ type Context = {
   attachToRequest: (requestId: string, files: File[], links: string[]) => void;
 };
 
-export function createPasteDrop(context: () => Context) {
+export function createPasteDrop(context: () => PasteDropContext) {
   function copyElements() {
     const { elementEntries, selection, clipboard, pasteCount, setPasteChoice, clipboardMark } = context();
     const entries = elementEntries(selection);
