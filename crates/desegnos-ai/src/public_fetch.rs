@@ -10,6 +10,53 @@ pub(crate) struct FetchRequest<'a> {
     pub limit: usize,
     pub host_lock: Option<&'a str>,
 }
+/// Why a public fetch failed. `Display` completes the sentence "The source ...".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FetchError {
+    InvalidAddress,
+    OutsideSource,
+    NotPublic,
+    NoHost,
+    NoPort,
+    NotFound,
+    PrivateNetwork,
+    CouldNotRequest,
+    NoResponse,
+    NoRedirectTarget,
+    BadRedirect,
+    ErrorPage,
+    Compressed,
+    NoContentType,
+    UnsupportedType,
+    TooLarge,
+    Stalled,
+    TooManyRedirects,
+}
+impl std::fmt::Display for FetchError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::InvalidAddress => "is not a valid web address",
+            Self::OutsideSource => "redirected outside the source website",
+            Self::NotPublic => "must be a public https:// address",
+            Self::NoHost => "has no host",
+            Self::NoPort => "has no port",
+            Self::NotFound => "could not be found",
+            Self::PrivateNetwork => "points to a private or special network address",
+            Self::CouldNotRequest => "could not be requested",
+            Self::NoResponse => "did not respond",
+            Self::NoRedirectTarget => "redirected without a destination",
+            Self::BadRedirect => "redirected to an invalid address",
+            Self::ErrorPage => "returned an error page",
+            Self::Compressed => "used an unsupported compressed response",
+            Self::NoContentType => "has no content type",
+            Self::UnsupportedType => "is not a supported file type",
+            Self::TooLarge => "is too large",
+            Self::Stalled => "stopped responding",
+            Self::TooManyRedirects => "redirected too many times",
+        })
+    }
+}
+
 pub(crate) struct PublicFetcher {
     #[cfg(any(test, feature = "test-support"))]
     fixture: Option<Url>,
@@ -37,54 +84,57 @@ impl PublicFetcher {
             None
         }
     }
+    /// Only a test fixture's own origin may use loopback and plain http.
+    fn loopback(&self, url: &Url) -> bool {
+        self.fixture()
+            .is_some_and(|origin| url.origin() == origin.origin())
+    }
     pub async fn document(
         &self,
         request: FetchRequest<'_>,
-    ) -> Result<(Vec<u8>, String, Url), &'static str> {
-        let mut url = Url::parse(request.url).map_err(|_| "is not a valid web address")?;
+    ) -> Result<(Vec<u8>, String, Url), FetchError> {
+        let mut url = Url::parse(request.url).map_err(|_| FetchError::InvalidAddress)?;
         for _ in 0..=2 {
             if request
                 .host_lock
                 .is_some_and(|host| url.host_str() != Some(host))
             {
-                return Err("redirected outside the source website");
+                return Err(FetchError::OutsideSource);
             }
-            if !permitted_url(&url, self.fixture()) {
-                return Err("must be a public https:// address");
+            let loopback = self.loopback(&url);
+            if !permitted_url(&url, loopback) {
+                return Err(FetchError::NotPublic);
             }
             let host = url
                 .host_str()
-                .ok_or("has no host")?
+                .ok_or(FetchError::NoHost)?
                 .trim_matches(['[', ']']);
-            let port = url.port_or_known_default().ok_or("has no port")?;
+            let port = url.port_or_known_default().ok_or(FetchError::NoPort)?;
             let addresses: Vec<SocketAddr> = tokio::net::lookup_host((host, port))
                 .await
-                .map_err(|_| "could not be found")?
+                .map_err(|_| FetchError::NotFound)?
                 .take(MAX_RESOLVED_ADDRESSES + 1)
                 .collect();
-            let fixture_host = self
-                .fixture()
-                .is_some_and(|origin| url.origin() == origin.origin());
             if addresses.is_empty()
                 || addresses.len() > MAX_RESOLVED_ADDRESSES
                 || addresses.iter().any(|address| {
-                    !public_address(address.ip()) && !(fixture_host && address.ip().is_loopback())
+                    !public_address(address.ip()) && !(loopback && address.ip().is_loopback())
                 })
             {
-                return Err("points to a private or special network address");
+                return Err(FetchError::PrivateNetwork);
             }
-            let client = crate::net::hardened_client(!fixture_host)
+            let client = crate::net::hardened_client(!loopback)
                 .resolve_to_addrs(host, &addresses)
                 .timeout(crate::net::PUBLIC_FETCH_TIMEOUT)
                 .connect_timeout(crate::net::PUBLIC_CONNECT_TIMEOUT)
                 .build()
-                .map_err(|_| "could not be requested")?;
+                .map_err(|_| FetchError::CouldNotRequest)?;
             let mut response = client
                 .get(url.clone())
                 .header("Accept", request.mimes.join(","))
                 .send()
                 .await
-                .map_err(|_| "did not respond")?;
+                .map_err(|_| FetchError::NoResponse)?;
             if response.status().is_redirection() {
                 url = url
                     .join(
@@ -92,20 +142,20 @@ impl PublicFetcher {
                             .headers()
                             .get("location")
                             .and_then(|value| value.to_str().ok())
-                            .ok_or("redirected without a destination")?,
+                            .ok_or(FetchError::NoRedirectTarget)?,
                     )
-                    .map_err(|_| "redirected to an invalid address")?;
+                    .map_err(|_| FetchError::BadRedirect)?;
                 continue;
             }
             if !response.status().is_success() {
-                return Err("returned an error page");
+                return Err(FetchError::ErrorPage);
             }
             if response
                 .headers()
                 .get("content-encoding")
                 .is_some_and(|value| value != "identity")
             {
-                return Err("used an unsupported compressed response");
+                return Err(FetchError::Compressed);
             }
             let mime = response
                 .headers()
@@ -113,9 +163,9 @@ impl PublicFetcher {
                 .and_then(|value| value.to_str().ok())
                 .and_then(|value| value.split(';').next())
                 .map(|value| value.trim().to_ascii_lowercase())
-                .ok_or("has no content type")?;
+                .ok_or(FetchError::NoContentType)?;
             if !request.mimes.contains(&mime.as_str()) {
-                return Err("is not a supported file type");
+                return Err(FetchError::UnsupportedType);
             }
             let bytes = crate::net::bounded_body(
                 &mut response,
@@ -125,20 +175,18 @@ impl PublicFetcher {
             )
             .await
             .map_err(|error| match error.kind {
-                crate::ErrorKind::OutputLimit => "is too large",
-                _ => "stopped responding",
+                crate::ErrorKind::OutputLimit => FetchError::TooLarge,
+                _ => FetchError::Stalled,
             })?
             .to_vec();
             return Ok((bytes, mime, url));
         }
-        Err("redirected too many times")
+        Err(FetchError::TooManyRedirects)
     }
 }
-pub(crate) fn permitted_url(url: &Url, fixture: Option<&Url>) -> bool {
+pub(crate) fn permitted_url(url: &Url, loopback: bool) -> bool {
     let ordinary = url.scheme() == "https" && url.port_or_known_default() == Some(443);
-    let fixture =
-        fixture.is_some_and(|origin| url.scheme() == "http" && url.origin() == origin.origin());
-    (ordinary || fixture)
+    (ordinary || loopback && url.scheme() == "http")
         && url.host_str().is_some()
         && url.username().is_empty()
         && url.password().is_none()
@@ -233,11 +281,11 @@ mod tests {
             "file:///a.png",
             "https://example.com/a.png#x",
         ] {
-            assert!(!permitted_url(&Url::parse(value).unwrap(), None));
+            assert!(!permitted_url(&Url::parse(value).unwrap(), false));
         }
         assert!(permitted_url(
             &Url::parse("https://upload.wikimedia.org/photo.png").unwrap(),
-            None
+            false
         ));
     }
     #[tokio::test]

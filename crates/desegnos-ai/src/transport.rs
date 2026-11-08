@@ -203,6 +203,7 @@ impl OpenAiClient {
         Ok(client)
     }
 
+    // Test timeouts must stay well above the loopback `retry_backoff` of 20/80 ms.
     #[cfg(test)]
     pub(crate) fn with_test_deadline(mut self, deadline: Duration) -> Self {
         self.timeouts.deadline = deadline;
@@ -395,13 +396,10 @@ impl OpenAiClient {
         let mut prefix = vec![];
         let mut received = 0_usize;
         loop {
-            let bytes = tokio::select! {
-                biased;
-                _ = cancellation.cancelled() => return Err(stream.error(ErrorKind::Cancelled, SubmissionOutcome::Unknown)),
-                _ = tokio::time::sleep_until(deadline.min(Instant::now() + self.timeouts.idle)) => return Err(stream.error(ErrorKind::Deadline, SubmissionOutcome::Unknown)),
-                result = response.chunk() => result.map_err(|error| stream.error(
-                    if error.is_timeout() { ErrorKind::Deadline } else { ErrorKind::Transport }, SubmissionOutcome::Unknown))?,
-            };
+            let bytes =
+                crate::net::next_chunk(&mut response, cancellation, deadline, self.timeouts.idle)
+                    .await
+                    .map_err(|failure| stream.error(failure.kind(), SubmissionOutcome::Unknown))?;
             let Some(bytes) = bytes else {
                 if !streaming {
                     return Err(non_stream_error(
@@ -704,12 +702,11 @@ pub(crate) async fn check_status(
         return Ok(());
     }
     let outcome = SubmissionOutcome::Rejected;
-    let request_id = crate::net::request_id(response.headers()).map(str::to_owned);
-    let content_type = response
-        .headers()
-        .get(CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-        .map(str::to_owned);
+    let crate::net::ErrorHead {
+        request_id,
+        content_type,
+        ..
+    } = crate::net::ErrorHead::of(response);
     let body = bounded_body(response, ERROR_BODY_LIMIT, cancellation, deadline)
         .await
         .map_err(|mut error| {

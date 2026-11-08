@@ -129,7 +129,6 @@ pub struct VersionSummary {
     pub parent: Option<i64>,
     pub label: String,
     pub created_at: i64,
-    /// This version is where the branch currently is.
     pub head: bool,
 }
 
