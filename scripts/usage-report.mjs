@@ -2,8 +2,6 @@
 // Summarizes how Desegnos is actually used, from local data only:
 // - usage/*.jsonl: clicks, shortcuts, typing counts and commands (src/usage.ts)
 // - generation/<project>/<job>/: every request sent to the AI and its outcome
-// The real-use native suite (tests/native/real-use-workflow.mjs) is built around these flows;
-// rerun this after a while of normal use and update that suite when the patterns change.
 //
 //   node scripts/usage-report.mjs [--data <dir>] [--out <file.md>]
 import { readFile, readdir, stat, writeFile } from 'node:fs/promises';
@@ -56,22 +54,15 @@ for (const project of await list(join(data, 'generation'))) {
     let record, markdown = '';
     try { record = JSON.parse(await readFile(join(folder, 'job.json'), 'utf8')); } catch { continue; }
     try { markdown = await readFile(join(folder, 'REQUIREMENTS.md'), 'utf8'); } catch { /* A failed write may leave the report unavailable. */ }
-    const view = record.view ?? record;
+    const { view } = record;
     const prompts = [...markdown.matchAll(/"prompt": "((?:[^"\\]|\\.)*)"/g)].map(match => JSON.parse(`"${match[1]}"`));
-    const kinds = [];
-    if (markdown.includes('\n## Selected elements\n')) kinds.push('element fix');
-    else if (markdown.includes('"elements"')) kinds.push('selected elements (full page)');
-    if (markdown.includes('"mobileOnly": true')) kinds.push('phone fix');
-    if (markdown.includes('"attachments"')) kinds.push('attachments');
-    if (prompts.some(prompt => prompt.startsWith('Update this page to follow the project brand rules'))) kinds.push('brand restyle');
-    if (!kinds.length) kinds.push('new areas');
     const files = await list(folder);
-    jobs.push({ project: project.slice(0, 8), when: (await stat(join(folder, 'job.json'))).mtimeMs, status: view.status ?? 'unknown', kinds, prompts, format: markdown.match(/Requirements format: (\d+)/)?.[1] ?? '?', followUp: files.includes('CONTEXT.md'), tokens: view.usage?.inputTokens });
+    jobs.push({ project: project.slice(0, 8), when: (await stat(join(folder, 'job.json'))).mtimeMs, status: view.status ?? 'unknown', prompts, format: markdown.match(/Requirements format: (\d+)/)?.[1] ?? '?', followUp: files.includes('CONTEXT.md'), tokens: view.usage?.inputTokens });
   }
 }
 jobs.sort((a, b) => a.when - b.when);
-const byKind = new Map(), byStatus = new Map();
-for (const job of jobs) { for (const kind of job.kinds) count(byKind, kind); count(byStatus, job.status); }
+const byStatus = new Map();
+for (const job of jobs) count(byStatus, job.status);
 // The same requests sent again right after a discard: the result was not what was wanted.
 let retries = 0;
 for (let index = 1; index < jobs.length; index++) if (jobs[index - 1].status === 'discarded' && jobs[index].prompts[0]?.slice(0, 40) === jobs[index - 1].prompts[0]?.slice(0, 40)) retries++;
@@ -86,9 +77,7 @@ ${jobs.length} generations across ${new Set(jobs.map(job => job.project)).size} 
 
 ${table(top(byStatus), ['Outcome', 'Jobs'])}
 
-${table(top(byKind), ['Kind', 'Jobs'])}
-
-${table(jobs.map(job => [new Date(job.when).toISOString().slice(5, 16).replace('T', ' '), job.project, job.status, job.kinds.join(', '), job.format, job.tokens ?? '', job.prompts.map(prompt => prompt.replace(/\s+/g, ' ').slice(0, 70).replace(/\|/g, '/')).join(' / ')]), ['When', 'Project', 'Outcome', 'Kind', 'Format', 'Input tokens', 'Requests'])}
+${table(jobs.map(job => [new Date(job.when).toISOString().slice(5, 16).replace('T', ' '), job.project, job.status, job.format, job.tokens ?? '', job.prompts.map(prompt => prompt.replace(/\s+/g, ' ').slice(0, 70).replace(/\|/g, '/')).join(' / ')]), ['When', 'Project', 'Outcome', 'Format', 'Input tokens', 'Requests'])}
 
 ## Editor usage
 

@@ -1,6 +1,6 @@
 # Desegnos project map
 
-A source map for people and AI agents, updated for the merged module splits on 2026-11-08. Paths are relative to this document. Product direction is [PRODUCT.md](../PRODUCT.md), the canvas concept [CANVAS.md](../CANVAS.md), the editor look and behaviour [DESIGN.md](../DESIGN.md) and the vocabulary [GLOSSARY.md](../GLOSSARY.md). Check claims here against the source before changing behaviour.
+A source map for people and AI agents, reviewed against the files present on 2026-11-08. Paths are relative to this document. Product direction is [PRODUCT.md](../PRODUCT.md), the canvas concept [CANVAS.md](../CANVAS.md), the editor look and behaviour [DESIGN.md](../DESIGN.md) and the vocabulary [GLOSSARY.md](../GLOSSARY.md). Check claims here against the source before changing behaviour.
 
 ## Architecture
 
@@ -361,18 +361,30 @@ Named views persist in `Project.views`; commands and validation live in [model.r
 | `npm run check:rust` | Clippy for the workspace, all targets, warnings denied. |
 | `npm run test:canvas` | `tests/project-canvas-geometry.test.mjs`, `tests/canvas-model.test.mjs` and `tests/canvas-fonts.test.mjs`. |
 | `npm run test:editor` | `scripts/test-editor.mjs` discovers every top-level `tests/*.test.mjs` except the three headless-browser suites (AI models, canvas UX, notices). Includes Play, release orchestration and launcher tests. |
+| `npm run test:canvas-ux` | `tests/canvas-ux-browser.test.mjs`: canvas interactions in headless Chromium. |
+| `npm run test:ai-models` | `tests/ai-models-browser.test.mjs`: AI model list in headless Chromium. |
+| `npm run generate:contract` | `scripts/generate-contract.mjs`: regenerates `src/generated/` from Rust. |
 | `npm run test:notices` | `tests/notice-system.test.mjs`: notice queue and layout in headless Chromium (~10s, kept out of `test:editor`). |
 | `npm run test:smoke` | `tests/native/canvas-smoke.mjs`: builds the `native-tests,gtk-dialogs` app and drives the real editor on a guarded Xvfb display and private session bus. Linux only. |
 | `npm run test:vault` | `scripts/test-vault.mjs`: native secret-service vault flow against a loopback provider. |
 | `npm run release:local` | `scripts/build-release.mjs`: Tauri release build (no bundle), then the guarded Linux startup check. `--dist` keeps the full LTO release profile. |
 
-All top-level test files are wired into npm scripts. `node scripts/startup-test.mjs --binary <path>` runs the guarded startup check directly.
+Every top-level test file runs under one of these scripts. Packages are installed with `npm` (`package-lock.json`). `node scripts/startup-test.mjs --binary <path>` runs the guarded startup check directly; set `DESEGNOS_XVFB_GUARD_DIR` to a directory inside the private runtime dir if your Xvfb wrapper reserves per-display lock files there.
 
 | Test file | Covers |
 | --- | --- |
 | [hug_synchronization.rs](../crates/desegnos-core/tests/hug_synchronization.rs) | Fixed-geometry edits and Hug synchronization in descendants and size overrides; replaces the former timing probe. |
 | [play.test.mjs](../tests/play.test.mjs) | Play click routing, pointer precedence and ancestor targets. |
 | [build-release.test.mjs](../tests/build-release.test.mjs) | Release orchestration, `--dist` profile and failure stopping. |
+| [behaviours.test.mjs](../tests/behaviours.test.mjs) | Behaviour pointers, add/update/remove edits and Built/Runs dock status. |
+| [element-layers.test.mjs](../tests/element-layers.test.mjs) | Layer-row drop targets: before, after, into a group, self-drops. |
+| [export-folder.test.mjs](../tests/export-folder.test.mjs) | Default and explicit export destinations across project renames. |
+| [export-panel.test.mjs](../tests/export-panel.test.mjs) | Export counts for reused behaviour code. |
+| [project-commands.test.mjs](../tests/project-commands.test.mjs) | Open/recover/save flows and disk-conflict resolution. |
+| [provider-errors.test.mjs](../tests/provider-errors.test.mjs) | Native failure wording and typed recovery actions. |
+| [canvas-fonts.test.mjs](../tests/canvas-fonts.test.mjs) | Canvas font loading, alias sharing and private measuring. |
+| [canvas-ux-browser.test.mjs](../tests/canvas-ux-browser.test.mjs) | Real dock clicks and text geometry in headless Chromium. |
+| [ai-models-browser.test.mjs](../tests/ai-models-browser.test.mjs) | AI model list UI in headless Chromium. |
 | [number-expression.test.mjs](../tests/number-expression.test.mjs) | Pure number-expression parsing and field resolution. |
 | [canvas-model.test.mjs](../tests/canvas-model.test.mjs) | Linked-size helpers, overrides, placeholders, origins, id parity with Rust, keymap uniqueness and keyboard dispatch. |
 | [code-mirror-state.test.mjs](../tests/code-mirror-state.test.mjs) | CodeMirror metadata, exact edits, undo/redo and lagging React echoes. |
@@ -414,7 +426,7 @@ Older logs, screenshots and JSON at the root of `test-results/` are historical r
 
 - [run.mjs](../scripts/run.mjs), [toolchain.mjs](../scripts/toolchain.mjs): shared Cargo/Tauri process runner and pinned toolchain discovery.
 - [test-editor.mjs](../scripts/test-editor.mjs): discovers and runs the non-browser Node test files.
-- [build-release.mjs](../scripts/build-release.mjs), [build-release.sh](../scripts/build-release.sh): local release build and startup check; `--dist` for publishing.
-- [startup-test.mjs](../scripts/startup-test.mjs), [test-vault.mjs](../scripts/test-vault.mjs), [xvfb.mjs](../scripts/xvfb.mjs): guarded native diagnostics.
-- [usage-report.mjs](../scripts/usage-report.mjs): summarises local usage JSONL and generation folders into Markdown. It sends nothing.
+- [build-release.mjs](../scripts/build-release.mjs): local release build and startup check; `--dist` for publishing.
+- [startup-test.mjs](../scripts/startup-test.mjs), [test-vault.mjs](../scripts/test-vault.mjs), [xvfb.mjs](../scripts/xvfb.mjs), [native-guard.mjs](../scripts/native-guard.mjs): guarded native diagnostics; `native-guard.mjs` holds the process-group, private-XDG and desktop-unchanged checks shared by the startup, vault and smoke tests.
+- [usage-report.mjs](../scripts/usage-report.mjs): summarises local usage JSONL and generation folders (`job.json`, `REQUIREMENTS.md`) into Markdown. It sends nothing.
 - [docs/](./): contracts and guides, including [CHATGPT_CONTRACT.md](./CHATGPT_CONTRACT.md), [IDENTITY_IMPORT.md](./IDENTITY_IMPORT.md), [INSTALL_AND_FIRST_SITE.md](./INSTALL_AND_FIRST_SITE.md), [GENERATION_BENCHMARK.md](./GENERATION_BENCHMARK.md) and the CodeMirror dependency records. Check their claims against source before changing behaviour.

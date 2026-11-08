@@ -4,7 +4,6 @@
   "private": true,
   "type": "module",
   "license": "GPL-3.0-only",
-  "packageManager": "pnpm@11.25.0",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",

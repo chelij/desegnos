@@ -1,5 +1,4 @@
-// Resolves the Linux virtual-display tooling from PATH instead of an owner-specific
-// wrapper, and supplies the X11 environment that wrapper used to set.
+// Resolves the Linux virtual-display tooling (xvfb-run, dbus-run-session) from PATH or an env override.
 import { accessSync, constants, statSync } from 'node:fs';
 import { delimiter, join } from 'node:path';
 
@@ -36,8 +35,7 @@ export function resolveDbusRunSession() {
   return resolve('dbus-run-session', 'DBUS_RUN_SESSION', 'Install dbus (package dbus on Arch, dbus-daemon on Debian/Ubuntu)');
 }
 
-// The former owner wrapper unset Wayland and forced the X11 backends before
-// exec'ing xvfb-run; pass the same environment explicitly.
+// Drops Wayland and forces the X11 backends so GTK and Qt use the virtual display.
 export function xvfbEnvironment(environment = process.env) {
   const result = { ...environment };
   delete result.WAYLAND_DISPLAY;

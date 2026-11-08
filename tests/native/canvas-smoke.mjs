@@ -2,15 +2,14 @@
 // display and session bus, then drives the editor with WebDriver clicks and keys. The only
 // native input is the GTK save dialog, which lives outside the webview.
 import assert from 'node:assert/strict';
-import { spawn, spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
-import { createReadStream, createWriteStream } from 'node:fs';
-import { access, chmod, mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, writeFile } from 'node:fs/promises';
-import { createServer } from 'node:net';
+import { spawn } from 'node:child_process';
+import { createWriteStream } from 'node:fs';
+import { access, chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
+import { alive, checkDesktop, desktopState, exit as childExit, hashFile, signalGroup, stopGroup, unusedPort as freePort } from '../../scripts/native-guard.mjs';
 import { toolchainEnvironment } from '../../scripts/toolchain.mjs';
 import { resolveDbusRunSession, resolveXvfbRun, xvfbEnvironment } from '../../scripts/xvfb.mjs';
 import { waitFor, WebDriver, xpathString } from './webdriver.mjs';
@@ -21,55 +20,6 @@ const script = fileURLToPath(import.meta.url);
 const args = process.argv.slice(2);
 
 const MODIFIERS = { Control: '\uE009', Shift: '\uE008', Alt: '\uE00A', Meta: '\uE03D' };
-
-function alive(child) { return child.exitCode === null && child.signalCode === null; }
-function childExit(child) {
-  if (child.exitCode !== null) return Promise.resolve(child.exitCode);
-  if (child.signalCode !== null) return Promise.resolve(1);
-  return new Promise((accept, reject) => { child.once('error', reject); child.once('exit', code => accept(code ?? 1)); });
-}
-function signalGroup(pid, signal) {
-  try { process.kill(-pid, signal); } catch (error) { if (error.code !== 'ESRCH') throw error; }
-}
-function groupExists(pid) {
-  try { process.kill(-pid, 0); return true; } catch (error) { if (error.code === 'ESRCH') return false; throw error; }
-}
-async function stopGroup(pid) {
-  if (!pid || !groupExists(pid)) return;
-  signalGroup(pid, 'SIGTERM');
-  const deadline = Date.now() + 2000;
-  while (groupExists(pid) && Date.now() < deadline) await delay(40);
-  if (groupExists(pid)) signalGroup(pid, 'SIGKILL');
-}
-async function hashFile(path) {
-  const hash = createHash('sha256');
-  for await (const chunk of createReadStream(path)) hash.update(chunk);
-  return hash.digest('hex');
-}
-async function freePort() {
-  const server = createServer();
-  await new Promise((accept, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', accept); });
-  const port = server.address().port;
-  await new Promise((accept, reject) => server.close(error => error ? reject(error) : accept()));
-  return port;
-}
-async function desktopState() {
-  const display = process.env.DISPLAY ?? null;
-  const number = display?.match(/^:(\d+)(?:\.\d+)?$/)?.[1];
-  const files = [];
-  for (const path of number ? [`/tmp/.X11-unix/X${number}`, `/tmp/.X${number}-lock`] : []) {
-    try { const item = await stat(path); files.push({ path, exists: true, dev: item.dev, ino: item.ino }); }
-    catch (error) { if (error.code !== 'ENOENT') throw error; files.push({ path, exists: false }); }
-  }
-  const probe = display ? spawnSync('xprop', ['-root', '_NET_SUPPORTING_WM_CHECK'], { encoding: 'utf8', timeout: 5000 }) : null;
-  return { display, files, connected: probe?.status === 0 };
-}
-async function verifyDesktop(before) {
-  const after = await desktopState();
-  assert.deepEqual(after.files, before.files, 'The desktop X11 socket or lock identity changed');
-  if (before.connected) assert.equal(after.connected, true, 'The desktop X11 connection failed after cleanup');
-  return { before, after, sockets: 'unchanged', connection: before.connected ? 'passed' : 'unavailable before test' };
-}
 
 class Pointer {
   constructor(driver) { this.driver = driver; }
@@ -749,7 +699,7 @@ async function main() {
   const binary = resolve(binaryIndex === -1 ? join(target, 'debug/desegnos') : args[binaryIndex + 1]);
   process.chdir(root);
   if (!skipBuild) {
-    const build = spawn(process.execPath, ['scripts/run.mjs', 'tauri', 'build', '--debug', '--no-bundle', '--features', 'native-tests,gtk-dialogs', '--config', 'src-tauri/tauri.test.conf.json', '--config', JSON.stringify({ build: { beforeBuildCommand: 'npm run build' } }), '--', '--no-default-features'], {
+    const build = spawn(process.execPath, ['scripts/run.mjs', 'tauri', 'build', '--debug', '--no-bundle', '--features', 'native-tests,gtk-dialogs', '--config', 'src-tauri/tauri.test.conf.json', '--', '--no-default-features'], {
       cwd: root, env: { ...toolchainEnvironment(), CARGO_TARGET_DIR: target }, stdio: 'inherit',
     });
     if (await childExit(build) !== 0) throw new Error('The native-tests build failed');
@@ -780,7 +730,7 @@ async function main() {
     finally { process.removeListener('SIGINT', interrupt); process.removeListener('SIGTERM', interrupt); }
   } finally {
     await rm(scratch, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
-    const cleanup = await verifyDesktop(before);
+    const cleanup = await checkDesktop(before);
     await writeFile(join(evidence, 'desktop-cleanup.json'), JSON.stringify(cleanup, null, 2));
   }
   console.log(`Smoke evidence: ${evidence}`);

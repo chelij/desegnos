@@ -1,47 +1,18 @@
 import assert from 'node:assert/strict';
-import { spawn, spawnSync } from 'node:child_process';
-import { createHash, randomBytes } from 'node:crypto';
-import { createReadStream, createWriteStream } from 'node:fs';
+import { spawn } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
+import { createWriteStream } from 'node:fs';
 import { access, chmod, mkdir, mkdtemp, readFile, readlink, realpath, rm, stat, writeFile } from 'node:fs/promises';
-import { createConnection, createServer } from 'node:net';
+import { createConnection } from 'node:net';
 import { isAbsolute, join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
+import { alive, assertPrivateXdg, checkDesktop, createPrivateXdg, desktopState, exit, groupExists, hashFile, signalGroup, stopGroup, unusedPort } from './native-guard.mjs';
 import { resolveDbusRunSession, resolveXvfbRun, xvfbEnvironment } from './xvfb.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const script = fileURLToPath(import.meta.url);
 const helper = join(root, 'tests/native/x11-input.py');
-
-async function hashFile(path) {
-  const hash = createHash('sha256');
-  for await (const chunk of createReadStream(path)) hash.update(chunk);
-  return hash.digest('hex');
-}
-
-function alive(child) { return child.exitCode === null && child.signalCode === null; }
-function exit(child) {
-  if (!alive(child)) return Promise.resolve(child.exitCode ?? 1);
-  return new Promise((accept, reject) => { child.once('error', reject); child.once('exit', code => accept(code ?? 1)); });
-}
-function signalGroup(pid, signal) {
-  try { process.kill(-pid, signal); } catch (error) { if (error.code !== 'ESRCH') throw error; }
-}
-function groupExists(pid) {
-  try { process.kill(-pid, 0); return true; } catch (error) { if (error.code === 'ESRCH') return false; throw error; }
-}
-async function stopGroup(pid) {
-  if (!pid || !groupExists(pid)) return;
-  signalGroup(pid, 'SIGTERM');
-  const deadline = Date.now() + 2000;
-  while (groupExists(pid) && Date.now() < deadline) await delay(40);
-  if (groupExists(pid)) {
-    signalGroup(pid, 'SIGKILL');
-    const killed = Date.now() + 2000;
-    while (groupExists(pid) && Date.now() < killed) await delay(40);
-    assert.equal(groupExists(pid), false, `Owned process group ${pid} remains after cleanup`);
-  }
-}
 
 async function command(program, args, { input, timeout = 5000 } = {}) {
   const child = spawn(program, args, { stdio: ['pipe', 'pipe', 'pipe'] });
@@ -52,33 +23,6 @@ async function command(program, args, { input, timeout = 5000 } = {}) {
   const timer = setTimeout(() => child.kill('SIGKILL'), timeout);
   try { assert.equal(await exit(child), 0, `${program} failed: ${stderr}`); return stdout; }
   finally { clearTimeout(timer); }
-}
-
-async function desktopState() {
-  const display = process.env.DISPLAY ?? null;
-  const number = display?.match(/^:(\d+)(?:\.\d+)?$/)?.[1];
-  const files = [];
-  for (const path of number ? [`/tmp/.X11-unix/X${number}`, `/tmp/.X${number}-lock`] : []) {
-    try { const item = await stat(path); files.push({ path, exists: true, dev: item.dev, ino: item.ino }); }
-    catch (error) { if (error.code !== 'ENOENT') throw error; files.push({ path, exists: false }); }
-  }
-  const connection = display ? spawnSync('xprop', ['-root', '_NET_SUPPORTING_WM_CHECK'], { encoding: 'utf8', timeout: 5000 }) : null;
-  return { display, files, connected: connection?.status === 0 };
-}
-
-async function checkDesktop(before) {
-  const after = await desktopState();
-  assert.deepEqual(after.files, before.files, 'The original desktop X socket or lock identity changed');
-  if (before.connected) assert.equal(after.connected, true, 'The original desktop X11 connection failed after cleanup');
-  return { before, after, resourceIdentity: 'passed', connection: before.connected ? 'passed' : 'unavailable before test' };
-}
-
-async function unusedPort() {
-  const server = createServer();
-  await new Promise((accept, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', accept); });
-  const port = server.address().port;
-  await new Promise((accept, reject) => server.close(error => error ? reject(error) : accept()));
-  return port;
 }
 
 async function guardLockOwners(information) {
@@ -111,12 +55,7 @@ async function isolated() {
   assert.equal(await realpath(scratch), scratch);
   const information = await stat(scratch);
   assert.ok(information.uid === process.getuid() && (information.mode & 0o077) === 0, 'Unsafe private startup storage');
-  for (const [variable, directory] of [['XDG_DATA_HOME', 'data'], ['XDG_CONFIG_HOME', 'config'], ['XDG_CACHE_HOME', 'cache'], ['XDG_RUNTIME_DIR', 'runtime']]) {
-    const path = await realpath(process.env[variable]);
-    assert.equal(path, join(scratch, directory));
-    const item = await stat(path);
-    assert.ok(item.uid === process.getuid() && (item.mode & 0o077) === 0, 'Unsafe private XDG storage');
-  }
+  await assertPrivateXdg(scratch);
   const display = process.env.DISPLAY?.match(/^:(\d+)(?:\.\d+)?$/);
   assert.ok(display && Number(display[1]) >= 90 && process.env.DISPLAY !== process.env.DESEGNOS_DESKTOP_DISPLAY, 'Refusing a desktop display');
   assert.equal(process.env.GDK_BACKEND, 'x11');
@@ -125,17 +64,19 @@ async function isolated() {
   assert.ok((await readlink(`/proc/${process.ppid}/exe`)).endsWith('/dbus-run-session'), 'Startup must run inside its private dbus-run-session');
   const socketPath = `/tmp/.X11-unix/X${display[1]}`;
   const lockPath = `/tmp/.X${display[1]}-lock`;
-  const guardLockPath = join(process.env.XDG_RUNTIME_DIR, 'codex-test-displays', display[1]);
+  // A display wrapper that reserves per-display lock files can name their directory inside the
+  // private runtime directory here; a plain xvfb-run has none.
+  const guardDirectory = process.env.DESEGNOS_XVFB_GUARD_DIR;
+  const guardLockPath = guardDirectory ? join(process.env.XDG_RUNTIME_DIR, guardDirectory, display[1]) : null;
   const displayResources = {};
-  for (const path of [socketPath, lockPath, guardLockPath]) {
+  for (const path of [socketPath, lockPath, guardLockPath].filter(Boolean)) {
     try { const item = await stat(path); assert.equal(item.uid, process.getuid()); displayResources[path] = { exists: true, dev: item.dev, ino: item.ino }; }
     catch (error) { if (error.code !== 'ENOENT') throw error; displayResources[path] = { exists: false }; }
   }
   const ownership = { display: process.env.DISPLAY, serverPid: null, socketPath, lockPath, guardLockPath, displayResources, ownershipVerified: false };
   await writeFile(join(scratch, 'display.json'), JSON.stringify(ownership));
   assert.ok(displayResources[socketPath].exists, 'The owned X socket is missing');
-  // The owner's guarded Xvfb reserves a lock file; a plain PATH xvfb-run does not.
-  const guarded = displayResources[guardLockPath].exists;
+  const guarded = Boolean(guardLockPath && displayResources[guardLockPath].exists);
   ownership.guarded = guarded;
   const owners = guarded ? await guardLockOwners(displayResources[guardLockPath]) : [];
   if (guarded) assert.equal(owners.length, 1, 'The private Xvfb guard lock must have one verified holder');
@@ -152,7 +93,7 @@ async function isolated() {
   const connectionDeadline = Date.now() + 10_000;
   let connected = false;
   while (Date.now() < connectionDeadline) {
-    try { await command('/usr/bin/xprop', ['-root', '_NET_SUPPORTING_WM_CHECK']); connected = true; break; }
+    try { await command('xprop', ['-root', '_NET_SUPPORTING_WM_CHECK']); connected = true; break; }
     catch { await delay(100); }
   }
   assert.ok(connected, 'The owned Xvfb display did not accept an actual client connection');
@@ -197,7 +138,7 @@ async function isolated() {
     while (Date.now() < deadline) {
       assert.ok(alive(app), 'The normal native binary exited before its window appeared');
       if (probeFailure) throw probeFailure;
-      try { window = JSON.parse(await command('/usr/bin/python3', [helper], { input: JSON.stringify({ action: 'inspect', pid: app.pid }) })); break; }
+      try { window = JSON.parse(await command('python3', [helper], { input: JSON.stringify({ action: 'inspect', pid: app.pid }) })); break; }
       catch { await delay(150); }
     }
     assert.ok(window, 'No owned native editor window appeared');
@@ -209,9 +150,9 @@ async function isolated() {
     report.window = window;
     const stableUntil = Date.now() + 5000;
     while (Date.now() < stableUntil) { assert.ok(alive(app), 'Normal native startup did not stay alive'); if (probeFailure) throw probeFailure; await delay(100); }
-    const owned = JSON.parse(await command('/usr/bin/python3', [helper], { input: JSON.stringify({ action: 'inspect', pid: app.pid, windowId: window.window.id }) }));
+    const owned = JSON.parse(await command('python3', [helper], { input: JSON.stringify({ action: 'inspect', pid: app.pid, windowId: window.window.id }) }));
     assert.deepEqual(owned.window, window.window, 'The startup window changed unexpectedly during the liveness check');
-    await command('/usr/bin/import', ['-display', process.env.DISPLAY, '-window', String(window.window.id), join(evidence, 'startup.png')], { timeout: 10_000 });
+    await command('import', ['-display', process.env.DISPLAY, '-window', String(window.window.id), join(evidence, 'startup.png')], { timeout: 10_000 });
     const png = await readFile(join(evidence, 'startup.png'));
     assert.ok(png.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])), 'The owned-window screenshot is not PNG');
     report.image = { width: png.readUInt32BE(16), height: png.readUInt32BE(20), sha256: await hashFile(join(evidence, 'startup.png')) };
@@ -251,7 +192,7 @@ async function main() {
   const environment = { ...process.env };
   for (const variable of Object.keys(environment)) if (variable.startsWith('DBUS_') || variable.startsWith('GNOME_KEYRING_') || variable.startsWith('DESEGNOS_NATIVE_TEST_') || variable.startsWith('DESEGNOS_TEST_') || variable.startsWith('DESEGNOS_STARTUP_') || variable.startsWith('TAURI_WEBDRIVER_')) delete environment[variable];
   for (const variable of ['DISPLAY', 'WAYLAND_DISPLAY', 'WAYLAND_SOCKET', 'XAUTHORITY', 'SSH_AUTH_SOCK', 'OPENAI_API_KEY']) delete environment[variable];
-  for (const [variable, directory] of [['XDG_DATA_HOME', 'data'], ['XDG_CONFIG_HOME', 'config'], ['XDG_CACHE_HOME', 'cache'], ['XDG_RUNTIME_DIR', 'runtime']]) { environment[variable] = join(scratch, directory); await mkdir(environment[variable], { mode: 0o700 }); }
+  await createPrivateXdg(scratch, environment);
   Object.assign(environment, { GDK_SCALE: '1', GDK_DPI_SCALE: '1',
     DESEGNOS_DESKTOP_DISPLAY: process.env.DISPLAY ?? '', DESEGNOS_STARTUP_PREVIOUS_BUS: process.env.DBUS_SESSION_BUS_ADDRESS ?? '', DESEGNOS_STARTUP_BINARY: binary,
     DESEGNOS_STARTUP_EVIDENCE: evidence, DESEGNOS_STARTUP_SCRATCH: scratch, DESEGNOS_STARTUP_TOKEN: randomBytes(24).toString('hex') });
@@ -284,8 +225,8 @@ async function main() {
         try { await stat(path); throw new Error(`Owned virtual display resource remains: ${path}`); }
         catch (error) { if (error.code !== 'ENOENT') throw error; }
       }
-      const guard = display.displayResources[display.guardLockPath];
-      if (guard.exists) {
+      const guard = display.guardLockPath && display.displayResources[display.guardLockPath];
+      if (guard?.exists) {
         try { const current = await stat(display.guardLockPath); assert.equal(current.dev, guard.dev); assert.equal(current.ino, guard.ino); }
         catch (error) { if (error.code !== 'ENOENT') throw error; }
         assert.deepEqual(await guardLockOwners(guard), [], 'The private Xvfb guard lock remains held after cleanup');

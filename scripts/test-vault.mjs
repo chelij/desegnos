@@ -3,6 +3,7 @@ import { chmod, mkdir, mkdtemp, readFile, readlink, realpath, rm, stat, writeFil
 import { randomBytes } from 'node:crypto';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { assertPrivateXdg, createPrivateXdg, signalGroup } from './native-guard.mjs';
 import { toolchainEnvironment } from './toolchain.mjs';
 import { startProviderServer, assertNoSyntheticKeys } from '../tests/native/provider-server.mjs';
 
@@ -15,7 +16,7 @@ let interrupted = false;
 for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => {
   interrupted = true;
   for (const [child, detached] of children) {
-    try { if (detached && child.pid) process.kill(-child.pid, 'SIGTERM'); else child.kill('SIGTERM'); } catch {}
+    if (detached && child.pid) signalGroup(child.pid, 'SIGTERM'); else child.kill('SIGTERM');
   }
 });
 
@@ -27,7 +28,7 @@ async function run(command, args, { env = process.env, timeout = 30_000, input, 
   child.stdout.on('data', chunk => { stdout += chunk; if (stdout.length > 4_194_304) { overflow = true; child.kill('SIGKILL'); } });
   child.stderr.on('data', chunk => { stderr += chunk; if (stderr.length > 4_194_304) { overflow = true; child.kill('SIGKILL'); } });
   child.stdin.end(input);
-  const timer = setTimeout(() => { if (detached && child.pid) { try { process.kill(-child.pid, 'SIGKILL'); } catch {} } else child.kill('SIGKILL'); }, timeout);
+  const timer = setTimeout(() => { if (detached && child.pid) signalGroup(child.pid, 'SIGKILL'); else child.kill('SIGKILL'); }, timeout);
   try {
     const result = await new Promise((resolve, reject) => { child.on('error', reject); child.on('close', (code, signal) => resolve({ code, signal, stdout, stderr })); });
     if (overflow) throw new Error('A test subprocess exceeded the bounded output limit.');
@@ -55,11 +56,7 @@ async function inside(binary, directory, evidencePath) {
   if (!/^\/tmp\/desegnos-vault-[^/]+$/.test(directory) || await realpath(directory) !== directory) throw new Error('Private vault storage path is unsafe.');
   const rootInformation = await stat(directory);
   if (rootInformation.uid !== process.getuid() || (rootInformation.mode & 0o077) !== 0) throw new Error('Private vault storage owner or permissions are unsafe.');
-  for (const [variable, name] of [['XDG_DATA_HOME', 'data'], ['XDG_CONFIG_HOME', 'config'], ['XDG_CACHE_HOME', 'cache'], ['XDG_RUNTIME_DIR', 'runtime']]) {
-    const expected = join(directory, name);
-    const information = await stat(expected);
-    if (await realpath(process.env[variable]) !== expected || information.uid !== process.getuid() || (information.mode & 0o077) !== 0) throw new Error('Private XDG preflight failed.');
-  }
+  await assertPrivateXdg(directory);
   for (const variable of ['DISPLAY', 'WAYLAND_DISPLAY', 'WAYLAND_SOCKET']) if (process.env[variable]) throw new Error('Display access must be cleared before keyring initialization.');
   const parent = await readlink(`/proc/${process.ppid}/exe`);
   if (!parent.endsWith('/dbus-run-session')) throw new Error('The vault test must be a direct child of its private dbus-run-session.');
@@ -94,11 +91,7 @@ async function inside(binary, directory, evidencePath) {
     const entries = (await readFile(`/proc/${daemon.pid}/environ`)).toString().split('\0');
     const executable = await readlink(`/proc/${daemon.pid}/exe`);
     if (!executable.endsWith('/gnome-keyring-daemon') || !entries.includes(`DBUS_SESSION_BUS_ADDRESS=${address}`)) throw new Error('Private keyring process identity mismatch.');
-    for (const [variable, name] of [['XDG_DATA_HOME', 'data'], ['XDG_CONFIG_HOME', 'config'], ['XDG_CACHE_HOME', 'cache'], ['XDG_RUNTIME_DIR', 'runtime']]) {
-      const expected = join(directory, name);
-      const information = await stat(expected);
-      if (await realpath(process.env[variable]) !== expected || !entries.includes(`${variable}=${expected}`) || information.uid !== process.getuid() || (information.mode & 0o077) !== 0) throw new Error('Private XDG isolation verification failed.');
-    }
+    await assertPrivateXdg(directory, entries);
     await writeFile(join(directory, 'isolation.json'), JSON.stringify({ token, busAddress: address, keyringPid: daemon.pid }), { mode: 0o600 });
     evidence.privateBusVerified = true; evidence.privateXdgVerified = true;
   }
@@ -142,9 +135,7 @@ async function outer() {
   const environment = toolchainEnvironment();
   for (const variable of Object.keys(environment)) if (variable.startsWith('DBUS_') || variable.startsWith('GNOME_KEYRING_') || variable.startsWith('DESEGNOS_TEST_')) delete environment[variable];
   for (const variable of ['DISPLAY', 'WAYLAND_DISPLAY', 'WAYLAND_SOCKET', 'XAUTHORITY', 'SSH_AUTH_SOCK', 'OPENAI_API_KEY']) delete environment[variable];
-  for (const [variable, name] of [['XDG_DATA_HOME', 'data'], ['XDG_CONFIG_HOME', 'config'], ['XDG_CACHE_HOME', 'cache'], ['XDG_RUNTIME_DIR', 'runtime']]) {
-    environment[variable] = join(directory, name); await mkdir(environment[variable], { mode: 0o700 });
-  }
+  await createPrivateXdg(directory, environment);
   environment.CARGO_TARGET_DIR = join(directory, 'target');
   try {
     const build = await run('cargo', ['test', '--offline', '--locked', '-p', 'desegnos-ai', '--test', 'system_vault', '--features', 'test-support', '--no-run', '--message-format=json'], { env: environment, timeout: 240_000 });

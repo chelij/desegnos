@@ -2,7 +2,7 @@
   "reviewedOn": "2026-10-20",
   "purpose": "CodeMirror 6 edits the Code block element; Desegnos has no page source editor",
   "scope": "Editor UI only; bundled offline; no native capabilities, remote scripts, telemetry or generated-site runtime imports. Package installation used --ignore-scripts.",
-  "provenance": "Official @codemirror and @lezer package scopes and their upstream repositories; direct versions exact-pinned and all resolved versions/integrities frozen in pnpm-lock.yaml. GitHub archives link to active code.haverbeke.berlin repositories.",
+  "provenance": "Official @codemirror and @lezer package scopes and their upstream repositories; direct versions exact-pinned and all resolved versions/integrities frozen in package-lock.json. GitHub archives link to active code.haverbeke.berlin repositories.",
   "primaryDocumentation": [
     "https://codemirror.net/docs/guide/",
     "https://codemirror.net/docs/ref/",
@@ -10,7 +10,7 @@
     "https://github.com/codemirror/view#readme"
   ],
   "advisoryCheck": {
-    "method": "pnpm audit --prod --json",
+    "method": "npm audit --omit=dev --json",
     "result": {
       "advisories": {},
       "metadata": {
