@@ -1,8 +1,8 @@
 import { errorMessage, errorValue, type ErrorValue } from './errorMessage.js';
 import { MAX_IMPORT_PAGES } from './generated/limits';
 import { usePoll } from './usePoll';
-import { needsAiSettings, ProblemBanner, Notice } from './ProblemBanner.js';
-import { userError } from './userErrors.js';
+import { ProblemBanner, Notice } from './ProblemBanner.js';
+import { userError, needsAiSettings } from './userErrors.js';
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { native } from './api';
 import type { AiSettingsView, IdentityAnalysis, IdentityCandidate, IdentitySelection, IdentitySource, WebsiteImportResultView, WebsiteImportSourceView } from './types';
@@ -322,7 +322,7 @@ export function ImportContext({ busy, settings, openSettings, importInto, onPage
       </ReviewCard>];
     });
   }
-  const aiNeedsFixing = !connected || selection?.needsSettings || (lastAttempt?.status === 'failed' && needsAiSettings(lastAttempt.error ?? '', lastAttempt.providerError, lastAttempt.provider));
+  const aiNeedsFixing = !connected || selection?.needsSettings || (lastAttempt?.status === 'failed' && needsAiSettings(lastAttempt.error ?? '', lastAttempt.providerError));
   return <form className="new-project import-context dialog-body" onSubmit={submit}>
     {error && <ProblemBanner message={userError(error)} dismiss={() => setError('')} action={needsAiSettings(error) ? { label: 'AI settings', onClick: openSettings } : { label: 'Choose another location', disabled: !!locked, onClick: () => { void pick('file'); } }} />}
       <section className="identity-import" aria-label="Brand evidence">
@@ -358,7 +358,7 @@ export function ImportContext({ busy, settings, openSettings, importInto, onPage
           {!candidate && selection?.message && <ProblemBanner message={userError(selection.message)} />}
           </>}
           {analyzing ? <div className="identity-progress" role="status"><span>Reading your brand…</span><button type="button" disabled={working} onClick={() => { void cancel(); }}>Stop reading</button></div> : !candidate ? <>
-            {lastAttempt && (lastAttempt.status === 'cancelled' ? <Notice message="Reading stopped." /> : <ProblemBanner message={userError({ ...lastAttempt, message: lastAttempt.error || 'The AI could not read your brand. Try again.' })} action={needsAiSettings(lastAttempt.error || '', lastAttempt.providerError, lastAttempt.provider) ? { label: 'AI settings', onClick: openSettings } : { label: 'Try again', disabled: !!locked, onClick: () => { void analyze(); } }} />)}
+            {lastAttempt && (lastAttempt.status === 'cancelled' ? <Notice message="Reading stopped." /> : <ProblemBanner message={userError({ ...lastAttempt, message: lastAttempt.error || 'The AI could not read your brand. Try again.' })} action={needsAiSettings(lastAttempt.error || '', lastAttempt.providerError) ? { label: 'AI settings', onClick: openSettings } : { label: 'Try again', disabled: !!locked, onClick: () => { void analyze(); } }} />)}
             <div className="identity-source-actions">{!hasPages && <button type="button" className="primary" disabled={locked || !selection?.fits || !connected} onClick={() => { void analyze(); }}>Read my brand</button>}{aiNeedsFixing && <button type="button" disabled={locked} onClick={openSettings}>{connected ? 'Check AI settings' : 'Connect AI'}</button>}</div>
           </> : <div className="identity-result" aria-label="Brand review">
             <div className="identity-review-intro"><h3>Choose what to keep</h3></div>

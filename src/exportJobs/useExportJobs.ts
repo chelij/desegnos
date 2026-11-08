@@ -7,6 +7,7 @@ import type { Command, PointerStateView, Project, WorkspaceView, ExportCheck, Ex
 import { idlePlay, playIsActive, type PlayState } from '../projectCanvas/play';
 import type { PreviewState } from '../ProjectCanvas';
 import { errorMessage } from '../errorMessage.js';
+import { browserOpenUrl } from '../userErrors.js';
 import { projectHasPreviewPages } from '../visibleActions';
 import type { EditorPanel, OpenPanel } from '../session/editorPanel';
 
@@ -206,10 +207,9 @@ export function useExportJobs(context: Context) {
     if (!project) return;
     try { await native<string>('open_in_browser', { projectId: project.id }); }
     catch (error) {
-      const message = errorMessage(error);
-      const url = message.match(/https?:\/\/\S+/)?.[0];
+      const url = browserOpenUrl(error);
       setError(errorValue(error));
-      if (url) setOpenFailure({ message, url });
+      if (url) setOpenFailure({ message: errorMessage(error), url });
     }
   }
 

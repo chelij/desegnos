@@ -7,16 +7,13 @@ try {
   const { DEFAULT_GRID_SPACING: GRID_SPACING } = await modules.load('generated/limits.js');
   const geometry = Object.assign({}, ...await Promise.all(['camera', 'boundaryLayout', 'referenceGeometry', 'canvasTargets', 'pointerGeometry', 'pointerNames', 'autoLinks'].map(name => modules.load(`projectCanvas/${name}.js`))));
   const {
-    boundaryHeight, layoutBoundaries, drawnBoundaryRect, snapValue, canvasRectFromPage, pageRectFromCanvas,
-    pushApartBoundaries, boundaryMoves, boundariesByPosition, dotGrid, unionBounds, sameBoundaries,
-    fitCamera, textEditingCamera, zoomCameraAt, panCamera, drawnFrameRect, referenceNoteRect, movedReferenceRect, resizedReferenceRect,
-    convertedReferenceRects, referenceFrameRect, pushApartReference, referenceMoves, insideRect, boundaryAt, boundaryNear,
-    insideAnyBoundary, canvasTargetKey, selectedPointers, selectedReference, selectedElementIds,
-    selectedElementTargets, hasCanvasTarget, toggleCanvasTarget, sizeTarget, nearestEdgeAnchors, pointerEndpointKey,
+    boundaryHeight, layoutBoundaries, drawnBoundaryRect, snapValue, pageRectFromCanvas,
+    pushApartBoundaries, boundaryMoves, boundariesByPosition, dotGrid, unionBounds, fitCamera, textEditingCamera, zoomCameraAt, panCamera, referenceNoteRect, movedReferenceRect, resizedReferenceRect,
+    clampedReferenceRect, pushApartReference, referenceMoves, insideRect, boundaryAt, boundaryNear,
+    canvasTargetKey, selectedPointers, selectedReference, selectedElementTargets, toggleCanvasTarget, sizeTarget, nearestEdgeAnchors, pointerEndpointKey,
     samePointerEndpoint, pointerEndpointRect, pointerRoute, pointerAt, pointSegmentDistance, pointerVisible,
     viewportWorldRect, screenPoint, pointerBroken, pointerLabel, pointerEndpointName, automaticLinks,
-    BOUNDARY_GAP, BOUNDARY_PUSH_GAP, MIN_SIZE, MAX_BOUNDARY_HEIGHT, FIT_PADDING, CANVAS_DOT_MIN_SCREEN, REFERENCE_ATTACHMENT_WIDTH, REFERENCE_ATTACHMENT_HEIGHT, REFERENCE_ATTACHMENT_GAP,
-    POINTER_HIT_PX,
+    BOUNDARY_GAP, BOUNDARY_PUSH_GAP, MIN_SIZE, MAX_BOUNDARY_HEIGHT, FIT_PADDING, CANVAS_DOT_MIN_SCREEN, POINTER_HIT_PX,
   } = geometry;
   const { MIN_ZOOM, ZOOM_LEVELS } = geometry;
 
@@ -148,9 +145,6 @@ try {
     const one = boundary('a', box(0, 0));
     const two = boundary('b', box(200, 100, 100, 50));
     assert.deepEqual(unionBounds([one.rect, two.rect]), { x: 0, y: 0, width: 400, height: 300 });
-    assert.equal(sameBoundaries([one, two], [one, two]), true);
-    assert.equal(sameBoundaries([one, two], [one, { ...two, label: 'B' }]), false);
-    assert.equal(sameBoundaries([one], [one, two]), false);
   });
 
   await test('fit centers boundaries inside the padding and never magnifies past 100%', () => {
@@ -211,23 +205,7 @@ try {
   });
 
   await test('frames convert between canvas and page coordinates through the boundary origin', () => {
-    assert.deepEqual(canvasRectFromPage(box(10, 20), { x: 100, y: 200 }), box(110, 220));
     assert.deepEqual(pageRectFromCanvas(box(110, 220), { x: 100, y: 200 }), box(10, 20));
-  });
-
-  await test('a frame drag snaps to 8px and clamps to its boundary', () => {
-    const area = box(100, 100, 400, 300);
-    assert.equal(GRID_SPACING, 8);
-    assert.equal(MIN_SIZE, 1);
-    assert.deepEqual(drawnFrameRect({ x: 120, y: 120 }, { x: 320, y: 280 }, area, GRID_SPACING), box(120, 120, 200, 160));
-    const reversed = drawnFrameRect({ x: 320, y: 280 }, { x: 120, y: 120 }, area, GRID_SPACING);
-    assert.deepEqual(reversed, box(120, 120, 200, 160));
-    const clamped = drawnFrameRect({ x: 120, y: 120 }, { x: 900, y: 900 }, area, GRID_SPACING);
-    assert.deepEqual(clamped, box(120, 120, 380, 280));
-    const minimal = drawnFrameRect({ x: 120, y: 120 }, { x: 121, y: 121 }, area, GRID_SPACING);
-    assert.deepEqual(minimal, box(120, 120, 1, 1));
-    assert.equal(drawnFrameRect({ x: 10, y: 10 }, { x: 200, y: 200 }, area, GRID_SPACING), null);
-    assert.equal(drawnFrameRect({ x: Number.NaN, y: 120 }, { x: 200, y: 200 }, area, GRID_SPACING), null);
   });
 
   await test('a Frame drag outside boundaries draws a snapped note of any size', () => {
@@ -248,23 +226,10 @@ try {
     assert.deepEqual(resizedReferenceRect(box(100, 100, 200, 150), 'nw', { x: 399, y: 399 }, GRID_SPACING), box(299, 249, 1, 1));
   });
 
-  await test('a frame dragged out places a note and its attachment cards one row beside it', () => {
-    assert.equal(REFERENCE_ATTACHMENT_WIDTH, 200);
-    assert.equal(REFERENCE_ATTACHMENT_HEIGHT, 140);
-    assert.equal(REFERENCE_ATTACHMENT_GAP, 16);
-    const converted = convertedReferenceRects(box(10, 20, 50, 40), 2);
-    assert.deepEqual(converted.note, box(10, 20, 50, 40));
-    assert.deepEqual(converted.attachments, [
-      box(10 + 50 + 16, 20, 200, 140),
-      box(10 + 50 + 16 + 216, 20, 200, 140),
-    ]);
-    assert.deepEqual(convertedReferenceRects(box(0, 0), 0).attachments, []);
-  });
-
   await test('a reference item dropped into a boundary keeps its size where it fits and clamps inside', () => {
-    assert.deepEqual(referenceFrameRect(box(110, 110, 100, 60), box(100, 100, 400, 300), GRID_SPACING), box(112, 112, 100, 60));
-    assert.deepEqual(referenceFrameRect(box(10, 10, 10, 10), box(100, 100, 400, 300), GRID_SPACING), box(100, 100, 10, 10));
-    assert.deepEqual(referenceFrameRect(box(480, 380, 200, 200), box(100, 100, 400, 300), GRID_SPACING), box(300, 200, 200, 200));
+    assert.deepEqual(clampedReferenceRect(box(110, 110, 100, 60), box(100, 100, 400, 300), GRID_SPACING), box(112, 112, 100, 60));
+    assert.deepEqual(clampedReferenceRect(box(10, 10, 10, 10), box(100, 100, 400, 300), GRID_SPACING), box(100, 100, 10, 10));
+    assert.deepEqual(clampedReferenceRect(box(480, 380, 200, 200), box(100, 100, 400, 300), GRID_SPACING), box(300, 200, 200, 200));
   });
 
   await test('boundaries push reference items aside and items do not push each other', () => {
@@ -295,7 +260,6 @@ try {
     assert.equal(boundaryAt(boundaries, { x: 60, y: 60 }).sizeId, 'above');
     assert.equal(boundaryAt(boundaries, { x: 10, y: 10 }).sizeId, 'below');
     assert.equal(boundaryAt(boundaries, { x: 400, y: 400 }), null);
-    assert.equal(insideAnyBoundary(boundaries, { x: 60, y: 60 }), true);
     assert.equal(boundaryAt([{ itemId: 'note', rect: box(0, 0, 10, 10) }], { x: 5, y: 5 }).itemId, 'note');
   });
 
@@ -311,11 +275,8 @@ try {
     assert.deepEqual(toggleCanvasTarget([elementTarget], pointerTarget, false), [pointerTarget]);
     assert.deepEqual(toggleCanvasTarget([elementTarget], pointerTarget, true), [elementTarget, pointerTarget]);
     assert.deepEqual(toggleCanvasTarget([elementTarget, pointerTarget], elementTarget, true), [pointerTarget]);
-    assert.equal(hasCanvasTarget([elementTarget], { ...elementTarget }), true);
-    assert.equal(hasCanvasTarget([allSizes], elementTarget), false);
     assert.deepEqual(selectedPointers([pointerTarget, referenceTarget]), ['x']);
     assert.deepEqual(selectedReference([pointerTarget, referenceTarget]), ['r']);
-    assert.deepEqual(selectedElementIds([elementTarget, allSizes]), ['e', 'e']);
     assert.deepEqual(selectedElementTargets([elementTarget, referenceTarget]), [elementTarget]);
     assert.deepEqual(sizeTarget(elementTarget), { size_id: 's' });
     assert.deepEqual(sizeTarget(allSizes), { all_sizes: true });

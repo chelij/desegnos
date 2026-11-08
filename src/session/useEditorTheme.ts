@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { readPreference, writePreference } from '../preferences';
-import type { Theme } from '../editorShared';
+export type Theme = 'system' | 'light' | 'dark';
 const THEME_KEY = 'desegnos.editor-theme';
 export function useEditorTheme() {
   const [theme, setTheme] = useState<Theme>(() => { const value = readPreference(THEME_KEY); return value === 'light' || value === 'dark' ? value : 'system'; });

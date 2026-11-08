@@ -1,4 +1,4 @@
-import { boundaryName, boundaryIcon, pageKind, projectKind } from '../projectCanvas/boundaryDefaults';
+import { boundaryKindLabel, boundaryIcon, pageKind, projectKind } from '../projectCanvas/boundaryDefaults';
 import { useMemo, useRef, useState, type ReactNode } from 'react';
 import { Icon, type IconName } from '../icons';
 import { CompactNumberField, CompactTextField } from '../CompactField';
@@ -134,7 +134,7 @@ export function CanvasLayers({ project, boundaries, selection, focused, selectBo
         onChange={event => setQuery(event.target.value)}
         onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); setQuery(''); } }} />
     </li>
-    <li><button type="button" className="dock-action" onClick={addBoundary}><Icon name="plus" />Add {boundaryName(projectKind(project)).toLowerCase()}</button></li>
+    <li><button type="button" className="dock-action" onClick={addBoundary}><Icon name="plus" />Add {boundaryKindLabel(projectKind(project)).toLowerCase()}</button></li>
     <li><StylesSection project={project} command={styleCommand} /></li>
     <LayerGroup section="views" title="Views" add={addView} addLabel="Save the current view">
       {views.length > 0 && views.map(view => <ViewRow key={view.id} view={view} jump={() => jumpToView(view)} rename={name => renameView(view, name)} remove={() => removeView(view)} />)}

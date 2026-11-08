@@ -2,6 +2,10 @@ import { SIZE_PRESETS } from './generated/limits';
 // The extraction wrapper runs inside the local static server's origin. The page itself is
 // rendered in a nested, script-disabled frame; this script only reads its DOM and posts a
 // compact tree back to the editor.
+/** How long the extractor waits for fonts and pictures; the outer capture timer must outlast it. */
+const IMAGE_WAIT_MS = 8000;
+export const CAPTURE_TIMEOUT_MS = IMAGE_WAIT_MS * 4;
+
 export const EXTRACTOR_SCRIPT = String.raw`
 (function () {
   'use strict';
@@ -219,7 +223,7 @@ export const EXTRACTOR_SCRIPT = String.raw`
       }
     });
     if (doc.fonts && doc.fonts.ready) waits.push(doc.fonts.ready.catch(function () {}));
-    return Promise.race([Promise.all(waits), new Promise(function (resolve) { setTimeout(resolve, 8000); })]);
+    return Promise.race([Promise.all(waits), new Promise(function (resolve) { setTimeout(resolve, ${IMAGE_WAIT_MS}); })]);
   }
   function extract(doc, pageUrl) {
     var budget = { count: 1 };

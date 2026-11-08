@@ -1,9 +1,20 @@
-import { sliderFromZoom, zoomFromSlider } from './editorShared';
+import { MAX_ZOOM, MIN_ZOOM } from './projectCanvas/camera';
 import { StatusChip } from './StatusChip';
 import type { Editor } from './session/useEditor';
 import { withShortcut } from './shortcuts';
 import type { Project, WorkspaceView } from './types';
 import { showsOpener } from './visibleActions';
+
+export function zoomFromSlider(value: number) {
+  const fraction = Math.max(0, Math.min(1, value / 1000));
+  return Math.round(MIN_ZOOM * Math.pow(MAX_ZOOM / MIN_ZOOM, fraction) * 1e6) / 1e6;
+}
+
+export function sliderFromZoom(zoom: number) {
+  const bounded = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, zoom));
+  return Math.round(1000 * Math.log(bounded / MIN_ZOOM) / Math.log(MAX_ZOOM / MIN_ZOOM));
+}
+
 
 export function StatusBar({ editor, project, view }: { editor: Editor; project: Project; view: WorkspaceView }) {
   const { actions, canvasRef, canvasSelection, selectedBounds, clashPointers, selectNextPointerClash, canvasZoom, zoomPercent, panel, openPanel, pending } = editor;

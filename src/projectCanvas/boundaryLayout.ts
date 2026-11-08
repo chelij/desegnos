@@ -61,12 +61,6 @@ export function drawnBoundaryRect(start: Point, end: Point, spacing: number): Re
     height: Math.max(MIN_SIZE, Math.abs(snapValue(end.y, spacing) - snapValue(start.y, spacing))) };
 }
 
-// A frame lives in page coordinates: the boundary origin is the page's top-left corner and a
-// boundary is exactly as wide as its page viewport, so canvas and page units differ by that origin.
-export function canvasRectFromPage(rect: Rect, origin: Point): Rect {
-  return { x: rect.x + origin.x, y: rect.y + origin.y, width: rect.width, height: rect.height };
-}
-
 export function pageRectFromCanvas(rect: Rect, origin: Point): Rect {
   return { x: rect.x - origin.x, y: rect.y - origin.y, width: rect.width, height: rect.height };
 }
@@ -119,15 +113,6 @@ export function boundariesByPosition(boundaries: Boundary[]): Boundary[] {
   return [...boundaries].sort((first, second) => first.rect.y - second.rect.y || first.rect.x - second.rect.x || first.sizeId.localeCompare(second.sizeId));
 }
 
-export function sameBoundaries(first: Boundary[], second: Boundary[]): boolean {
-  return first.length === second.length && first.every((item, index) => {
-    const other = second[index];
-    return item.pageId === other.pageId && item.sizeId === other.sizeId && item.label === other.label && item.kind === other.kind
-      && item.rect.x === other.rect.x && item.rect.y === other.rect.y
-      && item.rect.width === other.rect.width && item.rect.height === other.rect.height;
-  });
-}
-
 export function boundaryAt<T extends { rect: Rect }>(items: T[], point: Point): T | null {
   for (let index = items.length - 1; index >= 0; index--) if (insideRect(items[index].rect, point)) return items[index];
   return null;
@@ -143,8 +128,4 @@ export function boundaryNear<T extends { rect: Rect }>(items: T[], point: Point,
     if (distance <= bestDistance) { best = item; bestDistance = distance; }
   }
   return best;
-}
-
-export function insideAnyBoundary(boundaries: { rect: Rect }[], point: Point): boolean {
-  return boundaries.some(boundary => insideRect(boundary.rect, point));
 }

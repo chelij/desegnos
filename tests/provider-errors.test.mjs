@@ -6,12 +6,11 @@ import { compileModules } from './typescript.mjs';
 
 const modules = await compileModules(['src/userErrors.ts', 'src/Generation.tsx', 'src/dock/exportPanel.tsx']);
 try {
-  const { providerProblem, userError } = await modules.load('userErrors.js');
+  const { providerProblem, userError, needsAiSettings } = await modules.load('userErrors.js');
   await test('recovery failures show the native wording', () => {
     const reason = "Desegnos couldn't restore an unsaved project. Its original file is still on disk.";
     assert.equal(userError(reason), reason);
   });
-  const { needsAiSettings } = await modules.load('ProblemBanner.js');
   const { GenerationFeedback } = await modules.load('Generation.js');
   const { ExportPanel } = await modules.load('dock/exportPanel.js');
   const failure = (fields = {}) => ({ kind: 'transport', outcome: 'unknown', httpStatus: null, code: null, ...fields });
@@ -19,7 +18,7 @@ try {
     for (const [kind, settings] of [['server', false], ['transport', false], ['rateLimited', false], ['quota', true], ['authentication', true], ['modelUnavailable', true]]) {
       const error = failure({ kind, httpStatus: settings ? 500 : 401, code: 'misleading_transport_code' });
       const message = 'The native service explains this failure.';
-      assert.deepEqual(providerProblem(error, 'deepseek', message), { message, settings, action: settings ? 'AI settings' : 'Try again' });
+      assert.deepEqual(providerProblem(error, message), { message, settings, action: settings ? 'AI settings' : 'Try again' });
       assert.equal(needsAiSettings('API key network JSON error', error), settings);
       assert.equal(userError({ message, providerError: error, provider: 'deepseek' }), message);
     }

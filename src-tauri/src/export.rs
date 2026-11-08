@@ -1205,7 +1205,8 @@ pub fn open_in_browser(
     site: SiteState<'_>,
     project_id: Uuid,
 ) -> Result<String, crate::native_error::NativeFailure> {
-    (|| -> NativeResult<String> {
+    use crate::native_error::{NativeErrorKind, NativeFailure};
+    let (url, target) = (|| -> NativeResult<(String, String)> {
         let project = {
             let workspace = workspace.locked();
             let project = workspace.project()?;
@@ -1230,11 +1231,20 @@ pub fn open_in_browser(
             )
             .map_err(message)?;
         let target = entry_url(&path, &url);
-        crate::system_open::open(&target)
-            .map_err(|_| format!("The site is running at {url}, but no browser could open it."))?;
-        Ok(target)
+        Ok((url, target))
     })()
-    .map_err(crate::native_error::NativeErrorKind::Browser.failure())
+    .map_err(NativeErrorKind::Browser.failure())?;
+    // The running address travels as a field so the editor can offer to copy it.
+    crate::system_open::open(&target).map_err(|_| {
+        NativeFailure::from_serializable(
+            serde_json::json!({
+                "message": format!("The site is running at {url}, but no browser could open it."),
+                "url": url,
+            }),
+            NativeErrorKind::Browser,
+        )
+    })?;
+    Ok(target)
 }
 
 /// The page a browser should open: the home page, else a single-page export's own file.

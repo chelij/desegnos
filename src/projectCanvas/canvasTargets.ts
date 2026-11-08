@@ -15,11 +15,6 @@ export const canvasTargetKey = (target: CanvasTarget): string => target.kind ===
 
 export const selectedPointers = (selection: CanvasTarget[]): string[] => selection.flatMap(item => item.kind === 'pointer' ? [item.pointerId] : []);
 
-export function hasCanvasTarget(selection: CanvasTarget[], target: CanvasTarget): boolean {
-  const key = canvasTargetKey(target);
-  return selection.some(item => canvasTargetKey(item) === key);
-}
-
 // Shift or Ctrl/Cmd toggles one item; a plain click replaces the selection.
 export function toggleCanvasTarget(selection: CanvasTarget[], target: CanvasTarget, additive: boolean): CanvasTarget[] {
   if (!additive) return [target];
@@ -28,8 +23,6 @@ export function toggleCanvasTarget(selection: CanvasTarget[], target: CanvasTarg
 }
 
 export const selectedReference = (selection: CanvasTarget[]): string[] => selection.flatMap(item => item.kind === 'reference' ? [item.itemId] : []);
-
-export const selectedElementIds = (selection: CanvasTarget[]): string[] => selection.flatMap(item => item.kind === 'element' ? [item.elementId] : []);
 
 export const selectedElementTargets = (selection: CanvasTarget[]): ElementTarget[] => selection.flatMap(item => item.kind === 'element' ? [item] : []);
 

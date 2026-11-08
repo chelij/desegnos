@@ -1,7 +1,8 @@
 import { sizeLabel } from '../projectCanvas/sizes';
 import { type BoundaryToolKind, boundaryDefaults, layoutKind, outputKind, pageKind, projectKind, nextBoundaryName } from '../projectCanvas/boundaryDefaults';
 import { useProjectSession } from './useProjectSession';
-import { sizeBoundaries, suggestedPagePath } from '../editorShared';
+import { canvasView } from '../projectCanvas/canvasView';
+import { RESERVED_ROUTE_NAMES } from '../generated/limits';
 import { useCallback } from 'react';
 import { type ProjectCanvasHandle } from '../ProjectCanvas';
 import { BOUNDARY_GAP, boundaryMoves, pushApartBoundaries } from '../projectCanvas/boundaryLayout';
@@ -9,6 +10,15 @@ import { unionBounds } from '../projectCanvas/camera';
 import { referenceMoves, pushApartReference } from '../projectCanvas/referenceGeometry';
 import type { BoundaryKind, Element, PageSize, Rect, SizePreset, WorkspaceView } from '../types';
 import { SIZE_PRESETS } from '../projectCanvas/sizes';
+
+export function suggestedPagePath(name: string, paths: string[]) {
+  let slug = name.trim().toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '-').replace(/^-|-$/g, '') || 'page';
+  if (RESERVED_ROUTE_NAMES.includes(slug)) slug += '-page';
+  const base = `/${slug}`;
+  let path = base; let suffix = 2;
+  while (paths.some(existing => existing.toLowerCase() === path.toLowerCase())) path = `${base}-${suffix++}`;
+  return path;
+}
 
 export function useBoundaryCommands(current: import('react').RefObject<WorkspaceView | null>, mutate: ReturnType<typeof useProjectSession>['mutate'], canvasRef: import('react').RefObject<ProjectCanvasHandle | null>, selectCanvasBoundary: (pageId: string | null, sizeId?: string | null) => void) {
   const createCanvasBoundary = useCallback(async (bounds: Rect, kind: BoundaryToolKind, sourceId?: string) => {
@@ -32,7 +42,7 @@ export function useBoundaryCommands(current: import('react').RefObject<Workspace
       const copy = (element: Element): Element => ({ ...structuredClone(element), id: crypto.randomUUID(), children: element.children.map(copy), overrides: Object.fromEntries(Object.entries(element.overrides ?? {}).flatMap(([id, value]) => sizeIds.has(id) ? [[sizeIds.get(id)!, value]] : [])) });
       createdId = crypto.randomUUID();
       const page = { id: createdId, name, path: project.pages.length ? suggestedPagePath(name, project.pages.map(page => page.path)) : '/', included: true, output: outputKind(kind), background: source?.background ?? '#ffffff', sizes, elements: source?.elements.map(copy) ?? [] };
-      const before = sizeBoundaries(project);
+      const before = canvasView(project).boundaries;
       const additions = sizes.map(item => ({ pageId: page.id, sizeId: item.id, label: item.label, rect: { x: item.x, y: item.y, width: item.width, height: item.height }, kind: item.kind }));
       // Keep the whole linked-size row fixed while making room around it.
       const anchor = { ...additions[0], rect: unionBounds(additions.map(item => item.rect)) };
@@ -56,7 +66,7 @@ export function useBoundaryCommands(current: import('react').RefObject<Workspace
     const kind = projectKind(project);
     const id = await createCanvasBoundary(boundaryDefaults(project, kind), kind);
     selectCanvasBoundary(id);
-    if (id) requestAnimationFrame(() => canvasRef.current?.focusBoundary(id));
+    if (id) canvasRef.current?.focusBoundary(id);
   }
   const updateCanvasPage = useCallback((pageId: string, patch: { name?: string; path?: string; background?: string; included?: boolean }) => {
     void mutate(project => {
@@ -73,7 +83,7 @@ export function useBoundaryCommands(current: import('react').RefObject<Workspace
       const page = project.pages.find(item => item.id === pageId);
       const size = page?.sizes.find(item => item.id === sizeId);
       if (!page || !size) return null;
-      const before = sizeBoundaries(project);
+      const before = canvasView(project).boundaries;
       const resized = before.map(item => item.sizeId === sizeId
         ? { ...item, rect: { ...item.rect, width: patch.width ?? item.rect.width, height: patch.height ?? item.rect.height } }
         : item);
@@ -98,7 +108,7 @@ export function useBoundaryCommands(current: import('react').RefObject<Workspace
       const existing = preset !== 'custom' && page.sizes.slice(1).find(size => size.width === dimensions.width);
       if (existing) { focusedSizeId = existing.id; return null; }
       const size: PageSize = { id: sizeId, ...dimensions, kind: last.kind, x: last.x + last.width + BOUNDARY_GAP, y: last.y };
-      const anchor = sizeBoundaries(project);
+      const anchor = canvasView(project).boundaries;
       const pushed = pushApartBoundaries([...anchor, { pageId, sizeId: size.id, label: size.label, rect: { x: size.x, y: size.y, width: size.width, height: size.height }, kind: size.kind }], size.id);
       const placed = pushed.find(item => item.sizeId === size.id)!;
       return {

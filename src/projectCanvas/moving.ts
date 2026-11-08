@@ -3,7 +3,7 @@ import { canvasBoxes } from './canvasView';
 import { screenRect } from './surface';
 import { type PointerEvent as ReactPointerEvent } from 'react';
 import { boundaryAt, boundaryMoves, pageRectFromCanvas, pushApartBoundaries, type Boundary, type BoundaryMove } from './boundaryLayout';
-import { referenceFrameRect, referenceMoves, pushApartReference, type FrameCorner, type ReferenceBox, type ReferenceMove } from './referenceGeometry';
+import { clampedReferenceRect, referenceMoves, pushApartReference, type ReferenceCorner, type ReferenceBox, type ReferenceMove } from './referenceGeometry';
 import { type CanvasCamera, type Point } from './camera';
 import { type CanvasTarget, type ElementTarget } from './canvasTargets';
 import type { Element, ElementMove, Page, Project, Rect, ReferenceItem } from '../types';
@@ -249,7 +249,7 @@ export function createMovingActions(context: () => Context) {
     surface.current.focus({ preventScroll: true });
   }
 
-  function startReferenceResize(event: ReactPointerEvent<HTMLButtonElement>, corner: FrameCorner, item: ReferenceItem) {
+  function startReferenceResize(event: ReactPointerEvent<HTMLButtonElement>, corner: ReferenceCorner, item: ReferenceItem) {
     const { surface, beginPointerSession, drag, worldPoint, movingItems } = context();
     if (!surface.current) return;
     event.preventDefault();
@@ -288,7 +288,7 @@ export function createMovingActions(context: () => Context) {
         const boundary = boundaryAt(boundaryList, centre(rect));
         const item = project.reference.find(entry => entry.id === target.itemId);
         if (boundary && item) {
-          await referenceToElement(target.itemId, boundary.pageId, pageRectFromCanvas(item.kind.kind === 'element' ? rect : referenceFrameRect(rect, boundary.rect, project.gridSettings.snap ? project.gridSettings.spacing : 0), boundary.rect), boundary.sizeId);
+          await referenceToElement(target.itemId, boundary.pageId, pageRectFromCanvas(item.kind.kind === 'element' ? rect : clampedReferenceRect(rect, boundary.rect, project.gridSettings.snap ? project.gridSettings.spacing : 0), boundary.rect), boundary.sizeId);
         } else updateReference(target.itemId, { rect });
       }
     } finally { busy.current = false; }

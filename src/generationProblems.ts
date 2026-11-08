@@ -1,11 +1,10 @@
-import type { Element, GenerationJobView, Page, Project, Rect, GenerationValidationEvent } from './types';
-import { generationError, outcomeReason, technicalReason, providerFailureMessage } from './userErrors.js';
+import type { GenerationJobView, Project, GenerationValidationEvent } from './types';
+import { outcomeReason, technicalReason, providerFailureMessage } from './userErrors.js';
 
 /// A specific place that can resolve an outcome the AI itself declared.
 export type OutcomeFix = 'aiSettings' | 'import' | 'brief';
 export type Outcome = { retryable: boolean; reason: string; fix?: OutcomeFix };
 export type JobOutcome = { reason: string; retryable: string[]; blocked: { elementId: string; reason: string; fix?: OutcomeFix }[]; retryAll: boolean; retryBatches: boolean };
-export type AreaProblem = { key: string; elementId: string; message: string; stale: boolean; retryable: boolean; fix?: OutcomeFix; rect: Rect };
 
 export function requestText(project: Project | null, elementId: string): string {
   const request = (project?.requests ?? []).find(item => item.targets.some(target => target.kind === 'element' && target.id === elementId));
@@ -100,7 +99,7 @@ function jobReason(job: GenerationJobView): string {
     return '';
   }
   if (!['blocked', 'failed', 'unknown'].includes(job.status)) return '';
-  const provider = providerFailureMessage(job.providerError, job.provider, job.message);
+  const provider = providerFailureMessage(job.providerError, job.message);
   if (provider) return provider;
   const reply = events.find(event => event.elementId == null && event.kind === 'replyStructure');
   if (reply) return "The AI's reply was incomplete, so nothing was changed.";
@@ -135,48 +134,6 @@ export function jobOutcome(job: GenerationJobView | null, promptOf: (elementId: 
 /// The AI declared a scope conflict for this request: its fix belongs outside the area.
 export function declaredConflict(job: GenerationJobView | null, elementId: string): boolean {
   return !!job?.candidate?.requests.some(request => request.elementId === elementId && request.status === 'conflict');
-}
-
-export function areaProblems(job: GenerationJobView | null, page: Page, project: Project | null = null): AreaProblem[] {
-  if (!job || ['prepared', 'generating', 'ready', 'applying'].includes(job.status)) return [];
-  const stale = staleResult(job);
-  const elements: Element[] = page.elements.flatMap(function walk(element): Element[] { return [element, ...element.children.flatMap(walk)]; });
-  return elements.flatMap((element): AreaProblem[] => {
-    if (!job.areas.some(area => area.pageId === page.id && area.elementId === element.id)) return [];
-    const outcome = job.candidate?.requests?.find(item => item.elementId === element.id);
-    const prompt = project ? requestText(project, element.id) : undefined;
-    const result = areaOutcome(job, element.id, prompt);
-    // A stale result did nothing to the canvas; say so where the visible layer is.
-    if (stale && result.retryable && (project ? !!prompt?.trim() : true)) return [{ key: `${job.jobId}:${element.id}`, elementId: element.id,
-      message: staleResultMessage, stale: true, retryable: true, rect: element.rect }];
-    if (!outcome || outcome.status === 'implemented') return [];
-    const reason = outcome.explanation || job.message;
-    const message = result.retryable ? generationError(reason, prompt ?? '') : result.reason;
-    return [{ key: `${job.jobId}:${element.id}`, elementId: element.id,
-      message, stale: false, retryable: result.retryable, fix: result.fix, rect: element.rect }];
-  });
-}
-
-type Callout = { key: string; rect: Rect };
-const overlaps = (a: Rect, b: Rect) => a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y;
-// Coordinates are in painted canvas pixels; cards keep readable type at every zoom.
-export function placeCallouts(items: Callout[], areas: Rect[], origin: { x: number; y: number }, zoom: number, dismissed: readonly string[] = []) {
-  const paint = (r: Rect): Rect => ({ x: (r.x-origin.x)*zoom, y: (r.y-origin.y)*zoom, width:r.width*zoom, height:r.height*zoom });
-  const obstacles = areas.map(paint);
-  const placed: (Rect & { key: string })[] = [];
-  for (const item of items) {
-    if (dismissed.includes(item.key)) continue;
-    const area = paint(item.rect);
-    const card = { key:item.key, x:area.x, y:area.y-168, width:360, height:132 };
-    // Move above every intersecting area/card, retaining the area anchor horizontally.
-    while (true) {
-      const hit = [...obstacles, ...placed].filter(r => overlaps(card, r));
-      if (!hit.length) break;
-      card.y = Math.min(...hit.map(r => r.y))-card.height-36;
-    }
-    placed.push(card);
-  }
-  return placed;
 }
 
 /// Job and batch snapshots can carry the same diagnostics; show each warning once.

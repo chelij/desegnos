@@ -1,13 +1,12 @@
-import { useCallback, useRef } from 'react';
-import type { CommandName } from '../generated/commands';
+import { useCallback, useMemo, useRef } from 'react';
 import { native } from '../api';
 import { announcesStatus } from '../generationSession.js';
-import { activeGeneration, useGeneration } from '../useGeneration';
+import { activeGeneration, useGeneration, type GenerationNative } from '../useGeneration';
 import { selectedReference, type CanvasTarget } from '../projectCanvas/canvasTargets';
 import type { Boundary } from '../projectCanvas/boundaryLayout';
 import { coveredTargets } from '../projectCanvas/requests';
 import { baseSizeId } from '../projectCanvas/sizes';
-import type { Command, PendingRequest, Project, RequestArea, WorkspaceView } from '../types';
+import type { Command, GenerationJobView, PendingRequest, Project, RequestArea, WorkspaceView } from '../types';
 
 /** Preparing, running and applying AI generations, and the checks that run before and after each native call. */
 export function useGenerationFlow({ project, canGenerateFromBrief, canvasSelection, canvasBoundaries, queue, accept, mutate, requireAiReady, setNotice, setError, addFeedback }: {
@@ -26,21 +25,30 @@ export function useGenerationFlow({ project, canGenerateFromBrief, canvasSelecti
   const briefGenerateFlight = useRef(false);
   const activeProjectId = project?.id ?? null;
 
-  const call = useCallback(<T,>(command: CommandName, args?: Record<string, unknown>, signal?: AbortSignal) => Promise.resolve().then(() => queue(async workspace => {
+  const queued = useCallback(<T,>(run: () => Promise<T>, signal?: AbortSignal) => Promise.resolve().then(() => queue(async workspace => {
     signal?.throwIfAborted();
     if (!activeProjectId || workspace?.project?.id !== activeProjectId) throw new Error('Return to the project that owns this generation request.');
-    if (command === 'prepare_generation') await requireAiReady();
-    signal?.throwIfAborted();
-    const result = await native<T>(command, args);
-    if (command === 'apply_generation' && !signal?.aborted) accept(result as WorkspaceView);
-    return result;
-  }, false)), [queue, activeProjectId, accept, requireAiReady]);
+    return run();
+  }, false)), [queue, activeProjectId]);
+  const natives = useMemo<GenerationNative>(() => ({
+    call: (command, args, signal) => queued(() => native(command, args), signal),
+    prepare: (args, signal) => queued(async () => {
+      await requireAiReady();
+      signal?.throwIfAborted();
+      return native<GenerationJobView>('prepare_generation', args);
+    }, signal),
+    apply: (args, signal) => queued(async () => {
+      const result = await native<WorkspaceView>('apply_generation', args);
+      if (!signal?.aborted) accept(result);
+      return result;
+    }, signal),
+  }), [queued, accept, requireAiReady]);
   const applied = useCallback((workspace: WorkspaceView) => { if (workspace.project?.latestGeneration) setNotice('Generated result applied.'); }, []);
   const recorded = useCallback(() => queue(async () => {
     const refreshed = await native<WorkspaceView>('get_workspace');
     if (refreshed.project?.id === activeProjectId) accept(refreshed);
   }, false), [queue, accept, activeProjectId]);
-  const generation = useGeneration(activeProjectId, call, applied, recorded);
+  const generation = useGeneration(activeProjectId, natives, applied, recorded);
   const working = generation.canStop || activeGeneration(generation.job) || !!generation.operation;
   const showGenerationStatus = !!generation.error || announcesStatus(generation.job, { owns: generation.owns, stopped: generation.stopped, working });
 

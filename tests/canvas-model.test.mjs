@@ -312,8 +312,6 @@ try {
     assert.deepEqual(elementGeometry.roundRect({ x: 1.4, y: 1.6, width: 2.5, height: 3.5 }), { x: 1, y: 2, width: 3, height: 4 });
     assert.equal(geometry.snapValue(13, 8), 16);
     assert.deepEqual(elementGeometry.snapPoint({ x: 4, y: 12 }, 8), { x: 8, y: 16 });
-    assert.equal(geometry.sameRect({ x: 0, y: 0, width: 1, height: 1 }, { x: 0, y: 0, width: 1, height: 1 }), true);
-    assert.equal(geometry.sameRect({ x: 0, y: 0, width: 1, height: 1 }, { x: 0, y: 0, width: 2, height: 1 }), false);
     assert.deepEqual(geometry.unionBounds([]), { x: 0, y: 0, width: 0, height: 0 });
     assert.deepEqual(geometry.unionBounds([{ x: 0, y: 0, width: 10, height: 10 }, { x: 20, y: 5, width: 10, height: 10 }]), { x: 0, y: 0, width: 30, height: 15 });
   });
@@ -346,14 +344,8 @@ try {
     assert.deepEqual(elementGeometry.elementParents(project, 'p', 'grandchild'), ['root', 'child']);
     assert.deepEqual(elementGeometry.elementChildrenOf(project, 'p', 'child').map(item => item.id), ['grandchild']);
     assert.deepEqual(elementGeometry.elementChildrenOf(project, 'p', null).map(item => item.id), ['root', 'other']);
-    assert.deepEqual(elementGeometry.elementSiblings(project, 'p', 'grandchild').map(item => item.id), ['grandchild']);
-    assert.deepEqual(elementGeometry.elementSiblings(project, 'p', 'child').map(item => item.id), ['child']);
     assert.deepEqual(elementGeometry.elementWorldRect(project, 'p', 'grandchild', { x: 1000, y: 2000 }), { x: 1115, y: 2226, width: 30, height: 20 });
-    assert.deepEqual(elementGeometry.elementParentWorldOrigin(project, 'p', 'grandchild', { x: 1000, y: 2000 }), { x: 1110, y: 2220 });
     assert.equal(elementGeometry.elementWorldRect(project, 'p', 'gone', { x: 0, y: 0 }), null);
-    assert.deepEqual(elementGeometry.elementLocation(project, 'p', 'grandchild'), { pageId: 'p', parentId: 'child', index: 0, element: grandchild });
-    assert.equal(elementGeometry.anyElementLocation(project, 'other').pageId, 'p');
-    assert.equal(elementGeometry.anyElementLocation(project, 'gone'), null);
     assert.deepEqual(elementGeometry.elementBoundsHeight([makeElement('a', { rect: { x: 0, y: 0, width: 10, height: 100 }, children: [makeElement('b', { rect: { x: 0, y: 50, width: 10, height: 200 } })] })], 10), 250);
     assert.equal(elementGeometry.elementBoundsHeight([], 10), 10);
   });
@@ -368,15 +360,10 @@ try {
     assert.deepEqual(elementGeometry.pageElements(project, 'p', 'phone')[0].rect, { x: 20, y: 30, width: 120, height: 80 });
     assert.equal(elementGeometry.findPageElement(project, 'p', 'copy').id, 'copy');
     assert.equal(elementGeometry.findPageElement(project, 'p', 'gone'), null);
-    assert.equal(elementGeometry.findElementPage(project, 'copy').id, 'p');
-    assert.equal(elementGeometry.findElementPage(project, 'gone'), null);
     assert.equal(elementGeometry.pageElements(project, 'gone').length, 0);
   });
 
   await test('move and resize math snaps, anchors and keeps a minimum size', () => {
-    assert.deepEqual(elementGeometry.movedElementRect({ x: 10, y: 13, width: 30, height: 30 }, { x: 5, y: 6 }, true, GRID_SPACING), { x: 16, y: 16, width: 30, height: 30 });
-    assert.deepEqual(elementGeometry.movedElementRect({ x: 10, y: 13, width: 30, height: 30 }, { x: 5, y: 6 }, false, GRID_SPACING), { x: 15, y: 19, width: 30, height: 30 });
-    assert.deepEqual(elementGeometry.draggedElementRect({ x: 10, y: 10, width: 30, height: 30 }, { x: 5, y: 5 }, { x: 20, y: 20 }, false, GRID_SPACING), { x: 25, y: 25, width: 30, height: 30 });
     const rect = { x: 10, y: 20, width: 100, height: 80 };
     assert.deepEqual(elementGeometry.resizedElementRect(rect, 'se', { x: 150, y: 140 }, false, GRID_SPACING), { x: 10, y: 20, width: 140, height: 120 });
     assert.deepEqual(elementGeometry.resizedElementRect(rect, 'nw', { x: 0, y: 0 }, false, GRID_SPACING), { x: 0, y: 0, width: 110, height: 100 });
@@ -385,20 +372,10 @@ try {
     assert.deepEqual(elementGeometry.resizedElementRect(rect, 'se', { x: -100, y: -100 }, false, GRID_SPACING), { x: 10, y: 20, width: 1, height: 1 });
     assert.deepEqual(elementGeometry.resizedElementRect(rect, 'nw', { x: 500, y: 500 }, false, GRID_SPACING), { x: 109, y: 99, width: 1, height: 1 });
     assert.deepEqual(elementGeometry.ratioResizedRect(rect, 'se', { x: 400, y: 300 }, false, GRID_SPACING), { x: 10, y: 20, width: 390, height: 312 });
-    assert.equal(elementGeometry.layoutChildren({ kind: 'free' }), false);
-    assert.equal(elementGeometry.layoutChildren({ kind: 'stack', direction: 'row', gap: 0, padding: 0, align: 'start', justify: 'start', wrap: false }), true);
     assert.deepEqual(elementGeometry.rectFromPoints({ x: 30, y: 40 }, { x: 10, y: 20 }), { x: 10, y: 20, width: 20, height: 20 });
-    const snappedLine = elementGeometry.lineEnd({ x: 0, y: 0 }, { x: 10, y: 3 }, true);
-    assert.ok(Math.abs(snappedLine.y) < 1e-9);
-    assert.ok(Math.abs(snappedLine.x - Math.hypot(10, 3)) < 1e-9);
-    assert.deepEqual(elementGeometry.lineEnd({ x: 0, y: 0 }, { x: 10, y: 3 }, false), { x: 10, y: 3 });
     const boundaryOrigin = { x: 100, y: 200 };
     const parentOrigin = { x: 50, y: 60 };
-    assert.deepEqual(elementGeometry.elementCanvasRect(rect, boundaryOrigin, parentOrigin), { x: 160, y: 280, width: 100, height: 80 });
     assert.deepEqual(elementGeometry.elementLocalRect({ x: 160, y: 280, width: 100, height: 80 }, boundaryOrigin, parentOrigin), rect);
-    assert.deepEqual(elementGeometry.reparentedElementRect(rect, boundaryOrigin, parentOrigin, boundaryOrigin, { x: 0, y: 0 }), { x: 60, y: 80, width: 100, height: 80 });
-    const world = elementGeometry.elementCanvasRect(rect, boundaryOrigin, parentOrigin);
-    assert.deepEqual(elementGeometry.elementLocalRect(world, boundaryOrigin, { x: 0, y: 0 }), { x: 60, y: 80, width: 100, height: 80 });
   });
 
   await test('transform keys resize from the centre, keep ratios and lock axes', () => {
@@ -435,10 +412,6 @@ try {
     assert.equal(elementFacts.elementLabel(makeElement('a', { kind: 'ellipse', text: '' })), 'Ellipse');
     assert.equal(elementGeometry.elementKindLabel(makeElement('a', { kind: 'input', inputType: 'email' })), 'email input');
     assert.equal(elementGeometry.elementKindLabel(makeElement('a', { kind: 'ellipse' })), 'Ellipse');
-    assert.equal(elementGeometry.commonValue([]), undefined);
-    assert.equal(elementGeometry.commonValue([1, 1]), 1);
-    assert.equal(elementGeometry.commonValue([1, 2]), undefined);
-    assert.equal(elementGeometry.commonValue([{ a: 1 }, { a: 1 }]).a, 1);
   });
 
   // -------------------------------------------------------------------------

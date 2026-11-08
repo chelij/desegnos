@@ -431,6 +431,4 @@ export const elementScreenRect = (rect: Rect, camera: CanvasCamera): ScreenRect 
   width: rect.width * camera.zoom, height: rect.height * camera.zoom,
 });
 
-export const textKind = isTextKind;
-
 export type ElementDraft = { pageId: string; parentId: string | null; rect: Rect; kind: ElementKind; flow: boolean } | null;

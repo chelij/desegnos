@@ -1,4 +1,5 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { onEscape } from './escape';
 import { Icon } from './icons';
 
 export type MenuItem = {
@@ -31,6 +32,7 @@ export function MenuButton({ label, items, ariaLabel, title, className = '', sho
     setStartAtEnd(false);
     setOpen(true);
   }, [openSignal]);
+  useEffect(() => (open ? onEscape(close) : undefined), [open]);
   useEffect(() => {
     if (!open) return;
     const outside = (event: PointerEvent | FocusEvent) => {

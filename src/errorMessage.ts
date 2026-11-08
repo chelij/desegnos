@@ -1,6 +1,6 @@
-import type { NativeErrorKind, ProviderError, ProviderId } from './types';
+import type { NativeErrorKind, NativeFailure, ProviderError, ProviderId } from './types';
 
-export type ErrorValue = string | { message: string; kind?: NativeErrorKind; providerError?: ProviderError | null; provider?: ProviderId };
+export type ErrorValue = string | Partial<NativeFailure> & { message: string; providerError?: ProviderError | null; provider?: ProviderId };
 
 export function errorMessage(error: unknown): string {
   if (error && typeof error === 'object' && 'message' in error) return String(error.message ?? '');

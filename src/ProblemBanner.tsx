@@ -1,8 +1,5 @@
-import { nativeErrorKind } from './errorMessage.js';
 import { createContext, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type ReactElement } from 'react';
 import { Icon } from './icons';
-import { providerProblem } from './userErrors.js';
-import type { ProviderError, ProviderId } from './types';
 
 export type ProblemAction = { label: string; onClick: () => void; disabled?: boolean };
 export type NoticeProps = {
@@ -160,18 +157,10 @@ export function Notice(props: NoticeProps) {
     context?.update(id, visible ? { variant, title, message, action, secondaryAction, undo, priority, className, autoFocus, dismissKey, details, showDismiss, dismiss: close } : null);
   }, [context, id, visible, variant, title, message, action, secondaryAction, undo, priority, className, autoFocus, dismissKey, details, showDismiss, close]);
   useLayoutEffect(() => () => context?.update(id, null), [context, id]);
-  // Standalone rendering also supports previews and server-rendered component tests.
   return !context && visible ? <NoticeRow {...props} dismiss={close} /> : null;
 }
 
 export type ProblemBannerProps = NoticeProps;
-// Callers translate diagnostics before presentation; raw errors stay in state.
 export function ProblemBanner({ variant = 'error', ...props }: ProblemBannerProps) {
   return <Notice {...props} variant={variant} />;
-}
-
-export function needsAiSettings(error: unknown, structured?: ProviderError | null, provider?: ProviderId | null): boolean {
-  const problem = providerProblem(structured, provider);
-  if (problem) return problem.settings;
-  return nativeErrorKind(error) === 'aiSettings';
 }

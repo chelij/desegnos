@@ -60,7 +60,7 @@ export function pointerEndpointRect(endpoint: PointerSource | PointerTarget, wor
   }
 }
 
-// A missing frame or page still draws from its page boundary, so a broken line stays visible.
+// A missing layer or page still draws from its page boundary, so a broken line stays visible.
 function pointerFallbackRect(endpoint: PointerSource | PointerTarget, world: PointerWorld): Rect | null {
   if (endpoint.kind === 'element' || endpoint.kind === 'boundary') return boundaryRectFor(world, endpoint.pageId, endpoint.sizeId);
   return null;

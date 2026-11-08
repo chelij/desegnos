@@ -1,12 +1,14 @@
 import { type ErrorValue } from '../errorMessage.js';
 import { native } from '../api';
-import { type ProjectCanvasHandle } from '../ProjectCanvas';
 import { isPendingRecovery, type PendingRecovery } from '../RecoveryBanner';
 import { type SaveConflict, type SaveOutcome, type SaveChoice } from '../SaveConflict';
 import { type CanvasTarget } from '../projectCanvas/canvasTargets';
 import type { CanvasTemplate, CompactReport, WorkspaceView } from '../types';
-import { Replacement, Confirmation } from '../editorShared';
 import type { EditorPanel } from './editorPanel';
+
+export type Replacement = { label: string; run: (discard: boolean) => Promise<void> };
+
+export type Confirmation = { title: string; message: string; action: () => Promise<void>; confirmLabel?: string };
 
 type UntitledSave = {
   name: string;
@@ -38,7 +40,6 @@ type Context = {
   setShowStartPage: import("react").Dispatch<import("react").SetStateAction<boolean>>;
   setConfirmation: import("react").Dispatch<import("react").SetStateAction<Confirmation | null>>;
   resolvedTheme: "dark" | "light";
-  canvasRef: import("react").RefObject<ProjectCanvasHandle | null>;
   closePanel: (kind: EditorPanel['kind']) => void;
   setHistoryEpoch: import("react").Dispatch<import("react").SetStateAction<number>>;
 };
@@ -217,13 +218,12 @@ export function createProjectCommands(context: Context) {
   }
 
   async function newUntitled(template: CanvasTemplate = 'blank') {
-    const { settle, queue, resolvedTheme, accept, setShowStartPage, setCanvasSelection, setCanvasFocus, canvasRef } = context;
+    const { settle, queue, resolvedTheme, accept, setShowStartPage, setCanvasSelection, setCanvasFocus } = context;
     await settle();
     await queue(async () => {
       const next = await native<WorkspaceView>('new_untitled_project', { appearance: resolvedTheme, template });
       accept(next);
       setShowStartPage(false); setCanvasSelection([]); setCanvasFocus(null);
-      requestAnimationFrame(() => canvasRef.current?.fit());
     });
   }
 

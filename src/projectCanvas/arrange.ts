@@ -1,7 +1,7 @@
 import { sizeTarget } from './canvasTargets';
 import type { ElementMove, Rect } from '../types';
 import type { ElementEntry } from './interactionTypes';
-import { unionBounds as unionBounds } from './camera';
+import { unionBounds } from './camera';
 
 export type ArrangeOperation = 'forward' | 'backward' | 'front' | 'back';
 

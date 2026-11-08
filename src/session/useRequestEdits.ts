@@ -1,11 +1,14 @@
 import { useCallback, type Dispatch, type RefObject, type SetStateAction } from 'react';
 import type { CanvasTarget } from '../projectCanvas/canvasTargets';
-import { ownerPageId } from '../editorShared';
 import { findElementIn } from '../projectCanvas/elementFacts';
 import { baseSizeId } from '../projectCanvas/sizes';
 import { readRequestAttachments } from '../requestAttachments';
 import type { Command, PendingRequest, Project, RequestAttachment, WorkspaceView } from '../types';
 import type { ProjectEdits } from './projectEdits';
+
+function ownerPageId(project: Project, elementId: string): string | null {
+  return project.pages.find(page => !!findElementIn(page.elements, elementId))?.id ?? null;
+}
 
 const requestTargetingElement = (project: Project, elementId: string): PendingRequest | null =>
   (project.requests ?? []).find(request => request.targets.some(target => target.kind === 'element' && target.id === elementId)) ?? null;
