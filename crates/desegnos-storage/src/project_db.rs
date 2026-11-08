@@ -406,7 +406,6 @@ impl ProjectDatabase {
         Ok(())
     }
 
-    /// Unsaved work that is newer than the saved version, if any.
     pub fn autosave_work(&self) -> Result<Option<AutosaveProject>> {
         read_autosave_work(&self.connection)
     }
@@ -1196,7 +1195,6 @@ fn clean_label(label: &str) -> String {
     cut
 }
 
-/// Fold labels into one, without repeating what the version already says.
 fn merge_labels(existing: &str, incoming: &str) -> String {
     let mut merged: Vec<&str> = existing
         .split(", ")
@@ -1216,21 +1214,18 @@ fn branch_chain(connection: &Connection, branch: &str) -> Result<Vec<VersionRow>
         return Ok(vec![]);
     };
     let mut chain = Vec::new();
+    let mut seen = BTreeSet::new();
     let mut cursor = Some(head);
     while let Some(id) = cursor {
-        let Some(row) = version_row(connection, id)? else {
-            break;
-        };
+        let row = version_row(connection, id)?
+            .filter(|_| seen.insert(id))
+            .ok_or_else(|| Error("This project's version history is damaged.".into()))?;
         cursor = row.parent;
         chain.push(row);
-        if chain.len() >= 10_000 {
-            break;
-        }
     }
     Ok(chain)
 }
 
-/// Pick the versions history compaction keeps, newest first.
 fn kept_versions(chain: &[VersionRow], now: i64) -> BTreeSet<i64> {
     let mut keep = BTreeSet::new();
     let mut days = BTreeSet::new();

@@ -1,8 +1,8 @@
 use crate::net::{DEADLINE, ERROR_BODY_LIMIT, IDLE};
 use crate::retry::RetryResponse as Response;
 use crate::{
-    ApiKey, AuthenticationMethod, ErrorKind, MODEL_MAX_OUTPUT_TOKENS, ProviderError,
-    ProviderSettings, ResponseBodyKind, Result, SubmissionOutcome, TokenUsage,
+    ApiKey, AuthenticationMethod, ErrorKind, MAX_OUTPUT_TOKENS, ProviderError, ProviderSettings,
+    ResponseBodyKind, Result, SubmissionOutcome, TokenUsage,
     identity::prepare_identity_body,
     settings::prepare_body,
     sse::{
@@ -374,7 +374,7 @@ impl OpenAiClient {
             requirements_sha256,
             match authentication {
                 AuthenticationMethod::ApiKey => settings.max_output_tokens,
-                AuthenticationMethod::Chatgpt => MODEL_MAX_OUTPUT_TOKENS,
+                AuthenticationMethod::Chatgpt => MAX_OUTPUT_TOKENS,
             },
             crate::net::request_id(response.headers()),
             response

@@ -507,11 +507,9 @@ async fn real_dynamic_sign_in_validates_pkce_and_caches_models_without_startup_h
     assert_eq!(view.accounts.len(), 1);
     assert!(view.accounts[0].connected && view.accounts[0].plan_enabled);
     assert_eq!(view.accounts[0].storage, CredentialLocation::Session);
-    assert!(view.show_welcome);
     assert_eq!(view.models.len(), 1);
     let id = view.active_account_id.unwrap();
     assert!(manager.bearer(id, &CancellationToken::new()).await.is_ok());
-    assert!(!manager.acknowledge_welcome().await.unwrap().show_welcome);
     assert!(fixture.state.failures.lock().unwrap().is_empty());
     let model_count = fixture.state.models.load(Ordering::SeqCst);
     manager.view().await;
@@ -546,7 +544,6 @@ async fn real_dynamic_sign_in_validates_pkce_and_caches_models_without_startup_h
     let reopened = restarted.view().await;
     assert_eq!(reopened.accounts[0].id, id);
     assert!(!reopened.accounts[0].connected);
-    assert!(!reopened.show_welcome);
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -577,7 +574,6 @@ async fn missing_plan_scope_retains_identity_without_models_or_inference_authori
     assert_eq!(view.sign_in.status, ChatgptSignInStatus::Complete);
     assert!(view.accounts[0].connected);
     assert!(!view.accounts[0].plan_enabled);
-    assert!(!view.show_welcome);
     assert!(view.models.is_empty());
     assert_eq!(fixture.state.models.load(Ordering::SeqCst), 0);
     let error = manager

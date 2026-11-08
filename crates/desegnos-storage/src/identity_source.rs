@@ -9,7 +9,7 @@ use crate::source_files::{
 use crate::{io, load_project};
 
 use base64::{Engine, engine::general_purpose::STANDARD};
-use desegnos_core::{Error, limits::MAX_PROJECT_PHOTO_BYTES, ProjectPhoto, Result, digest};
+use desegnos_core::{Error, ProjectPhoto, Result, digest, limits::MAX_PROJECT_PHOTO_BYTES};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},

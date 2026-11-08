@@ -28,7 +28,6 @@ pub(super) struct Registration {
     #[serde(default)]
     pub refresh_pending: Option<Uuid>,
     pub last_plan_enabled: Option<bool>,
-    pub welcomed: bool,
 }
 
 #[derive(Clone, Serialize, Deserialize)]

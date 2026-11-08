@@ -18,7 +18,6 @@ Use a Tokio runtime for its async methods:
 | `begin_sign_in(storage, account_id)` | Binds a literal-loopback callback, returns a native-only `ChatgptAuthorization`, and starts the bounded authorization task. `None` adds a registration; `Some(id)` reconnects that exact registration. |
 | `cancel_sign_in()` | Cancels the current callback/exchange without replacing accepted access. |
 | `select_account(id)` | Persists selection and cancels pending authorization. |
-| `acknowledge_welcome()` | Persists the selected account's first-plan-use acknowledgment. |
 | `bearer(id, cancellation)` | Returns the opaque native `ApiKey` wrapper; validates registration and plan scope, and serializes refresh when needed. |
 | `discover_models(id, client, cancellation)` | Explicit authenticated discovery; updates the cache only while that registration still has access. |
 | `retry_secure_storage(id)` | Commits a retained replacement bundle without HTTP or refresh replay. |
@@ -48,7 +47,7 @@ registration with session storage disables the system mapping and retires its
 owned vault entry; failure rolls back to the previously accepted mapping.
 
 `accounts.json` contains host UUID, issued client IDs, labels, verified subject/email,
-selection, permission/welcome status and a non-secret refresh fence. It contains no
+selection, permission status and a non-secret refresh fence. It contains no
 tokens. Unix directory/file permissions are 0700/0600. Bounded reads, symlink
 rejection, atomic replacement with synchronization and an OS file lock protect
 metadata. Vault calls run on blocking workers rather than the async executor.

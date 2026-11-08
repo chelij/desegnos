@@ -100,11 +100,11 @@ test-results/                Local evidence from smoke, startup and vault runs (
 
 ## `desegnos-ai`
 
-[lib.rs](../crates/desegnos-ai/src/lib.rs) declares modules and re-exports the externally consumed API; internal callers import the owning module directly.
+[lib.rs](../crates/desegnos-ai/src/lib.rs) declares modules, re-exports the API the app uses, and gathers the crate-internal names (`pub(crate) use`) that sibling modules and tests import from the root.
 
 | Module | Owns |
 | --- | --- |
-| [providers.rs](../crates/desegnos-ai/src/providers.rs) | `ProviderId`, `ProviderDescriptor`, provider catalogue, `ProviderAdapter`, `ProviderClient`, estimates, model access checks and generation/identity dispatch. |
+| [providers.rs](../crates/desegnos-ai/src/providers.rs) | `ProviderId`, `ProviderDescriptor`, provider catalogue, `ProviderClient`, estimates, model access checks and generation/identity dispatch. |
 | [transport.rs](../crates/desegnos-ai/src/transport.rs) | `OpenAiClient`, HTTP/SSE streaming, deadlines/idle limits, response identity and correlation, and ChatGPT bearer use. |
 | [estimate.rs](../crates/desegnos-ai/src/estimate.rs) | Shared cost, pricing overrides, image fees, spending and context-window arithmetic with explicit wire-format reserves. |
 | [model_discovery.rs](../crates/desegnos-ai/src/model_discovery.rs) | Provider discovery profiles, model parsing, authorization, shared connectivity probes and ChatGPT catalogue discovery. |
