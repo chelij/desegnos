@@ -73,7 +73,6 @@ test-results/                Local evidence from smoke, startup and vault runs (
 | [identity_pages.rs](../crates/desegnos-core/src/identity_pages.rs) | Source-page kinds and portable route names for imported evidence. |
 | [project_assets.rs](../crates/desegnos-core/src/project_assets.rs) | `desegnos-asset:` references, the content-addressed picture store, `prepare_picture`, image catalogues and unused-picture cleanup. |
 | [picture_scaling.rs](../crates/desegnos-core/src/picture_scaling.rs) | AI preview size/quality and display-scaled picture copies. |
-| [image_generation.rs](../crates/desegnos-core/src/image_generation.rs) | The downloaded-image byte ceiling. |
 | [website.rs](../crates/desegnos-core/src/website.rs) | `website_links`, `website_assets` and `css_urls`: stylesheets, logos, pages, photos, media frames and CSS references. |
 | [website_import.rs](../crates/desegnos-core/src/website_import.rs) | `WebCapture` types and the pure conversion into pages, elements, reference notes, behaviour pointers and linked-size overrides. |
 | [export.rs](../crates/desegnos-core/src/export.rs) | Export plans, exact AI request markdown, schemas, reply parsing/validation, AI and direct bundles, manifests, pointer fingerprints and `RecordExport`. |

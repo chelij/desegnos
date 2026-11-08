@@ -486,7 +486,7 @@ impl ElementMeta {
     pub(crate) fn validate(&self) -> Result<()> {
         ensure(
             self.requests.len() <= MAX_ELEMENT_REQUESTS,
-            "A layer keeps at most 100 past requests.",
+            format!("A layer keeps at most {MAX_ELEMENT_REQUESTS} past requests."),
         )?;
         for record in &self.requests {
             record.validate()?;
@@ -706,7 +706,7 @@ impl Element {
         if let ElementKind::Select { options } = &self.kind {
             ensure(
                 (1..=MAX_ELEMENT_OPTIONS).contains(&options.len()),
-                "A select needs between 1 and 100 options.",
+                format!("A select needs between 1 and {MAX_ELEMENT_OPTIONS} options."),
             )?;
             let mut seen = BTreeSet::new();
             for option in options {
@@ -806,19 +806,24 @@ impl ElementStyle {
         )?;
         ensure(
             text.size.is_finite() && (TEXT_SIZE_RANGE.0..=TEXT_SIZE_RANGE.1).contains(&text.size),
-            "Text size must be between 1 and 512 pixels.",
+            format!(
+                "Text size must be between {} and {} pixels.",
+                TEXT_SIZE_RANGE.0, TEXT_SIZE_RANGE.1
+            ),
         )?;
         ensure(
             (1..=MAX_FONT_WEIGHT).contains(&text.weight),
-            "Text weight must be between 1 and 1,000.",
+            format!("Text weight must be between 1 and {MAX_FONT_WEIGHT}."),
         )?;
         ensure(
             text.line_height.is_finite() && (0.0..=LINE_HEIGHT_MAX).contains(&text.line_height),
-            "Line height must be between 0 and 10.",
+            format!("Line height must be between 0 and {LINE_HEIGHT_MAX}."),
         )?;
         ensure(
             text.letter_spacing.is_finite() && text.letter_spacing.abs() <= MAX_LETTER_SPACING,
-            "Letter spacing must be between -100 and 100 pixels.",
+            format!(
+                "Letter spacing must be between -{MAX_LETTER_SPACING} and {MAX_LETTER_SPACING} pixels."
+            ),
         )?;
         validate_colour(&text.color, "Text colour")?;
         Ok(())

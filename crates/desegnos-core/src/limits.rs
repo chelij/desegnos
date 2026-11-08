@@ -162,6 +162,12 @@ pub const AUTOSAVE_INTERVAL_MS: u64 = 3000;
 
 pub const MAX_ELEMENT_OPTIONS: usize = 100;
 
+pub const MAX_ELEMENT_CHILDREN: usize = 512;
+
+pub const MAX_REQUEST_OPERATIONS: usize = 2048;
+
+pub const MAX_EXPORT_COMMENT_CHARS: usize = 2048;
+
 pub const MAX_ELEMENT_NAME_CHARS: usize = MAX_NAME_CHARS;
 
 pub const MAX_LINKED_DEFINITIONS: usize = 1_000;

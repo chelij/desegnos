@@ -1,9 +1,9 @@
 use crate::{
     Error, Result, generation::DecisionProposal, generation::DesignCriticism,
-    generation::GenerationCandidate, limits::MAX_DECISION_PROPOSALS, limits::MAX_DESIGN_CRITICISMS,
-    limits::MAX_GENERATION_REQUESTS, model::Project, model::Scope,
-    requirements::RequirementsSnapshot, validation::digest, validation::ensure,
-    validation::validate_text,
+    generation::GenerationCandidate, generation::validate_summary_and_notes,
+    limits::MAX_DECISION_PROPOSALS, limits::MAX_DESIGN_CRITICISMS, limits::MAX_GENERATION_REQUESTS,
+    model::Project, model::Scope, requirements::RequirementsSnapshot, validation::digest,
+    validation::ensure,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -130,7 +130,6 @@ impl GenerationDossier {
                 "The generation notes have an invalid source digest.",
             )?;
         }
-        validate_text(&self.summary, "Generation summary", 16_384, false)?;
         ensure(
             !self.targets.is_empty() && self.targets.len() <= MAX_GENERATION_REQUESTS,
             format!(
@@ -155,11 +154,9 @@ impl GenerationDossier {
                 && self.criticism.len() <= MAX_DESIGN_CRITICISMS,
             "The generation notes exceed their proposal or feedback limit.",
         )?;
+        validate_summary_and_notes(&self.summary, &self.decision_proposals, &self.criticism)?;
         let mut topics = BTreeSet::new();
         for proposal in &self.decision_proposals {
-            validate_text(&proposal.topic, "Decision topic", 120, true)?;
-            validate_text(&proposal.value, "Decision value", 16_384, true)?;
-            validate_text(&proposal.rationale, "Decision rationale", 4096, true)?;
             ensure(
                 match &proposal.scope {
                     Scope::Project => true,
@@ -178,8 +175,6 @@ impl GenerationDossier {
             )?;
         }
         for criticism in &self.criticism {
-            validate_text(&criticism.message, "Design feedback", 4096, true)?;
-            validate_text(&criticism.suggestion, "Design suggestion", 4096, true)?;
             ensure(
                 criticism.element_id.is_none_or(|id| elements.contains(&id)),
                 "Design feedback refers outside its recorded scope.",

@@ -1,6 +1,6 @@
 use crate::limits::{
-    MAX_IDENTITY_ASSET_BYTES, MAX_IDENTITY_ASSETS, MAX_IMPORTED_ITEMS, MAX_PHOTO_DESCRIPTION_CHARS,
-    MAX_PROJECT_PHOTO_BYTES,
+    MAX_HTTP_URL_BYTES, MAX_IDENTITY_ASSET_BYTES, MAX_IDENTITY_ASSETS, MAX_IMPORTED_ITEMS,
+    MAX_PHOTO_DESCRIPTION_CHARS, MAX_PROJECT_PHOTO_BYTES,
 };
 use crate::{
     Result, model::Project, validation::digest, validation::ensure, validation::validate_text,
@@ -75,7 +75,7 @@ impl ImportedItem {
             crate::identity_pages::validate_source_page_ref(page)?;
         }
         validate_text(&self.summary, "Imported item summary", 300, false)?;
-        validate_text(&self.url, "Imported item link", 2048, false)?;
+        validate_text(&self.url, "Imported item link", MAX_HTTP_URL_BYTES, false)?;
         ensure(
             self.url.is_empty()
                 || self.url.starts_with("https://")

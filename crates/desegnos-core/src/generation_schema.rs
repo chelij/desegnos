@@ -1,6 +1,7 @@
 use crate::limits::{
-    MAX_DECISION_PROPOSALS, MAX_DESIGN_CRITICISMS, MAX_EXPLANATION_CHARS, MAX_GENERATED_IMAGES,
-    MAX_GENERATION_REQUESTS, MAX_POINTER_CLASSIFICATIONS,
+    MAX_DECISION_PROPOSALS, MAX_DESIGN_CRITICISMS, MAX_ELEMENT_CHILDREN, MAX_ELEMENT_CODE_CHARS,
+    MAX_ELEMENT_OPTIONS, MAX_EXPLANATION_CHARS, MAX_GENERATED_IMAGES, MAX_GENERATION_REQUESTS,
+    MAX_HTTP_URL_BYTES, MAX_POINTER_CLASSIFICATIONS, MAX_PROMPT_CHARS, MAX_REQUEST_OPERATIONS,
 };
 pub(crate) fn uuid_schema() -> serde_json::Value {
     serde_json::json!({"type":"string","pattern":"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"})
@@ -62,34 +63,34 @@ pub fn candidate_schema() -> serde_json::Value {
     let draft = object(json!({
         "kind":kind,"rect":rect,"name":nullable(text(120)),
         "rotation":{"type":"number"},"visible":{"type":"boolean"},"locked":{"type":"boolean"},
-        "style":style,"text":text(16_384),"image":nullable(uuid.clone()),
-        "imageRequest":nullable(text(120)),"url":nullable(text(2048)),"layout":layout,
+        "style":style,"text":text(MAX_PROMPT_CHARS),"image":nullable(uuid.clone()),
+        "imageRequest":nullable(text(120)),"url":nullable(text(MAX_HTTP_URL_BYTES)),"layout":layout,
         "inputType":nullable(input_type.clone()),
-        "options":nullable(json!({"type":"array","minItems":1,"maxItems":100,"items":text(120)})),
-        "language":nullable(text(40)),"source":nullable(text(200_000)),
-        "children":{"type":"array","maxItems":512,"items":{"$ref":"#/$defs/element"}}
+        "options":nullable(json!({"type":"array","minItems":1,"maxItems":MAX_ELEMENT_OPTIONS,"items":text(120)})),
+        "language":nullable(text(40)),"source":nullable(text(MAX_ELEMENT_CODE_CHARS)),
+        "children":{"type":"array","maxItems":MAX_ELEMENT_CHILDREN,"items":{"$ref":"#/$defs/element"}}
     }));
     let update = object(json!({
         "elementId":uuid.clone(),"rect":nullable(rect.clone()),"rotation":nullable(json!({"type":"number"})),
-        "style":nullable(style),"text":nullable(text(16_384)),"url":nullable(text(2048)),
+        "style":nullable(style),"text":nullable(text(MAX_PROMPT_CHARS)),"url":nullable(text(MAX_HTTP_URL_BYTES)),
         "layout":nullable(layout),"visible":nullable(json!({"type":"boolean"})),
         "locked":nullable(json!({"type":"boolean"})),"name":nullable(text(120)),
         "inputType":nullable(input_type),
-        "options":nullable(json!({"type":"array","maxItems":100,"items":text(120)})),
-        "language":nullable(text(40)),"source":nullable(text(200_000)),
+        "options":nullable(json!({"type":"array","maxItems":MAX_ELEMENT_OPTIONS,"items":text(120)})),
+        "language":nullable(text(40)),"source":nullable(text(MAX_ELEMENT_CODE_CHARS)),
         "sizeId":{"anyOf":[uuid.clone(),{"type":"null"}],"description":"Change only this linked size of the boundary; null keeps the base values every size inherits."}
     }));
     let reference_kind = json!({"anyOf":[
-        object(json!({"kind":{"type":"string","enum":["note"]},"text":text(16_384)})),
-        object(json!({"kind":{"type":"string","enum":["link"]},"url":text(2048),"title":text(120)})),
+        object(json!({"kind":{"type":"string","enum":["note"]},"text":text(MAX_PROMPT_CHARS)})),
+        object(json!({"kind":{"type":"string","enum":["link"]},"url":text(MAX_HTTP_URL_BYTES),"title":text(120)})),
         object(json!({"kind":{"type":"string","enum":["swatch"]},"color":text(32)}))
     ]});
     let operation = json!({"anyOf":[
-        object(json!({"kind":{"type":"string","enum":["replaceChildren"]},"children":{"type":"array","maxItems":512,"items":{"$ref":"#/$defs/element"}}})),
-        object(json!({"kind":{"type":"string","enum":["update"]},"patches":{"type":"array","minItems":1,"maxItems":2048,"items":update}})),
+        object(json!({"kind":{"type":"string","enum":["replaceChildren"]},"children":{"type":"array","maxItems":MAX_ELEMENT_CHILDREN,"items":{"$ref":"#/$defs/element"}}})),
+        object(json!({"kind":{"type":"string","enum":["update"]},"patches":{"type":"array","minItems":1,"maxItems":MAX_REQUEST_OPERATIONS,"items":update}})),
         object(json!({"kind":{"type":"string","enum":["insert"]},"parentId":uuid.clone(),"index":nullable(json!({"type":"integer","minimum":0})),"element":{"$ref":"#/$defs/element"}})),
         object(json!({"kind":{"type":"string","enum":["remove"]},"elementId":uuid.clone()})),
-        object(json!({"kind":{"type":"string","enum":["setBehaviour"]},"elementId":nullable(uuid.clone()),"behaviour":text(crate::limits::MAX_PROMPT_CHARS)})),
+        object(json!({"kind":{"type":"string","enum":["setBehaviour"]},"elementId":nullable(uuid.clone()),"behaviour":text(MAX_PROMPT_CHARS)})),
         object(json!({"kind":{"type":"string","enum":["insertInBoundary"]},"pageId":uuid.clone(),"sizeId":nullable(uuid.clone()),"element":{"$ref":"#/$defs/element"}})),
         object(json!({"kind":{"type":"string","enum":["setPage"]},"pageId":uuid.clone(),"name":nullable(json!({"type":"string","minLength":1,"maxLength":120})),"path":nullable(json!({"type":"string","minLength":1,"maxLength":1024})),"background":nullable(json!({"type":"string","pattern":"^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$"}))})),
         object(json!({"kind":{"type":"string","enum":["addReference"]},"item":object(json!({"rect":rect,"kind":reference_kind}))}))
@@ -110,13 +111,13 @@ pub fn candidate_schema() -> serde_json::Value {
     let schema = object(json!({
         "jobId":uuid,
         "requirementsSha256":{"type":"string","pattern":"^[0-9a-f]{64}$"},
-        "summary":text(16_384),
+        "summary":text(MAX_PROMPT_CHARS),
         "requests":array(object(json!({
             "requestId":nullable(uuid.clone()),
             "elementId":nullable(uuid.clone()),
             "status":{"type":"string","enum":["implemented","conflict"]},
             "explanation":text(MAX_EXPLANATION_CHARS),
-            "operations":array(operation,2048)
+            "operations":array(operation,MAX_REQUEST_OPERATIONS)
         })),MAX_GENERATION_REQUESTS),
         "images":array(object(json!({
             "key":text(120),"prompt":text(4000),
@@ -124,10 +125,10 @@ pub fn candidate_schema() -> serde_json::Value {
             "height":{"type":"integer","minimum":16,"maximum":4096}
         })),MAX_GENERATED_IMAGES),
         "pointerClassifications":array(object(json!({
-            "pointerId":uuid.clone(),"comment":text(16_384),"action":action
+            "pointerId":uuid.clone(),"comment":text(MAX_PROMPT_CHARS),"action":action
         })),MAX_POINTER_CLASSIFICATIONS),
         "decisionProposals":array(object(json!({
-            "topic":text(120),"value":text(16_384),"scope":scope,"rationale":text(MAX_EXPLANATION_CHARS)
+            "topic":text(120),"value":text(MAX_PROMPT_CHARS),"scope":scope,"rationale":text(MAX_EXPLANATION_CHARS)
         })),MAX_DECISION_PROPOSALS),
         "criticism":array(object(json!({
             "elementId":nullable(uuid.clone()),

@@ -4,7 +4,9 @@
 //! behaviours travel as frozen AI requests. Replies contain marked JavaScript; HTML and CSS
 //! always come from the model. Pointer fingerprints are SHA-256
 //! digests over each pointer's marked fragments, so later code changes can be spotted.
-use crate::limits::{MAX_EXPORT_BYTES, MAX_EXPORT_FILE_BYTES, MAX_EXPORT_FILES};
+use crate::limits::{
+    MAX_EXPORT_BYTES, MAX_EXPORT_COMMENT_CHARS, MAX_EXPORT_FILE_BYTES, MAX_EXPORT_FILES,
+};
 use crate::{
     Error, Result, element_edit::element_subtree, elements::Element, elements::ElementKind,
     model::ExportRecord, model::ExportedPage, model::ExportedPointer, model::GenerationMode,
@@ -708,7 +710,7 @@ fn comment_schema(job_id: Uuid, sha256: &str) -> serde_json::Value {
         "properties": {
             "jobId": {"type": "string", "description": job_id.to_string()},
             "requirementsSha256": {"type": "string", "description": sha256},
-            "comment": {"type": "string", "maxLength": 2048},
+            "comment": {"type": "string", "maxLength": MAX_EXPORT_COMMENT_CHARS},
         },
     })
 }
@@ -807,7 +809,9 @@ pub fn parse_comment_reply(plan: &ExportPlan, text: &str) -> Result<String> {
     )?;
     let comment = value.comment.trim();
     ensure(
-        !comment.is_empty() && comment.chars().count() <= 2048 && !comment.contains('\0'),
+        !comment.is_empty()
+            && comment.chars().count() <= MAX_EXPORT_COMMENT_CHARS
+            && !comment.contains('\0'),
         "The AI returned an empty or oversized comment.",
     )?;
     Ok(comment.into())

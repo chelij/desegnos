@@ -13,7 +13,6 @@ mod generation_scope;
 mod geometry;
 mod identity;
 mod identity_pages;
-mod image_generation;
 mod json_parse;
 pub mod limits;
 mod model;
@@ -73,7 +72,6 @@ pub use identity_pages::{
     identity_source_page, page_references_image, source_page_at_route, source_page_kind,
     source_page_path, validate_source_page_ref,
 };
-pub use image_generation::ImageGenerationRequest;
 pub use json_parse::{complete_truncated_operations, parse_provider_json, parse_structured_reply};
 pub use model::{
     Appearance, BoundaryKind, Brief, CanvasPlacement, CanvasTemplate, ColourStyle, Decision,

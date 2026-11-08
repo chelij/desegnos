@@ -6,7 +6,8 @@ use crate::generation_apply::{
 use crate::generation_scope::scope_for;
 use crate::limits::{
     MAX_DECISION_PROPOSALS, MAX_DESIGN_CRITICISMS, MAX_EXPLANATION_CHARS, MAX_GENERATED_IMAGES,
-    MAX_GENERATION_BYTES, MAX_GENERATION_REQUESTS, MAX_POINTER_CLASSIFICATIONS,
+    MAX_GENERATION_BYTES, MAX_GENERATION_REQUESTS, MAX_POINTER_CLASSIFICATIONS, MAX_PROMPT_CHARS,
+    MAX_REQUEST_OPERATIONS,
 };
 use crate::schema_conformance::{conform_to_candidate_schema, drop_null_optional_draft_fields};
 use crate::{
@@ -273,6 +274,40 @@ pub struct PointerClassification {
     pub action: ClassifiedAction,
 }
 
+/// Text checks shared by an AI reply and the generation notes stored from it.
+pub(crate) fn validate_summary_and_notes(
+    summary: &str,
+    proposals: &[DecisionProposal],
+    criticism: &[DesignCriticism],
+) -> Result<()> {
+    validate_text(summary, "Generation summary", MAX_PROMPT_CHARS, false)?;
+    for proposal in proposals {
+        validate_text(&proposal.topic, "Decision topic", 120, true)?;
+        validate_text(&proposal.value, "Decision value", MAX_PROMPT_CHARS, true)?;
+        validate_text(
+            &proposal.rationale,
+            "Decision rationale",
+            MAX_EXPLANATION_CHARS,
+            true,
+        )?;
+    }
+    for criticism in criticism {
+        validate_text(
+            &criticism.message,
+            "Design feedback",
+            MAX_EXPLANATION_CHARS,
+            true,
+        )?;
+        validate_text(
+            &criticism.suggestion,
+            "Design suggestion",
+            MAX_EXPLANATION_CHARS,
+            true,
+        )?;
+    }
+    Ok(())
+}
+
 #[derive(ts_rs::TS, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DecisionProposal {
@@ -468,10 +503,11 @@ impl GenerationCandidate {
             crate::limits::is_sha256_hex(&self.requirements_sha256),
             "The requirements digest must be a SHA-256 hexadecimal digest.",
         )?;
-        validate_text(&self.summary, "Generation summary", 16_384, false)?;
         ensure(
             !self.requests.is_empty() && self.requests.len() <= MAX_GENERATION_REQUESTS,
-            "A generation result must account for between 1 and 512 requests.",
+            format!(
+                "A generation result must account for between 1 and {MAX_GENERATION_REQUESTS} requests."
+            ),
         )?;
         ensure(
             self.images.len() <= MAX_GENERATED_IMAGES,
@@ -513,37 +549,19 @@ impl GenerationCandidate {
                 false,
             )?;
             ensure(
-                request.operations.len() <= 2048,
-                "A request supports at most 2,048 operations.",
+                request.operations.len() <= MAX_REQUEST_OPERATIONS,
+                format!("A request supports at most {MAX_REQUEST_OPERATIONS} operations."),
             )?;
         }
         for classification in &self.pointer_classifications {
-            validate_text(&classification.comment, "Pointer comment", 16_384, false)?;
-        }
-        for proposal in &self.decision_proposals {
-            validate_text(&proposal.topic, "Decision topic", 120, true)?;
-            validate_text(&proposal.value, "Decision value", 16_384, true)?;
             validate_text(
-                &proposal.rationale,
-                "Decision rationale",
-                MAX_EXPLANATION_CHARS,
-                true,
+                &classification.comment,
+                "Pointer comment",
+                MAX_PROMPT_CHARS,
+                false,
             )?;
         }
-        for criticism in &self.criticism {
-            validate_text(
-                &criticism.message,
-                "Design feedback",
-                MAX_EXPLANATION_CHARS,
-                true,
-            )?;
-            validate_text(
-                &criticism.suggestion,
-                "Design suggestion",
-                MAX_EXPLANATION_CHARS,
-                true,
-            )?;
-        }
+        validate_summary_and_notes(&self.summary, &self.decision_proposals, &self.criticism)?;
         ensure(
             serde_json::to_vec(self)
                 .map_err(|error| Error(error.to_string()))?

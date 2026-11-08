@@ -136,7 +136,7 @@ impl GenerationCapabilities {
             )?;
         }
         ensure(
-            self.image_downloads <= 8,
+            usize::from(self.image_downloads) <= crate::limits::MAX_REQUEST_IMAGES,
             "The image download limit is invalid.",
         )
     }

@@ -556,7 +556,7 @@ impl Project {
                     .colours
                     .iter_mut()
                     .find(|s| s.id == id)
-                    .ok_or_else(|| Error("This style no longer exists.".into()))? = style;
+                    .ok_or_else(|| missing("style"))? = style;
             }
             Command::RemoveColourStyle { id } => {
                 next.detach_style(id, false)?;
@@ -576,7 +576,7 @@ impl Project {
                     .text
                     .iter_mut()
                     .find(|s| s.id == id)
-                    .ok_or_else(|| Error("This style no longer exists.".into()))? = style;
+                    .ok_or_else(|| missing("style"))? = style;
             }
             Command::RemoveTextStyle { id } => {
                 next.detach_style(id, true)?;
@@ -621,9 +621,7 @@ impl Project {
                 reference,
             } => {
                 let p = next.page_mut(page_id)?;
-                let size = p
-                    .size_mut(size_id)
-                    .ok_or_else(|| Error("This size no longer exists.".into()))?;
+                let size = p.size_mut(size_id).ok_or_else(|| missing("size"))?;
                 if let Some(label) = label {
                     size.label = label.trim().into();
                 }
@@ -660,7 +658,7 @@ impl Project {
                     next.pages
                         .iter()
                         .position(|existing| existing.id == id)
-                        .ok_or_else(|| Error("This boundary no longer exists.".into()))?
+                        .ok_or_else(|| missing("boundary"))?
                         + 1
                 } else {
                     next.pages.len()
@@ -733,20 +731,7 @@ impl Project {
                 next.place_reference(reference)?;
             }
             Command::RemovePageSize { page_id, size_id } => {
-                let page = next.page_mut(page_id)?;
-                ensure(page.sizes.len() > 1, "A boundary keeps at least one size.")?;
-                ensure(
-                    page.base_size_id() != size_id,
-                    "The base size cannot be removed.",
-                )?;
-                ensure(page.size(size_id).is_some(), "This size no longer exists.")?;
-                page.sizes.retain(|size| size.id != size_id);
-                for element in page.elements.iter_mut() {
-                    clear_size_overrides(element, size_id);
-                }
-                for definition in next.linked.values_mut() {
-                    clear_size_overrides(&mut definition.master, size_id);
-                }
+                next.remove_page_size(page_id, size_id)?;
                 next.prune_requests();
             }
             Command::SetCanvasLayout {
@@ -787,7 +772,7 @@ impl Project {
                     .views
                     .iter_mut()
                     .find(|view| view.id == view_id)
-                    .ok_or_else(|| Error("This view no longer exists.".into()))?;
+                    .ok_or_else(|| missing("view"))?;
                 if let Some(name) = name {
                     view.name = name.trim().into();
                 }
@@ -803,10 +788,7 @@ impl Project {
                 view.validate()?;
             }
             Command::RemoveNamedView { view_id } => {
-                ensure(
-                    next.views.iter().any(|view| view.id == view_id),
-                    "This view no longer exists.",
-                )?;
+                exists(next.views.iter().any(|view| view.id == view_id), "view")?;
                 next.views.retain(|view| view.id != view_id);
             }
             Command::AddReferenceItem {
@@ -824,9 +806,9 @@ impl Project {
             Command::RemoveReferenceItems { ids } => {
                 ensure(!ids.is_empty(), "Choose a reference item to remove.")?;
                 for id in &ids {
-                    ensure(
+                    exists(
                         next.reference.iter().any(|item| item.id == *id),
-                        "This reference item no longer exists.",
+                        "reference item",
                     )?;
                 }
                 next.reference.retain(|item| !ids.contains(&item.id));
@@ -843,9 +825,9 @@ impl Project {
             Command::RemovePointers { ids } => {
                 ensure(!ids.is_empty(), "Choose a pointer to remove.")?;
                 for id in &ids {
-                    ensure(
+                    exists(
                         next.pointers.iter().any(|pointer| pointer.id == *id),
-                        "This pointer no longer exists.",
+                        "pointer",
                     )?;
                 }
                 next.pointers.retain(|pointer| !ids.contains(&pointer.id));
@@ -882,9 +864,9 @@ impl Project {
                 ensure(!drop.contains(&keep), "Keep one of the two pointers.")?;
                 next.pointer_mut(keep)?;
                 for id in &drop {
-                    ensure(
+                    exists(
                         next.pointers.iter().any(|pointer| pointer.id == *id),
-                        "This pointer no longer exists.",
+                        "pointer",
                     )?;
                 }
                 let pointer = next.pointer_mut(keep)?;
@@ -1015,19 +997,19 @@ impl Project {
                 // Explicitly selected requests go first, so removing their targets in the same
                 // gesture cannot prune them out from under the request check.
                 for id in request_ids {
-                    ensure(
+                    exists(
                         next.requests.iter().any(|request| request.id == id),
-                        "This request no longer exists.",
+                        "request",
                     )?;
                     next.requests.retain(|request| request.id != id);
                 }
                 let mut by_page: BTreeMap<Uuid, Vec<Uuid>> = BTreeMap::new();
                 for (page_id, element_id) in elements {
                     next.page(page_id)?;
-                    ensure(
+                    exists(
                         crate::elements::find_element(&next.page(page_id)?.elements, element_id)
                             .is_some(),
-                        "This layer no longer exists.",
+                        "layer",
                     )?;
                     by_page.entry(page_id).or_default().push(element_id);
                 }
@@ -1035,16 +1017,16 @@ impl Project {
                     next.remove_elements(page_id, ids)?;
                 }
                 for id in reference_ids {
-                    ensure(
+                    exists(
                         next.reference.iter().any(|item| item.id == id),
-                        "This reference item no longer exists.",
+                        "reference item",
                     )?;
                     next.reference.retain(|item| item.id != id);
                 }
                 for id in pointer_ids {
-                    ensure(
+                    exists(
                         next.pointers.iter().any(|pointer| pointer.id == id),
-                        "This pointer no longer exists.",
+                        "pointer",
                     )?;
                     next.pointers.retain(|pointer| pointer.id != id);
                 }
@@ -1052,26 +1034,10 @@ impl Project {
                     next.delete_linked_definition(id)?;
                 }
                 for (page_id, size_id) in size_ids {
-                    let page = next.page_mut(page_id)?;
-                    ensure(page.sizes.len() > 1, "A boundary keeps at least one size.")?;
-                    ensure(
-                        page.base_size_id() != size_id,
-                        "The base size cannot be removed.",
-                    )?;
-                    ensure(page.size(size_id).is_some(), "This size no longer exists.")?;
-                    page.sizes.retain(|size| size.id != size_id);
-                    for element in page.elements.iter_mut() {
-                        clear_size_overrides(element, size_id);
-                    }
-                    for definition in next.linked.values_mut() {
-                        clear_size_overrides(&mut definition.master, size_id);
-                    }
+                    next.remove_page_size(page_id, size_id)?;
                 }
                 for page_id in page_ids {
-                    ensure(
-                        next.pages.iter().any(|page| page.id == page_id),
-                        "This boundary no longer exists.",
-                    )?;
+                    exists(next.pages.iter().any(|page| page.id == page_id), "boundary")?;
                     next.pages.retain(|page| page.id != page_id);
                 }
                 next.rehome();
@@ -1110,9 +1076,9 @@ impl Project {
                 }
             }
             Command::RemoveDecision { decision_id } => {
-                ensure(
+                exists(
                     next.decisions.iter().any(|d| d.id == decision_id),
-                    "This decision no longer exists.",
+                    "decision",
                 )?;
                 next.decisions.retain(|d| d.id != decision_id);
             }
@@ -1128,9 +1094,9 @@ impl Project {
                 accepted_at_revision: next.revision,
             }),
             Command::RemoveException { exception_id } => {
-                ensure(
+                exists(
                     next.exceptions.iter().any(|e| e.id == exception_id),
-                    "This exception no longer exists.",
+                    "exception",
                 )?;
                 next.exceptions.retain(|e| e.id != exception_id);
             }
@@ -1143,6 +1109,34 @@ impl Project {
         crate::adapt::adapt_changed_pages(self, &mut next)?;
         next.validate()?;
         Ok(next)
+    }
+}
+
+fn missing(what: &str) -> Error {
+    Error(format!("This {what} no longer exists."))
+}
+
+fn exists(found: bool, what: &str) -> Result<()> {
+    if found { Ok(()) } else { Err(missing(what)) }
+}
+
+impl Project {
+    fn remove_page_size(&mut self, page_id: Uuid, size_id: Uuid) -> Result<()> {
+        let page = self.page_mut(page_id)?;
+        ensure(page.sizes.len() > 1, "A boundary keeps at least one size.")?;
+        ensure(
+            page.base_size_id() != size_id,
+            "The base size cannot be removed.",
+        )?;
+        exists(page.size(size_id).is_some(), "size")?;
+        page.sizes.retain(|size| size.id != size_id);
+        for element in page.elements.iter_mut() {
+            clear_size_overrides(element, size_id);
+        }
+        for definition in self.linked.values_mut() {
+            clear_size_overrides(&mut definition.master, size_id);
+        }
+        Ok(())
     }
 }
 

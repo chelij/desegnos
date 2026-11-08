@@ -356,11 +356,6 @@ fn served_path(url: &str) -> Option<String> {
     Some(normalize_url(suffix))
 }
 
-fn remote_href(href: &str) -> Option<String> {
-    let href = href.trim();
-    crate::limits::valid_http_url(href).then(|| href.to_owned())
-}
-
 fn parse_colour(value: &str) -> Option<String> {
     let value = value.trim().to_ascii_lowercase();
     if value.is_empty() || value == "transparent" {
@@ -680,7 +675,8 @@ impl Converter<'_> {
         {
             return None;
         }
-        remote_href(href)
+        let href = href.trim();
+        crate::limits::valid_http_url(href).then(|| href.to_owned())
     }
 
     fn picture(&self, source: Option<&str>) -> Option<Uuid> {
