@@ -9,7 +9,7 @@ import { shownReference } from './reference';
 import { pointerWorld } from './pointerLayout';
 import { Drag, elementAt } from './interactionTypes';
 
-type Context = {
+export type PointerToolContext = {
   latest: import("react").RefObject<Pick<ProjectCanvasProps, 'project' | 'selectPointer'> & { boundaries: Boundary[] }>;
   setArmedPointer: import("react").Dispatch<import("react").SetStateAction<{ pointerId: string; end: 'from' | 'to'; } | null>>;
   surface: import("react").RefObject<HTMLDivElement | null>;
@@ -23,7 +23,7 @@ type Context = {
   drag: { current: Drag | null; };
 };
 
-export function createPointerTool(context: () => Context) {
+export function createPointerTool(context: () => PointerToolContext) {
   function armPointer(pointerId: string) {
     const { latest, setArmedPointer, surface } = context();
     const pointer = (latest.current.project.pointers ?? []).find(item => item.id === pointerId);

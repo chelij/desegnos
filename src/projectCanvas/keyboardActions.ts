@@ -26,7 +26,7 @@ export type Painter =
   | { kind: 'armed'; style: import('../types').ElementStyle };
 export type PainterEvent = { kind: 'copy'; style: import('../types').ElementStyle } | { kind: 'arm' | 'disarm' };
 
-type Context = {
+export type KeyboardContext = {
   editProject: ProjectCanvasProps['editProject'];
   createBoundary: ProjectCanvasProps['createBoundary'];
   drag: { current: Drag | null; };
@@ -80,7 +80,7 @@ type Context = {
   openPage: (pageId: string) => void;
 };
 
-export function createKeyboardActions(context: () => Context) {
+export function createKeyboardActions(context: () => KeyboardContext) {
   function escapeCanvas() {
     const { drag, cancelDrag, painterArmed, transitionPainter, latest, onPlayExit, requestDraft, polygonDraft, draftArea, cancelRequestDraft, editing, finishEditingText, selection, selectBoundary, focused } = context();
     if (drag.current) { cancelDrag(); return; }

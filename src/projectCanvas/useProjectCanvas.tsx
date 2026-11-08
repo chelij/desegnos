@@ -1,12 +1,12 @@
 import { shortcutFor } from '../shortcuts';
 import { selectionEntries as resolveSelectionEntries } from './selectionGeometry';
-import { createRequestTool } from './requestTool';
-import { createPointerTool } from './pointerTool';
-import { createDrawingActions, type TextEditing, type TextEditingEvent } from './drawing';
-import { createMovingActions } from './moving';
-import { createPasteDrop } from './pasteDrop';
-import { createKeyboardActions, type Painter, type PainterEvent } from './keyboardActions';
-import { createCanvasInteraction } from './interaction';
+import { createRequestTool, type RequestToolContext } from './requestTool';
+import { createPointerTool, type PointerToolContext } from './pointerTool';
+import { createDrawingActions, type DrawingContext, type TextEditing, type TextEditingEvent } from './drawing';
+import { createMovingActions, type MovingContext } from './moving';
+import { createPasteDrop, type PasteDropContext } from './pasteDrop';
+import { createKeyboardActions, type KeyboardContext, type Painter, type PainterEvent } from './keyboardActions';
+import { createCanvasInteraction, type InteractionContext } from './interaction';
 import { ElementEntry, ClipboardEntry, PasteChoice, LinkDecision, Drag, DragInput, ProjectCanvasHandle, DuplicateRepeat, type CanvasHookProps, isElementTarget, targetKey } from './interactionTypes';
 import { canvasView } from './canvasView';
 import { useNativeDrop } from './useNativeDrop';
@@ -37,6 +37,8 @@ import type { ForwardedRef } from 'react';
 
 const EMPTY_RECTS: Record<string, Rect> = {};
 
+type CanvasContext = RequestToolContext & PointerToolContext & DrawingContext & MovingContext & PasteDropContext & KeyboardContext & InteractionContext;
+
 export function useProjectCanvas({
   editProject, project, openPage, createBoundary, savePlacements, saveView, selection, focused, selectBoundary, selectReference, selectPointer, selectElement, clearSelection,
   removeSelection, removeElements, deleteBoundary, addReference, updateReference, elementToReference, referenceToElement, attachToRequest,
@@ -46,74 +48,36 @@ export function useProjectCanvas({
   play, onPlayBoundary, onPlayElement, onPlayExit, preview, previewClose, previewRefresh, focusBehaviour, generate,
 }: CanvasHookProps, ref: ForwardedRef<ProjectCanvasHandle>) {
 
+  // Everything the canvas parts share. Filled in below once every piece exists; the parts only read it from event handlers.
+  const shared = useRef<CanvasContext | null>(null);
+  const context = () => shared.current!;
   const {
     requestTargetAt, requestEditorScreen, closeRequestArea, startRequestOnSelection,
     startRequestFromShape, submitRequestDraft, askRequestDraft, cancelRequestDraft,
-  } = createRequestTool(() => ({
-    requestBoxes, project, movingItems, pointerWorldNow, camera, viewSize, boundaryUnder, elementScreenRect,
-    boundaries, setPolygonDraft, setRequestDraft, surface, selection, focused, focusedSize, elementEntries,
-    requestDraft, editProject, generate, selectRequest,
-  }));
+  } = createRequestTool(context);
   const {
     armPointer, endpointAt, pointerSourceAt, startReattach,
-  } = createPointerTool(() => ({
-    latest, setArmedPointer, surface, requestBoxes, project, movingItems, boundaryUnder, pointerWorldNow,
-    beginPointerSession, worldPoint, drag,
-  }));
+  } = createPointerTool(context);
   const {
     chooseImage, insertionPoint, elementRectAt, placeElement, drawElementDrag, persistDraw,
-  } = createDrawingActions(() => ({
-    setPendingImage, project, boundaryRect, createdElement, editingAllSizes, insertElements, selectElement, transitionText,
-    boundaryUnder, boundaryNear: boundaryNearPress, beginPointerSession, drag, busy, boundaryKind, createBoundary, onTool,
-    selectBoundary,
-  }));
+  } = createDrawingActions(context);
   const {
     startPan, beginMove, marqueeTargets, rememberRepeatMove, duplicateElementMove,
     commitElementMove, startElementResize, startReferenceResize, persistMove, commitMove,
-  } = createMovingActions(() => ({
-    beginPointerSession, drag, setPanning, project, surface, boundaryRect, camera, pageFor, duplicateRepeat,
-    insertElements, selectTargets, boundaryUnder, elementToReference, moveElements, clearSelection, selection,
-    worldPoint, movingItems, boundaries, referenceBoxes, busy, savePlacements, moving, referenceToElement,
-    updateReference,
-  }));
+  } = createMovingActions(context);
   const {
     copyElements, pasteTarget, pasteElements, confirmPaste,
     duplicateElements, pasteClipboard, paste, dropText,
-  } = createPasteDrop(() => ({
-    elementEntries, selection, clipboard, pasteCount, setPasteChoice, clipboardMark, project, boundaryRect,
-    lastPointer, viewSize, camera, boundaryUnder, editingAllSizes, pasteLinked, selectTargets, insertElements,
-    setLinkChoice, pasteMode, pasteChoice, duplicateRepeat, duplicateBurst, addReference, selectReference, elementRectAt, busy,
-    insertionPoint, selectElement, placeElement, createdElement, worldPoint, latest, attachToRequest,
-  }));
+  } = createPasteDrop(context);
   const {
     escapeCanvas, copyStyle, pasteStyle, paintFormat, applyPainterStyle,
     alignSelection, distributeSelection, setSelectionFill, deleteSelectedLayers, linkSelection, linkCopies, unlinkSelection,
     canvasAction,
     keyDown,
-  } = createKeyboardActions(() => ({
-    editProject, createBoundary, drag, cancelDrag, painterArmed, transitionPainter, latest, onPlayExit, requestDraft, polygonDraft, draftArea,
-    cancelRequestDraft, editing, finishEditingText, selection, selectBoundary, focused, project, selectTargets,
-    pageFor, elementEntries, moveElements, painter, updateElements, surface, boundaryRect, removeSelection,
-    elementScreenRect, setLinkChoice, linkElements, unlinkElements, groupElements, ungroupElements,
-    rememberRepeatMove, clipboard, pasteTarget, deleteBoundary, focusedSize, startRequestOnSelection, onTool,
-    startRequestFromShape, copyElements, pasteElements, duplicateElements, setMinimapPreference,
-    minimapVisible, saveView, currentCamera, goToView, closeRequestArea, openPage,
-  }));
+  } = createKeyboardActions(context);
   const {
     pointerDown, beginPointerSession, endPointerSession, cancelDrag, pointerMove, pointerUp, doubleClick,
-  } = createCanvasInteraction(() => ({
-    busy, startPan, pasteChoice, linkChoice, setPasteChoice, setLinkChoice, worldPoint, lastPointer, held,
-    drag, painterArmed, project, selection, applyPainterStyle, surface, transitionPainter, selectRequest,
-    latest, tool, requestShape, requestTargetAt, requestDraft, setRequestDraft, requestEditorScreen,
-    setPolygonDraft, polygonDraft, camera, closeRequestArea, boundaryUnder, boundaryNear: boundaryNearPress, pointerSourceAt, pageFor,
-    startEditingElement, editingSizeId, drawElementDrag, insertKind, pendingImage, imagePicker, selectElement,
-    selectBoundary, elementEntries, nextSelectionFor, selectReference, beginMove, boundaries, movingItems,
-    dragSession, dragHandlers, setPanning, touched, setCamera, renderDrag, worldToScreen, persistMove,
-    persistDraw, addReference, createdItem, boundaryRect, placeElement, createdElement, transitionText,
-    setPendingImage, onTool, duplicateElementMove, commitElementMove, updateElements, moveElements,
-    marqueeTargets, selectTargets, endpointAt, addPointer, createdPointer, setArmedPointer, selectPointer,
-    updatePointer, commitMove, updateReference, focusBehaviour,
-  }));
+  } = createCanvasInteraction(context);
 
   const surface = useRef<HTMLDivElement>(null);
   const [, renderDrag] = useState(0);
@@ -472,6 +436,26 @@ export function useProjectCanvas({
     window.addEventListener('paste', handle);
     return () => window.removeEventListener('paste', handle);
   }, []);
+
+  shared.current = {
+    addPointer, addReference, applyPainterStyle, attachToRequest, beginMove, beginPointerSession, boundaries, boundaryKind,
+    boundaryNear: boundaryNearPress, boundaryRect, boundaryUnder, busy, camera, cancelDrag, cancelRequestDraft, clearSelection,
+    clipboard, clipboardMark, closeRequestArea, commitElementMove, commitMove, copyElements, createBoundary, createdElement,
+    createdItem, createdPointer, currentCamera, deleteBoundary, draftArea, drag, dragHandlers, dragSession,
+    drawElementDrag, duplicateBurst, duplicateElementMove, duplicateElements, duplicateRepeat, editProject, editing, editingAllSizes,
+    editingSizeId, elementEntries, elementRectAt, elementScreenRect, elementToReference, endpointAt, finishEditingText, focusBehaviour,
+    focused, focusedSize, generate, goToView, groupElements, held, imagePicker, insertElements,
+    insertKind, insertionPoint, lastPointer, latest, linkChoice, linkElements, marqueeTargets, minimapVisible,
+    moveElements, moving, movingItems, nextSelectionFor, onPlayExit, onTool, openPage, pageFor,
+    painter, painterArmed, pasteChoice, pasteCount, pasteElements, pasteLinked, pasteMode, pasteTarget,
+    pendingImage, persistDraw, persistMove, placeElement, pointerSourceAt, pointerWorldNow, polygonDraft, project,
+    referenceBoxes, referenceToElement, rememberRepeatMove, removeSelection, renderDrag, requestBoxes, requestDraft, requestEditorScreen,
+    requestShape, requestTargetAt, savePlacements, saveView, selectBoundary, selectElement, selectPointer, selectReference,
+    selectRequest, selectTargets, selection, setArmedPointer, setCamera, setLinkChoice, setMinimapPreference, setPanning,
+    setPasteChoice, setPendingImage, setPolygonDraft, setRequestDraft, startEditingElement, startPan, startRequestFromShape, startRequestOnSelection,
+    surface, tool, touched, transitionPainter, transitionText, ungroupElements, unlinkElements, updateElements,
+    updatePointer, updateReference, viewSize, worldPoint, worldToScreen,
+  };
 
   let pointerDraft: { from: Point; to: Point } | null = null;
   if (activeDrag && activeDrag.kind !== 'polygon-request' && activeDrag.moved && (activeDrag.kind === 'draw-pointer' || activeDrag.kind === 'reattach-pointer')) {

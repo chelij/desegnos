@@ -18,7 +18,7 @@ import {
   isElementTarget, elementTargetAt, intersects, elementMoveDelta, targetKey, entryTargetKey,
 } from './interactionTypes';
 
-type Context = {
+export type MovingContext = {
   beginPointerSession: (event: { pointerId: number; }) => void;
   drag: { current: Drag | null; };
   setPanning: import("react").Dispatch<import("react").SetStateAction<boolean>>;
@@ -46,7 +46,7 @@ type Context = {
   updateReference: (itemId: string, patch: { rect?: Rect; text?: string; url?: string; title?: string; color?: string; }) => void;
 };
 
-export function createMovingActions(context: () => Context) {
+export function createMovingActions(context: () => MovingContext) {
   function startPan(event: ReactPointerEvent<HTMLDivElement>, pageId: string | null) {
     const { camera } = context();
     const { beginPointerSession, drag, setPanning } = context();

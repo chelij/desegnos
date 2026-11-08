@@ -11,7 +11,7 @@ import { screenRect, type ScreenRect } from './surface';
 import { baseSizeId } from './sizes';
 import { ElementEntry, REQUEST_EDITOR_WIDTH, REQUEST_EDITOR_HEIGHT, isElementTarget, elementAt } from './interactionTypes';
 
-type Context = {
+export type RequestToolContext = {
   requestBoxes: () => RequestBox[];
   project: Project;
   movingItems: Record<string, Rect>;
@@ -34,7 +34,7 @@ type Context = {
   selectRequest: (requestId: string) => void;
 };
 
-export function createRequestTool(context: () => Context) {
+export function createRequestTool(context: () => RequestToolContext) {
   function requestTargetAt(point: Point): RequestTarget | null {
     const { requestBoxes, project, movingItems, pointerWorldNow, camera, viewSize, boundaryUnder } = context();
     const box = elementAt(requestBoxes(), point);
