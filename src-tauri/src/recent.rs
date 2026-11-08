@@ -109,10 +109,7 @@ fn remember_destination(
         .take(120)
         .collect();
     let mut entries = read(directory)?;
-    let existing = entries
-        .iter()
-        .find(|entry| entry.path == path)
-        .cloned();
+    let existing = entries.iter().find(|entry| entry.path == path).cloned();
     entries.retain(|entry| entry.path != path);
     let opened_at_ms = existing
         .as_ref()
@@ -145,9 +142,7 @@ fn lock(directory: &Path) -> Result<File, String> {
     loop {
         match lock.try_lock() {
             Ok(()) => return Ok(lock),
-            Err(std::fs::TryLockError::WouldBlock)
-                if std::time::Instant::now() < deadline =>
-            {
+            Err(std::fs::TryLockError::WouldBlock) if std::time::Instant::now() < deadline => {
                 std::thread::sleep(std::time::Duration::from_millis(5));
             }
             Err(error) => {
@@ -161,7 +156,7 @@ fn lock(directory: &Path) -> Result<File, String> {
 
 fn write(directory: &Path, entries: &[RecentProject]) -> Result<(), String> {
     let json = serde_json::to_string(entries).map_err(|error| error.to_string())?;
-    desegnos_storage::write_markdown(&directory.join("recent-projects.json"), &json)
+    desegnos_storage::write_text(&directory.join("recent-projects.json"), &json)
         .map_err(|error| error.to_string())
 }
 

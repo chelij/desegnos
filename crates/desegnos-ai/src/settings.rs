@@ -2,7 +2,7 @@ use crate::{
     ErrorKind, ProviderError, Result,
     request::{RequestContent, RequestPart},
 };
-use desegnos_core::{GenerationMode, RequirementsSnapshot, digest};
+use desegnos_core::{GenerationMode, RequirementsSnapshot};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -376,21 +376,6 @@ pub struct CostEstimate {
     pub verified_at: String,
 }
 
-pub fn estimate_cost(
-    snapshot: &RequirementsSnapshot,
-    mode: GenerationMode,
-    schema: &Value,
-    settings: &ProviderSettings,
-) -> Result<CostEstimate> {
-    estimate_for_auth(
-        AuthenticationMethod::ApiKey,
-        snapshot,
-        mode,
-        schema,
-        settings,
-    )
-}
-
 pub fn estimate_for_auth(
     authentication: AuthenticationMethod,
     snapshot: &RequirementsSnapshot,
@@ -398,23 +383,55 @@ pub fn estimate_for_auth(
     schema: &Value,
     settings: &ProviderSettings,
 ) -> Result<CostEstimate> {
-    let (counted, reserve) = without_previews(snapshot);
-    let result = request_body(authentication, &counted, mode, schema, settings)
-        .and_then(|body| estimate_body_with_reserve(authentication, &body, settings, reserve));
-    result
-        .and_then(|mut estimate| {
-            let images = image_generation_reserve(authentication, snapshot);
-            estimate.estimate_usd += images;
-            if (authentication == AuthenticationMethod::ApiKey || images > 0.0)
-                && (!settings.spending_limit_usd.is_finite()
-                    || settings.spending_limit_usd <= 0.0
-                    || estimate.estimate_usd > settings.spending_limit_usd)
-            {
-                return Err(ProviderError::before(ErrorKind::SpendingLimit));
-            }
-            Ok(estimate)
-        })
+    generation_body(authentication, snapshot, mode, schema, settings)
+        .map(|(_, estimate)| estimate)
         .map_err(|error| error.with_authentication(authentication))
+}
+
+fn generation_body(
+    authentication: AuthenticationMethod,
+    snapshot: &RequirementsSnapshot,
+    mode: GenerationMode,
+    schema: &Value,
+    settings: &ProviderSettings,
+) -> Result<(Vec<u8>, CostEstimate)> {
+    settings.validate_for_auth(authentication)?;
+    let content = request_content(snapshot, mode, schema)?;
+    let mut value = content.responses_body();
+    configure_response_body(&mut value, authentication, settings);
+    let body = crate::schema_wire::serialize_body(&value)
+        .map_err(|_| ProviderError::before(ErrorKind::InvalidRequirements))?;
+    if body.len() > MAX_REQUEST_BYTES {
+        return Err(ProviderError::before(ErrorKind::InputLimit));
+    }
+    let preview_bytes = value["input"][0]["content"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .skip(2)
+        .map(|part| serde_json::to_vec(part).map(|bytes| bytes.len() + 1))
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|_| ProviderError::before(ErrorKind::InvalidRequirements))?
+        .into_iter()
+        .sum::<usize>();
+    let reserve = snapshot.images.len() as u64 * desegnos_core::AI_PREVIEW_TOKEN_RESERVE;
+    let mut estimate = estimate_response_value(
+        authentication,
+        body.len() - preview_bytes,
+        &value,
+        settings,
+        reserve,
+    )?;
+    let images = image_generation_reserve(snapshot);
+    estimate.estimate_usd += images;
+    if images > 0.0
+        && (!settings.spending_limit_usd.is_finite()
+            || settings.spending_limit_usd <= 0.0
+            || estimate.estimate_usd > settings.spending_limit_usd)
+    {
+        return Err(ProviderError::before(ErrorKind::SpendingLimit));
+    }
+    Ok((body, estimate))
 }
 
 /// Picture previews are billed per image, not per Base64 byte: estimate the request without
@@ -433,11 +450,10 @@ pub(crate) fn prepare_body(
     schema: &Value,
     settings: &ProviderSettings,
 ) -> Result<Vec<u8>> {
-    let body = request_body(authentication, snapshot, mode, schema, settings)?;
-    estimate_for_auth(authentication, snapshot, mode, schema, settings)?;
-    Ok(body)
+    generation_body(authentication, snapshot, mode, schema, settings).map(|(body, _)| body)
 }
 
+#[cfg(test)]
 pub(crate) fn request_body(
     authentication: AuthenticationMethod,
     snapshot: &RequirementsSnapshot,
@@ -461,25 +477,9 @@ pub(crate) fn request_content<'a>(
     mode: GenerationMode,
     schema: &Value,
 ) -> Result<RequestContent<'a>> {
-    if snapshot.markdown.is_empty()
-        || snapshot.request_count == 0
-        || snapshot.page_count == 0
-        || snapshot.sha256 != digest(snapshot.markdown.as_bytes())
-        || snapshot.job_id.is_nil()
-        || snapshot.project_id.is_nil()
-        || !schema.is_object()
-        || schema.get("type").and_then(Value::as_str) != Some("object")
-        || schema.get("additionalProperties") != Some(&Value::Bool(false))
-    {
+    let schema = crate::request::frozen_schema(snapshot, schema)?;
+    if snapshot.request_count == 0 || snapshot.page_count == 0 {
         return Err(ProviderError::before(ErrorKind::InvalidRequirements));
-    }
-    if snapshot.markdown.len() > MAX_REQUIREMENTS_BYTES
-        || serde_json::to_vec(schema)
-            .map_err(|_| ProviderError::before(ErrorKind::InvalidRequirements))?
-            .len()
-            > MAX_SCHEMA_BYTES
-    {
-        return Err(ProviderError::before(ErrorKind::InputLimit));
     }
     let mode_section = snapshot
         .markdown
@@ -500,24 +500,6 @@ pub(crate) fn request_content<'a>(
         .map_err(|_| ProviderError::before(ErrorKind::InvalidRequirements))?;
     if setting != json!({"generationMode": mode}) {
         return Err(ProviderError::before(ErrorKind::InvalidRequirements));
-    }
-    let mut schema = schema.clone();
-    let properties = schema
-        .get_mut("properties")
-        .and_then(Value::as_object_mut)
-        .ok_or_else(|| ProviderError::before(ErrorKind::InvalidRequirements))?;
-    for (name, value) in [
-        ("jobId", snapshot.job_id.to_string()),
-        ("requirementsSha256", snapshot.sha256.clone()),
-    ] {
-        let property = properties
-            .get_mut(name)
-            .and_then(Value::as_object_mut)
-            .ok_or_else(|| ProviderError::before(ErrorKind::InvalidRequirements))?;
-        if property.get("type").and_then(Value::as_str) != Some("string") {
-            return Err(ProviderError::before(ErrorKind::InvalidRequirements));
-        }
-        property.insert("enum".into(), json!([value]));
     }
     let metadata = serde_json::to_string(&json!({"jobId":snapshot.job_id,"requirementsSha256":snapshot.sha256,"generationMode":mode}))
         .map_err(|_| ProviderError::before(ErrorKind::InvalidRequirements))?;
@@ -567,91 +549,60 @@ pub(crate) fn estimate_body_with_reserve(
     settings: &ProviderSettings,
     visual_tokens: u64,
 ) -> Result<CostEstimate> {
-    // Count every wire byte as a token, including Base64 and schema, with framing headroom.
-    // Visual inputs additionally reserve tokens independently of their compressed byte size.
-    let upper = u64::try_from(body.len())
-        .ok()
-        .and_then(|length| length.checked_add(4096))
-        .and_then(|length| length.checked_add(visual_tokens))
-        .ok_or_else(|| ProviderError::before(ErrorKind::ContextLimit))?;
-    let output_reserve = match authentication {
-        AuthenticationMethod::ApiKey => settings.max_output_tokens,
-        AuthenticationMethod::Chatgpt => MODEL_MAX_OUTPUT_TOKENS,
-    };
-    if upper + u64::from(output_reserve) > CONTEXT_WINDOW_TOKENS {
-        return Err(ProviderError::before(ErrorKind::ContextLimit));
-    }
-    if authentication == AuthenticationMethod::Chatgpt {
-        return Ok(CostEstimate {
-            estimate_usd: 0.0,
-            input_token_upper_bound: upper,
-            verified_at: VERIFIED_AT.into(),
-        });
-    }
-    // Use long-context cache-write input and output prices without assuming cache discounts.
+    let value: Value = serde_json::from_slice(body)
+        .map_err(|_| ProviderError::before(ErrorKind::InvalidRequirements))?;
+    estimate_response_value(authentication, body.len(), &value, settings, visual_tokens)
+}
+
+fn estimate_response_value(
+    authentication: AuthenticationMethod,
+    wire_bytes: usize,
+    body: &Value,
+    settings: &ProviderSettings,
+    visual_tokens: u64,
+) -> Result<CostEstimate> {
     let model = model_catalogue()
         .into_iter()
         .find(|model| model.id == settings.model);
-    let (input_rate, output_rate) = if let Some(pricing) = &settings.pricing {
-        pricing.validate(&settings.model)?;
-        (
-            pricing.input_usd_per_million,
-            pricing.output_usd_per_million,
-        )
-    } else if let Some(model) = model {
-        (
-            model.long_context_input_usd_per_million * 1.25,
-            model.long_context_output_usd_per_million,
-        )
-    } else {
-        return Err(ProviderError::before(ErrorKind::InvalidSettings));
-    };
-    let fees = if let Some(pricing) = &settings.pricing {
-        let images = if pricing.image_usd > 0.0 {
-            let value: Value = serde_json::from_slice(body)
-                .map_err(|_| ProviderError::before(ErrorKind::InvalidRequirements))?;
-            value["input"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .flat_map(|input| input["content"].as_array().into_iter().flatten())
-                .filter(|part| part["type"] == "input_image")
-                .count()
-        } else {
-            0
-        };
-        pricing.request_usd + images as f64 * pricing.image_usd
-    } else {
-        0.0
-    };
-    let estimate = (((upper as f64 * input_rate
-        + f64::from(settings.max_output_tokens) * output_rate)
-        / 1_000_000.0
-        + fees)
-        * 100.0)
-        .ceil()
-        / 100.0;
-    if estimate > settings.spending_limit_usd {
-        return Err(ProviderError::before(ErrorKind::SpendingLimit));
-    }
-    Ok(CostEstimate {
-        estimate_usd: estimate,
-        input_token_upper_bound: upper,
-        verified_at: VERIFIED_AT.into(),
-    })
+    let images = body["input"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .flat_map(|input| input["content"].as_array().into_iter().flatten())
+        .filter(|part| part["type"] == "input_image")
+        .count();
+    crate::estimate::estimate(
+        crate::estimate::EstimateInput {
+            wire_bytes,
+            visual_tokens,
+            framing_tokens: crate::estimate::WIRE_FRAMING_TOKENS,
+            window_bytes_per_token: 1,
+            context_window: CONTEXT_WINDOW_TOKENS,
+            output_reserve: if authentication == AuthenticationMethod::Chatgpt {
+                MODEL_MAX_OUTPUT_TOKENS
+            } else {
+                settings.max_output_tokens
+            },
+            images,
+            included: authentication == AuthenticationMethod::Chatgpt,
+            cache_write_factor: crate::estimate::CACHE_WRITE_FACTOR,
+            verified_at: VERIFIED_AT,
+        },
+        settings,
+        model.as_ref(),
+    )
 }
 
 /// Reserve $0.50 per bounded low-quality Image API call, including a reference.
 /// An estimate allowance, not a guaranteed provider billing cap.
-pub(crate) fn image_generation_reserve(
-    _auth: AuthenticationMethod,
-    snapshot: &RequirementsSnapshot,
-) -> f64 {
+pub(crate) fn image_generation_reserve(snapshot: &RequirementsSnapshot) -> f64 {
     snapshot
         .capabilities
         .as_ref()
         .and_then(|c| c.image_generation.as_ref())
-        .map_or(0.0, |images| f64::from(images.max_images) * 0.50)
+        .map_or(0.0, |images| {
+            f64::from(images.max_images) * crate::estimate::IMAGE_GENERATION_USD
+        })
 }
 
 /// Parameters shared by normal Responses calls and account capability probes.
@@ -697,7 +648,7 @@ mod web_search_tests {
             job_id: uuid::Uuid::new_v4(),
             project_id: uuid::Uuid::new_v4(),
             base_revision: 1,
-            sha256: digest(markdown.as_bytes()),
+            sha256: desegnos_core::digest(markdown.as_bytes()),
             markdown,
             request_count: 1,
             reference_ids: vec![],
@@ -803,7 +754,10 @@ mod web_search_tests {
                 serde_json::from_str::<Value>(&schema_wire).unwrap(),
                 expected
             );
-            assert_eq!(snapshot.sha256, digest(snapshot.markdown.as_bytes()));
+            assert_eq!(
+                snapshot.sha256,
+                desegnos_core::digest(snapshot.markdown.as_bytes())
+            );
             let body: Value = serde_json::from_str(&wire).unwrap();
             let instructions = body["instructions"].as_str().unwrap();
             assert!(instructions.contains("setBehaviour"));

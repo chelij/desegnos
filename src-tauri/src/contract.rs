@@ -58,8 +58,8 @@ fn types() -> String {
         crate::crash_report::OpenFailure,
         crate::fonts::CanvasFont,
         crate::image_drop::ImageDrag,
-        desegnos_storage::project_db::ProjectHistoryView,
-        desegnos_storage::project_db::CompactReport,
+        crate::project_history::ProjectHistoryView,
+        crate::project_history::CompactReport,
     ];
     let mut text =
         String::from("// Generated from Rust by `npm run generate:contract`. Do not edit.\n\n");

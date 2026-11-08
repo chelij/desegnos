@@ -49,43 +49,106 @@ pub fn local_endpoint(settings: &ProviderSettings) -> Result<String> {
     Ok(url.as_str().trim_end_matches('/').into())
 }
 
-#[derive(ts_rs::TS, Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ProviderId {
-    #[default]
-    Openai,
+#[derive(Clone, Copy)]
+pub(crate) enum AuthHeader {
+    Bearer,
     Anthropic,
     Google,
-    Openrouter,
-    Deepseek,
-    Local,
 }
+
+pub(crate) struct ProviderSpec {
+    pub name: &'static str,
+    pub service: &'static str,
+    pub endpoint: &'static str,
+    pub default_model: &'static str,
+    pub auth: AuthHeader,
+    pub discovery: crate::model_discovery::DiscoveryProfile,
+    wire: Option<WireProtocol>,
+    web_search: bool,
+    local: bool,
+    list_probe: bool,
+    reasoning: ReasoningEffort,
+    max_output: u32,
+    catalogue: fn() -> Vec<ModelInfo>,
+}
+
+macro_rules! providers {
+    ($($(#[$meta:meta])* $id:ident => $spec:expr),+ $(,)?) => {
+#[derive(ts_rs::TS, Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+        pub enum ProviderId { $($(#[$meta])* $id),+ }
+        const PROVIDERS: &[ProviderId] = &[$(ProviderId::$id),+];
+        impl ProviderId {
+            pub(crate) fn spec(self) -> &'static ProviderSpec {
+                match self { $(Self::$id => { const SPEC: ProviderSpec = $spec; &SPEC }),+ }
+            }
+        }
+    };
+}
+providers! {
+    #[default]
+    Openai => ProviderSpec {
+        name: "OpenAI", service: "io.desegnos.openai", endpoint: "https://api.openai.com/v1",
+        default_model: crate::MODEL_ID, auth: AuthHeader::Bearer,
+        discovery: crate::model_discovery::STANDARD_DISCOVERY,
+        wire: None, web_search: true, local: false, list_probe: false,
+        reasoning: ReasoningEffort::Medium, max_output: crate::DEFAULT_MAX_OUTPUT_TOKENS,
+        catalogue: crate::model_catalogue,
+    },
+    Anthropic => ProviderSpec {
+        name: "Anthropic", service: "io.desegnos.anthropic", endpoint: "https://api.anthropic.com/v1",
+        default_model: "claude-sonnet-5-5", auth: AuthHeader::Anthropic,
+        discovery: crate::model_discovery::ANTHROPIC_DISCOVERY,
+        wire: Some(WireProtocol::Anthropic), web_search: true, local: false, list_probe: false,
+        reasoning: ReasoningEffort::Medium, max_output: crate::DEFAULT_MAX_OUTPUT_TOKENS,
+        catalogue: anthropic_catalogue,
+    },
+    Google => ProviderSpec {
+        name: "Google", service: "io.desegnos.google", endpoint: "https://generativelanguage.googleapis.com/v1beta",
+        default_model: "gemini-3.8-flash", auth: AuthHeader::Google,
+        discovery: crate::model_discovery::GOOGLE_DISCOVERY,
+        wire: Some(WireProtocol::Google), web_search: true, local: false, list_probe: false,
+        reasoning: ReasoningEffort::Medium, max_output: crate::DEFAULT_MAX_OUTPUT_TOKENS,
+        catalogue: google_catalogue,
+    },
+    Openrouter => ProviderSpec {
+        name: "OpenRouter", service: "io.desegnos.openrouter", endpoint: "https://openrouter.ai/api/v1",
+        default_model: "openai/gpt-6.1-sol", auth: AuthHeader::Bearer,
+        discovery: crate::model_discovery::OPENROUTER_DISCOVERY,
+        wire: Some(WireProtocol::Chat { schema_in_prompt: false, require_parameters: true }),
+        web_search: false, local: false, list_probe: true,
+        reasoning: ReasoningEffort::Medium, max_output: crate::DEFAULT_MAX_OUTPUT_TOKENS, catalogue: Vec::new,
+    },
+    Deepseek => ProviderSpec {
+        name: "DeepSeek", service: "io.desegnos.deepseek", endpoint: DEEPSEEK_ENDPOINT,
+        default_model: "deepseek-flash", auth: AuthHeader::Bearer,
+        discovery: crate::model_discovery::STANDARD_DISCOVERY,
+        wire: Some(WireProtocol::Chat { schema_in_prompt: true, require_parameters: false }),
+        web_search: false, local: false, list_probe: true,
+        reasoning: ReasoningEffort::High, max_output: crate::MAX_OUTPUT_TOKENS, catalogue: deepseek_catalogue,
+    },
+    Local => ProviderSpec {
+        name: "Local", service: "io.desegnos.local", endpoint: DEFAULT_LOCAL_ENDPOINT,
+        default_model: "local-model", auth: AuthHeader::Bearer,
+        discovery: crate::model_discovery::LOCAL_DISCOVERY,
+        wire: Some(WireProtocol::Chat { schema_in_prompt: false, require_parameters: false }),
+        web_search: false, local: true, list_probe: true,
+        reasoning: ReasoningEffort::Medium, max_output: crate::DEFAULT_MAX_OUTPUT_TOKENS, catalogue: Vec::new,
+    }
+}
+
 impl ProviderId {
     fn default_model(self) -> &'static str {
-        match self {
-            Self::Openai => crate::MODEL_ID,
-            Self::Anthropic => "claude-sonnet-5-5",
-            Self::Google => "gemini-3.8-flash",
-            Self::Openrouter => "openai/gpt-6.1-sol",
-            Self::Deepseek => "deepseek-flash",
-            Self::Local => "local-model",
-        }
+        self.spec().default_model
     }
     pub fn service(self) -> &'static str {
-        match self {
-            Self::Openai => "io.desegnos.openai",
-            Self::Anthropic => "io.desegnos.anthropic",
-            Self::Google => "io.desegnos.google",
-            Self::Openrouter => "io.desegnos.openrouter",
-            Self::Deepseek => "io.desegnos.deepseek",
-            Self::Local => "io.desegnos.local",
-        }
+        self.spec().service
     }
     pub fn capabilities(self) -> GenerationCapabilities {
         GenerationCapabilities {
-            web_search: matches!(self, Self::Openai | Self::Anthropic | Self::Google),
+            web_search: self.spec().web_search,
             image_downloads: GenerationCapabilities::default().image_downloads,
-            image_generation: (self == Self::Openai).then(Default::default),
+            image_generation: self.spec().wire.is_none().then(Default::default),
         }
     }
     pub fn capabilities_for(
@@ -105,62 +168,24 @@ impl ProviderId {
         capabilities
     }
     pub fn defaults(self) -> ProviderSettings {
-        let (model, reasoning_effort, max_output_tokens, endpoint) = match self {
-            Self::Openai => (
-                self.default_model(),
-                ReasoningEffort::Medium,
-                crate::DEFAULT_MAX_OUTPUT_TOKENS,
-                None,
-            ),
-            Self::Anthropic => (
-                self.default_model(),
-                ReasoningEffort::Medium,
-                crate::DEFAULT_MAX_OUTPUT_TOKENS,
-                None,
-            ),
-            Self::Google => (
-                self.default_model(),
-                ReasoningEffort::Medium,
-                crate::DEFAULT_MAX_OUTPUT_TOKENS,
-                None,
-            ),
-            Self::Openrouter => (
-                self.default_model(),
-                ReasoningEffort::Medium,
-                crate::DEFAULT_MAX_OUTPUT_TOKENS,
-                None,
-            ),
-            // DeepSeek thinking is always on and counts inside max_tokens.
-            Self::Deepseek => (
-                self.default_model(),
-                ReasoningEffort::High,
-                crate::MAX_OUTPUT_TOKENS,
-                None,
-            ),
-            Self::Local => (
-                self.default_model(),
-                ReasoningEffort::Medium,
-                crate::DEFAULT_MAX_OUTPUT_TOKENS,
-                Some(DEFAULT_LOCAL_ENDPOINT),
-            ),
-        };
+        let spec = self.spec();
         ProviderSettings {
-            model: model.into(),
-            reasoning_effort,
-            max_output_tokens,
-            endpoint: endpoint.map(str::to_owned),
+            model: spec.default_model.into(),
+            reasoning_effort: spec.reasoning.clone(),
+            max_output_tokens: spec.max_output,
+            endpoint: spec.local.then(|| spec.endpoint.to_owned()),
             ..Default::default()
         }
     }
     pub fn validate(self, settings: &ProviderSettings, auth: AuthenticationMethod) -> Result<()> {
-        if self == Self::Openai {
+        if self.spec().wire.is_none() {
             return settings.validate_for_auth(auth);
         }
         if auth != AuthenticationMethod::ApiKey || !crate::settings::valid_model_id(&settings.model)
         {
             return Err(ProviderError::before(ErrorKind::InvalidSettings));
         }
-        if self == Self::Local {
+        if self.spec().local {
             local_endpoint(settings)?;
         }
         if self == Self::Deepseek && settings.endpoint.is_some() {
@@ -169,109 +194,109 @@ impl ProviderId {
         settings.validate_limits(auth)
     }
     pub fn catalogue(self) -> Vec<ModelInfo> {
-        if matches!(self, Self::Openrouter | Self::Local) {
-            return vec![];
-        }
-        if self == Self::Openai {
-            return crate::model_catalogue();
-        }
-        if self == Self::Deepseek {
-            // Peak rates are used as the ceilings; discovery publishes neither price nor limit.
-            // Desegnos never requests more than its own API-key output ceiling.
-            return [
-                (self.default_model(), "DeepSeek V4.1 Flash", 0.30, 1.20),
-                ("deepseek-v4-pro", "DeepSeek V4 Pro", 1.32, 3.96),
-            ]
-            .into_iter()
-            .map(|(id, name, input, output)| ModelInfo {
-                id: id.into(),
-                name: name.into(),
-                input_usd_per_million: input,
-                output_usd_per_million: output,
-                verified_at: "2026-11-06".into(),
-                source_url: "https://api-docs.deepseek.com/quick_start/pricing".into(),
-                reasoning_efforts: vec![
-                    ReasoningEffort::Low,
-                    ReasoningEffort::High,
-                    ReasoningEffort::Other("max".into()),
-                ],
-                context_window_tokens: DEEPSEEK_CONTEXT_TOKENS,
-                max_output_tokens: MAX_OUTPUT_TOKENS,
-                long_context_input_usd_per_million: input,
-                long_context_output_usd_per_million: output,
-                pricing_required: false,
-                default_pricing: None,
-            })
-            .collect();
-        }
-        let (name, input, output, ceiling_input, ceiling_output, source, context) = match self {
-            Self::Anthropic => (
-                "Claude Sonnet 5.5",
-                2.0,
-                10.0,
-                2.0,
-                10.0,
-                "https://platform.claude.com/docs/en/about-claude/pricing",
-                1_000_000,
-            ),
-            _ => (
-                "Gemini 3.8 Flash",
-                0.75,
-                3.75,
-                1.5,
-                7.5,
-                "https://ai.google.dev/gemini-api/docs/pricing",
-                1_048_576,
-            ),
-        };
-        vec![ModelInfo {
-            id: self.defaults().model,
-            name: name.into(),
-            input_usd_per_million: input,
-            output_usd_per_million: output,
-            verified_at: "2026-10-19".into(),
-            source_url: source.into(),
-            reasoning_efforts: vec![
-                ReasoningEffort::Low,
-                ReasoningEffort::Medium,
-                ReasoningEffort::High,
-            ],
-            context_window_tokens: context,
-            max_output_tokens: MAX_OUTPUT_TOKENS,
-            long_context_input_usd_per_million: ceiling_input,
-            long_context_output_usd_per_million: ceiling_output,
-            pricing_required: false,
-            default_pricing: None,
-        }]
+        (self.spec().catalogue)()
     }
+}
+
+fn deepseek_catalogue() -> Vec<ModelInfo> {
+    // Peak rates bound discovery, which supplies neither prices nor limits.
+    [
+        (
+            ProviderId::Deepseek.default_model(),
+            "DeepSeek V4.1 Flash",
+            0.30,
+            1.20,
+        ),
+        ("deepseek-v4-pro", "DeepSeek V4 Pro", 1.32, 3.96),
+    ]
+    .into_iter()
+    .map(|(id, name, input, output)| ModelInfo {
+        id: id.into(),
+        name: name.into(),
+        input_usd_per_million: input,
+        output_usd_per_million: output,
+        verified_at: "2026-11-06".into(),
+        source_url: "https://api-docs.deepseek.com/quick_start/pricing".into(),
+        reasoning_efforts: vec![
+            ReasoningEffort::Low,
+            ReasoningEffort::High,
+            ReasoningEffort::Other("max".into()),
+        ],
+        context_window_tokens: DEEPSEEK_CONTEXT_TOKENS,
+        max_output_tokens: MAX_OUTPUT_TOKENS,
+        long_context_input_usd_per_million: input,
+        long_context_output_usd_per_million: output,
+        pricing_required: false,
+        default_pricing: None,
+    })
+    .collect()
+}
+fn priced_model(
+    id: ProviderId,
+    name: &str,
+    rates: (f64, f64),
+    ceiling: (f64, f64),
+    source: &str,
+    context: u64,
+) -> Vec<ModelInfo> {
+    vec![ModelInfo {
+        id: id.default_model().into(),
+        name: name.into(),
+        input_usd_per_million: rates.0,
+        output_usd_per_million: rates.1,
+        verified_at: "2026-10-19".into(),
+        source_url: source.into(),
+        reasoning_efforts: vec![
+            ReasoningEffort::Low,
+            ReasoningEffort::Medium,
+            ReasoningEffort::High,
+        ],
+        context_window_tokens: context,
+        max_output_tokens: MAX_OUTPUT_TOKENS,
+        long_context_input_usd_per_million: ceiling.0,
+        long_context_output_usd_per_million: ceiling.1,
+        pricing_required: false,
+        default_pricing: None,
+    }]
+}
+fn anthropic_catalogue() -> Vec<ModelInfo> {
+    priced_model(
+        ProviderId::Anthropic,
+        "Claude Sonnet 5.5",
+        (2.0, 10.0),
+        (2.0, 10.0),
+        "https://platform.claude.com/docs/en/about-claude/pricing",
+        1_000_000,
+    )
+}
+fn google_catalogue() -> Vec<ModelInfo> {
+    priced_model(
+        ProviderId::Google,
+        "Gemini 3.8 Flash",
+        (0.75, 3.75),
+        (1.5, 7.5),
+        "https://ai.google.dev/gemini-api/docs/pricing",
+        1_048_576,
+    )
 }
 #[derive(ts_rs::TS, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProviderDescriptor {
     pub id: ProviderId,
     pub name: &'static str,
-    pub available: bool,
     pub sign_in_supported: bool,
     pub capabilities: GenerationCapabilities,
 }
 pub fn provider_catalogue() -> Vec<ProviderDescriptor> {
-    [
-        (ProviderId::Openai, "OpenAI"),
-        (ProviderId::Anthropic, "Anthropic"),
-        (ProviderId::Google, "Google"),
-        (ProviderId::Openrouter, "OpenRouter"),
-        (ProviderId::Deepseek, "DeepSeek"),
-        (ProviderId::Local, "Local"),
-    ]
-    .into_iter()
-    .map(|(id, name)| ProviderDescriptor {
-        id,
-        name,
-        available: true,
-        sign_in_supported: id == ProviderId::Openai,
-        capabilities: id.capabilities(),
-    })
-    .collect()
+    PROVIDERS
+        .iter()
+        .map(|id| ProviderDescriptor {
+            id: *id,
+            name: id.spec().name,
+            sign_in_supported: id.spec().wire.is_none(),
+            capabilities: id.capabilities(),
+        })
+        .collect()
 }
 
 /// A local server that rejected the anonymous key needs one entered, not a generic auth error.
@@ -318,7 +343,6 @@ pub struct IdentityRequest<'a> {
     pub images: &'a [IdentityImage],
 }
 pub type ProviderFuture<'a> = Pin<Box<dyn Future<Output = Result<ProviderResponse>> + Send + 'a>>;
-/// Provider differences stop here. No HTTP or credential details enter the UI.
 pub trait ProviderAdapter: Send + Sync {
     fn generate<'a>(
         &'a self,
@@ -494,7 +518,7 @@ pub fn estimate_identity_for_provider(
     settings: &ProviderSettings,
     images: &[IdentityImage],
 ) -> Result<CostEstimate> {
-    if provider == ProviderId::Openai {
+    if provider.spec().wire.is_none() {
         return crate::estimate_identity_for_auth(auth, snapshot, schema, settings, images);
     }
     provider.validate(settings, auth)?;
@@ -527,60 +551,41 @@ fn estimate_wire(
     if wire.len() > MAX_REQUEST_BYTES {
         return Err(ProviderError::before(ErrorKind::InputLimit));
     }
-    // Cost keeps the byte-per-token bound, so spending is never underestimated; the context
-    // window uses the two-bytes-per-token bound, so a request that fits is not refused.
-    let input = wire.len() as u64 + reserve + 65_536;
-    let window_input = wire.len() as u64 / crate::WINDOW_BYTES_PER_TOKEN + reserve + 65_536;
     let info = id
         .catalogue()
         .into_iter()
         .find(|model| model.id == settings.model);
-    if window_input + u64::from(settings.max_output_tokens)
-        > info.as_ref().map_or(crate::CONTEXT_WINDOW_TOKENS, |model| {
-            model.context_window_tokens
-        })
-    {
-        return Err(ProviderError::before(ErrorKind::InputLimit));
-    }
-    let (input_rate, output_rate, verified_at) = if let Some(pricing) = &settings.pricing {
-        pricing.validate(&settings.model)?;
-        (
-            pricing.input_usd_per_million,
-            pricing.output_usd_per_million,
-            String::new(),
-        )
-    } else if let Some(info) = info {
-        (
-            info.long_context_input_usd_per_million,
-            info.long_context_output_usd_per_million,
-            info.verified_at,
-        )
-    } else {
-        return Err(ProviderError::before(ErrorKind::InvalidSettings));
-    };
-    let fees = settings.pricing.as_ref().map_or(0.0, |pricing| {
-        pricing.request_usd
-            + pricing.image_usd
-                * body
-                    .parts
-                    .iter()
-                    .filter(|part| matches!(part, RequestPart::Image { .. }))
-                    .count() as f64
-    });
-    let estimate = (((input as f64 * input_rate
-        + f64::from(settings.max_output_tokens) * output_rate)
-        / 1_000_000.0
-        + fees)
-        * 100.0)
-        .ceil()
-        / 100.0;
-    if estimate > settings.spending_limit_usd {
-        return Err(ProviderError::before(ErrorKind::SpendingLimit));
-    }
-    Ok(CostEstimate {
-        estimate_usd: estimate,
-        input_token_upper_bound: input,
-        verified_at,
+    crate::estimate::estimate(
+        crate::estimate::EstimateInput {
+            wire_bytes: wire.len(),
+            visual_tokens: reserve,
+            framing_tokens: crate::estimate::WIRE_FRAMING_TOKENS,
+            window_bytes_per_token: crate::WINDOW_BYTES_PER_TOKEN,
+            context_window: info.as_ref().map_or(crate::CONTEXT_WINDOW_TOKENS, |model| {
+                model.context_window_tokens
+            }),
+            output_reserve: settings.max_output_tokens,
+            images: body
+                .parts
+                .iter()
+                .filter(|part| matches!(part, RequestPart::Image { .. }))
+                .count(),
+            included: false,
+            cache_write_factor: 1.0,
+            verified_at: if settings.pricing.is_some() {
+                ""
+            } else {
+                info.as_ref().map_or("", |model| model.verified_at.as_str())
+            },
+        },
+        settings,
+        info.as_ref(),
+    )
+    .map_err(|mut error| {
+        if error.kind == ErrorKind::ContextLimit {
+            error.kind = ErrorKind::InputLimit;
+        }
+        error
     })
 }
 
@@ -594,23 +599,16 @@ struct KeyAdapter {
 use crate::net::{DEADLINE, ERROR_BODY_LIMIT, IDLE as PROVIDER_IDLE, PROBE_IDLE};
 impl KeyAdapter {
     fn new(id: ProviderId) -> Result<Self> {
-        let endpoint = match id {
-            ProviderId::Anthropic => "https://api.anthropic.com/v1",
-            ProviderId::Google => "https://generativelanguage.googleapis.com/v1beta",
-            ProviderId::Openrouter => "https://openrouter.ai/api/v1",
-            ProviderId::Deepseek => DEEPSEEK_ENDPOINT,
-            ProviderId::Local => DEFAULT_LOCAL_ENDPOINT,
-            _ => return Err(ProviderError::before(ErrorKind::InvalidSettings)),
-        };
-        Self::build(id, endpoint, id != ProviderId::Local)
+        Self::build(id, id.spec().endpoint, !id.spec().local)
     }
+
     fn build(id: ProviderId, endpoint: &str, https: bool) -> Result<Self> {
         // Same limits as the OpenAI transport: silence for 90 s or 20 minutes overall.
         let deadline = DEADLINE;
         let client = crate::net::hardened_client(https)
             .timeout(deadline)
             .read_timeout(PROVIDER_IDLE)
-            .connect_timeout(Duration::from_secs(20))
+            .connect_timeout(crate::net::CONNECT_TIMEOUT)
             .build()
             .map_err(|_| ProviderError::before(ErrorKind::Transport))?;
         Ok(Self {
@@ -633,10 +631,7 @@ impl KeyAdapter {
         key: &ApiKey,
         cancel: &CancellationToken,
     ) -> Result<()> {
-        if matches!(
-            self.id,
-            ProviderId::Openrouter | ProviderId::Deepseek | ProviderId::Local
-        ) {
+        if self.id.spec().list_probe {
             let models = crate::model_discovery::list_models(
                 self.id,
                 &self.client,
@@ -651,30 +646,22 @@ impl KeyAdapter {
                 Err(ProviderError::before(ErrorKind::ModelUnavailable))
             };
         }
-        let path = format!("{}/models/{}", self.endpoint, s.model);
-        let mut response = crate::retry::send(
-            self.authorized(self.client.get(path), key)?,
+        crate::model_discovery::probe_model(
+            self.id,
+            &self.client,
+            &self.endpoint,
+            &s.model,
+            key,
             cancel,
             crate::retry::RetryPolicy::new(
                 tokio::time::Instant::now() + PROVIDER_IDLE,
                 PROBE_IDLE,
                 ERROR_BODY_LIMIT,
             ),
-            &|_| {},
         )
-        .await?;
-        if response.status().is_success() {
-            Ok(())
-        } else {
-            Err(read_http_error(
-                &mut response,
-                key,
-                cancel,
-                tokio::time::Instant::now() + PROVIDER_IDLE,
-            )
-            .await)
-        }
+        .await
     }
+
     async fn submit(
         &self,
         common: RequestContent<'_>,
@@ -694,12 +681,10 @@ impl KeyAdapter {
         {
             return Err(ProviderError::before(ErrorKind::InputLimit));
         }
-        let path = match self.id {
-            ProviderId::Anthropic => format!("{}/messages", self.endpoint),
-            ProviderId::Openrouter | ProviderId::Deepseek | ProviderId::Local => {
-                format!("{}/chat/completions", self.endpoint)
-            }
-            _ => format!(
+        let path = match self.id.wire_protocol()? {
+            WireProtocol::Anthropic => format!("{}/messages", self.endpoint),
+            WireProtocol::Chat { .. } => format!("{}/chat/completions", self.endpoint),
+            WireProtocol::Google => format!(
                 "{}/models/{}:streamGenerateContent?alt=sse",
                 self.endpoint, s.model
             ),
@@ -1078,23 +1063,9 @@ enum WireProtocol {
 }
 impl ProviderId {
     fn wire_protocol(self) -> Result<WireProtocol> {
-        Ok(match self {
-            Self::Openrouter => WireProtocol::Chat {
-                schema_in_prompt: false,
-                require_parameters: true,
-            },
-            Self::Deepseek => WireProtocol::Chat {
-                schema_in_prompt: true,
-                require_parameters: false,
-            },
-            Self::Local => WireProtocol::Chat {
-                schema_in_prompt: false,
-                require_parameters: false,
-            },
-            Self::Google => WireProtocol::Google,
-            Self::Anthropic => WireProtocol::Anthropic,
-            Self::Openai => return Err(ProviderError::before(ErrorKind::InvalidSettings)),
-        })
+        self.spec()
+            .wire
+            .ok_or_else(|| ProviderError::before(ErrorKind::InvalidSettings))
     }
 }
 pub(crate) fn foreign_body(
@@ -1881,7 +1852,7 @@ mod tests {
                 request
                     .to_ascii_lowercase()
                     .contains("authorization: bearer"),
-                key.expose() != crate::credentials::LOCAL_ANONYMOUS_KEY
+                !key.is_anonymous()
             );
             let body: Value =
                 serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1).unwrap();

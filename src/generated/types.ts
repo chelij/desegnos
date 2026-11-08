@@ -518,7 +518,7 @@ export type ProjectPhoto = { id: string, name: string, dataUri: string, sha256: 
 
 export type ProjectStyles = { colours: Array<ColourStyle>, text: Array<TextStyle>, };
 
-export type ProviderDescriptor = { id: ProviderId, name: string, available: boolean, signInSupported: boolean, capabilities: GenerationCapabilities, };
+export type ProviderDescriptor = { id: ProviderId, name: string, signInSupported: boolean, capabilities: GenerationCapabilities, };
 
 export type ProviderError = { kind: ErrorKind, outcome: SubmissionOutcome, responseId: string | null, usage: TokenUsage | null, authentication: AuthenticationMethod, httpStatus: number | null, code: string | null, param: string | null, requestId: string | null, responseFormat?: ResponseFormat | null, };
 

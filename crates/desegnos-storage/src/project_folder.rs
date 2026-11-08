@@ -1,12 +1,11 @@
 //! A project file lives in its own folder. The folder holds the `.desegnos` file and nothing
 //! else; saving never touches neighbouring files.
-use crate::{Error, io};
+use crate::io;
 use desegnos_core::{Error as CoreError, Result};
 use std::{
     fs,
     path::{Component, Path, PathBuf},
 };
-use uuid::Uuid;
 
 pub fn sanitize_project_name(name: &str) -> String {
     let mut clean: String = name
@@ -75,28 +74,6 @@ pub fn create_project_folder(parent: &Path, name: &str) -> Result<PathBuf> {
     ))
 }
 
-/// A project folder is the folder that holds a project file.
-pub fn is_project_folder(path: &Path) -> bool {
-    path.extension().and_then(|extension| extension.to_str()) == Some("desegnos")
-        && path.parent().is_some_and(|parent| parent.is_dir())
-}
-
-/// Adopting a folder is now just a promise not to take over other files; nothing is written.
-pub fn manage_project_folder(
-    path: &Path,
-    _project_id: Uuid,
-    _originals: std::collections::BTreeMap<String, String>,
-) -> Result<()> {
-    let root = path
-        .parent()
-        .ok_or_else(|| Error("Choose a project folder.".into()))?;
-    if !root.is_dir() {
-        return Err(Error("Choose a project folder.".into()));
-    }
-    Ok(())
-}
-
-/// The one project file in a folder, if that folder holds exactly one.
 pub fn project_in_folder(folder: &Path) -> Result<Option<PathBuf>> {
     if !folder.is_dir() {
         return Ok(None);

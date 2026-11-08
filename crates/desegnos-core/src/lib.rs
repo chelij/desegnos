@@ -72,13 +72,13 @@ pub use generation::{
 pub use identity::{
     IdentityAsset, ImportedContext, ImportedIdentity, ImportedItem, ImportedPageContext,
     MAX_IDENTITY_ASSET_BYTES, MAX_IDENTITY_ASSETS, MAX_IMPORTED_ITEMS, MAX_PHOTO_DESCRIPTION_CHARS,
-    MAX_PROJECT_PHOTO_BYTES, ProjectPhoto, SourcePage, SourcePageRef,
+    MAX_PROJECT_PHOTO_BYTES, ProjectPhoto, SourcePage, SourcePageRef, raster_dimensions,
 };
 pub use identity_pages::{
     identity_source_page, page_frontmatter, page_references_image, source_page_at_route,
     source_page_kind, source_page_path, validate_source_page_ref,
 };
-pub use image_generation::{ImageGenerationRequest, MAX_DOWNLOADED_IMAGE_BYTES};
+pub use image_generation::MAX_DOWNLOADED_IMAGE_BYTES;
 pub use json_parse::{
     complete_truncated_operations, fill_reply_echoes, parse_provider_json, parse_structured_reply,
 };

@@ -176,19 +176,7 @@ impl Store {
         Ok(store)
     }
     pub fn lock(&self) -> ChatgptResult<File> {
-        let file = self.open_lock()?;
-        let started = std::time::Instant::now();
-        loop {
-            match file.try_lock() {
-                Ok(()) => return Ok(file),
-                Err(std::fs::TryLockError::WouldBlock)
-                    if started.elapsed() < std::time::Duration::from_secs(5) =>
-                {
-                    std::thread::sleep(std::time::Duration::from_millis(20))
-                }
-                _ => return Err(Kind::Storage.into()),
-            }
-        }
+        super::lock::metadata(self.open_lock()?)
     }
     pub fn open_lock(&self) -> ChatgptResult<File> {
         let path = self.directory.join("accounts.lock");

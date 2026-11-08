@@ -1,9 +1,8 @@
 //! Unauthenticated public-web fetching with DNS pinning and bounded bodies.
 use reqwest::Url;
-use std::{
-    net::{IpAddr, SocketAddr},
-    time::Duration,
-};
+use std::net::{IpAddr, SocketAddr};
+
+const MAX_RESOLVED_ADDRESSES: usize = 16;
 
 pub(crate) struct FetchRequest<'a> {
     pub url: &'a str,
@@ -12,28 +11,31 @@ pub(crate) struct FetchRequest<'a> {
     pub host_lock: Option<&'a str>,
 }
 pub(crate) struct PublicFetcher {
+    #[cfg(any(test, feature = "test-support"))]
     fixture: Option<Url>,
 }
 impl PublicFetcher {
-    pub fn new(fixture: Option<&Url>) -> Result<Self, String> {
-        #[cfg(not(any(test, feature = "test-support")))]
-        if fixture.is_some() {
-            return Err("Test website sources are unavailable in this build.".into());
+    pub fn new() -> Self {
+        Self {
+            #[cfg(any(test, feature = "test-support"))]
+            fixture: None,
         }
-        Ok(Self {
-            fixture: fixture.cloned(),
-        })
+    }
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn for_fixture(origin: &Url) -> Self {
+        Self {
+            fixture: Some(origin.clone()),
+        }
     }
     pub fn fixture(&self) -> Option<&Url> {
-        self.fixture.as_ref()
-    }
-    pub async fn fetch(
-        &self,
-        request: FetchRequest<'_>,
-    ) -> Result<(Vec<u8>, String), &'static str> {
-        self.document(request)
-            .await
-            .map(|(bytes, mime, _)| (bytes, mime))
+        #[cfg(any(test, feature = "test-support"))]
+        {
+            self.fixture.as_ref()
+        }
+        #[cfg(not(any(test, feature = "test-support")))]
+        {
+            None
+        }
     }
     pub async fn document(
         &self,
@@ -47,7 +49,7 @@ impl PublicFetcher {
             {
                 return Err("redirected outside the source website");
             }
-            if !permitted_url(&url, self.fixture.as_ref()) {
+            if !permitted_url(&url, self.fixture()) {
                 return Err("must be a public https:// address");
             }
             let host = url
@@ -58,14 +60,13 @@ impl PublicFetcher {
             let addresses: Vec<SocketAddr> = tokio::net::lookup_host((host, port))
                 .await
                 .map_err(|_| "could not be found")?
-                .take(17)
+                .take(MAX_RESOLVED_ADDRESSES + 1)
                 .collect();
             let fixture_host = self
-                .fixture
-                .as_ref()
+                .fixture()
                 .is_some_and(|origin| url.origin() == origin.origin());
             if addresses.is_empty()
-                || addresses.len() > 16
+                || addresses.len() > MAX_RESOLVED_ADDRESSES
                 || addresses.iter().any(|address| {
                     !public_address(address.ip()) && !(fixture_host && address.ip().is_loopback())
                 })
@@ -74,8 +75,8 @@ impl PublicFetcher {
             }
             let client = crate::net::hardened_client(!fixture_host)
                 .resolve_to_addrs(host, &addresses)
-                .timeout(Duration::from_secs(8))
-                .connect_timeout(Duration::from_secs(4))
+                .timeout(crate::net::PUBLIC_FETCH_TIMEOUT)
+                .connect_timeout(crate::net::PUBLIC_CONNECT_TIMEOUT)
                 .build()
                 .map_err(|_| "could not be requested")?;
             let mut response = client
@@ -120,7 +121,7 @@ impl PublicFetcher {
                 &mut response,
                 request.limit,
                 &crate::CancellationToken::default(),
-                tokio::time::Instant::now() + Duration::from_secs(8),
+                tokio::time::Instant::now() + crate::net::PUBLIC_FETCH_TIMEOUT,
             )
             .await
             .map_err(|error| match error.kind {
@@ -179,9 +180,9 @@ mod tests {
     use std::io::Cursor;
     #[cfg(test)]
     async fn download(source: &str, fixture: Option<&Url>) -> Option<String> {
-        let (bytes, mime) = PublicFetcher::new(fixture)
-            .unwrap()
-            .fetch(FetchRequest {
+        let (bytes, mime, _) = fixture
+            .map_or_else(PublicFetcher::new, PublicFetcher::for_fixture)
+            .document(FetchRequest {
                 url: source,
                 mimes: &["image/png", "image/jpeg"],
                 limit: MAX_DOWNLOADED_IMAGE_BYTES,

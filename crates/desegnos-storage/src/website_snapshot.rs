@@ -2,14 +2,13 @@
 //! for rendering. Nothing here writes outside the returned list or follows symlinks.
 use crate::io;
 use crate::source_files::{
-    SourcePurpose, excessive_expansion, excluded as source_excluded, extension, open_unchanged,
-    ordinary_zip_mode, priority, read_exact_bounded, safe_archive_name,
+    SourcePurpose, excessive_expansion, excluded as source_excluded, extension, is_download,
+    open_unchanged, ordinary_zip_mode, priority, read_exact_bounded, safe_archive_name,
 };
 use desegnos_core::{Error, Result};
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     fs,
-    io::Read,
     path::{Path, PathBuf},
 };
 use zip::ZipArchive;
@@ -37,25 +36,16 @@ pub struct WebsitePage {
     pub file: String,
 }
 
-fn download(name: &str) -> bool {
-    matches!(
-        extension(name).as_str(),
-        "mp3" | "mp4" | "webm" | "ogg" | "wav" | "pdf" | "txt" | "json" | "xml"
-    )
-}
-
-fn excluded(name: &str) -> bool {
-    source_excluded(name, SourcePurpose::Render)
-}
-fn safe_name(name: &str) -> Option<String> {
-    safe_archive_name(name)
-}
-
+const INDEX_NAMES: [&str; 6] = [
+    "index.html",
+    "index.htm",
+    "default.html",
+    "default.htm",
+    "home.html",
+    "home.htm",
+];
 fn index_name(name: &str) -> bool {
-    matches!(
-        name.to_ascii_lowercase().as_str(),
-        "index.html" | "index.htm" | "default.html" | "default.htm" | "home.html" | "home.htm"
-    )
+    INDEX_NAMES.contains(&name.to_ascii_lowercase().as_str())
 }
 
 fn page_route(name: &str) -> Option<String> {
@@ -73,7 +63,7 @@ fn page_route(name: &str) -> Option<String> {
     Some(format!("/{}", name.rsplit_once('.')?.0))
 }
 
-fn decode_html(bytes: &[u8]) -> String {
+pub fn decode_html(bytes: &[u8]) -> String {
     use encoding_rs::{Encoding, WINDOWS_1252};
     if let Some((encoding, length)) = Encoding::for_bom(bytes) {
         return encoding.decode(&bytes[length..]).0.into_owned();
@@ -116,7 +106,8 @@ fn decode_html(bytes: &[u8]) -> String {
         .unwrap_or_else(|_| WINDOWS_1252.decode(bytes).0.into_owned())
 }
 
-fn page_title(name: &str, doc: &dom_query::Document) -> String {
+pub fn page_title(name: &str, html: &str) -> String {
+    let doc = dom_query::Document::from(html);
     let title = doc.select("title").first().text().trim().to_owned();
     if !title.is_empty() {
         return title;
@@ -131,6 +122,36 @@ fn page_title(name: &str, doc: &dom_query::Document) -> String {
     }
 }
 
+pub fn page_file(route: &str) -> String {
+    let route = route.trim_start_matches('/');
+    if route.is_empty() || route.ends_with('/') {
+        format!("{route}index.html")
+    } else if route.ends_with(".html") || route.ends_with(".htm") {
+        route.to_owned()
+    } else {
+        format!("{route}.html")
+    }
+}
+
+pub fn decode_url_path(path: &str) -> Option<String> {
+    let mut bytes = Vec::with_capacity(path.len());
+    let mut chars = path.bytes();
+    while let Some(byte) = chars.next() {
+        bytes.push(if byte == b'%' {
+            let high = (chars.next()? as char).to_digit(16)?;
+            let low = (chars.next()? as char).to_digit(16)?;
+            (high * 16 + low) as u8
+        } else {
+            byte
+        });
+    }
+    let value = String::from_utf8(bytes).ok()?;
+    if value.contains('\\') || value.chars().any(char::is_control) {
+        return None;
+    }
+    Some(value)
+}
+
 fn resolve_link(from: &str, target: &str, files: &BTreeMap<String, String>) -> Option<String> {
     let mut base = url::Url::parse("https://snapshot.invalid/").ok()?;
     base.path_segments_mut()
@@ -141,35 +162,13 @@ fn resolve_link(from: &str, target: &str, files: &BTreeMap<String, String>) -> O
     if resolved.origin() != base.origin() {
         return None;
     }
-    let path = resolved.path().as_bytes();
-    let mut decoded = Vec::new();
-    let mut i = 0;
-    while i < path.len() {
-        if path[i] == b'%' && i + 2 < path.len() {
-            let byte =
-                u8::from_str_radix(std::str::from_utf8(&path[i + 1..i + 3]).ok()?, 16).ok()?;
-            decoded.push(byte);
-            i += 3;
-        } else {
-            decoded.push(path[i]);
-            i += 1;
-        }
-    }
-    let path = String::from_utf8(decoded)
-        .ok()?
+    let path = decode_url_path(resolved.path())?
         .trim_start_matches('/')
         .to_ascii_lowercase();
     if let Some(file) = files.get(&path) {
         return Some(file.clone());
     }
-    for index in [
-        "index.html",
-        "index.htm",
-        "default.html",
-        "default.htm",
-        "home.html",
-        "home.htm",
-    ] {
+    for index in INDEX_NAMES {
         let candidate = format!(
             "{}{index}",
             if path.is_empty() {
@@ -228,25 +227,21 @@ fn snapshot_pages(files: &[(String, Vec<u8>)]) -> Vec<WebsitePage> {
             pages.insert(
                 name.clone(),
                 WebsitePage {
-                    route: page_route(name).unwrap(),
-                    title: page_title(name, &doc),
+                    route: match page_route(name) {
+                        Some(route) => route,
+                        None => continue,
+                    },
+                    title: page_title(name, &text),
                     file: name.clone(),
                 },
             );
         }
     }
-    let home = [
-        "index.html",
-        "index.htm",
-        "default.html",
-        "default.htm",
-        "home.html",
-        "home.htm",
-    ]
-    .iter()
-    .find_map(|name| names.get(*name))
-    .cloned()
-    .or_else(|| pages.keys().next().cloned());
+    let home = INDEX_NAMES
+        .iter()
+        .find_map(|name| names.get(*name))
+        .cloned()
+        .or_else(|| pages.keys().next().cloned());
     if let Some(home) = &home {
         let mut target = home.clone();
         let mut seen = BTreeSet::new();
@@ -286,13 +281,12 @@ fn snapshot_pages(files: &[(String, Vec<u8>)]) -> Vec<WebsitePage> {
     ordered
 }
 
-struct Candidate {
+struct Candidate<T> {
     name: String,
     size: u64,
-    index: usize,
-    metadata: Option<fs::Metadata>,
+    source: T,
 }
-impl Candidate {
+impl<T> Candidate<T> {
     fn fits(&self, count: usize, total: u64) -> bool {
         count < MAX_FILES
             && self.size <= MAX_FILE_BYTES
@@ -347,14 +341,14 @@ fn render_references(name: &str, bytes: &[u8]) -> Vec<String> {
     references
 }
 
-fn select_files(
-    mut candidates: Vec<Candidate>,
+fn select_files<T>(
+    mut candidates: Vec<Candidate<T>>,
     skipped: &mut Vec<String>,
-    mut read: impl FnMut(&Candidate) -> Result<Vec<u8>>,
+    mut read: impl FnMut(&Candidate<T>) -> Result<Vec<u8>>,
 ) -> Result<Vec<(String, Vec<u8>)>> {
     let downloads = candidates
         .iter()
-        .filter(|file| download(&file.name) && priority(&file.name).is_none())
+        .filter(|file| is_download(&file.name) && priority(&file.name).is_none())
         .count();
     if downloads > 0 {
         skipped.push(format!(
@@ -451,7 +445,7 @@ fn select_files(
         ));
     }
     if !rejected.is_empty() {
-        skipped.push(format!("Left out {} rendering files to keep the snapshot within 1,500 files, 128 MiB total and {} MiB per file.", rejected.len(), MAX_FILE_BYTES / 1024 / 1024));
+        skipped.push(format!("Left out {} rendering files to keep the snapshot within {MAX_FILES} files, {} MiB total and {} MiB per file.", rejected.len(), MAX_TOTAL_BYTES / 1024 / 1024, MAX_FILE_BYTES / 1024 / 1024));
     }
     Ok(files)
 }
@@ -459,7 +453,7 @@ fn select_files(
 fn inventory_folder(
     root: &Path,
     directory: &Path,
-    candidates: &mut Vec<Candidate>,
+    candidates: &mut Vec<Candidate<fs::Metadata>>,
     skipped: &mut Vec<String>,
     entries: &mut usize,
 ) -> Result<()> {
@@ -467,17 +461,17 @@ fn inventory_folder(
         let child = child.map_err(io)?;
         *entries += 1;
         if *entries > MAX_ENTRIES {
-            return Err(Error(
-                "The website has more than 50,000 entries. Choose the site folder itself.".into(),
-            ));
+            return Err(Error(format!(
+                "The website has more than {MAX_ENTRIES} entries. Choose the site folder itself."
+            )));
         }
         let path = child.path();
         let relative = path.strip_prefix(root).map_err(io)?;
-        let Some(name) = safe_name(&relative.to_string_lossy()) else {
+        let Some(name) = safe_archive_name(&relative.to_string_lossy()) else {
             skipped.push(format!("{}: unsafe name", relative.display()));
             continue;
         };
-        if excluded(&name) {
+        if source_excluded(&name, SourcePurpose::Render) {
             continue;
         }
         let metadata = fs::symlink_metadata(&path).map_err(io)?;
@@ -491,25 +485,14 @@ fn inventory_folder(
             candidates.push(Candidate {
                 name,
                 size: metadata.len(),
-                index: 0,
-                metadata: Some(metadata),
+                source: metadata,
             });
         }
     }
     Ok(())
 }
 
-/// Inventory a folder or ZIP, then read bounded HTML/CSS and the selected rendering assets.
-pub fn collect_website_snapshot(path: &Path) -> Result<WebsiteSnapshot> {
-    collect_snapshot(path, false)
-}
-
-/// A shared page and brand snapshot may contain only brand evidence.
 pub fn collect_import_snapshot(path: &Path) -> Result<WebsiteSnapshot> {
-    collect_snapshot(path, true)
-}
-
-fn collect_snapshot(path: &Path, allow_empty: bool) -> Result<WebsiteSnapshot> {
     let metadata = fs::symlink_metadata(path).map_err(io)?;
     if metadata.file_type().is_symlink() {
         return Err(Error(
@@ -527,17 +510,13 @@ fn collect_snapshot(path: &Path, allow_empty: bool) -> Result<WebsiteSnapshot> {
         .chars()
         .take(120)
         .collect();
-    let mut candidates = Vec::new();
     let mut skipped = Vec::new();
     let mut files;
     if metadata.is_dir() {
+        let mut candidates = Vec::new();
         inventory_folder(path, path, &mut candidates, &mut skipped, &mut 0)?;
         files = select_files(candidates, &mut skipped, |file| {
-            let expected = file
-                .metadata
-                .as_ref()
-                .ok_or_else(|| Error("Missing source metadata.".into()))?;
-            let mut input = open_unchanged(&path.join(&file.name), expected)?;
+            let mut input = open_unchanged(&path.join(&file.name), &file.source)?;
             read_exact_bounded(&mut input, file.size, MAX_FILE_BYTES as usize)
         })?;
     } else if metadata.is_file()
@@ -545,12 +524,12 @@ fn collect_snapshot(path: &Path, allow_empty: bool) -> Result<WebsiteSnapshot> {
             .extension()
             .is_some_and(|ext| ext.eq_ignore_ascii_case("zip"))
     {
+        let mut candidates = Vec::new();
         let mut archive = ZipArchive::new(fs::File::open(path).map_err(io)?).map_err(io)?;
         if archive.len() > MAX_ENTRIES {
-            return Err(Error(
-                "The website ZIP has more than 50,000 entries. Choose the site folder itself."
-                    .into(),
-            ));
+            return Err(Error(format!(
+                "The website ZIP has more than {MAX_ENTRIES} entries. Choose the site folder itself."
+            )));
         }
         for index in 0..archive.len() {
             let entry = archive.by_index(index).map_err(io)?;
@@ -562,7 +541,7 @@ fn collect_snapshot(path: &Path, allow_empty: bool) -> Result<WebsiteSnapshot> {
                 skipped.push(format!("{}: unsafe path", entry.name()));
                 continue;
             };
-            if excluded(&name) {
+            if source_excluded(&name, SourcePurpose::Render) {
                 continue;
             }
             if entry.encrypted()
@@ -577,12 +556,11 @@ fn collect_snapshot(path: &Path, allow_empty: bool) -> Result<WebsiteSnapshot> {
             candidates.push(Candidate {
                 name,
                 size: entry.size(),
-                index,
-                metadata: None,
+                source: index,
             });
         }
         files = select_files(candidates, &mut skipped, |file| {
-            let mut entry = archive.by_index(file.index).map_err(io)?;
+            let mut entry = archive.by_index(file.source).map_err(io)?;
             read_exact_bounded(&mut entry, file.size, MAX_FILE_BYTES as usize)
         })?;
     } else {
@@ -591,11 +569,6 @@ fn collect_snapshot(path: &Path, allow_empty: bool) -> Result<WebsiteSnapshot> {
         ));
     }
     let pages = snapshot_pages(&files);
-    if pages.is_empty() && !allow_empty {
-        return Err(Error(
-            "That folder or archive has no HTML page to render.".into(),
-        ));
-    }
     files.sort_by(|a, b| a.0.cmp(&b.0));
     Ok(WebsiteSnapshot {
         name,
@@ -608,16 +581,18 @@ fn collect_snapshot(path: &Path, allow_empty: bool) -> Result<WebsiteSnapshot> {
 /// Read only native-dialog-selected HTML files, with the normal snapshot limits.
 pub fn collect_import_html(paths: &[PathBuf]) -> Result<WebsiteSnapshot> {
     if paths.is_empty() || paths.len() > MAX_FILES {
-        return Err(Error("Choose between 1 and 1,500 HTML files.".into()));
+        return Err(Error(format!(
+            "Choose between 1 and {MAX_FILES} HTML files."
+        )));
     }
     let mut candidates = Vec::new();
-    let mut selected = BTreeMap::new();
+    let mut selected = BTreeSet::new();
     for path in paths {
         let metadata = fs::symlink_metadata(path).map_err(io)?;
         let name = path
             .file_name()
             .and_then(|name| name.to_str())
-            .and_then(safe_name)
+            .and_then(safe_archive_name)
             .ok_or_else(|| Error("An HTML file has an unsafe name.".into()))?;
         if !metadata.is_file()
             || metadata.file_type().is_symlink()
@@ -633,30 +608,19 @@ pub fn collect_import_html(paths: &[PathBuf]) -> Result<WebsiteSnapshot> {
                 desegnos_core::limits::MAX_IDENTITY_SOURCE_BYTES / 1024 / 1024
             )));
         }
-        if selected.insert(name.clone(), path).is_some() {
+        if !selected.insert(name.clone()) {
             return Err(Error("Choose HTML files with different names.".into()));
         }
         candidates.push(Candidate {
             name,
             size: metadata.len(),
-            index: 0,
-            metadata: None,
+            source: (path.clone(), metadata),
         });
     }
     let mut skipped = Vec::new();
     let files = select_files(candidates, &mut skipped, |file| {
-        let mut bytes = Vec::new();
-        fs::File::open(selected[&file.name])
-            .map_err(io)?
-            .take(file.size + 1)
-            .read_to_end(&mut bytes)
-            .map_err(io)?;
-        if bytes.len() as u64 != file.size {
-            return Err(Error(
-                "An imported file changed size. Try importing again.".into(),
-            ));
-        }
-        Ok(bytes)
+        let mut input = open_unchanged(&file.source.0, &file.source.1)?;
+        read_exact_bounded(&mut input, file.size, MAX_FILE_BYTES as usize)
     })?;
     Ok(WebsiteSnapshot {
         name: "Selected HTML files".into(),
@@ -713,7 +677,7 @@ pub fn write_website_snapshot(folder: &Path, snapshot: &WebsiteSnapshot) -> Resu
         .canonicalize()
         .unwrap_or_else(|_| folder.to_path_buf());
     for (name, bytes) in &snapshot.files {
-        let Some(name) = safe_name(name) else {
+        let Some(name) = safe_archive_name(name) else {
             return Err(Error("An imported file has an unsafe name.".into()));
         };
         let mut path = root.clone();
@@ -759,7 +723,7 @@ mod tests {
             fs::write(path, bytes).unwrap();
         }
         fn snapshot(&self) -> WebsiteSnapshot {
-            collect_website_snapshot(&self.0).unwrap()
+            collect_import_snapshot(&self.0).unwrap()
         }
     }
     impl Drop for Fixture {
@@ -854,8 +818,7 @@ mod tests {
             ]
             .concat();
             let text = decode_html(&html);
-            let doc = dom_query::Document::from(text.as_str());
-            assert_eq!(page_title("ARTICLE.HTM", &doc), "Article 1 – Café news");
+            assert_eq!(page_title("ARTICLE.HTM", &text), "Article 1 – Café news");
         }
         assert_eq!(
             decode_html("<title>Café</title>".as_bytes()),
@@ -912,8 +875,7 @@ mod tests {
         let mut candidates = vec![Candidate {
             name: "INDEX.HTM".into(),
             size: 20,
-            index: 0,
-            metadata: None,
+            source: 0,
         }];
         for (name, size) in [
             ("a.mp3", MAX_TOTAL_BYTES * 2),
@@ -927,16 +889,14 @@ mod tests {
             candidates.push(Candidate {
                 name: name.into(),
                 size,
-                index: 0,
-                metadata: None,
+                source: 0,
             });
         }
         for index in 0..20 {
             candidates.push(Candidate {
                 name: format!("{index:02}.png"),
                 size: MAX_FILE_BYTES,
-                index: 0,
-                metadata: None,
+                source: 0,
             });
         }
         let mut skipped = Vec::new();
@@ -948,7 +908,11 @@ mod tests {
         assert_eq!(selected[1].0, "z.css");
         assert!(selected.iter().map(|c| c.1.len() as u64).sum::<u64>() <= MAX_TOTAL_BYTES);
         assert!(selected.iter().any(|c| c.0 == "z.js"));
-        assert!(!selected.iter().any(|c| download(&c.0) || c.0 == "huge.gif"));
+        assert!(
+            !selected
+                .iter()
+                .any(|c| is_download(&c.0) || c.0 == "huge.gif")
+        );
         assert_eq!(skipped.len(), 2);
     }
 
@@ -979,7 +943,7 @@ mod tests {
         }
         let archive = Fixture::new();
         archive.add("website.ZIP", &zip.finish().unwrap().into_inner());
-        let zipped = collect_website_snapshot(&archive.0.join("website.ZIP")).unwrap();
+        let zipped = collect_import_snapshot(&archive.0.join("website.ZIP")).unwrap();
         assert_eq!(zipped.files, folder.files);
         assert_eq!(zipped.pages, folder.pages);
         assert_eq!(zipped.skipped, folder.skipped);
@@ -1089,7 +1053,7 @@ mod tests {
         }
         let archive = Fixture::new();
         archive.add("site.zip", &zip.finish().unwrap().into_inner());
-        let zipped = collect_website_snapshot(&archive.0.join("site.zip")).unwrap();
+        let zipped = collect_import_snapshot(&archive.0.join("site.zip")).unwrap();
         assert_eq!(zipped.files, folder.files);
         assert_eq!(zipped.pages, folder.pages);
         assert_eq!(zipped.skipped, folder.skipped);
@@ -1115,14 +1079,13 @@ mod tests {
             .map(|(index, (name, bytes))| Candidate {
                 name: (*name).into(),
                 size: bytes.len() as u64,
-                index,
-                metadata: None,
+                source: index,
             })
             .collect();
         let mut reads = BTreeSet::new();
         let files = select_files(candidates, &mut Vec::new(), |file| {
             assert!(reads.insert(file.name.clone()), "read twice: {}", file.name);
-            Ok(contents[file.index].1.as_bytes().to_vec())
+            Ok(contents[file.source].1.as_bytes().to_vec())
         })
         .unwrap();
         assert_eq!(files.len(), contents.len());
@@ -1154,7 +1117,7 @@ mod tests {
             &mut entries,
         )
         .unwrap_err();
-        assert!(error.to_string().contains("50,000"));
+        assert!(error.to_string().contains(&MAX_ENTRIES.to_string()));
         assert!(error.to_string().contains("site folder itself"));
     }
 

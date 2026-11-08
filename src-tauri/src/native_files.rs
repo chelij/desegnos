@@ -94,20 +94,17 @@ pub fn read_json<T: for<'de> Deserialize<'de>>(
     })
 }
 
-pub fn write_json(
-    path: &Path,
-    value: &impl Serialize,
-    limit: u64,
-    noun: &str,
-) -> NativeResult<()> {
+pub fn write_json(path: &Path, value: &impl Serialize, limit: u64, noun: &str) -> NativeResult<()> {
     if path.exists() {
         regular_file(path, noun)?;
     }
     let bytes = serde_json::to_string(value).map_err(message)?;
     if bytes.len() as u64 > limit {
-        return Err(format!("The complete {noun} exceeds its local storage limit."));
+        return Err(format!(
+            "The complete {noun} exceeds its local storage limit."
+        ));
     }
-    desegnos_storage::write_markdown(path, &bytes).map_err(message)
+    desegnos_storage::write_text(path, &bytes).map_err(message)
 }
 
 /// Open (creating if needed) a lock file readable only by the user.

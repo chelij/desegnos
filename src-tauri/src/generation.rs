@@ -13,7 +13,7 @@ use desegnos_ai::{
     ProviderResponse, ProviderSettings, SubmissionOutcome, TokenUsage,
 };
 use desegnos_core::{GenerationCandidate, GenerationMode, Project, RequirementsSnapshot, digest};
-use desegnos_storage::write_markdown;
+use desegnos_storage::write_text;
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -70,7 +70,7 @@ fn capture_benchmark_output(
 ) -> NativeResult<()> {
     if enabled {
         private_directory(directory, RECORD)?;
-        write_markdown(
+        write_text(
             &directory.join(format!("provider-output-{ordinal}.txt")),
             text,
         )
@@ -923,7 +923,7 @@ impl GenerationService {
         }
         let directory = self.store.job_directory(project.id, job_id);
         if let Some(context) = &record.view.context {
-            write_markdown(
+            write_text(
                 &directory.join(format!("attempt-{}-CONTEXT.md", record.view.attempts.len())),
                 &context.markdown,
             )
@@ -935,7 +935,7 @@ impl GenerationService {
             }
         }
         if let Some(reply) = &record.view.raw_reply {
-            write_markdown(
+            write_text(
                 &directory.join(format!("attempt-{}-reply.txt", record.view.attempts.len())),
                 reply,
             )

@@ -1,11 +1,12 @@
 use crate::native_files::{NativeResult, message, open_lock_file};
+use crate::project_history::ProjectHistoryView;
 use desegnos_core::{
     Appearance, CanvasTemplate, Command, GenerationCandidate, Project, RequirementsSnapshot,
     Session,
 };
 use desegnos_storage::{
-    AutosaveProject, FileStamp, LoadedProject, ProjectDatabase, ProjectHistoryView, SaveFailure,
-    SaveFailureKind, remove_project_files, write_markdown,
+    AutosaveProject, FileStamp, LoadedProject, ProjectDatabase, SaveFailure, SaveFailureKind,
+    remove_project_files, write_text,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -142,7 +143,7 @@ pub enum SaveProjectOutcome {
 #[serde(rename_all = "camelCase")]
 pub struct SaveConflict {
     token: Uuid,
-    kind: SaveFailureKind,
+    kind: crate::project_history::SaveFailureKind,
     path: String,
     file_name: String,
     message: String,
@@ -154,8 +155,8 @@ pub struct SaveConflict {
 #[derive(ts_rs::TS, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SaveConflictDetails {
-    expected: Option<FileStamp>,
-    actual: Option<FileStamp>,
+    expected: Option<crate::project_history::FileStamp>,
+    actual: Option<crate::project_history::FileStamp>,
 }
 
 #[derive(Clone, Copy, Deserialize)]
@@ -432,7 +433,7 @@ impl Workspace {
             project_path: path.to_owned(),
             untitled,
         };
-        write_markdown(
+        write_text(
             &self.pointer_path(project_id),
             &serde_json::to_string(&pointer).map_err(message)?,
         )
@@ -1132,7 +1133,7 @@ impl Workspace {
             SaveDestination::Current => {
                 let file = self.file().ok_or("Choose a project file first.")?;
                 let stamp = self.active.as_ref().and_then(|open| open.stamp.clone());
-                file.save_checked(project, stamp.as_ref(), labels, label)
+                file.save_checked(project, stamp.as_ref(), labels, label, now)
                     .map_err(|failure| failure.message)?;
             }
             SaveDestination::New(path) => {
@@ -1141,7 +1142,7 @@ impl Workspace {
             }
             SaveDestination::Existing(path) => {
                 let file = ProjectDatabase::open(&path).map_err(message)?;
-                file.save(project, labels, label).map_err(message)?;
+                file.save(project, labels, label, now).map_err(message)?;
                 self.active.as_mut().expect("active project").file = Some(file);
             }
         }
@@ -1163,7 +1164,7 @@ impl Workspace {
                     SaveFailure::new(SaveFailureKind::Io, "Choose a project file first.")
                 })?;
                 let stamp = self.active.as_ref().and_then(|open| open.stamp.clone());
-                file.save_checked(project, stamp.as_ref(), labels, label)?;
+                file.save_checked(project, stamp.as_ref(), labels, label, now)?;
             }
             SaveDestination::New(path) => {
                 let file = ProjectDatabase::create(&path, project, now)
@@ -1174,7 +1175,7 @@ impl Workspace {
                 let file = ProjectDatabase::open(&path).map_err(|error| {
                     SaveFailure::new(SaveFailureKind::Unreadable, error.to_string())
                 })?;
-                let saved = file.save_checked(project, None, labels, label);
+                let saved = file.save_checked(project, None, labels, label, now);
                 if saved.is_ok() {
                     self.active.as_mut().expect("active project").file = Some(file);
                 }
@@ -1330,15 +1331,16 @@ impl Workspace {
                 SaveFailureKind::DifferentProject
             } else {
                 failure.kind
-            },
+            }
+            .into(),
             path,
             file_name,
             message,
             default_choice: if different { "cancel" } else { "copy" },
             can_replace,
             details: SaveConflictDetails {
-                expected: failure.expected,
-                actual: failure.actual.clone(),
+                expected: failure.expected.map(Into::into),
+                actual: failure.actual.clone().map(Into::into),
             },
         };
         self.active.as_mut().expect("active project").pending_save = Some(PendingSaveConflict {
@@ -1439,6 +1441,7 @@ impl Workspace {
                         pending.save_as,
                         &pending.labels,
                         pending.label.as_deref(),
+                        desegnos_storage::project_db::now_millis(),
                     )
                     .map(|_| ())
                     .map_err(|failure| failure.message)?;
@@ -1455,6 +1458,7 @@ impl Workspace {
                         true,
                         &pending.labels,
                         pending.label.as_deref(),
+                        desegnos_storage::project_db::now_millis(),
                     )
                     .map(|_| ())
                     .map_err(|failure| failure.message)?;
@@ -1788,7 +1792,9 @@ impl Workspace {
     /// The saved version becomes the current state as one undo step.
     fn restore_version(&mut self, version: i64) -> NativeResult<()> {
         let file = self.file().ok_or("Create or open a project first.")?;
-        let restored = file.restore(version).map_err(message)?;
+        let restored = file
+            .restore(version, desegnos_storage::project_db::now_millis())
+            .map_err(message)?;
         let stamp = file.stamp().map_err(message)?;
         let session = self
             .session_mut()
@@ -2138,7 +2144,10 @@ pub fn autosave_project(state: WorkspaceState<'_>) -> NativeResult<()> {
 pub fn get_project_history(state: WorkspaceState<'_>) -> NativeResult<Option<ProjectHistoryView>> {
     let state = state.lock().map_err(message)?;
     match state.file() {
-        Some(file) => file.history().map(Some).map_err(message),
+        Some(file) => file
+            .history()
+            .map(|history| Some(history.into()))
+            .map_err(message),
         None => Ok(None),
     }
 }
@@ -2216,10 +2225,13 @@ pub async fn save_project_copy(
 
 /// Keep recent versions in full, thin out older ones, drop unreferenced blobs and shrink.
 #[tauri::command(async)]
-pub fn compact_history(state: WorkspaceState<'_>) -> NativeResult<desegnos_storage::CompactReport> {
+pub fn compact_history(
+    state: WorkspaceState<'_>,
+) -> NativeResult<crate::project_history::CompactReport> {
     let state = state.lock().map_err(message)?;
     let file = state.file().ok_or("Create or open a project first.")?;
     file.compact(desegnos_storage::project_db::now_millis())
+        .map(Into::into)
         .map_err(message)
 }
 

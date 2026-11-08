@@ -13,6 +13,7 @@ test-support = []
 bytes = "=1.12.1"
 httpdate = "=1.0.3"
 desegnos-core = { path = "../desegnos-core" }
+desegnos-storage = { path = "../desegnos-storage" }
 serde.workspace = true
 serde_json.workspace = true
 base64 = { version = "=0.23.1", default-features = false, features = ["std"] }
@@ -36,7 +37,6 @@ keyring = { version = "=3.6.3", default-features = false, features = ["apple-nat
 keyring = { version = "=3.6.3", default-features = false, features = ["windows-native"] }
 
 [dev-dependencies]
-desegnos-storage = { path = "../desegnos-storage" }
 tokio = { version = "=1.53.3", default-features = false, features = ["rt-multi-thread", "net", "io-util", "test-util"] }
 
 [lints]

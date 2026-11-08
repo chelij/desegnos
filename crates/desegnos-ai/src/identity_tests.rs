@@ -239,7 +239,16 @@ fn every_provider_sizes_photo_previews_as_low_detail_and_uses_the_same_preflight
     let frozen = identity_snapshot();
     let photo = IdentityImage {
         photo: true,
-        data_uri: "data:image/jpeg;base64,/9j/".into(),
+        data_uri: {
+            let mut bytes = std::io::Cursor::new(Vec::new());
+            image::DynamicImage::new_rgb8(4, 4)
+                .write_to(&mut bytes, image::ImageFormat::Jpeg)
+                .unwrap();
+            format!(
+                "data:image/jpeg;base64,{}",
+                STANDARD.encode(bytes.into_inner())
+            )
+        },
     };
     for provider in [
         ProviderId::Openai,
@@ -358,7 +367,9 @@ async fn identity_invalid_packet_schema_and_images_fail_before_connecting() {
             ErrorKind::InputLimit
         );
     }
-    let mut large_png = b"\x89PNG\r\n\x1a\n".to_vec();
+    let mut large_png = STANDARD
+        .decode(logo().data_uri.split_once(',').unwrap().1)
+        .unwrap();
     large_png.resize(140_000, 0);
     let large = IdentityImage {
         photo: false,
