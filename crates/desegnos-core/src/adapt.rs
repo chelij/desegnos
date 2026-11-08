@@ -6,10 +6,6 @@ use crate::{
 use uuid::Uuid;
 
 /// Rebuild automatic overrides, retaining every manually authored override.
-pub fn adapt_size(page: &mut Page, size_id: Uuid) -> Result<()> {
-    adapt_with_styles(page, size_id, &crate::model::ProjectStyles::default())
-}
-
 pub(crate) fn adapt_with_styles(
     page: &mut Page,
     size_id: Uuid,

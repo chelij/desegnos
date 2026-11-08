@@ -1,5 +1,4 @@
 use crate::native_files::LockExt;
-use base64::Engine;
 use desegnos_core::{ResolvedFont, resolve_font, standalone_face};
 use serde::Serialize;
 use std::collections::HashMap;
@@ -45,9 +44,6 @@ pub fn load_canvas_font(id: String) -> Result<String, crate::native_error::Nativ
             .get(&id)
             .ok_or("Resolve the font before loading it.")?;
         let bytes = standalone_face(&face.bytes, face.index).ok_or("Invalid font collection.")?;
-        Ok(format!(
-            "data:font/ttf;base64,{}",
-            base64::engine::general_purpose::STANDARD.encode(bytes)
-        ))
+        Ok(desegnos_core::limits::image_data_uri("font/ttf", &bytes))
     })
 }

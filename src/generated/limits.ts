@@ -28,6 +28,7 @@ export const DEFAULT_GRID_SPACING = 8;
 export const DEFAULT_LOCAL_ENDPOINT = "http://127.0.0.1:11434/v1";
 export const TEXT_SIZE_RANGE = [1.0, 512.0] as const;
 export const IMAGE_MIME_TYPES: readonly string[] = ["image/png","image/jpeg","image/webp","image/gif"];
+export const NEEDS_AI_SETTINGS_ERROR_KINDS: readonly string[] = ["authentication","invalidCredential","missingCredential","quota","modelUnavailable","invalidSettings","vaultUnavailable","spendingLimit","chatgptUsageLimit","chatgptPermission","chatgptInvalidUser"];
 export const RESERVED_ROUTE_NAMES: readonly string[] = ["assets","src","node_modules","con","prn","aux","nul","com1","com2","com3","com4","com5","com6","com7","com8","com9","lpt1","lpt2","lpt3","lpt4","lpt5","lpt6","lpt7","lpt8","lpt9"];
 export const SIZE_LABELS = [
   { min: 0, label: "Phone" },

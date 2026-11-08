@@ -36,7 +36,6 @@ mod web_codegen;
 mod website;
 mod website_import;
 
-pub use adapt::adapt_size;
 pub use attachments::{AttachmentKind, RequestAttachment};
 pub use commands::Command;
 pub use dossier::{
@@ -82,7 +81,7 @@ pub use model::{
     RequestTarget, SIZE_LABELS, Scope, SizePreset, TEMPLATE_GAP, TextStyle, Viewport, size_label,
 };
 
-pub use pointers::{PointerState, PointerStateView, broken_pointers, pointer_needs_classifying};
+pub use pointers::{PointerState, PointerStateView, pointer_needs_classifying};
 
 pub use geometry::Rgba;
 pub use request_history::{

@@ -4,7 +4,7 @@ use crate::{
     ApiKey, AuthenticationMethod, ErrorKind, MAX_OUTPUT_TOKENS, ProviderError, ProviderSettings,
     ResponseBodyKind, Result, SubmissionOutcome, TokenUsage,
     identity::prepare_identity_body,
-    settings::prepare_body,
+    request::prepare_body,
     sse::{
         MAX_EVENT_BYTES, MAX_STREAM_BYTES, ResponseStream, SseDecoder, error_code,
         event_stream_prefix,

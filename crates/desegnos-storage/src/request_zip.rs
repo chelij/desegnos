@@ -1,5 +1,4 @@
 //! Bounded, in-memory ZIP imports. Never materialize archive paths on disk.
-use base64::{Engine, engine::general_purpose::STANDARD};
 use desegnos_core::{AttachmentKind, Error, RequestAttachment, Result};
 use serde::Serialize;
 use std::io::{Read, Seek, SeekFrom};
@@ -142,8 +141,7 @@ pub fn unpack_request_zip<R: Read + Seek>(
         };
         if let Some(mime) = mime {
             attachment.kind = AttachmentKind::Image;
-            attachment.data_uri =
-                Some(format!("data:{mime};base64,{}", STANDARD.encode(bytes)).into());
+            attachment.data_uri = Some(desegnos_core::limits::image_data_uri(mime, &bytes).into());
         } else {
             let Ok(text) = String::from_utf8(bytes) else {
                 skip("invalid UTF-8 text");

@@ -52,9 +52,9 @@ fn generated_png(response: &Value) -> Result<String> {
             .write_to(&mut png, ImageFormat::Png)
             .map_err(|_| invalid_image())?;
         if png.get_ref().len() <= MAX_DOWNLOADED_IMAGE_BYTES {
-            return Ok(format!(
-                "data:image/png;base64,{}",
-                STANDARD.encode(png.get_ref())
+            return Ok(desegnos_core::limits::image_data_uri(
+                "image/png",
+                png.get_ref(),
             ));
         }
         if picture.width() <= 128 {

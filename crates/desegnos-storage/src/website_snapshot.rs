@@ -16,7 +16,7 @@ use zip::ZipArchive;
 const MAX_ENTRIES: usize = 50_000;
 const MAX_FILES: usize = 1_500;
 const MAX_FILE_BYTES: u64 = desegnos_core::limits::MAX_WEBSITE_FILE_BYTES as u64;
-const MAX_TOTAL_BYTES: u64 = crate::source_files::MAX_WEBSITE_BYTES as u64;
+const MAX_TOTAL_BYTES: u64 = desegnos_core::limits::MAX_WEBSITE_BYTES as u64;
 
 #[derive(Debug, Clone, Default)]
 pub struct WebsiteSnapshot {

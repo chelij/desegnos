@@ -40,7 +40,7 @@ fn overflowing_row_stacks_and_grows_parent_and_page() {
     let mut parent = empty_element(ElementKind::Group, rect(0.0, 0.0, 1440.0, 40.0));
     parent.children = vec![text(20.0, 0.0, 600.0, 40.0), text(700.0, 0.0, 600.0, 40.0)];
     p.pages[0].elements = vec![parent];
-    adapt_size(&mut p.pages[0], id).unwrap();
+    adapt_size(&mut p, id);
     let e = resolve_for_size(&p, &p.pages[0], id);
     assert!(e[0].children[1].rect.y >= e[0].children[0].rect.y + e[0].children[0].rect.height);
     assert!(e[0].rect.height > 40.0);
@@ -54,7 +54,7 @@ fn fitting_row_stays_horizontal() {
     let a = empty_element(ElementKind::Image, rect(0.0, 10.0, 80.0, 40.0));
     let b = empty_element(ElementKind::Image, rect(120.0, 10.0, 80.0, 40.0));
     p.pages[0].elements = vec![a, b];
-    adapt_size(&mut p.pages[0], id).unwrap();
+    adapt_size(&mut p, id);
     let e = resolve_for_size(&p, &p.pages[0], id);
     assert_eq!(e[0].rect.y, e[1].rect.y);
     assert!(e[1].rect.x >= e[0].rect.x + e[0].rect.width);
@@ -69,15 +69,15 @@ fn preserves_manual_override_on_readapt() {
     };
     e.overrides.insert(id, over.clone());
     p.pages[0].elements = vec![e];
-    adapt_size(&mut p.pages[0], id).unwrap();
-    adapt_size(&mut p.pages[0], id).unwrap();
+    adapt_size(&mut p, id);
+    adapt_size(&mut p, id);
     assert_eq!(p.pages[0].elements[0].overrides[&id], over);
 }
 #[test]
 fn editing_size_clears_automatic_and_undo_restores_it() {
     let (mut p, id) = project();
     p.pages[0].elements = vec![text(0.0, 0.0, 600.0, 100.0)];
-    adapt_size(&mut p.pages[0], id).unwrap();
+    adapt_size(&mut p, id);
     let eid = p.pages[0].elements[0].id;
     let page_id = p.pages[0].id;
     let patch =
@@ -101,12 +101,12 @@ fn editing_size_clears_automatic_and_undo_restores_it() {
 fn body_text_is_readable_and_repeated_adaptation_converges() {
     let (mut p, id) = project();
     p.pages[0].elements = vec![text(0.0, 0.0, 1000.0, 24.0)];
-    adapt_size(&mut p.pages[0], id).unwrap();
+    adapt_size(&mut p, id);
     let e = resolve_for_size(&p, &p.pages[0], id);
     assert!(e[0].style.text_style.size >= 14.0);
     assert!(e[0].rect.height > 24.0);
     let before = p.clone();
-    adapt_size(&mut p.pages[0], id).unwrap();
+    adapt_size(&mut p, id);
     assert_eq!(p, before);
 }
 #[test]
@@ -123,7 +123,7 @@ fn stack_rows_turn_into_columns_and_grids_drop_columns() {
         wrap: false,
     };
     p.pages[0].elements = vec![parent];
-    adapt_size(&mut p.pages[0], id).unwrap();
+    adapt_size(&mut p, id);
     let e = resolve_for_size(&p, &p.pages[0], id);
     assert!(matches!(
         e[0].layout,
@@ -138,7 +138,7 @@ fn stack_rows_turn_into_columns_and_grids_drop_columns() {
         gap: 20.0,
         padding: 20.0,
     };
-    adapt_size(&mut p.pages[0], id).unwrap();
+    adapt_size(&mut p, id);
     let e = resolve_for_size(&p, &p.pages[0], id);
     assert!(matches!(
         e[0].layout,
@@ -175,7 +175,7 @@ fn backgrounds_do_not_join_rows_and_images_keep_aspect_ratio() {
         empty_element(ElementKind::Image, rect(0.0, 20.0, 1000.0, 500.0)),
         text(0.0, 550.0, 800.0, 40.0),
     ];
-    adapt_size(&mut p.pages[0], id).unwrap();
+    adapt_size(&mut p, id);
     let e = resolve_for_size(&p, &p.pages[0], id);
     assert_eq!(e[0].rect.width, 390.0);
     assert_eq!(e[1].rect.width / e[1].rect.height, 2.0);
@@ -241,13 +241,13 @@ fn inline_rows_wrap_only_when_the_next_item_does_not_fit() {
             e
         })
         .collect();
-    adapt_size(&mut p.pages[0], id).unwrap();
+    adapt_size(&mut p, id);
     let phone = resolve_for_size(&p, &p.pages[0], id);
     assert_eq!(phone[0].rect.y, phone[2].rect.y);
     assert!(phone[3].rect.y >= phone[0].rect.y + 40.0);
     assert_eq!(phone[3].rect.y, phone[4].rect.y);
     p.pages[0].size_mut(id).unwrap().width = 820;
-    adapt_size(&mut p.pages[0], id).unwrap();
+    adapt_size(&mut p, id);
     let tablet = resolve_for_size(&p, &p.pages[0], id);
     assert!(tablet.iter().all(|e| e.rect.y == tablet[0].rect.y));
 }
@@ -272,7 +272,7 @@ fn repeated_tiles_use_two_phone_columns_and_four_tablet_columns() {
         })
         .collect();
     p.pages[0].elements = vec![parent];
-    adapt_size(&mut p.pages[0], id).unwrap();
+    adapt_size(&mut p, id);
     let phone = resolve_for_size(&p, &p.pages[0], id);
     let tiles = &phone[0].children;
     assert_eq!(tiles[0].rect.y, tiles[1].rect.y);
@@ -284,7 +284,7 @@ fn repeated_tiles_use_two_phone_columns_and_four_tablet_columns() {
         assert!(tile.children[0].rect.height <= tile.rect.height);
     }
     p.pages[0].size_mut(id).unwrap().width = 820;
-    adapt_size(&mut p.pages[0], id).unwrap();
+    adapt_size(&mut p, id);
     let tablet = resolve_for_size(&p, &p.pages[0], id);
     assert!(
         tablet[0]
@@ -309,7 +309,7 @@ fn wrapped_price_rows_keep_the_parent_content_inset() {
     body.text = "Every stage".into();
     card.children = vec![title, price, suffix, body];
     p.pages[0].elements = vec![card];
-    adapt_size(&mut p.pages[0], id).unwrap();
+    adapt_size(&mut p, id);
     let tree = resolve_for_size(&p, &p.pages[0], id);
     let children = &tree[0].children;
     assert_eq!(children[0].rect.x, children[1].rect.x);
@@ -338,7 +338,7 @@ fn field_labels_wrap_with_their_controls() {
     p.pages[0].elements = vec![parent];
     for width in [390, 820] {
         p.pages[0].size_mut(id).unwrap().width = width;
-        adapt_size(&mut p.pages[0], id).unwrap();
+        adapt_size(&mut p, id);
         let tree = resolve_for_size(&p, &p.pages[0], id);
         let fields = &tree[0].children;
         for i in 0..3 {
@@ -373,7 +373,7 @@ fn uneven_headliner_cards_share_a_tablet_grid_without_overlapping() {
         parent.children.push(card);
     }
     p.pages[0].elements = vec![parent];
-    adapt_size(&mut p.pages[0], id).unwrap();
+    adapt_size(&mut p, id);
     let tree = resolve_for_size(&p, &p.pages[0], id);
     let cards = &tree[0].children;
     assert_eq!(cards[0].rect.y, cards[2].rect.y);
@@ -424,7 +424,7 @@ fn letter_by_letter_headline_stays_on_one_line_at_phone() {
             e
         })
         .collect();
-    adapt_size(&mut p.pages[0], id).unwrap();
+    adapt_size(&mut p, id);
     let phone = resolve_for_size(&p, &p.pages[0], id);
     let width = f64::from(p.pages[0].size(id).unwrap().width);
     assert!(
@@ -440,4 +440,31 @@ fn letter_by_letter_headline_stays_on_one_line_at_phone() {
             .iter()
             .all(|e| e.style.text_style.size <= width * 0.16 + 0.01)
     );
+}
+
+/// Runs the AdaptSize command on fixtures that are completed first (the command validates the
+/// project) and keeps the revision, so repeated adaptation can be compared for equality.
+fn adapt_size(p: &mut Project, size_id: Uuid) {
+    let uri = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+    let (picture, uri) = Project::prepare_picture(uri, 1).unwrap();
+    p.pictures.insert(picture, uri.into());
+    fn complete(elements: &mut [Element], picture: Uuid) {
+        for e in elements {
+            if e.kind == ElementKind::Image && e.image.is_none() {
+                e.image = Some(picture);
+            }
+            if e.kind == ElementKind::Link && e.url.is_none() {
+                e.url = Some("https://example.com".into());
+            }
+            complete(&mut e.children, picture);
+        }
+    }
+    let picture = *p.pictures.keys().next().unwrap();
+    complete(&mut p.pages[0].elements, picture);
+    let page_id = p.pages[0].id;
+    let revision = p.revision;
+    *p = p
+        .apply(revision, Command::AdaptSize { page_id, size_id })
+        .unwrap();
+    p.revision = revision;
 }

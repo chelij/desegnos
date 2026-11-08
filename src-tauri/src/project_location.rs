@@ -130,24 +130,24 @@ pub fn set_show_start_page(
 pub async fn pick_project_location(
     app: AppHandle,
 ) -> Result<Option<PathBuf>, crate::native_error::NativeFailure> {
-    let result: Result<Option<PathBuf>, String> = async {
-        tauri::async_runtime::spawn_blocking(move || -> Result<Option<PathBuf>, String> {
-            let Some(picked) = crate::file_dialogs::picked(
-                app.dialog()
-                    .file()
-                    .set_title("Choose project location")
-                    .blocking_pick_folder(),
-            )?
-            else {
-                return Ok(None);
-            };
-            picked.into_path().map(Some).map_err(|e| e.to_string())
+    crate::native_error::NativeErrorKind::Command
+        .run_async(async {
+            tauri::async_runtime::spawn_blocking(move || -> Result<Option<PathBuf>, String> {
+                let Some(picked) = crate::file_dialogs::picked(
+                    app.dialog()
+                        .file()
+                        .set_title("Choose project location")
+                        .blocking_pick_folder(),
+                )?
+                else {
+                    return Ok(None);
+                };
+                picked.into_path().map(Some).map_err(|e| e.to_string())
+            })
+            .await
+            .map_err(|e| e.to_string())?
         })
         .await
-        .map_err(|e| e.to_string())?
-    }
-    .await;
-    result.map_err(crate::native_error::NativeErrorKind::Command.failure())
 }
 
 #[tauri::command]

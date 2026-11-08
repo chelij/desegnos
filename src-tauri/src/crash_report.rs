@@ -5,6 +5,7 @@
 //! A panic hook records the crash without touching the UI. Startup also notices an unclean
 //! exit through a small marker file, so a closed window is not silently forgotten.
 
+use crate::native_files::now;
 use serde::{Deserialize, Serialize};
 use std::{
     fmt::{self, Write as _},
@@ -273,12 +274,6 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
     result
 }
 
-fn now() -> String {
-    time::OffsetDateTime::now_utc()
-        .format(&time::format_description::well_known::Rfc3339)
-        .unwrap_or_else(|_| "unknown".to_owned())
-}
-
 fn capped(value: &str, limit: usize) -> String {
     if value.len() <= limit {
         return value.to_owned();
@@ -457,7 +452,7 @@ fn scrub_with(text: &str, home: Option<&str>, username: Option<&str>) -> String 
     value = redact_emails(&value);
     value = redact_bearer(&value);
     value = redact_jwts(&value);
-    value = redact_openai_keys(&value);
+    value = redact_token_prefixes(&value);
     value = redact_named_secrets(&value);
     redact_long_runs(&value)
 }
@@ -761,20 +756,23 @@ fn redact_jwts(text: &str) -> String {
     out
 }
 
-fn redact_openai_keys(text: &str) -> String {
+fn redact_token_prefixes(text: &str) -> String {
     let bytes = text.as_bytes();
     let mut out = String::with_capacity(text.len());
     let mut index = 0;
     let mut copied = 0;
     while index < text.len() {
-        if bytes[index..].starts_with(b"sk-") {
-            let mut end = index + 3;
+        if let Some(prefix) = desegnos_ai::redact::TOKEN_PREFIXES
+            .iter()
+            .find(|prefix| bytes[index..].starts_with(prefix.as_bytes()))
+        {
+            let mut end = index + prefix.len();
             while end < bytes.len()
                 && (bytes[end].is_ascii_alphanumeric() || matches!(bytes[end], b'_' | b'-'))
             {
                 end += 1;
             }
-            if end - index >= 3 + 10 {
+            if end - index >= prefix.len() + 10 {
                 out.push_str(&text[copied..index]);
                 out.push_str("<key>");
                 copied = end;
@@ -790,16 +788,12 @@ fn redact_openai_keys(text: &str) -> String {
 
 fn redact_named_secrets(text: &str) -> String {
     let mut value = text.to_owned();
-    for name in [
-        "api_key",
-        "apikey",
-        "access_token",
-        "refresh_token",
-        "password",
-        "secret",
-        "token",
-        "key",
-    ] {
+    let generic = ["secret", "token", "key"];
+    for name in desegnos_ai::redact::SECRET_NAMES
+        .into_iter()
+        .filter(|name| !matches!(*name, "bearer" | "authorization"))
+        .chain(generic)
+    {
         value = redact_parameter(&value, name);
     }
     value
@@ -1005,10 +999,12 @@ mod tests {
     fn secrets_are_removed() {
         let long = "a".repeat(64);
         let text = format!(
-            "sk-abcdefghijklmnop Bearer abcdefghijklmnop eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0In0.signature key=secretvalue {long}"
+            "sk-abcdefghijklmnop ghp_abcdefghijklmnop AIzaabcdefghijklmnop Bearer abcdefghijklmnop eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0In0.signature key=secretvalue {long}"
         );
         let scrubbed = scrub_with(&text, None, None);
         assert!(!scrubbed.contains("sk-abc"), "{scrubbed}");
+        assert!(!scrubbed.contains("ghp_"), "{scrubbed}");
+        assert!(!scrubbed.contains("AIza"), "{scrubbed}");
         assert!(!scrubbed.contains("abcdefghijklmnop"), "{scrubbed}");
         assert!(!scrubbed.contains("eyJ"), "{scrubbed}");
         assert!(!scrubbed.contains("secretvalue"), "{scrubbed}");

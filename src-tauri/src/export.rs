@@ -9,7 +9,7 @@ use crate::ai_job::{signed_out_notice, stopped_notice};
 use crate::ai_settings::SettingsState;
 use crate::chatgpt::ChatgptState;
 use crate::local_site::LocalSite;
-use crate::native_files::{LockExt, NativeResult, message};
+use crate::native_files::{LockExt, NativeResult, message, now};
 use crate::workspace::WorkspaceState;
 use desegnos_ai::{
     AuthenticationMethod, CancellationToken, ProviderId, ProviderResponse, TokenUsage,
@@ -25,7 +25,6 @@ use std::{
     fs,
     path::{Path, PathBuf},
     sync::Mutex,
-    time::{SystemTime, UNIX_EPOCH},
 };
 use tauri::{AppHandle, Manager, State};
 use tauri_plugin_dialog::DialogExt;
@@ -36,13 +35,6 @@ type SiteState<'a> = State<'a, Mutex<LocalSite>>;
 
 /// The largest export file the clash check reads back.
 use desegnos_core::limits::MAX_EXPORT_CHECK_BYTES as MAX_CHECK_BYTES;
-
-fn now() -> String {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_millis().to_string())
-        .unwrap_or_else(|_| "0".into())
-}
 
 #[derive(ts_rs::TS, Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[ts(rename = "ExportStatus")]
@@ -357,27 +349,27 @@ fn trusted_destination(path: String) -> NativeResult<PathBuf> {
 pub async fn pick_export_destination(
     app: AppHandle,
 ) -> Result<Option<PickDestination>, crate::native_error::NativeFailure> {
-    let result: NativeResult<Option<PickDestination>> = async {
-        let picked = tauri::async_runtime::spawn_blocking(move || {
-            crate::file_dialogs::picked(
-                app.dialog()
-                    .file()
-                    .set_title("Choose where to export")
-                    .blocking_pick_folder(),
-            )
+    crate::native_error::NativeErrorKind::Command
+        .run_async(async {
+            let picked = tauri::async_runtime::spawn_blocking(move || {
+                crate::file_dialogs::picked(
+                    app.dialog()
+                        .file()
+                        .set_title("Choose where to export")
+                        .blocking_pick_folder(),
+                )
+            })
+            .await
+            .map_err(message)??;
+            let Some(picked) = picked else {
+                return Ok(None);
+            };
+            let path = picked.into_path().map_err(message)?;
+            Ok(Some(PickDestination {
+                path: path.to_string_lossy().into_owned(),
+            }))
         })
         .await
-        .map_err(message)??;
-        let Some(picked) = picked else {
-            return Ok(None);
-        };
-        let path = picked.into_path().map_err(message)?;
-        Ok(Some(PickDestination {
-            path: path.to_string_lossy().into_owned(),
-        }))
-    }
-    .await;
-    result.map_err(crate::native_error::NativeErrorKind::Command.failure())
 }
 
 fn page_views(plan: &ExportPlan) -> Vec<ExportPageView> {
@@ -411,121 +403,143 @@ pub async fn prepare_export(
     preview: bool,
     build_behaviours: Option<bool>,
 ) -> Result<ExportJobView, crate::native_error::NativeFailure> {
-    let result: NativeResult<ExportJobView> = async {
-        let project = {
-            let workspace = workspace.locked();
-            let project = workspace.project()?.clone();
-            if project.id != project_id || project.revision != revision {
-                return Err("The design changed. Export the current version again.".into());
-            }
-            project
-        };
-        let page_ids = page_ids.unwrap_or_default();
-        let preview_page_id = if preview {
-            if page_ids.len() != 1 {
-                return Err("Preview export prints one boundary at a time.".into());
-            }
-            let page = project
-                .pages
-                .iter()
-                .find(|page| page.id == page_ids[0])
-                .ok_or("This boundary no longer exists.")?;
-            if !page.output.needs_ai() {
-                return Err("Preview shows pages.".into());
-            }
-            Some(page.id)
-        } else {
-            if !page_ids.is_empty() {
-                return Err("Export writes every included boundary.".into());
-            }
-            None
-        };
-        // A preview writes every included boundary, so links from the chosen page keep working.
-        // AI pages render directly here: Preview never starts paid generation.
-        let export_page_ids = match preview_page_id {
-            Some(chosen) => desegnos_core::preview_page_ids(&project, chosen),
-            None => page_ids.clone(),
-        };
-        if !preview {
-            // A full export records the version it came from, so the project needs a file first.
-            workspace.locked().head_version()?;
-        }
-        let job_id = Uuid::new_v4();
-        let project = service.locked().with_accepted(project);
-        let plan =
-            desegnos_core::plan_export(&project, &export_page_ids, job_id).map_err(message)?;
-        let preview_page = preview_page_id
-            .and_then(|id| plan.pages.iter().find(|page| page.page_id == id))
-            .map(|page| page.file.clone());
-        let (destination_path, preview_folder) = if preview {
-            let folder = {
-                let service = service.locked();
-                service.prune_previews(None);
-                service.new_preview_folder()?
+    crate::native_error::NativeErrorKind::Command
+        .run_async(async {
+            let project = {
+                let workspace = workspace.locked();
+                let project = workspace.project()?.clone();
+                if project.id != project_id || project.revision != revision {
+                    return Err("The design changed. Export the current version again.".into());
+                }
+                project
             };
-            site.locked().stop();
-            (folder.clone(), Some(folder))
-        } else {
-            let parent = destination.ok_or("Choose a destination folder before exporting.")?;
-            create_default_destination(&app, &parent)?;
-            (trusted_destination(parent)?, None)
-        };
-        let has_ai = plan.request_count > 0 && (!preview || build_behaviours.unwrap_or(false));
-        let reused_behaviour_count = desegnos_core::reused_export_behaviour_count(&project, &plan);
-        let mut view = ExportJobView {
-            job_id,
-            project_id,
-            base_revision: project.revision,
-            kind: ExportKind::Code,
-            status: JobStatus::Prepared,
-            message: if has_ai {
-                "Ready to generate behaviour. Sending uses your provider plan or credits.".into()
+            let page_ids = page_ids.unwrap_or_default();
+            let preview_page_id = if preview {
+                if page_ids.len() != 1 {
+                    return Err("Preview export prints one boundary at a time.".into());
+                }
+                let page = project
+                    .pages
+                    .iter()
+                    .find(|page| page.id == page_ids[0])
+                    .ok_or("This boundary no longer exists.")?;
+                if !page.output.needs_ai() {
+                    return Err("Preview shows pages.".into());
+                }
+                Some(page.id)
             } else {
-                "Ready to write.".into()
-            },
-            summary: String::new(),
-            estimate_usd: 0.0,
-            usage: None,
-            attempts: Vec::new(),
-            pages: page_views(&plan),
-            size_count: plan.pages.iter().map(|page| page.size_ids.len()).sum(),
-            pointer_count: plan.pointers.len() + reused_behaviour_count,
-            reused_behaviour_count,
-            warnings: plan.warnings.clone(),
-            result: None,
-            error: None,
-            provider_error: None,
-            provider: None,
-        };
-        if !has_ai {
-            let bundle =
-                desegnos_core::direct_export_bundle(&project, &export_page_ids).map_err(message)?;
-            let written = commit(
-                &workspace,
-                &site,
-                &project,
-                &bundle,
-                &destination_path,
-                preview_folder.as_deref(),
-                preview,
-                preview_page.as_deref(),
-            )?;
-            service.locked().remember(&project, &bundle)?;
-            view.status = JobStatus::Ready;
-            view.pointer_count = bundle.behaviours.len();
-            view.reused_behaviour_count = bundle.behaviours.len();
-            view.message = written.label.clone();
-            view.summary = if bundle.behaviours.is_empty() {
-                "Rendered directly from the design.".into()
-            } else {
-                String::new()
+                if !page_ids.is_empty() {
+                    return Err("Export writes every included boundary.".into());
+                }
+                None
             };
-            // Each unbuilt behaviour is named; Connect AI says how to build them.
-            view.warnings.extend(bundle.warnings.iter().cloned());
-            if plan.request_count > 0 {
-                view.warnings.push("Connect AI to build behaviours.".into());
+            // A preview writes every included boundary, so links from the chosen page keep working.
+            // AI pages render directly here: Preview never starts paid generation.
+            let export_page_ids = match preview_page_id {
+                Some(chosen) => desegnos_core::preview_page_ids(&project, chosen),
+                None => page_ids.clone(),
+            };
+            if !preview {
+                // A full export records the version it came from, so the project needs a file first.
+                workspace.locked().head_version()?;
             }
-            view.result = Some(written);
+            let job_id = Uuid::new_v4();
+            let project = service.locked().with_accepted(project);
+            let plan =
+                desegnos_core::plan_export(&project, &export_page_ids, job_id).map_err(message)?;
+            let preview_page = preview_page_id
+                .and_then(|id| plan.pages.iter().find(|page| page.page_id == id))
+                .map(|page| page.file.clone());
+            let (destination_path, preview_folder) = if preview {
+                let folder = {
+                    let service = service.locked();
+                    service.prune_previews(None);
+                    service.new_preview_folder()?
+                };
+                site.locked().stop();
+                (folder.clone(), Some(folder))
+            } else {
+                let parent = destination.ok_or("Choose a destination folder before exporting.")?;
+                create_default_destination(&app, &parent)?;
+                (trusted_destination(parent)?, None)
+            };
+            let has_ai = plan.request_count > 0 && (!preview || build_behaviours.unwrap_or(false));
+            let reused_behaviour_count =
+                desegnos_core::reused_export_behaviour_count(&project, &plan);
+            let mut view = ExportJobView {
+                job_id,
+                project_id,
+                base_revision: project.revision,
+                kind: ExportKind::Code,
+                status: JobStatus::Prepared,
+                message: if has_ai {
+                    "Ready to generate behaviour. Sending uses your provider plan or credits."
+                        .into()
+                } else {
+                    "Ready to write.".into()
+                },
+                summary: String::new(),
+                estimate_usd: 0.0,
+                usage: None,
+                attempts: Vec::new(),
+                pages: page_views(&plan),
+                size_count: plan.pages.iter().map(|page| page.size_ids.len()).sum(),
+                pointer_count: plan.pointers.len() + reused_behaviour_count,
+                reused_behaviour_count,
+                warnings: plan.warnings.clone(),
+                result: None,
+                error: None,
+                provider_error: None,
+                provider: None,
+            };
+            if !has_ai {
+                let bundle = desegnos_core::direct_export_bundle(&project, &export_page_ids)
+                    .map_err(message)?;
+                let written = commit(
+                    &workspace,
+                    &site,
+                    &project,
+                    &bundle,
+                    &destination_path,
+                    preview_folder.as_deref(),
+                    preview,
+                    preview_page.as_deref(),
+                )?;
+                service.locked().remember(&project, &bundle)?;
+                view.status = JobStatus::Ready;
+                view.pointer_count = bundle.behaviours.len();
+                view.reused_behaviour_count = bundle.behaviours.len();
+                view.message = written.label.clone();
+                view.summary = if bundle.behaviours.is_empty() {
+                    "Rendered directly from the design.".into()
+                } else {
+                    String::new()
+                };
+                // Each unbuilt behaviour is named; Connect AI says how to build them.
+                view.warnings.extend(bundle.warnings.iter().cloned());
+                if plan.request_count > 0 {
+                    view.warnings.push("Connect AI to build behaviours.".into());
+                }
+                view.result = Some(written);
+                let mut service = service.locked();
+                service.jobs.insert(
+                    job_id,
+                    ExportJob {
+                        view: view.clone(),
+                        plan,
+                        destination: Some(destination_path),
+                        preview,
+                        preview_folder,
+                        connection: None,
+                        mode: project.generation_mode,
+                        cancellation: CancellationToken::new(),
+                    },
+                );
+                return Ok(view);
+            }
+            let connection = bound_connection(&ai, &chatgpt).await?;
+            let snapshot = desegnos_core::plan_snapshot(&project, &plan);
+            view.estimate_usd = estimate_export(&ai, &plan, &snapshot, project.generation_mode)?;
             let mut service = service.locked();
             service.jobs.insert(
                 job_id,
@@ -535,34 +549,14 @@ pub async fn prepare_export(
                     destination: Some(destination_path),
                     preview,
                     preview_folder,
-                    connection: None,
+                    connection: Some(connection),
                     mode: project.generation_mode,
                     cancellation: CancellationToken::new(),
                 },
             );
-            return Ok(view);
-        }
-        let connection = bound_connection(&ai, &chatgpt).await?;
-        let snapshot = desegnos_core::plan_snapshot(&project, &plan);
-        view.estimate_usd = estimate_export(&ai, &plan, &snapshot, project.generation_mode)?;
-        let mut service = service.locked();
-        service.jobs.insert(
-            job_id,
-            ExportJob {
-                view: view.clone(),
-                plan,
-                destination: Some(destination_path),
-                preview,
-                preview_folder,
-                connection: Some(connection),
-                mode: project.generation_mode,
-                cancellation: CancellationToken::new(),
-            },
-        );
-        Ok(view)
-    }
-    .await;
-    result.map_err(crate::native_error::NativeErrorKind::Command.failure())
+            Ok(view)
+        })
+        .await
 }
 
 /// The selected AI connection, bound to the signed-in ChatGPT account when it uses one.
@@ -701,88 +695,88 @@ pub async fn start_export(
     site: SiteState<'_>,
     job_id: Uuid,
 ) -> Result<ExportJobView, crate::native_error::NativeFailure> {
-    let result: NativeResult<ExportJobView> = async {
-        let (plan, connection, mode, cancellation) = {
-            let mut service = service.locked();
-            let service = &mut *service;
-            let job = service
-                .jobs
-                .get_mut(&job_id)
-                .ok_or("This export is no longer available. Prepare it again.")?;
-            if !matches!(
-                job.view.status,
-                JobStatus::Prepared | JobStatus::Failed | JobStatus::Cancelled
-            ) {
-                return Err("Only a prepared or failed export can be sent.".into());
-            }
-            let connection = job
-                .connection
-                .clone()
-                .ok_or("This export has nothing to send.")?;
-            job.view.status = JobStatus::Sending;
-            job.view.error = None;
-            job.view.provider_error = None;
-            job.view.provider = Some(connection.provider);
-            job.view.message = "Exporting…".into();
-            job.cancellation = service.active.start(job_id, 0);
-            (
-                job.plan.clone(),
-                connection,
-                job.mode,
-                job.cancellation.clone(),
-            )
-        };
-        let mut provider_error = None;
-        let result = async {
-            let access = resolve(&ai, &chatgpt, &connection, &cancellation)
-                .await
-                .map_err(|failure| {
-                    provider_error = failure.provider_error.as_deref().cloned();
-                    failure.message
-                })?;
-            let snapshot = {
-                let workspace = workspace.locked();
-                let project = workspace.project()?;
-                if project.id != plan.project_id || project.revision != plan.base_revision {
-                    return Err("The design changed. Prepare the export again.".into());
+    crate::native_error::NativeErrorKind::Command
+        .run_async(async {
+            let (plan, connection, mode, cancellation) = {
+                let mut service = service.locked();
+                let service = &mut *service;
+                let job = service
+                    .jobs
+                    .get_mut(&job_id)
+                    .ok_or("This export is no longer available. Prepare it again.")?;
+                if !matches!(
+                    job.view.status,
+                    JobStatus::Prepared | JobStatus::Failed | JobStatus::Cancelled
+                ) {
+                    return Err("Only a prepared or failed export can be sent.".into());
                 }
-                desegnos_core::plan_snapshot(project, &plan)
-            };
-            access
-                .check(&snapshot, mode, &plan.schema)
-                .map_err(message)?;
-            access
-                .client
-                .generate(
-                    desegnos_ai::GenerationRequest {
-                        authentication: access.authentication,
-                        snapshot: &snapshot,
-                        mode,
-                        schema: &plan.schema,
-                        settings: &access.settings,
-                        key: &access.key,
-                        cancellation: &cancellation,
-                    },
-                    |_progress| {},
+                let connection = job
+                    .connection
+                    .clone()
+                    .ok_or("This export has nothing to send.")?;
+                job.view.status = JobStatus::Sending;
+                job.view.error = None;
+                job.view.provider_error = None;
+                job.view.provider = Some(connection.provider);
+                job.view.message = "Exporting…".into();
+                job.cancellation = service.active.start(job_id, 0);
+                (
+                    job.plan.clone(),
+                    connection,
+                    job.mode,
+                    job.cancellation.clone(),
                 )
-                .await
-                .map_err(|error| {
-                    provider_error = Some(error.clone());
-                    message(error)
-                })
-        }
-        .await;
-        if let Some(error) = provider_error
-            && let Some(job) = service.locked().jobs.get_mut(&job_id)
-        {
-            job.view.provider_error = Some(error);
-        }
-        let finished = finish(&workspace, &service, &site, job_id, plan, result);
-        service.locked().active.remove(job_id);
-        finished
-    }
-    .await;
-    result.map_err(crate::native_error::NativeErrorKind::Command.failure())
+            };
+            let mut provider_error = None;
+            let result = async {
+                let access = resolve(&ai, &chatgpt, &connection, &cancellation)
+                    .await
+                    .map_err(|failure| {
+                        provider_error = failure.provider_error.as_deref().cloned();
+                        failure.message
+                    })?;
+                let snapshot = {
+                    let workspace = workspace.locked();
+                    let project = workspace.project()?;
+                    if project.id != plan.project_id || project.revision != plan.base_revision {
+                        return Err("The design changed. Prepare the export again.".into());
+                    }
+                    desegnos_core::plan_snapshot(project, &plan)
+                };
+                access
+                    .check(&snapshot, mode, &plan.schema)
+                    .map_err(message)?;
+                access
+                    .client
+                    .generate(
+                        desegnos_ai::GenerationRequest {
+                            authentication: access.authentication,
+                            snapshot: &snapshot,
+                            mode,
+                            schema: &plan.schema,
+                            settings: &access.settings,
+                            key: &access.key,
+                            cancellation: &cancellation,
+                        },
+                        |_progress| {},
+                    )
+                    .await
+                    .map_err(|error| {
+                        provider_error = Some(error.clone());
+                        message(error)
+                    })
+            }
+            .await;
+            if let Some(error) = provider_error
+                && let Some(job) = service.locked().jobs.get_mut(&job_id)
+            {
+                job.view.provider_error = Some(error);
+            }
+            let finished = finish(&workspace, &service, &site, job_id, plan, result);
+            service.locked().active.remove(job_id);
+            finished
+        })
+        .await
 }
 
 fn finish(
@@ -1078,74 +1072,75 @@ pub async fn keep_pointer_code(
     project_id: Uuid,
     pointer_id: Uuid,
 ) -> Result<ExportJobView, crate::native_error::NativeFailure> {
-    let result: NativeResult<ExportJobView> = async {
-        let project = {
-            let workspace = workspace.locked();
-            let project = workspace.project()?.clone();
-            if project.id != project_id {
-                return Err("The active project changed.".into());
-            }
-            project
-        };
-        let record = project
-            .last_export
-            .clone()
-            .ok_or("Export once before rewriting a pointer comment.")?;
-        let files = read_export_folder(&PathBuf::from(&record.destination), MAX_CHECK_BYTES)
-            .map_err(message)?;
-        let marked = marked_pointer_code(&files, pointer_id);
-        if marked.trim().is_empty() {
-            return Err(
+    crate::native_error::NativeErrorKind::Command
+        .run_async(async {
+            let project = {
+                let workspace = workspace.locked();
+                let project = workspace.project()?.clone();
+                if project.id != project_id {
+                    return Err("The active project changed.".into());
+                }
+                project
+            };
+            let record = project
+                .last_export
+                .clone()
+                .ok_or("Export once before rewriting a pointer comment.")?;
+            let files = read_export_folder(&PathBuf::from(&record.destination), MAX_CHECK_BYTES)
+                .map_err(message)?;
+            let marked = marked_pointer_code(&files, pointer_id);
+            if marked.trim().is_empty() {
+                return Err(
                 "That pointer's code is no longer in the export folder. Keep the comment instead."
                     .into(),
             );
-        }
-        let job_id = Uuid::new_v4();
-        let plan =
-            desegnos_core::plan_comment(&project, pointer_id, &marked, job_id).map_err(message)?;
-        let connection = bound_connection(&ai, &chatgpt).await?;
-        let snapshot = desegnos_core::plan_snapshot(&project, &plan);
-        let estimate_usd = estimate_export(&ai, &plan, &snapshot, project.generation_mode)?;
-        let view = ExportJobView {
-            job_id,
-            project_id,
-            base_revision: project.revision,
-            kind: ExportKind::Comment,
-            status: JobStatus::Prepared,
-            message: "Ready to rewrite the comment. Sending uses your provider plan or credits."
-                .into(),
-            summary: String::new(),
-            estimate_usd,
-            usage: None,
-            attempts: Vec::new(),
-            pages: Vec::new(),
-            size_count: 0,
-            pointer_count: 1,
-            reused_behaviour_count: 0,
-            warnings: Vec::new(),
-            result: None,
-            error: None,
-            provider_error: None,
-            provider: None,
-        };
-        let mut service = service.locked();
-        service.jobs.insert(
-            job_id,
-            ExportJob {
-                view: view.clone(),
-                plan,
-                destination: None,
-                preview: false,
-                preview_folder: None,
-                connection: Some(connection),
-                mode: project.generation_mode,
-                cancellation: CancellationToken::new(),
-            },
-        );
-        Ok(view)
-    }
-    .await;
-    result.map_err(crate::native_error::NativeErrorKind::Command.failure())
+            }
+            let job_id = Uuid::new_v4();
+            let plan = desegnos_core::plan_comment(&project, pointer_id, &marked, job_id)
+                .map_err(message)?;
+            let connection = bound_connection(&ai, &chatgpt).await?;
+            let snapshot = desegnos_core::plan_snapshot(&project, &plan);
+            let estimate_usd = estimate_export(&ai, &plan, &snapshot, project.generation_mode)?;
+            let view = ExportJobView {
+                job_id,
+                project_id,
+                base_revision: project.revision,
+                kind: ExportKind::Comment,
+                status: JobStatus::Prepared,
+                message:
+                    "Ready to rewrite the comment. Sending uses your provider plan or credits."
+                        .into(),
+                summary: String::new(),
+                estimate_usd,
+                usage: None,
+                attempts: Vec::new(),
+                pages: Vec::new(),
+                size_count: 0,
+                pointer_count: 1,
+                reused_behaviour_count: 0,
+                warnings: Vec::new(),
+                result: None,
+                error: None,
+                provider_error: None,
+                provider: None,
+            };
+            let mut service = service.locked();
+            service.jobs.insert(
+                job_id,
+                ExportJob {
+                    view: view.clone(),
+                    plan,
+                    destination: None,
+                    preview: false,
+                    preview_folder: None,
+                    connection: Some(connection),
+                    mode: project.generation_mode,
+                    cancellation: CancellationToken::new(),
+                },
+            );
+            Ok(view)
+        })
+        .await
 }
 
 #[tauri::command]

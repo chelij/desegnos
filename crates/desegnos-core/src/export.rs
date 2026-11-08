@@ -91,9 +91,7 @@ pub fn behaviour_fingerprint(project: &Project, pointer: &Pointer) -> String {
 
 fn cached_behaviour<'a>(project: &'a Project, pointer: &Pointer) -> Option<&'a ExportBehaviour> {
     // Keep-comment explicitly forgets the pointer record and must also invalidate reuse.
-    if pointer.kind != crate::model::PointerKind::Change
-        || crate::pointers::pointer_is_broken(project, pointer)
-    {
+    if pointer.kind != crate::model::PointerKind::Change || pointer.is_broken(project) {
         return None;
     }
     let record = project.last_export.as_ref()?;
@@ -414,7 +412,7 @@ pub fn plan_export(project: &Project, page_ids: &[Uuid], job_id: Uuid) -> Result
             collect_pointer_reference(project, pointer, &mut references_json, &mut allowed_urls);
             if pointer.kind != crate::model::PointerKind::Change
                 || pointer.comment.trim().is_empty()
-                || crate::pointers::pointer_is_broken(project, pointer)
+                || pointer.is_broken(project)
                 || cached_behaviour(project, pointer).is_some()
             {
                 continue;

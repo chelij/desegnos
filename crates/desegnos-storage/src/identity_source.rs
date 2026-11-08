@@ -668,14 +668,14 @@ fn prepare_photo(name: &str, bytes: &[u8]) -> std::result::Result<IdentitySource
         photo: ProjectPhoto {
             id: stable_id(&format!("photo:{sha256}")),
             name: display_name(name),
-            data_uri: format!("data:image/jpeg;base64,{}", STANDARD.encode(&bytes)).into(),
+            data_uri: desegnos_core::limits::image_data_uri("image/jpeg", &bytes).into(),
             sha256,
             width,
             height,
             description: String::new(),
             source_pages: vec![],
         },
-        thumbnail: format!("data:image/jpeg;base64,{}", STANDARD.encode(&thumbnail)),
+        thumbnail: desegnos_core::limits::image_data_uri("image/jpeg", &thumbnail),
     })
 }
 
@@ -1038,7 +1038,7 @@ fn choose_assets(candidates: &[Candidate]) -> BTreeMap<String, IdentitySourceAss
         else {
             continue;
         };
-        let data_uri = format!("data:{mime};base64,{}", STANDARD.encode(&candidate.bytes));
+        let data_uri = desegnos_core::limits::image_data_uri(mime, &candidate.bytes);
         if uri_bytes + data_uri.len() > MAX_ASSET_URI_BYTES {
             continue;
         }
@@ -1087,7 +1087,7 @@ fn checked_asset(candidate: &Candidate) -> Option<desegnos_core::IdentityAsset> 
         id: stable_id(&format!("asset:{sha256}")),
         name: candidate.name.clone(),
         mime: mime.into(),
-        data_uri: format!("data:{mime};base64,{}", STANDARD.encode(&candidate.bytes)),
+        data_uri: desegnos_core::limits::image_data_uri(mime, &candidate.bytes),
         sha256,
     };
     asset.validate().ok()?;

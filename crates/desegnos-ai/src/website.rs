@@ -110,10 +110,9 @@ fn enqueue_pages(
     queue.extend(candidates);
 }
 
-const MAX_SNAPSHOT_PAGE_BYTES: usize = 1024 * 1024;
-const MAX_DISCOVERED_PAGES: usize = 256;
-const MAX_SNAPSHOT_ASSETS: usize = 240;
-const MAX_SNAPSHOT_TOTAL_BYTES: usize = 96 * 1024 * 1024;
+use desegnos_core::limits::{
+    MAX_DISCOVERED_PAGES, MAX_SNAPSHOT_ASSETS, MAX_SNAPSHOT_PAGE_BYTES, MAX_SNAPSHOT_TOTAL_BYTES,
+};
 
 const ASSET_MIMES: &[&str] = &[
     "text/css",

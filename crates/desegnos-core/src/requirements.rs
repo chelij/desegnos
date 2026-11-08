@@ -361,7 +361,7 @@ impl Project {
         let described: Vec<&crate::model::PendingRequest> = self
             .requests
             .iter()
-            .filter(|request| !request.text.trim().is_empty())
+            .filter(|request| request.is_described())
             .collect();
         ensure(
             !described.is_empty(),
@@ -451,7 +451,7 @@ impl Project {
         let page_ids: BTreeSet<Uuid> = targets.iter().map(|(page, _)| page.id).collect();
         self.requests
             .iter()
-            .filter(|request| !request.text.trim().is_empty())
+            .filter(|request| request.is_described())
             .filter(|request| {
                 request.targets.is_empty()
                     || request.targets.iter().any(|target| match target {

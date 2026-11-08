@@ -156,6 +156,18 @@ impl ProviderId {
     pub fn service(self) -> &'static str {
         self.spec().service
     }
+    /// Runs on the user's machine, so a key is optional.
+    pub fn is_local(self) -> bool {
+        self.spec().local
+    }
+    /// ChatGPT account sign-in is offered.
+    pub fn supports_sign_in(self) -> bool {
+        self.spec().sign_in
+    }
+    /// The OpenAI Image API is available.
+    pub fn supports_image_api(self) -> bool {
+        self.spec().image_api
+    }
     pub fn capabilities(self) -> GenerationCapabilities {
         GenerationCapabilities {
             web_search: self.spec().web_search,
@@ -305,7 +317,7 @@ pub fn provider_catalogue() -> Vec<ProviderDescriptor> {
         .map(|id| ProviderDescriptor {
             id: *id,
             name: id.spec().name,
-            sign_in_supported: id.spec().sign_in,
+            sign_in_supported: id.supports_sign_in(),
             capabilities: id.capabilities(),
         })
         .collect()
@@ -316,9 +328,7 @@ pub fn models_need_key(
     local_authentication: bool,
     error: &ProviderError,
 ) -> bool {
-    provider == ProviderId::Local
-        && !local_authentication
-        && error.kind == ErrorKind::Authentication
+    provider.is_local() && !local_authentication && error.kind == ErrorKind::Authentication
 }
 
 pub fn models_error(
@@ -723,7 +733,7 @@ impl KeyAdapter {
         progress: &(dyn Fn(ProviderProgress) + Send + Sync),
     ) -> Result<ProviderResponse> {
         self.estimate(r.authentication, r.snapshot, r.mode, r.schema, r.settings)?;
-        let body = crate::settings::request_content(r.snapshot, r.mode, r.schema)?;
+        let body = crate::request::request_content(r.snapshot, r.mode, r.schema)?;
         self.submit(body, r.settings, r.key, r.cancellation, progress)
             .await
     }
@@ -753,8 +763,8 @@ impl KeyAdapter {
         settings: &ProviderSettings,
     ) -> Result<CostEstimate> {
         self.id.validate(settings, auth)?;
-        let (counted, reserve) = crate::settings::without_previews(snapshot);
-        let body = crate::settings::request_content(&counted, mode, schema)?;
+        let (counted, reserve) = crate::request::without_previews(snapshot);
+        let body = crate::request::request_content(&counted, mode, schema)?;
         foreign_estimate(self.id, &body, settings, reserve, snapshot.images.len())
     }
     async fn list_models(
@@ -1021,9 +1031,8 @@ fn chat_body(
     Ok(body)
 }
 fn image_data(uri: &str) -> Result<(&str, &str)> {
-    uri.strip_prefix("data:")
-        .and_then(|uri| uri.split_once(";base64,"))
-        .ok_or_else(|| ProviderError::before(ErrorKind::InvalidRequirements))
+    desegnos_core::limits::split_image_data_uri(uri)
+        .map_err(|_| ProviderError::before(ErrorKind::InvalidRequirements))
 }
 fn content_parts(
     request: &RequestContent<'_>,
@@ -1703,7 +1712,7 @@ mod tests {
             let snapshot = crate::tests::snapshot(GenerationMode::Strict);
             let schema = desegnos_core::candidate_schema();
             let mut packet =
-                crate::settings::request_content(&snapshot, GenerationMode::Strict, &schema)
+                crate::request::request_content(&snapshot, GenerationMode::Strict, &schema)
                     .unwrap();
             packet.web_search = false;
             packet.parts.push(RequestPart::Image {
@@ -1721,7 +1730,7 @@ mod tests {
             };
             let adapter = KeyAdapter::build(provider, &endpoint, false).unwrap();
             let mut sent =
-                crate::settings::request_content(&snapshot, GenerationMode::Strict, &schema)
+                crate::request::request_content(&snapshot, GenerationMode::Strict, &schema)
                     .unwrap();
             sent.web_search = false;
             sent.parts.push(RequestPart::Image {
@@ -2101,7 +2110,7 @@ mod tests {
         let schema = desegnos_core::candidate_schema();
         let image_uri = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
         let mut packet =
-            crate::settings::request_content(&snapshot, GenerationMode::Strict, &schema).unwrap();
+            crate::request::request_content(&snapshot, GenerationMode::Strict, &schema).unwrap();
         packet.parts.push(RequestPart::Image {
             uri: image_uri,
             detail: "low",

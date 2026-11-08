@@ -1,3 +1,4 @@
+use crate::native_files::NativeResult;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
@@ -23,6 +24,14 @@ impl NativeErrorKind {
         body: impl FnOnce() -> Result<T, E>,
     ) -> Result<T, NativeFailure> {
         body().map_err(self.failure())
+    }
+
+    /// Async twin of `run` for commands whose body awaits.
+    pub async fn run_async<T>(
+        self,
+        body: impl std::future::Future<Output = NativeResult<T>>,
+    ) -> Result<T, NativeFailure> {
+        body.await.map_err(self.failure())
     }
 }
 

@@ -10,6 +10,13 @@ use std::{
 
 pub type NativeResult<T> = Result<T, String>;
 
+/// The one format for persisted timestamps.
+pub fn now() -> String {
+    time::OffsetDateTime::now_utc()
+        .format(&time::format_description::well_known::Rfc3339)
+        .expect("UTC timestamps fit RFC3339")
+}
+
 /// The size limit of a small settings or list record, for reading and writing alike.
 pub const SMALL_RECORD_BYTES: u64 = 1024 * 1024;
 

@@ -190,7 +190,7 @@ pub fn join_project(parts: &BTreeMap<String, PartData>) -> Result<Project> {
             )?;
             pictures.insert(
                 id.to_string(),
-                Value::String(format!("data:{mime};base64,{}", STANDARD.encode(bytes))),
+                Value::String(desegnos_core::limits::image_data_uri(&mime, &bytes)),
             );
         }
     }

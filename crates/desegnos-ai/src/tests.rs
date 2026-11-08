@@ -2459,7 +2459,7 @@ async fn chatgpt_preflight_preserves_scope_and_reserves_model_output_capacity() 
         spending_limit_usd: 10_000.0,
         ..ProviderSettings::default()
     };
-    let plan_body = crate::settings::prepare_body(
+    let plan_body = crate::request::prepare_body(
         AuthenticationMethod::Chatgpt,
         &frozen,
         GenerationMode::Strict,
@@ -3547,7 +3547,7 @@ fn a_picture_attachment_is_frozen_as_a_preview_and_sent_to_the_provider() {
     assert_eq!(frozen.images[0].attachment_id, "logo1");
     frozen.validate_current(&project).unwrap();
     let body: Value = serde_json::from_slice(
-        &crate::settings::prepare_body(
+        &crate::request::prepare_body(
             AuthenticationMethod::ApiKey,
             &frozen,
             project.generation_mode,
@@ -3582,7 +3582,7 @@ fn attachment_previews_are_sent_as_low_detail_images_and_estimated_per_image() {
         transparent_percent: None,
     }];
     let body: Value = serde_json::from_slice(
-        &crate::settings::prepare_body(
+        &crate::request::prepare_body(
             AuthenticationMethod::ApiKey,
             &frozen,
             GenerationMode::Strict,
@@ -3773,7 +3773,7 @@ fn image_credentials_prefer_main_then_confirmed_image_key() {
 #[test]
 fn chatgpt_response_configuration_strips_builtin_images_but_keeps_functions() {
     let mut body = json!({"tools":[{"type":"image_generation"}, {"type":"function","name":"request_image"}], "tool_choice":{"type":"image_generation"}});
-    crate::settings::configure_response_body(
+    crate::request::configure_response_body(
         &mut body,
         AuthenticationMethod::Chatgpt,
         &ProviderSettings::default(),
@@ -4034,7 +4034,7 @@ fn deepseek_requests_use_system_role_and_effort_names() {
     }
     let snapshot = snapshot(GenerationMode::Strict);
     let mut packet =
-        crate::settings::request_content(&snapshot, GenerationMode::Strict, &schema()).unwrap();
+        crate::request::request_content(&snapshot, GenerationMode::Strict, &schema()).unwrap();
     packet.web_search = false;
     let settings = ProviderSettings {
         reasoning_effort: ReasoningEffort::Medium,

@@ -129,6 +129,10 @@ fn limits() -> String {
         serde_json::to_string(IMAGE_MIME_TYPES).unwrap()
     ));
     text.push_str(&format!(
+        "export const NEEDS_AI_SETTINGS_ERROR_KINDS: readonly string[] = {};\n",
+        serde_json::to_string(&desegnos_ai::ErrorKind::NEEDS_AI_SETTINGS).unwrap()
+    ));
+    text.push_str(&format!(
         "export const RESERVED_ROUTE_NAMES: readonly string[] = {};\n",
         serde_json::to_string(RESERVED_ROUTE_NAMES).unwrap()
     ));
