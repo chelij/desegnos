@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { createWriteStream } from 'node:fs';
-import { access, chmod, mkdir, mkdtemp, readFile, readlink, realpath, rm, stat, writeFile } from 'node:fs/promises';
+import { access, chmod, mkdir, mkdtemp, readdir, readFile, readlink, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { createConnection } from 'node:net';
 import { isAbsolute, join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -23,6 +23,19 @@ async function command(program, args, { input, timeout = 5000 } = {}) {
   const timer = setTimeout(() => child.kill('SIGKILL'), timeout);
   try { assert.equal(await exit(child), 0, `${program} failed: ${stderr}`); return stdout; }
   finally { clearTimeout(timer); }
+}
+
+async function socketOwner(path) {
+  const inodes = new Set((await readFile('/proc/net/unix', 'utf8')).split('\n').slice(1)
+    .map(line => line.trim().split(/\s+/)).filter(fields => fields[7] === path || fields[7] === `@${path}`).map(fields => `socket:[${fields[6]}]`));
+  for (const pid of (await readdir('/proc')).filter(name => /^\d+$/.test(name))) {
+    let fds;
+    try { fds = await readdir(`/proc/${pid}/fd`); } catch { continue; }
+    for (const fd of fds) {
+      try { if (inodes.has(await readlink(`/proc/${pid}/fd/${fd}`))) return Number(pid); } catch { /* the descriptor closed */ }
+    }
+  }
+  return null;
 }
 
 async function guardLockOwners(information) {
@@ -76,14 +89,14 @@ async function isolated() {
   const ownership = { display: process.env.DISPLAY, serverPid: null, socketPath, lockPath, guardLockPath, displayResources, ownershipVerified: false };
   await writeFile(join(scratch, 'display.json'), JSON.stringify(ownership));
   assert.ok(displayResources[socketPath].exists, 'The owned X socket is missing');
+  // The server is whichever process holds the display's listening socket; lock files are optional
+  // (a guarded Xvfb may run with -nolock), but any that exist must name the same process.
+  const serverPid = await socketOwner(socketPath);
+  assert.ok(serverPid, 'No process of this user owns the isolated X socket');
   const guarded = Boolean(guardLockPath && displayResources[guardLockPath].exists);
   ownership.guarded = guarded;
-  const owners = guarded ? await guardLockOwners(displayResources[guardLockPath]) : [];
-  if (guarded) assert.equal(owners.length, 1, 'The private Xvfb guard lock must have one verified holder');
-  else assert.ok(displayResources[lockPath].exists, 'The owned Xvfb server lock is missing');
-  const serverPid = displayResources[lockPath].exists ? Number((await readFile(lockPath, 'utf8')).trim()) : owners[0];
-  assert.ok(Number.isInteger(serverPid) && serverPid > 0);
-  if (guarded) assert.equal(owners[0], serverPid, 'Traditional X lock and private guard lock identify different processes');
+  if (guarded) assert.deepEqual(await guardLockOwners(displayResources[guardLockPath]), [serverPid], 'The private Xvfb guard lock is not held by the X server');
+  if (displayResources[lockPath].exists) assert.equal(Number((await readFile(lockPath, 'utf8')).trim()), serverPid, 'The X lock file names another process');
   assert.equal((await stat(`/proc/${serverPid}`)).uid, process.getuid(), 'Xvfb belongs to another user');
   const serverEnvironment = (await readFile(`/proc/${serverPid}/environ`, 'utf8')).split('\0');
   const serverArguments = (await readFile(`/proc/${serverPid}/cmdline`, 'utf8')).split('\0');
