@@ -1,11 +1,13 @@
-import { linkedName } from './links';
+import { linkedName } from '../projectCanvas/links';
 import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
+import { onEscape } from '../escape';
 import { Icon, type IconName } from '../icons';
 import type { Element, ElementKind, ElementPatch, Project } from '../types';
 import { kindFields } from '../types';
-import { elementLabel, holdsChildren } from './elementGeometry';
-import { nestedLayerIds } from './links';
-import { behaviourLayerKeys } from './behaviours';
+import { elementLabel } from '../projectCanvas/elementFacts';
+import { holdsChildren } from '../projectCanvas/elementGeometry';
+import { nestedLayerIds } from '../projectCanvas/links';
+import { behaviourLayerKeys } from '../projectCanvas/behaviours';
 import { MAX_NAME_CHARS } from '../generated/limits';
 
 const KIND_ICONS: Record<ElementKind, IconName> = {
@@ -139,7 +141,7 @@ const OVERSCAN = 4;
 export type FlatLayer = { element: Element; parentId: string | null; index: number; depth: number; open: boolean };
 
 /** Display order is reversed within each sibling list, while drop indices retain model order. */
-export function flattenLayers(elements: Element[], sizeId: string, collapsed: ReadonlySet<string>, keep: ReadonlySet<string> | null): FlatLayer[] {
+function flattenLayers(elements: Element[], sizeId: string, collapsed: ReadonlySet<string>, keep: ReadonlySet<string> | null): FlatLayer[] {
   const rows: FlatLayer[] = [];
   const visit = (children: Element[], parentId: string | null, depth: number) => {
     for (let index = children.length - 1; index >= 0; index--) {
@@ -232,6 +234,7 @@ export function ElementLayers({ project, pageId, sizeId, elements, selection, se
     const originX = event.clientX;
     const originY = event.clientY;
     let dragging = false;
+    let stopEscape = () => {};
     const capture = (active: boolean) => {
       try {
         if (active) node.setPointerCapture(pointerId);
@@ -242,7 +245,7 @@ export function ElementLayers({ project, pageId, sizeId, elements, selection, se
       window.removeEventListener('pointermove', handleMove);
       window.removeEventListener('pointerup', handleUp);
       window.removeEventListener('pointercancel', handleCancel);
-      window.removeEventListener('keydown', handleKey, true);
+      stopEscape();
       capture(false);
       endGesture.current = null;
       setDraggedId(null);
@@ -253,6 +256,7 @@ export function ElementLayers({ project, pageId, sizeId, elements, selection, se
       if (!dragging) {
         if (Math.hypot(moveEvent.clientX - originX, moveEvent.clientY - originY) < DRAG_THRESHOLD) return;
         dragging = true;
+        stopEscape = onEscape(finish);
         capture(true);
         setDraggedId(source.id);
         window.getSelection()?.removeAllRanges();
@@ -267,16 +271,10 @@ export function ElementLayers({ project, pageId, sizeId, elements, selection, se
       if (target) commitGesture(source, target);
     };
     const handleCancel = (cancelEvent: PointerEvent) => { if (cancelEvent.pointerId === pointerId) finish(); };
-    const handleKey = (keyEvent: KeyboardEvent) => {
-      if (keyEvent.key !== 'Escape' || !dragging) return;
-      keyEvent.preventDefault(); keyEvent.stopPropagation();
-      finish();
-    };
     endGesture.current = finish;
     window.addEventListener('pointermove', handleMove);
     window.addEventListener('pointerup', handleUp);
     window.addEventListener('pointercancel', handleCancel);
-    window.addEventListener('keydown', handleKey, true);
   }
   const [viewport, setViewport] = useState({ top: 0, height: 280 });
   useLayoutEffect(() => {

@@ -1,9 +1,8 @@
-import type { CanvasPlacement, Element } from './generated/types';
+import type { Element } from './generated/types';
 
 export * from './generated/types';
 
 export type ElementKind = Element['kind'];
-export type Placements = CanvasPlacement[];
 export type Viewport = { width: number; height: number };
 
 type WithoutKind<E> = E extends unknown ? Omit<E, 'kind'> : never;

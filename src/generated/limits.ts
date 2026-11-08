@@ -52,11 +52,11 @@ export const ELEMENT_DEFAULTS = {
   code: { label: "Code", name: "Code", text: "", width: 360, height: 160 },
 } as const;
 export const TEMPLATE_DEFAULTS = {
-  "blank": { output: "webpage", kind: "page", width: 1440, height: 900 },
-  "website": { output: "webpage", kind: "page", width: 1440, height: 900 },
-  "appScreen": { output: "webpage", kind: "screen", width: 390, height: 844 },
-  "slideDeck": { output: "slide", kind: "screen", width: 1920, height: 1080 },
-  "socialImage": { output: "image", kind: "screen", width: 1080, height: 1080 },
+  "blank": { output: "webpage", kind: "page", width: 1440, height: 900, page: { width: 1440, height: 900, kind: "page" } },
+  "website": { output: "webpage", kind: "page", width: 1440, height: 900, page: { width: 1440, height: 900, kind: "page" } },
+  "appScreen": { output: "webpage", kind: "screen", width: 390, height: 844, page: { width: 390, height: 844, kind: "screen" } },
+  "slideDeck": { output: "slide", kind: "screen", width: 1920, height: 1080, page: { width: 1440, height: 900, kind: "page" } },
+  "socialImage": { output: "image", kind: "screen", width: 1080, height: 1080, page: { width: 1440, height: 900, kind: "page" } },
 } as const;
 
 export const SIZE_PRESETS = {

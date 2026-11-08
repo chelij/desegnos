@@ -1,7 +1,7 @@
 import type { BoundaryKind, OutputType, Page, Project } from '../types';
 import type { IconName } from '../icons';
 import { TEMPLATE_DEFAULTS } from '../generated/limits';
-import { BOUNDARY_GAP } from '../projectCanvasGeometry';
+import { BOUNDARY_GAP } from './boundaryLayout';
 
 export type BoundaryToolKind = 'page' | 'slide' | 'image';
 export const boundaryKindLabel = (kind: BoundaryToolKind) => ({ page: 'Page', slide: 'Slide', image: 'Image' })[kind];

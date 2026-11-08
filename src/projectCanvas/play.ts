@@ -15,8 +15,12 @@ export const idlePlay: PlayState = { boundary: null, hidden: {}, swaps: {} };
 
 export const playIsActive = (play: PlayState) => play.boundary !== null;
 
+/** Playing a project made only of slides fills the canvas as a presentation. */
+export const isPresenting = (project: Project, play: PlayState) =>
+  playIsActive(play) && project.pages.length > 0 && project.pages.every(page => page.output === 'slide');
+
 /** The pointer a click on this element runs in Play, or null when it runs nothing. */
-export function playPointerAt(project: Project, pageId: string, elementId: string): Pointer | null {
+function playPointerAt(project: Project, pageId: string, elementId: string): Pointer | null {
   for (const pointer of project.pointers ?? []) {
     if (pointer.from.kind !== 'element' || pointer.from.pageId !== pageId || pointer.from.elementId !== elementId) continue;
     if (pointer.play) return pointer;

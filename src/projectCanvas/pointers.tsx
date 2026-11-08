@@ -1,22 +1,14 @@
 import { useEffect, useRef, type PointerEvent as ReactPointerEvent } from 'react';
 import { useDraftText } from '../DraftText';
 import { Icon } from '../icons';
-import { POINTER_ARROW_PX, POINTER_BREAK_PX, POINTER_COMMENT_ZOOM, POINTER_HIT_PX, pointerRoute, pointerVisible, screenPoint, type AutoLink, type Boundary, type CanvasCamera, type PointerRoute, type PointerWorld } from '../projectCanvasGeometry';
-import type { Pointer, PointerStateView, Project, Rect } from '../types';
-import { elementBoxes } from './requests';
+import { POINTER_ARROW_PX, POINTER_BREAK_PX, POINTER_COMMENT_ZOOM, POINTER_HIT_PX, pointerRoute, pointerVisible, type PointerRoute, type PointerWorld } from './pointerGeometry';
+import { screenPoint, type CanvasCamera } from './camera';
+import { type AutoLink } from './autoLinks';
+import type { Pointer, PointerStateView, Rect } from '../types';
 import { isBehaviour, type BehaviourEntry } from './behaviours';
 import { MAX_PROMPT_CHARS } from '../generated/limits';
 
 export type PointerEntry = { pointer: Pointer; route: PointerRoute };
-
-// The layout a pointer is drawn against, including items and boundaries mid-drag.
-export function pointerWorld(project: Project, boundaries: Boundary[], moving: { pageId: string; sizeId: string; rect: Rect } | null, _movingElements: Record<string, Rect>, movingItems: Record<string, Rect>): PointerWorld {
-  return {
-    requests: elementBoxes(project, boundaries, moving),
-    boundaries: boundaries.map(item => ({ pageId: item.pageId, sizeId: item.sizeId, rect: moving && moving.sizeId === item.sizeId && moving.pageId === item.pageId ? moving.rect : item.rect })),
-    reference: (project.reference ?? []).map(item => ({ itemId: item.id, rect: movingItems[item.id] ?? item.rect, url: item.kind.kind === 'link' ? item.kind.url : undefined })),
-  };
-}
 
 // Routes every pointer once; hidden ones are dropped unless selected, so editing never hides.
 // A behaviour points at its own layer, so it gets a badge instead of a line.

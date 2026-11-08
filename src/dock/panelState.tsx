@@ -7,7 +7,6 @@ const PANELS_HIDDEN_KEY = 'desegnos.panels-hidden';
 const MIN_DOCK_WIDTH = 224;
 const MAX_DOCK_WIDTH = 480;
 const DEFAULT_DOCK_WIDTH = 272;
-/** Every expanded panel keeps enough height to read its own controls. */
 export const MIN_PANEL_HEIGHT = 160;
 
 export type PanelState = { width: number; collapsed: boolean; hidden: boolean };

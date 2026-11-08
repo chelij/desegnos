@@ -1,16 +1,15 @@
 import { TEXT_SIZE_RANGE } from '../generated/limits';
-import { sizeTarget } from '../projectCanvasGeometry';
-import { isTextField } from '../WorkspaceSurface';
+import { sizeTarget } from './canvasTargets';
+import { isTextField } from '../textField';
 import { pageKind } from './boundaryDefaults';
 import type { ProjectCanvasProps } from './interactionTypes';
-import { alignSelectionMoves, distributeSelectionMoves, arrangeSiblingOrder, type SelectionDistribution, type ArrangeOperation } from './arrange';
+import { alignSelectionMoves, distributeSelectionMoves, arrangeSiblingOrder, type SelectionAlign, type SelectionDistribution, type ArrangeOperation } from './arrange';
 import { type KeyboardEvent as ReactKeyboardEvent } from 'react';
-import {
-  BOUNDARY_GAP, selectedPointers, type CanvasCamera, type CanvasTarget, type ElementTarget, type Point,
-} from '../projectCanvasGeometry';
+import { BOUNDARY_GAP } from './boundaryLayout';
+import { selectedPointers, type CanvasTarget, type ElementTarget } from './canvasTargets';
+import { type CanvasCamera, type Point } from './camera';
 import type { Element, ElementMove, ElementPatch, NamedView, Page, Project, Rect, RequestArea, RequestShape, RequestTarget } from '../types';
 import type { ProjectTool } from '../EditorTools';
-import { type SelectionAlign } from './selectionBar';
 import { type ScreenRect } from './surface';
 import { type LinkCopy } from './linkedChoices';
 import { copySummary, linkNeedsChoice, nestedLayerIds, sameStructure } from './links';
@@ -433,7 +432,6 @@ export function createKeyboardActions(context: () => Context) {
     if (event.defaultPrevented || isTextField(event.target)) return;
     if (event.key === 'Enter' && polygonDraft && polygonDraft.length >= 3) { event.preventDefault(); closeRequestArea(polygonDraft, 'polygon'); return; }
     if (event.key === 'Enter' && focused && !selection.length) { event.preventDefault(); openPage(focused); }
-    else if (event.key === 'Escape') { event.preventDefault(); escapeCanvas(); }
   }
 
   return {

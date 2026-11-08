@@ -1,5 +1,6 @@
 import { useMemo, useRef, type PointerEvent as ReactPointerEvent } from 'react';
-import { viewportWorldRect, type Boundary, type CanvasCamera } from '../projectCanvasGeometry';
+import { viewportWorldRect, type CanvasCamera } from './camera';
+import { type Boundary } from './boundaryLayout';
 import type { ReferenceItem } from '../types';
 import {
   MINIMAP_HEIGHT, MINIMAP_WIDTH, cameraCentredOn, minimapPoint, minimapTransform, minimapWorld, minimapWorldPoint, overviewRects,

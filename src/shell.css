@@ -68,14 +68,6 @@
   .dossier-navigation .tabs button { padding-inline: var(--space-4); }
 }
 .workspace { position: relative; display: flex; min-width: 0; min-height: 0; flex: 1; }
-.tool-divider { width: 1px; height: 18px; margin-inline: var(--space-2); background: var(--border-soft); flex: none; }
-.request-overview { position: relative; font-size: var(--text-sm); }
-.request-overview > summary { cursor: pointer; list-style: none; padding: var(--space-3) var(--space-4); border: 1px solid var(--border); border-radius: var(--radius-sm); white-space: nowrap; }
-.request-overview > summary::-webkit-details-marker { display: none; }
-.request-overview > summary:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
-.request-popover { position: absolute; z-index: 21; right: 0; top: calc(100% + var(--space-4)); width: min(390px, calc(100vw - 32px)); max-height: min(65vh, 600px); overflow: auto; padding: var(--space-5); border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface-raised); box-shadow: var(--shadow-2); }
-.request-popover h3 { font-size: var(--text-md); margin-block: var(--space-6) var(--space-4); }
-.request-popover details { padding-block: var(--space-3); }
 .design-pane { position: relative; display: flex; flex: 1; min-width: 0; min-height: 0; }
 .code-line.selected { background: color-mix(in srgb, var(--accent) 16%, transparent); }
 .code-line.match { background: color-mix(in srgb, #f2c94c 22%, transparent); }
@@ -444,21 +436,21 @@
 .project-dot { width: 8px; height: 8px; flex: none; border-radius: 50%; }
 .shortcut-help section > h3 { margin: var(--space-5) 0 var(--space-2); color: var(--muted); font-size: var(--text-xs); font-weight: var(--weight-semibold); text-transform: uppercase; letter-spacing: 0.04em; }
 .shortcut-help section:first-child > h3 { margin-top: 0; }
-.editor-dock, .generation-log, .surface-content, .notice-details pre, .request-popover, .log-message pre, .export-panel-list {
+.editor-dock, .generation-log, .surface-content, .notice-details pre, .log-message pre, .export-panel-list {
   scrollbar-width: thin;
   scrollbar-color: color-mix(in srgb, var(--faint) 60%, transparent) transparent;
 }
-.editor-dock ::-webkit-scrollbar, .generation-log ::-webkit-scrollbar, .surface-content::-webkit-scrollbar, .request-popover::-webkit-scrollbar, .dock-panels::-webkit-scrollbar, .dock-panel-body::-webkit-scrollbar, .log-messages::-webkit-scrollbar {
+.editor-dock ::-webkit-scrollbar, .generation-log ::-webkit-scrollbar, .surface-content::-webkit-scrollbar, .dock-panels::-webkit-scrollbar, .dock-panel-body::-webkit-scrollbar, .log-messages::-webkit-scrollbar {
   width: 8px; height: 8px;
 }
-.editor-dock ::-webkit-scrollbar-track, .generation-log ::-webkit-scrollbar-track, .surface-content::-webkit-scrollbar-track, .request-popover::-webkit-scrollbar-track, .dock-panels::-webkit-scrollbar-track, .dock-panel-body::-webkit-scrollbar-track, .log-messages::-webkit-scrollbar-track {
+.editor-dock ::-webkit-scrollbar-track, .generation-log ::-webkit-scrollbar-track, .surface-content::-webkit-scrollbar-track, .dock-panels::-webkit-scrollbar-track, .dock-panel-body::-webkit-scrollbar-track, .log-messages::-webkit-scrollbar-track {
   background: transparent;
 }
-.editor-dock ::-webkit-scrollbar-thumb, .generation-log ::-webkit-scrollbar-thumb, .surface-content::-webkit-scrollbar-thumb, .request-popover::-webkit-scrollbar-thumb, .dock-panels::-webkit-scrollbar-thumb, .dock-panel-body::-webkit-scrollbar-thumb, .log-messages::-webkit-scrollbar-thumb {
+.editor-dock ::-webkit-scrollbar-thumb, .generation-log ::-webkit-scrollbar-thumb, .surface-content::-webkit-scrollbar-thumb, .dock-panels::-webkit-scrollbar-thumb, .dock-panel-body::-webkit-scrollbar-thumb, .log-messages::-webkit-scrollbar-thumb {
   border: 2px solid transparent; border-radius: var(--radius-pill);
   background: color-mix(in srgb, var(--faint) 60%, transparent); background-clip: content-box;
 }
-.editor-dock ::-webkit-scrollbar-thumb:hover, .generation-log ::-webkit-scrollbar-thumb:hover, .surface-content::-webkit-scrollbar-thumb:hover, .request-popover::-webkit-scrollbar-thumb:hover, .dock-panels::-webkit-scrollbar-thumb:hover, .dock-panel-body::-webkit-scrollbar-thumb:hover, .log-messages::-webkit-scrollbar-thumb:hover {
+.editor-dock ::-webkit-scrollbar-thumb:hover, .generation-log ::-webkit-scrollbar-thumb:hover, .surface-content::-webkit-scrollbar-thumb:hover, .dock-panels::-webkit-scrollbar-thumb:hover, .dock-panel-body::-webkit-scrollbar-thumb:hover, .log-messages::-webkit-scrollbar-thumb:hover {
   background: var(--faint); background-clip: content-box;
 }
 

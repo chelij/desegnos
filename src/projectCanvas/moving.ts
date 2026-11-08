@@ -2,20 +2,17 @@ import type { ProjectCanvasProps } from './interactionTypes';
 import { canvasBoxes } from './canvasView';
 import { screenRect } from './surface';
 import { type PointerEvent as ReactPointerEvent } from 'react';
-import {
-  boundaryAt, boundaryMoves, referenceFrameRect, referenceMoves, pageRectFromCanvas, pushApartBoundaries,
-  pushApartReference, type Boundary, type BoundaryMove, type CanvasCamera, type CanvasTarget,
-  type ElementTarget, type FrameCorner, type Point, type ReferenceBox, type ReferenceMove,
-} from '../projectCanvasGeometry';
+import { boundaryAt, boundaryMoves, pageRectFromCanvas, pushApartBoundaries, type Boundary, type BoundaryMove } from './boundaryLayout';
+import { referenceFrameRect, referenceMoves, pushApartReference, type FrameCorner, type ReferenceBox, type ReferenceMove } from './referenceGeometry';
+import { type CanvasCamera, type Point } from './camera';
+import { type CanvasTarget, type ElementTarget } from './canvasTargets';
 import type { Element, ElementMove, Page, Project, Rect, ReferenceItem } from '../types';
 import { shownReference } from './reference';
 import { centre } from './surface';
 import { baseSizeId } from './sizes';
 import { elementLocalRect } from './elementGeometry';
-import {
-  elementTreeIds, cloneElement, elementChildrenOf, elementPath, elementParents, findElementIn,
-  type ElementCorner,
-} from './elementGeometry';
+import { elementTreeIds, cloneElement, elementChildrenOf, elementPath, elementParents, type ElementCorner } from './elementGeometry';
+import { findElementIn } from './elementFacts';
 import {
   MoveBoundaryDrag, MoveTarget, MoveSelectionDrag, ElementEntry, MoveElementsDrag, Drag, DuplicateRepeat,
   isElementTarget, elementTargetAt, intersects, elementMoveDelta, targetKey, entryTargetKey,

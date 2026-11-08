@@ -4,7 +4,9 @@ import { useProjectSession } from './useProjectSession';
 import { sizeBoundaries, suggestedPagePath } from '../editorShared';
 import { useCallback } from 'react';
 import { type ProjectCanvasHandle } from '../ProjectCanvas';
-import { BOUNDARY_GAP, unionBounds, referenceMoves, pushApartReference, boundaryMoves, pushApartBoundaries } from '../projectCanvasGeometry';
+import { BOUNDARY_GAP, boundaryMoves, pushApartBoundaries } from '../projectCanvas/boundaryLayout';
+import { unionBounds } from '../projectCanvas/camera';
+import { referenceMoves, pushApartReference } from '../projectCanvas/referenceGeometry';
 import type { BoundaryKind, Element, PageSize, Rect, SizePreset, WorkspaceView } from '../types';
 import { SIZE_PRESETS } from '../projectCanvas/sizes';
 
@@ -82,7 +84,6 @@ export function useBoundaryCommands(current: import('react').RefObject<Workspace
         reference: [] };
     });
   }, [mutate]);
-  /** Adding a linked size is one undo step, including the boundaries it pushes aside. */
   const addCanvasPageSize = useCallback((pageId: string, preset: SizePreset, width = 0, height = 0) => {
     const sizeId = crypto.randomUUID();
     let focusedSizeId: string = sizeId;

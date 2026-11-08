@@ -1,9 +1,13 @@
 import { canvasView } from './projectCanvas/canvasView';
-import { MIN_ZOOM } from './projectCanvasGeometry';
+import { MIN_ZOOM } from './projectCanvas/camera';
 import { useState } from 'react';
 import { type MenuItem } from './Menus';
-import { MAX_ZOOM, type Boundary, type CanvasTarget } from './projectCanvasGeometry';
-import { elementWorldRect, findElementIn, unionRects } from './projectCanvas/elementGeometry';
+import { MAX_ZOOM } from './projectCanvas/camera';
+import { type Boundary } from './projectCanvas/boundaryLayout';
+import { type CanvasTarget } from './projectCanvas/canvasTargets';
+import { elementWorldRect } from './projectCanvas/elementGeometry';
+import { findElementIn } from './projectCanvas/elementFacts';
+import { unionBounds as unionBounds } from './projectCanvas/camera';
 import { type PaletteCommand } from './CommandPalette';
 import type { GridSettings, Project, Rect, RecoveryInfo } from './types';
 import { GRID_PERCENT_MIN, GRID_PERCENT_MAX, GRID_PIXEL_MIN, GRID_PIXEL_MAX, RESERVED_ROUTE_NAMES, MAX_NAME_CHARS } from './generated/limits';
@@ -29,7 +33,7 @@ export function ownerPageId(project: Project, elementId: string): string | null 
   return project.pages.find(page => !!findElementIn(page.elements, elementId))?.id ?? null;
 }
 
-export function targetCanvasRect(project: Project, target: CanvasTarget): Rect | null {
+function targetCanvasRect(project: Project, target: CanvasTarget): Rect | null {
   if (target.kind === 'reference') return project.reference.find(item => item.id === target.itemId)?.rect ?? null;
   if (target.kind !== 'element') return null;
   const page = project.pages.find(item => item.id === target.pageId);
@@ -40,7 +44,7 @@ export function targetCanvasRect(project: Project, target: CanvasTarget): Rect |
 
 export function selectionBounds(project: Project, selection: CanvasTarget[]): Rect | null {
   const rects = selection.flatMap(target => { const rect = targetCanvasRect(project, target); return rect ? [rect] : []; });
-  return rects.length ? unionRects(rects) : null;
+  return rects.length ? unionBounds(rects) : null;
 }
 
 export function menuPaletteCommands(items: MenuItem[], group = 'Menu'): PaletteCommand[] {

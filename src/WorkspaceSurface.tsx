@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
+import { onEscape } from './escape';
 import { Icon } from './icons';
 import './dialogs.css';
 
@@ -10,10 +11,6 @@ const Surfaces = createContext<{
   host: (place: Place, node: HTMLElement | null) => void;
   enter: (entry: Entry) => () => void;
 } | null>(null);
-
-export function isTextField(target: EventTarget | null) {
-  return target instanceof HTMLElement && !!target.closest('input:not([type=checkbox], [type=radio], [type=button], [type=submit], [type=reset], [type=range], [type=color], [type=file]), textarea, select, [contenteditable]:not([contenteditable="false"]), .cm-editor, [role="textbox"]');
-}
 
 export function WorkspaceSurfaces({ children }: { children: ReactNode }) {
   const [hosts, setHosts] = useState<Partial<Record<Place, HTMLElement>>>({});
@@ -26,7 +23,9 @@ export function WorkspaceSurfaces({ children }: { children: ReactNode }) {
     const previous = entry.place === 'banner' ? undefined : entries.current.find(item => item.place === entry.place);
     if (previous) { if (entry.opener?.closest('.workspace-surface')) entry.opener = previous.opener; previous.close(); }
     entries.current.push(entry);
+    const stopEscape = onEscape(entry.close);
     return () => {
+      stopEscape();
       const wasTop = entries.current.at(-1) === entry;
       entries.current = entries.current.filter(item => item !== entry);
       const remaining = entries.current.at(-1);
@@ -36,18 +35,6 @@ export function WorkspaceSurfaces({ children }: { children: ReactNode }) {
         if (target?.isConnected && !target.matches(':disabled')) target.focus({ preventScroll: true });
       });
     };
-  }, []);
-  useLayoutEffect(() => {
-    const escape = (event: KeyboardEvent) => {
-      // A focused text box takes the first Escape; the app then leaves it.
-      if (event.key !== 'Escape' || event.defaultPrevented || isTextField(event.target) || (event.target instanceof HTMLElement && event.target.closest('dialog[open]'))) return;
-      // Let open menus and native select controls handle their own Escape first.
-      if (document.querySelector('.editor-menu')) return;
-      const entry = entries.current.at(-1);
-      if (entry) { event.preventDefault(); event.stopImmediatePropagation(); entry.close(); }
-    };
-    window.addEventListener('keydown', escape, true);
-    return () => window.removeEventListener('keydown', escape, true);
   }, []);
   return <Surfaces.Provider value={{ hosts, host, enter }}>{children}</Surfaces.Provider>;
 }

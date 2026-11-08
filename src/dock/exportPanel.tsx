@@ -5,7 +5,7 @@ import type { ExportJobs } from '../exportJobs/useExportJobs';
 
 const money = (value: number) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 4 }).format(value);
 
-export const OUTPUT_CHOICES: [string, string][] = [
+const OUTPUT_CHOICES: [string, string][] = [
   ['webpage', 'Page'],
   ['slide', 'Slide'],
   ['image', 'Image'],

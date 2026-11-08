@@ -302,25 +302,3 @@ export function AiSettings({ current, refresh, update, manageUsage, pollingError
     </>}
   </div>;
 }
-
-export function ChatgptWelcome({ update, manageUsage, dismissed }: { update: AiSettingsUpdate; manageUsage: () => Promise<void>; dismissed: () => void }) {
-  const [activity, setActivity] = useState<'idle' | 'acknowledging' | 'managingUsage'>('idle');
-  const [error, setError] = useState('');
-  // One operation at a time; a failure reports here instead of escaping.
-  async function perform<T>(next: 'acknowledging' | 'managingUsage', task: () => Promise<T>): Promise<T | undefined> {
-    setActivity(next); setError('');
-    try { return await task(); }
-    catch (error) { setError(errorMessage(error)); return undefined; }
-    finally { setActivity('idle'); }
-  }
-  async function acknowledge() {
-    if (activity !== 'idle') return;
-    if (await perform('acknowledging', () => update('acknowledge_chatgpt_welcome'))) dismissed();
-  }
-  const busy = activity !== 'idle';
-  return <section aria-label="You're using your ChatGPT plan" className="dialog-body"><strong>You're using your ChatGPT plan</strong>
-    <p>Eligible AI requests in Desegnos use your ChatGPT plan or credits balance. Manage usage in your ChatGPT settings.</p>
-    {error && <ProblemBanner message={userError(error)} dismiss={() => setError('')} />}
-    <div className="form-actions"><button disabled={busy} onClick={() => { void perform('managingUsage', manageUsage); }}>Manage usage</button><button className="primary" disabled={busy} onClick={() => { void acknowledge(); }}>Got it</button>
-    </div></section>;
-}

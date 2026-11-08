@@ -4,7 +4,8 @@ import { elementIndex } from './elementGeometry';
 import { ElementTree } from './elements';
 import { idlePlay, playElements, type PlayState } from './play';
 import { resolveForSize } from './sizes';
-import type { Boundary, CanvasTarget } from '../projectCanvasGeometry';
+import type { Boundary } from './boundaryLayout';
+import type { CanvasTarget } from './canvasTargets';
 import type { Element, Project, Rect } from '../types';
 
 /** A faint dashed ghost where a layer exists in another linked size but not this one. */

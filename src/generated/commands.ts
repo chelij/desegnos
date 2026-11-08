@@ -70,7 +70,6 @@ export type CommandName =
   | 'select_chatgpt_account'
   | 'retry_chatgpt_secure_storage'
   | 'sign_out_chatgpt'
-  | 'acknowledge_chatgpt_welcome'
   | 'open_chatgpt_usage'
   | 'test_ai_access'
   | 'prepare_generation'

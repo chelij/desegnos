@@ -1,7 +1,9 @@
 import { useLayoutEffect, useRef } from 'react';
 import { boundaryKindLabel, type BoundaryToolKind } from './boundaryDefaults';
 import { boundaryLabel } from './sizes';
-import type { Boundary, CanvasCamera, CanvasTarget } from '../projectCanvasGeometry';
+import type { Boundary } from './boundaryLayout';
+import type { CanvasCamera } from './camera';
+import type { CanvasTarget } from './canvasTargets';
 import type { Project, Rect } from '../types';
 
 const dimensionsLabel = (rect: Rect) => `${Math.round(rect.width)} × ${Math.round(rect.height)}`;

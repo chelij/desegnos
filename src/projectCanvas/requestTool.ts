@@ -1,9 +1,10 @@
-import {
-  pointerAt, POINTER_HIT_PX, boundaryAt, viewportWorldRect, type Boundary, type CanvasCamera,
-  type CanvasTarget, type Point, type RequestBox,
-} from '../projectCanvasGeometry';
+import { pointerAt, POINTER_HIT_PX } from './pointerGeometry';
+import { boundaryAt, type Boundary } from './boundaryLayout';
+import { viewportWorldRect, type CanvasCamera, type Point } from './camera';
+import { type CanvasTarget, type RequestBox } from './canvasTargets';
 import type { Command, PendingRequest, Project, Rect, RequestArea, RequestShape, RequestTarget, WorkspaceView } from '../types';
-import { coveredTargets, dedupeTargets, requestShapeBounds } from './requests';
+import { coveredTargets, dedupeTargets } from './requests';
+import { requestShapeBounds } from './requestGeometry';
 import { shownReference } from './reference';
 import { pointerEntries } from './pointers';
 import { screenRect, type ScreenRect } from './surface';
@@ -14,7 +15,7 @@ type Context = {
   requestBoxes: () => RequestBox[];
   project: Project;
   movingItems: Record<string, Rect>;
-  pointerWorldNow: () => import("../projectCanvasGeometry").PointerWorld;
+  pointerWorldNow: () => import("./pointerGeometry").PointerWorld;
   camera: CanvasCamera;
   viewSize: { width: number; height: number; };
   boundaryUnder: (point: Point) => Boundary | null;

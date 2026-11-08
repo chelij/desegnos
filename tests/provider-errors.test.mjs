@@ -4,7 +4,7 @@ import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { compileModules } from './typescript.mjs';
 
-const modules = await compileModules(['src/userErrors.ts', 'src/Generation.tsx', 'src/projectCanvas/exportPanel.tsx']);
+const modules = await compileModules(['src/userErrors.ts', 'src/Generation.tsx', 'src/dock/exportPanel.tsx']);
 try {
   const { providerProblem, userError } = await modules.load('userErrors.js');
   await test('startup recovery failures do not become AI failures when diagnostics name elements', () => {
@@ -13,7 +13,7 @@ try {
   });
   const { needsAiSettings } = await modules.load('ProblemBanner.js');
   const { GenerationFeedback } = await modules.load('Generation.js');
-  const { ExportPanel } = await modules.load('projectCanvas/exportPanel.js');
+  const { ExportPanel } = await modules.load('dock/exportPanel.js');
   const failure = (fields = {}) => ({ kind: 'transport', outcome: 'unknown', httpStatus: null, code: null, ...fields });
   await test('native kinds choose actions while native wording stays intact', () => {
     for (const [kind, settings] of [['server', false], ['transport', false], ['rateLimited', false], ['quota', true], ['authentication', true], ['modelUnavailable', true]]) {

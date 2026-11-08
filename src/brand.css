@@ -65,7 +65,7 @@
   --leading-tight: 1.25; --leading-normal: 1.45; --leading-control: 20px;
   --tracking-label: 0.04em;
   --control-sm: 24px; --control-md: 28px; --control-lg: 32px;
-  --icon-sm: 14px; --icon-md: 16px; --icon-stroke: 1.5;
+  --icon-md: 16px; --icon-stroke: 1.5;
   --duration-fast: 100ms; --duration-base: 160ms;
   --ease-standard: cubic-bezier(0.2, 0, 0, 1);
   --site-light: #ffffff; --site-dark: #17191c;

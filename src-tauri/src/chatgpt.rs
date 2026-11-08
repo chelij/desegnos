@@ -374,28 +374,6 @@ async fn sign_out_after_cancellation<T>(
 }
 
 #[tauri::command]
-pub async fn acknowledge_chatgpt_welcome(
-    state: AiState<'_>,
-    chatgpt: State<'_, ChatgptState>,
-) -> Result<AiSettingsView, crate::native_error::NativeFailure> {
-    let result: NativeResult<AiSettingsView> = async {
-        chatgpt
-            .manager()?
-            .acknowledge_welcome()
-            .await
-            .map_err(|error| error.message().to_owned())?;
-        settings_view(&state, &chatgpt).await
-    }
-    .await;
-    result.map_err(|error| {
-        crate::native_error::NativeFailure::from_serializable(
-            error,
-            crate::native_error::NativeErrorKind::AiSettings,
-        )
-    })
-}
-
-#[tauri::command]
 pub fn open_chatgpt_usage(app: AppHandle) -> Result<(), crate::native_error::NativeFailure> {
     (|| -> NativeResult<()> {
         #[cfg(not(feature = "native-tests"))]

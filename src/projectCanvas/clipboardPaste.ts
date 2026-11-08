@@ -1,10 +1,10 @@
 import { ELEMENT_DEFAULTS, MAX_PASTED_IMAGE_WIDTH, PASTED_NOTE_WIDTH, PASTED_NOTE_HEIGHT } from '../generated/limits';
 import type { Rect } from '../types';
-import type { Point } from '../projectCanvasGeometry';
+import type { Point } from './camera';
 
 // Copying layers leaves a marker on the system clipboard. A paste whose text is not that
 // marker comes from another app, so its content is placed instead of Desegnos' layers.
-export const CLIPBOARD_MARKER = 'desegnos-layers:';
+const CLIPBOARD_MARKER = 'desegnos-layers:';
 
 export { MAX_PASTED_IMAGE_WIDTH, PASTED_NOTE_WIDTH, PASTED_NOTE_HEIGHT } from '../generated/limits';
 

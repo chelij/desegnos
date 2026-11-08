@@ -3,9 +3,10 @@ import { native } from '../api';
 import { type ProjectCanvasHandle } from '../ProjectCanvas';
 import { isPendingRecovery, type PendingRecovery } from '../RecoveryBanner';
 import { type SaveConflict, type SaveOutcome, type SaveChoice } from '../SaveConflict';
-import { type CanvasTarget } from '../projectCanvasGeometry';
+import { type CanvasTarget } from '../projectCanvas/canvasTargets';
 import type { CanvasTemplate, CompactReport, WorkspaceView } from '../types';
 import { Replacement, Confirmation } from '../editorShared';
+import type { EditorPanel } from './editorPanel';
 
 type UntitledSave = {
   name: string;
@@ -38,7 +39,7 @@ type Context = {
   setConfirmation: import("react").Dispatch<import("react").SetStateAction<Confirmation | null>>;
   resolvedTheme: "dark" | "light";
   canvasRef: import("react").RefObject<ProjectCanvasHandle | null>;
-  closePanel: (kind: import('./useEditor').EditorPanel['kind']) => void;
+  closePanel: (kind: EditorPanel['kind']) => void;
   setHistoryEpoch: import("react").Dispatch<import("react").SetStateAction<number>>;
 };
 
