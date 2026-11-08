@@ -145,7 +145,7 @@ impl Collector {
                     self.photos.push(photo);
                 }
             }
-            Err(reason) => self.skip(&name, reason),
+            Err(reason) => self.skip(&name, &reason),
         }
     }
 
@@ -605,25 +605,25 @@ fn jpeg(image: &image::DynamicImage, quality: u8) -> Option<Vec<u8>> {
     Some(bytes)
 }
 
-/// Decodes a photo within pixel limits, applies its camera orientation, and keeps a JPEG of at
-/// most 1280 px and 200 KiB plus a small thumbnail. Transparent areas become white.
-fn prepare_photo(
-    name: &str,
-    bytes: &[u8],
-) -> std::result::Result<IdentitySourcePhoto, &'static str> {
+/// Decodes a photo within pixel limits, applies its camera orientation, and keeps a JPEG within
+/// `PHOTO_EDGE` and `MAX_PROJECT_PHOTO_BYTES` plus a small thumbnail. Transparent areas become white.
+fn prepare_photo(name: &str, bytes: &[u8]) -> std::result::Result<IdentitySourcePhoto, String> {
     use image::{ImageDecoder, ImageReader, imageops::FilterType};
     let reader = ImageReader::new(std::io::Cursor::new(bytes))
         .with_guessed_format()
-        .map_err(|_| "the photo could not be read")?;
+        .map_err(|_| "the photo could not be read".to_owned())?;
     let mut decoder = reader
         .into_decoder()
-        .map_err(|_| "the photo format is not supported")?;
+        .map_err(|_| "the photo format is not supported".to_owned())?;
     let (width, height) = decoder.dimensions();
     if u64::from(width) * u64::from(height) > MAX_PHOTO_PIXELS {
-        return Err("the photo exceeds 80 million pixels");
+        return Err(format!(
+            "the photo exceeds {} million pixels",
+            MAX_PHOTO_PIXELS / 1_000_000
+        ));
     }
     if width.min(height) < MIN_PHOTO_EDGE {
-        return Err("too small to be a photo");
+        return Err("too small to be a photo".to_owned());
     }
     let orientation = decoder
         .orientation()

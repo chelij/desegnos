@@ -11,7 +11,7 @@ use crate::{
 use desegnos_core::{GenerationCapabilities, GenerationMode, RequirementsSnapshot};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::{collections::BTreeMap, future::Future, pin::Pin};
+use std::collections::BTreeMap;
 
 pub const DEFAULT_LOCAL_ENDPOINT: &str = "http://127.0.0.1:11434/v1";
 const DEEPSEEK_ENDPOINT: &str = "https://api.deepseek.com";
@@ -311,7 +311,6 @@ pub fn provider_catalogue() -> Vec<ProviderDescriptor> {
         .collect()
 }
 
-/// A local server that rejected the anonymous key needs one entered, not a generic auth error.
 pub fn models_need_key(
     provider: ProviderId,
     local_authentication: bool,
@@ -322,7 +321,6 @@ pub fn models_need_key(
         && error.kind == ErrorKind::Authentication
 }
 
-/// Discovery failures reach the settings view as text; a server demanding a key says so.
 pub fn models_error(
     provider: ProviderId,
     local_authentication: bool,
@@ -344,7 +342,6 @@ pub struct GenerationRequest<'a> {
     pub key: &'a ApiKey,
     pub cancellation: &'a CancellationToken,
 }
-/// One frozen brand-identity analysis: the source packet, its logo images and the account.
 pub struct IdentityRequest<'a> {
     pub authentication: AuthenticationMethod,
     pub snapshot: &'a RequirementsSnapshot,
@@ -354,101 +351,15 @@ pub struct IdentityRequest<'a> {
     pub cancellation: &'a CancellationToken,
     pub images: &'a [IdentityImage],
 }
-pub type ProviderFuture<'a> = Pin<Box<dyn Future<Output = Result<ProviderResponse>> + Send + 'a>>;
-pub trait ProviderAdapter: Send + Sync {
-    fn generate<'a>(
-        &'a self,
-        request: GenerationRequest<'a>,
-        progress: &'a (dyn Fn(ProviderProgress) + Send + Sync),
-    ) -> ProviderFuture<'a>;
-    fn analyze_identity<'a>(
-        &'a self,
-        request: IdentityRequest<'a>,
-        progress: &'a (dyn Fn(ProviderProgress) + Send + Sync),
-    ) -> ProviderFuture<'a>;
-    fn estimate(
-        &self,
-        auth: AuthenticationMethod,
-        snapshot: &RequirementsSnapshot,
-        mode: GenerationMode,
-        schema: &Value,
-        settings: &ProviderSettings,
-    ) -> Result<CostEstimate>;
-    fn estimate_identity(
-        &self,
-        auth: AuthenticationMethod,
-        snapshot: &RequirementsSnapshot,
-        schema: &Value,
-        settings: &ProviderSettings,
-        images: &[IdentityImage],
-    ) -> Result<CostEstimate>;
-    fn list_models<'a>(
-        &'a self,
-        key: &'a ApiKey,
-        cancel: &'a CancellationToken,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<ModelInfo>>> + Send + 'a>>;
-    fn test_access<'a>(
-        &'a self,
-        settings: &'a ProviderSettings,
-        key: &'a ApiKey,
-        cancel: &'a CancellationToken,
-    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>>;
-}
-impl ProviderAdapter for OpenAiClient {
-    fn generate<'a>(
-        &'a self,
-        r: GenerationRequest<'a>,
-        p: &'a (dyn Fn(ProviderProgress) + Send + Sync),
-    ) -> ProviderFuture<'a> {
-        Box::pin(OpenAiClient::generate(self, r, p))
-    }
-    fn analyze_identity<'a>(
-        &'a self,
-        r: IdentityRequest<'a>,
-        p: &'a (dyn Fn(ProviderProgress) + Send + Sync),
-    ) -> ProviderFuture<'a> {
-        Box::pin(OpenAiClient::analyze_identity(self, r, p))
-    }
-    fn estimate(
-        &self,
-        auth: AuthenticationMethod,
-        snapshot: &RequirementsSnapshot,
-        mode: GenerationMode,
-        schema: &Value,
-        settings: &ProviderSettings,
-    ) -> Result<CostEstimate> {
-        crate::estimate_for_auth(auth, snapshot, mode, schema, settings)
-    }
-    fn estimate_identity(
-        &self,
-        auth: AuthenticationMethod,
-        snapshot: &RequirementsSnapshot,
-        schema: &Value,
-        settings: &ProviderSettings,
-        images: &[IdentityImage],
-    ) -> Result<CostEstimate> {
-        crate::estimate_identity_for_auth(auth, snapshot, schema, settings, images)
-    }
-    fn list_models<'a>(
-        &'a self,
-        key: &'a ApiKey,
-        cancel: &'a CancellationToken,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<ModelInfo>>> + Send + 'a>> {
-        Box::pin(self.list_api_models(key, cancel))
-    }
-    fn test_access<'a>(
-        &'a self,
-        settings: &'a ProviderSettings,
-        key: &'a ApiKey,
-        cancel: &'a CancellationToken,
-    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
-        Box::pin(self.test_model_access(settings, key, cancel))
-    }
+#[derive(Clone)]
+enum Backend {
+    OpenAi(OpenAiClient),
+    Key(KeyAdapter),
 }
 #[derive(Clone)]
 pub struct ProviderClient {
     pub id: ProviderId,
-    adapter: std::sync::Arc<dyn ProviderAdapter>,
+    backend: Backend,
 }
 impl ProviderClient {
     pub fn with_settings(
@@ -456,14 +367,14 @@ impl ProviderClient {
         openai: OpenAiClient,
         settings: &ProviderSettings,
     ) -> Result<Self> {
-        let adapter: std::sync::Arc<dyn ProviderAdapter> = match id {
-            ProviderId::Openai => std::sync::Arc::new(openai),
+        let backend = match id {
+            ProviderId::Openai => Backend::OpenAi(openai),
             ProviderId::Local => {
-                std::sync::Arc::new(KeyAdapter::build(id, &local_endpoint(settings)?, false)?)
+                Backend::Key(KeyAdapter::build(id, &local_endpoint(settings)?, false)?)
             }
-            _ => std::sync::Arc::new(KeyAdapter::new(id)?),
+            _ => Backend::Key(KeyAdapter::new(id)?),
         };
-        Ok(Self { id, adapter })
+        Ok(Self { id, backend })
     }
     pub fn new(id: ProviderId, openai: OpenAiClient) -> Result<Self> {
         Self::with_settings(id, openai, &id.defaults())
@@ -473,7 +384,10 @@ impl ProviderClient {
         key: &ApiKey,
         cancel: &CancellationToken,
     ) -> Result<Vec<ModelInfo>> {
-        self.adapter.list_models(key, cancel).await
+        match &self.backend {
+            Backend::OpenAi(client) => client.list_api_models(key, cancel).await,
+            Backend::Key(adapter) => adapter.list_models(key, cancel).await,
+        }
     }
     pub fn estimate(
         &self,
@@ -483,8 +397,10 @@ impl ProviderClient {
         schema: &Value,
         settings: &ProviderSettings,
     ) -> Result<CostEstimate> {
-        self.adapter
-            .estimate(auth, snapshot, mode, schema, settings)
+        match &self.backend {
+            Backend::OpenAi(_) => crate::estimate_for_auth(auth, snapshot, mode, schema, settings),
+            Backend::Key(adapter) => adapter.estimate(auth, snapshot, mode, schema, settings),
+        }
     }
     pub fn estimate_identity(
         &self,
@@ -494,8 +410,7 @@ impl ProviderClient {
         settings: &ProviderSettings,
         images: &[IdentityImage],
     ) -> Result<CostEstimate> {
-        self.adapter
-            .estimate_identity(auth, snapshot, schema, settings, images)
+        estimate_identity_for_provider(self.id, auth, snapshot, schema, settings, images)
     }
     pub async fn test_model_access(
         &self,
@@ -503,21 +418,30 @@ impl ProviderClient {
         key: &ApiKey,
         cancel: &CancellationToken,
     ) -> Result<()> {
-        self.adapter.test_access(settings, key, cancel).await
+        match &self.backend {
+            Backend::OpenAi(client) => client.test_model_access(settings, key, cancel).await,
+            Backend::Key(adapter) => adapter.test_access(settings, key, cancel).await,
+        }
     }
     pub async fn generate(
         &self,
         request: GenerationRequest<'_>,
         progress: impl Fn(ProviderProgress) + Send + Sync,
     ) -> Result<ProviderResponse> {
-        self.adapter.generate(request, &progress).await
+        match &self.backend {
+            Backend::OpenAi(client) => client.generate(request, progress).await,
+            Backend::Key(adapter) => adapter.generate(request, &progress).await,
+        }
     }
     pub async fn analyze_identity(
         &self,
         request: IdentityRequest<'_>,
         progress: impl Fn(ProviderProgress) + Send + Sync,
     ) -> Result<ProviderResponse> {
-        self.adapter.analyze_identity(request, &progress).await
+        match &self.backend {
+            Backend::OpenAi(client) => client.analyze_identity(request, progress).await,
+            Backend::Key(adapter) => adapter.analyze_identity(request, &progress).await,
+        }
     }
 }
 
@@ -540,6 +464,7 @@ pub fn estimate_identity_for_provider(
         &body,
         settings,
         crate::identity::vision_reserve(images),
+        images.len(),
     )
 }
 
@@ -548,16 +473,17 @@ fn foreign_estimate(
     body: &RequestContent<'_>,
     settings: &ProviderSettings,
     reserve: u64,
+    images: usize,
 ) -> Result<CostEstimate> {
     let wire = foreign_wire(id, body, settings)?;
-    estimate_wire(id, body, settings, reserve, &wire)
+    estimate_wire(id, settings, reserve, images, &wire)
 }
 
 fn estimate_wire(
     id: ProviderId,
-    body: &RequestContent<'_>,
     settings: &ProviderSettings,
     reserve: u64,
+    images: usize,
     wire: &[u8],
 ) -> Result<CostEstimate> {
     if wire.len() > MAX_REQUEST_BYTES {
@@ -577,11 +503,7 @@ fn estimate_wire(
                 model.context_window_tokens
             }),
             output_reserve: settings.max_output_tokens,
-            images: body
-                .parts
-                .iter()
-                .filter(|part| matches!(part, RequestPart::Image { .. }))
-                .count(),
+            images,
             included: false,
             cache_write_factor: 1.0,
             verified_at: if settings.pricing.is_some() {
@@ -639,6 +561,7 @@ impl KeyAdapter {
         key: &ApiKey,
         cancel: &CancellationToken,
     ) -> Result<()> {
+        self.id.validate(s, AuthenticationMethod::ApiKey)?;
         if self.id.spec().list_probe {
             let models = crate::model_discovery::list_models(
                 self.id,
@@ -673,14 +596,12 @@ impl KeyAdapter {
     async fn submit(
         &self,
         common: RequestContent<'_>,
-        reserve: u64,
         s: &ProviderSettings,
         key: &ApiKey,
         cancel: &CancellationToken,
         progress: &(dyn Fn(ProviderProgress) + Send + Sync),
     ) -> Result<ProviderResponse> {
         let body = foreign_wire(self.id, &common, s)?;
-        estimate_wire(self.id, &common, s, reserve, &body)?;
         if body.len() > MAX_REQUEST_BYTES
             || key.appears_in(
                 std::str::from_utf8(&body)
@@ -732,7 +653,9 @@ impl KeyAdapter {
         let mut stream = ForeignStream::new(self.id);
         let mut bytes = 0usize;
         loop {
-            let chunk = tokio::select! {biased;_=cancel.cancelled()=>return Err(stream.error(ErrorKind::Cancelled)),_=tokio::time::sleep_until(deadline.min(tokio::time::Instant::now()+PROVIDER_IDLE))=>return Err(stream.error(ErrorKind::Deadline)),r=response.chunk()=>r.map_err(|_|stream.error(ErrorKind::Transport))?};
+            let chunk = crate::net::next_chunk(&mut response, cancel, deadline, PROVIDER_IDLE)
+                .await
+                .map_err(|failure| stream.error(failure.kind()))?;
             let Some(chunk) = chunk else {
                 break;
             };
@@ -793,37 +716,33 @@ impl KeyAdapter {
         stream.finish()
     }
 }
-impl ProviderAdapter for KeyAdapter {
-    fn generate<'a>(
-        &'a self,
-        r: GenerationRequest<'a>,
-        p: &'a (dyn Fn(ProviderProgress) + Send + Sync),
-    ) -> ProviderFuture<'a> {
-        Box::pin(async move {
-            self.id.validate(r.settings, r.authentication)?;
-            let body = crate::settings::request_content(r.snapshot, r.mode, r.schema)?;
-            self.submit(body, 0, r.settings, r.key, r.cancellation, p)
-                .await
-        })
-    }
-    fn analyze_identity<'a>(
-        &'a self,
-        r: IdentityRequest<'a>,
-        p: &'a (dyn Fn(ProviderProgress) + Send + Sync),
-    ) -> ProviderFuture<'a> {
-        Box::pin(async move {
-            self.id.validate(r.settings, r.authentication)?;
-            let body = crate::identity::identity_content(r.snapshot, r.schema, r.images)?;
-            self.submit(
-                body,
-                crate::identity::vision_reserve(r.images),
-                r.settings,
-                r.key,
-                r.cancellation,
-                p,
-            )
+impl KeyAdapter {
+    async fn generate(
+        &self,
+        r: GenerationRequest<'_>,
+        progress: &(dyn Fn(ProviderProgress) + Send + Sync),
+    ) -> Result<ProviderResponse> {
+        self.estimate(r.authentication, r.snapshot, r.mode, r.schema, r.settings)?;
+        let body = crate::settings::request_content(r.snapshot, r.mode, r.schema)?;
+        self.submit(body, r.settings, r.key, r.cancellation, progress)
             .await
-        })
+    }
+    async fn analyze_identity(
+        &self,
+        r: IdentityRequest<'_>,
+        progress: &(dyn Fn(ProviderProgress) + Send + Sync),
+    ) -> Result<ProviderResponse> {
+        estimate_identity_for_provider(
+            self.id,
+            r.authentication,
+            r.snapshot,
+            r.schema,
+            r.settings,
+            r.images,
+        )?;
+        let body = crate::identity::identity_content(r.snapshot, r.schema, r.images)?;
+        self.submit(body, r.settings, r.key, r.cancellation, progress)
+            .await
     }
     fn estimate(
         &self,
@@ -836,48 +755,15 @@ impl ProviderAdapter for KeyAdapter {
         self.id.validate(settings, auth)?;
         let (counted, reserve) = crate::settings::without_previews(snapshot);
         let body = crate::settings::request_content(&counted, mode, schema)?;
-        foreign_estimate(self.id, &body, settings, reserve)
+        foreign_estimate(self.id, &body, settings, reserve, snapshot.images.len())
     }
-    fn estimate_identity(
+    async fn list_models(
         &self,
-        auth: AuthenticationMethod,
-        snapshot: &RequirementsSnapshot,
-        schema: &Value,
-        settings: &ProviderSettings,
-        images: &[IdentityImage],
-    ) -> Result<CostEstimate> {
-        self.id.validate(settings, auth)?;
-        let body = crate::identity::identity_content(snapshot, schema, images)?;
-        foreign_estimate(
-            self.id,
-            &body,
-            settings,
-            crate::identity::vision_reserve(images),
-        )
-    }
-    fn list_models<'a>(
-        &'a self,
-        key: &'a ApiKey,
-        cancel: &'a CancellationToken,
-    ) -> Pin<Box<dyn Future<Output = Result<Vec<ModelInfo>>> + Send + 'a>> {
-        Box::pin(crate::model_discovery::list_models(
-            self.id,
-            &self.client,
-            &self.endpoint,
-            key,
-            cancel,
-        ))
-    }
-    fn test_access<'a>(
-        &'a self,
-        settings: &'a ProviderSettings,
-        key: &'a ApiKey,
-        cancel: &'a CancellationToken,
-    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
-        Box::pin(async move {
-            self.id.validate(settings, AuthenticationMethod::ApiKey)?;
-            KeyAdapter::test_access(self, settings, key, cancel).await
-        })
+        key: &ApiKey,
+        cancel: &CancellationToken,
+    ) -> Result<Vec<ModelInfo>> {
+        crate::model_discovery::list_models(self.id, &self.client, &self.endpoint, key, cancel)
+            .await
     }
 }
 
@@ -897,18 +783,11 @@ async fn read_http_error(
     cancel: &CancellationToken,
     deadline: tokio::time::Instant,
 ) -> ProviderError {
-    let status = response.status().as_u16();
-    let request_id = response
-        .headers()
-        .get("request-id")
-        .or_else(|| response.headers().get("x-request-id"))
-        .and_then(|v| v.to_str().ok())
-        .map(str::to_owned);
-    let content_type = response
-        .headers()
-        .get("content-type")
-        .and_then(|v| v.to_str().ok())
-        .map(str::to_owned);
+    let crate::net::ErrorHead {
+        status,
+        request_id,
+        content_type,
+    } = crate::net::ErrorHead::of(response);
     let body = match crate::net::bounded_body(response, ERROR_BODY_LIMIT, cancel, deadline).await {
         Ok(body) => body,
         Err(_) => {
@@ -1850,7 +1729,7 @@ mod tests {
                 detail: "low",
             });
             let response = adapter
-                .submit(sent, 0, &settings, &key, &CancellationToken::new(), &|_| {})
+                .submit(sent, &settings, &key, &CancellationToken::new(), &|_| {})
                 .await
                 .unwrap();
             assert_eq!(response.text, "{}");
@@ -1895,7 +1774,7 @@ mod tests {
             let mut paid = settings.clone();
             paid.pricing.as_mut().unwrap().request_usd = 3.0;
             assert_eq!(
-                foreign_estimate(provider, &packet, &paid, 0)
+                foreign_estimate(provider, &packet, &paid, 0, 0)
                     .unwrap_err()
                     .kind,
                 ErrorKind::SpendingLimit
@@ -2160,7 +2039,6 @@ mod tests {
             let error = adapter
                 .submit(
                     common(),
-                    0,
                     &id.defaults(),
                     &key,
                     &CancellationToken::new(),
@@ -2383,7 +2261,7 @@ mod tests {
             let (remote, server) = fixture(id, events, false).await;
             let client = ProviderClient {
                 id,
-                adapter: std::sync::Arc::new(remote),
+                backend: Backend::Key(remote),
             };
             let model = format!("future-{}", uuid::Uuid::new_v4());
             let settings = ProviderSettings {
@@ -2504,7 +2382,6 @@ mod tests {
             let result = adapter
                 .submit(
                     common(),
-                    0,
                     &id.defaults(),
                     &key,
                     &CancellationToken::new(),
@@ -2531,7 +2408,7 @@ mod tests {
             });
             assert_eq!(
                 adapter
-                    .submit(common(), 0, &id.defaults(), &key, &token, &|_| {})
+                    .submit(common(), &id.defaults(), &key, &token, &|_| {})
                     .await
                     .unwrap_err()
                     .kind,
@@ -2552,7 +2429,6 @@ mod tests {
                 adapter
                     .submit(
                         common(),
-                        0,
                         &id.defaults(),
                         &key,
                         &CancellationToken::new(),
@@ -2647,7 +2523,6 @@ mod retry_tests {
         let response = adapter
             .submit(
                 common,
-                0,
                 &settings,
                 &ApiKey::new("test-retry-key".into()).unwrap(),
                 &CancellationToken::new(),

@@ -396,29 +396,20 @@ fn generation_body(
     settings: &ProviderSettings,
 ) -> Result<(Vec<u8>, CostEstimate)> {
     settings.validate_for_auth(authentication)?;
-    let content = request_content(snapshot, mode, schema)?;
-    let mut value = content.responses_body();
-    configure_response_body(&mut value, authentication, settings);
-    let body = crate::schema_wire::serialize_body(&value)
-        .map_err(|_| ProviderError::before(ErrorKind::InvalidRequirements))?;
+    let body = responses_wire(authentication, snapshot, mode, schema, settings)?;
     if body.len() > MAX_REQUEST_BYTES {
         return Err(ProviderError::before(ErrorKind::InputLimit));
     }
-    let preview_bytes = value["input"][0]["content"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .skip(2)
-        .map(|part| serde_json::to_vec(part).map(|bytes| bytes.len() + 1))
-        .collect::<std::result::Result<Vec<_>, _>>()
-        .map_err(|_| ProviderError::before(ErrorKind::InvalidRequirements))?
-        .into_iter()
-        .sum::<usize>();
-    let reserve = snapshot.images.len() as u64 * desegnos_core::limits::AI_PREVIEW_TOKEN_RESERVE;
+    let (counted, reserve) = without_previews(snapshot);
+    let counted_bytes = if snapshot.images.is_empty() {
+        body.len()
+    } else {
+        responses_wire(authentication, &counted, mode, schema, settings)?.len()
+    };
     let mut estimate = estimate_response_value(
         authentication,
-        body.len() - preview_bytes,
-        &value,
+        counted_bytes,
+        snapshot.images.len(),
         settings,
         reserve,
     )?;
@@ -434,8 +425,22 @@ fn generation_body(
     Ok((body, estimate))
 }
 
+fn responses_wire(
+    authentication: AuthenticationMethod,
+    snapshot: &RequirementsSnapshot,
+    mode: GenerationMode,
+    schema: &Value,
+    settings: &ProviderSettings,
+) -> Result<Vec<u8>> {
+    let mut value = request_content(snapshot, mode, schema)?.responses_body();
+    configure_response_body(&mut value, authentication, settings);
+    crate::schema_wire::serialize_body(&value)
+        .map_err(|_| ProviderError::before(ErrorKind::InvalidRequirements))
+}
+
 /// Picture previews are billed per image, not per Base64 byte: estimate the request without
-/// them and reserve a fixed number of tokens for each instead.
+/// them and reserve a fixed number of tokens for each instead. Every provider estimate uses
+/// this one rule.
 pub(crate) fn without_previews(snapshot: &RequirementsSnapshot) -> (RequirementsSnapshot, u64) {
     let reserve = snapshot.images.len() as u64 * desegnos_core::limits::AI_PREVIEW_TOKEN_RESERVE;
     let mut counted = snapshot.clone();
@@ -524,39 +529,23 @@ pub(crate) fn request_content<'a>(
     })
 }
 
-pub(crate) fn estimate_body_with_reserve(
-    authentication: AuthenticationMethod,
-    body: &[u8],
-    settings: &ProviderSettings,
-    visual_tokens: u64,
-) -> Result<CostEstimate> {
-    let value: Value = serde_json::from_slice(body)
-        .map_err(|_| ProviderError::before(ErrorKind::InvalidRequirements))?;
-    estimate_response_value(authentication, body.len(), &value, settings, visual_tokens)
-}
-
-fn estimate_response_value(
+pub(crate) fn estimate_response_value(
     authentication: AuthenticationMethod,
     wire_bytes: usize,
-    body: &Value,
+    images: usize,
     settings: &ProviderSettings,
     visual_tokens: u64,
 ) -> Result<CostEstimate> {
     let model = model_catalogue()
         .into_iter()
         .find(|model| model.id == settings.model);
-    let images = body["input"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .flat_map(|input| input["content"].as_array().into_iter().flatten())
-        .filter(|part| part["type"] == "input_image")
-        .count();
     crate::estimate::estimate(
         crate::estimate::EstimateInput {
             wire_bytes,
             visual_tokens,
             framing_tokens: crate::estimate::WIRE_FRAMING_TOKENS,
+            // Unlike foreign providers (WINDOW_BYTES_PER_TOKEN), the OpenAI window is bounded by
+            // one token per byte.
             window_bytes_per_token: 1,
             context_window: CONTEXT_WINDOW_TOKENS,
             output_reserve: if authentication == AuthenticationMethod::Chatgpt {

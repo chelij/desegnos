@@ -52,6 +52,41 @@ impl BodyResponse for crate::retry::RetryResponse {
     }
 }
 
+pub(crate) enum ChunkFailure {
+    Cancelled,
+    Deadline,
+    Transport,
+}
+impl ChunkFailure {
+    pub fn kind(self) -> ErrorKind {
+        match self {
+            Self::Cancelled => ErrorKind::Cancelled,
+            Self::Deadline => ErrorKind::Deadline,
+            Self::Transport => ErrorKind::Transport,
+        }
+    }
+}
+
+/// The next body chunk, ending early on cancellation, the overall deadline or `idle` of silence.
+pub(crate) async fn next_chunk(
+    response: &mut (impl BodyResponse + Send),
+    cancellation: &CancellationToken,
+    deadline: Instant,
+    idle: Duration,
+) -> std::result::Result<Option<bytes::Bytes>, ChunkFailure> {
+    let silence = Instant::now()
+        .checked_add(idle)
+        .map_or(deadline, |limit| deadline.min(limit));
+    tokio::select! {
+        biased;
+        _ = cancellation.cancelled() => Err(ChunkFailure::Cancelled),
+        _ = tokio::time::sleep_until(silence) => Err(ChunkFailure::Deadline),
+        result = response.body_chunk() => result.map_err(|error| {
+            if error.is_timeout() { ChunkFailure::Deadline } else { ChunkFailure::Transport }
+        }),
+    }
+}
+
 pub(crate) async fn bounded_body(
     response: &mut (impl BodyResponse + Send),
     limit: usize,
@@ -67,17 +102,34 @@ pub(crate) async fn bounded_body(
     }
     let mut body = zeroize::Zeroizing::new(Vec::new());
     loop {
-        let chunk = tokio::select! {
-            biased;
-            _ = cancellation.cancelled() => return Err(error(ErrorKind::Cancelled)),
-            _ = tokio::time::sleep_until(deadline) => return Err(error(ErrorKind::Deadline)),
-            result = response.body_chunk() => result.map_err(|_| error(ErrorKind::Transport))?,
-        };
+        let chunk = next_chunk(response, cancellation, deadline, Duration::MAX)
+            .await
+            .map_err(|failure| error(failure.kind()))?;
         let Some(chunk) = chunk else { return Ok(body) };
         if body.len().saturating_add(chunk.len()) > limit {
             return Err(error(ErrorKind::OutputLimit));
         }
         body.extend_from_slice(&chunk);
+    }
+}
+
+/// What both provider stacks keep from a failed response before reading its body.
+pub(crate) struct ErrorHead {
+    pub status: u16,
+    pub request_id: Option<String>,
+    pub content_type: Option<String>,
+}
+impl ErrorHead {
+    pub fn of(response: &crate::retry::RetryResponse) -> Self {
+        let headers = response.headers();
+        Self {
+            status: response.status().as_u16(),
+            request_id: request_id(headers).map(str::to_owned),
+            content_type: headers
+                .get(reqwest::header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_owned),
+        }
     }
 }
 

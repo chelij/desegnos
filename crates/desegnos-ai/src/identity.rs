@@ -2,7 +2,7 @@ use crate::{
     AuthenticationMethod, CostEstimate, ErrorKind, MAX_REQUEST_BYTES, ProviderError,
     ProviderSettings, Result,
     request::{RequestContent, RequestPart},
-    settings::estimate_body_with_reserve,
+    settings::estimate_response_value,
 };
 use desegnos_core::RequirementsSnapshot;
 use serde_json::{Value, json};
@@ -43,11 +43,9 @@ pub fn estimate_identity_for_auth(
     settings: &ProviderSettings,
     images: &[IdentityImage],
 ) -> Result<CostEstimate> {
-    let result =
-        identity_body(authentication, snapshot, schema, settings, images).and_then(|body| {
-            estimate_body_with_reserve(authentication, &body, settings, vision_reserve(images))
-        });
-    result.map_err(|error| error.with_authentication(authentication))
+    identity_wire(authentication, snapshot, schema, settings, images)
+        .map(|(_, estimate)| estimate)
+        .map_err(|error| error.with_authentication(authentication))
 }
 
 pub(crate) fn prepare_identity_body(
@@ -57,9 +55,7 @@ pub(crate) fn prepare_identity_body(
     settings: &ProviderSettings,
     images: &[IdentityImage],
 ) -> Result<Vec<u8>> {
-    let body = identity_body(authentication, snapshot, schema, settings, images)?;
-    estimate_body_with_reserve(authentication, &body, settings, vision_reserve(images))?;
-    Ok(body)
+    identity_wire(authentication, snapshot, schema, settings, images).map(|(body, _)| body)
 }
 
 pub(crate) fn vision_reserve(images: &[IdentityImage]) -> u64 {
@@ -75,22 +71,29 @@ pub(crate) fn vision_reserve(images: &[IdentityImage]) -> u64 {
         .sum()
 }
 
-pub(crate) fn identity_body(
+fn identity_wire(
     authentication: AuthenticationMethod,
     snapshot: &RequirementsSnapshot,
     schema: &Value,
     settings: &ProviderSettings,
     images: &[IdentityImage],
-) -> Result<Vec<u8>> {
+) -> Result<(Vec<u8>, CostEstimate)> {
     settings.validate_for_auth(authentication)?;
     let mut body = identity_content(snapshot, schema, images)?.responses_body();
     crate::settings::configure_response_body(&mut body, authentication, settings);
-    let bytes = serde_json::to_vec(&body)
+    let bytes = crate::schema_wire::serialize_body(&body)
         .map_err(|_| ProviderError::before(ErrorKind::InvalidRequirements))?;
     if bytes.len() > MAX_REQUEST_BYTES {
         return Err(ProviderError::before(ErrorKind::InputLimit));
     }
-    Ok(bytes)
+    let estimate = estimate_response_value(
+        authentication,
+        bytes.len(),
+        images.len(),
+        settings,
+        vision_reserve(images),
+    )?;
+    Ok((bytes, estimate))
 }
 
 pub(crate) fn identity_content<'a>(
