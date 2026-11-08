@@ -109,10 +109,7 @@ fn remember_destination(
         .take(120)
         .collect();
     let mut entries = read(directory)?;
-    let existing = entries
-        .iter()
-        .find(|entry| entry.path == path)
-        .cloned();
+    let existing = entries.iter().find(|entry| entry.path == path).cloned();
     entries.retain(|entry| entry.path != path);
     let opened_at_ms = existing
         .as_ref()
@@ -145,9 +142,7 @@ fn lock(directory: &Path) -> Result<File, String> {
     loop {
         match lock.try_lock() {
             Ok(()) => return Ok(lock),
-            Err(std::fs::TryLockError::WouldBlock)
-                if std::time::Instant::now() < deadline =>
-            {
+            Err(std::fs::TryLockError::WouldBlock) if std::time::Instant::now() < deadline => {
                 std::thread::sleep(std::time::Duration::from_millis(5));
             }
             Err(error) => {
@@ -197,9 +192,17 @@ pub fn set_pinned(
 pub fn forget_recent_project(
     state: tauri::State<'_, std::sync::Mutex<crate::workspace::Workspace>>,
     path: PathBuf,
-) -> Result<Vec<RecentProject>, String> {
-    let state = state.lock().map_err(|error| error.to_string())?;
-    forget(state.directory(), &path)
+) -> Result<Vec<RecentProject>, crate::native_error::NativeFailure> {
+    (|| -> Result<Vec<RecentProject>, String> {
+        let state = state.lock().map_err(|error| error.to_string())?;
+        forget(state.directory(), &path)
+    })()
+    .map_err(|error| {
+        crate::native_error::NativeFailure::from_serializable(
+            error,
+            crate::native_error::NativeErrorKind::Command,
+        )
+    })
 }
 
 #[tauri::command]
@@ -207,9 +210,17 @@ pub fn set_recent_project_pin(
     state: tauri::State<'_, std::sync::Mutex<crate::workspace::Workspace>>,
     path: PathBuf,
     pinned: bool,
-) -> Result<Vec<RecentProject>, String> {
-    let state = state.lock().map_err(|error| error.to_string())?;
-    set_pinned(state.directory(), &path, pinned)
+) -> Result<Vec<RecentProject>, crate::native_error::NativeFailure> {
+    (|| -> Result<Vec<RecentProject>, String> {
+        let state = state.lock().map_err(|error| error.to_string())?;
+        set_pinned(state.directory(), &path, pinned)
+    })()
+    .map_err(|error| {
+        crate::native_error::NativeFailure::from_serializable(
+            error,
+            crate::native_error::NativeErrorKind::Command,
+        )
+    })
 }
 
 #[cfg(test)]

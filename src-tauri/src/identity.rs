@@ -582,23 +582,31 @@ pub fn prepare_identity_selection(
     generation: State<'_, Mutex<AiSettingsStore>>,
     source_id: Uuid,
     file_ids: Option<Vec<Uuid>>,
-) -> NativeResult<IdentitySelection> {
-    let source = state
-        .lock()
-        .map_err(error)?
-        .sources
-        .get(&source_id)
-        .cloned()
-        .ok_or("Choose your brand folder or website again.")?;
-    let connection = generation.lock().map_err(error)?.connection();
-    let (provider, authentication, settings) = (
-        connection.provider,
-        connection.authentication,
-        connection.settings,
-    );
-    Ok(select_files(&source, file_ids, |ids| {
-        check_selection(&source, ids, provider, authentication, &settings)
-    }))
+) -> Result<IdentitySelection, crate::native_error::NativeFailure> {
+    (|| -> NativeResult<IdentitySelection> {
+        let source = state
+            .lock()
+            .map_err(error)?
+            .sources
+            .get(&source_id)
+            .cloned()
+            .ok_or("Choose your brand folder or website again.")?;
+        let connection = generation.lock().map_err(error)?.connection();
+        let (provider, authentication, settings) = (
+            connection.provider,
+            connection.authentication,
+            connection.settings,
+        );
+        Ok(select_files(&source, file_ids, |ids| {
+            check_selection(&source, ids, provider, authentication, &settings)
+        }))
+    })()
+    .map_err(|error| {
+        crate::native_error::NativeFailure::from_serializable(
+            error,
+            crate::native_error::NativeErrorKind::Command,
+        )
+    })
 }
 
 fn candidate_schema() -> Value {
@@ -1370,19 +1378,36 @@ impl IdentityService {
 }
 
 #[tauri::command]
-pub fn get_identity_analysis(state: IdentityState<'_>) -> NativeResult<Option<AnalysisView>> {
-    let service = state.lock().map_err(error)?;
-    if let Some(reason) = &service.startup_error {
-        return Err(reason.clone());
-    }
-    Ok(service.latest.as_ref().map(AnalysisRecord::view))
+pub fn get_identity_analysis(
+    state: IdentityState<'_>,
+) -> Result<Option<AnalysisView>, crate::native_error::NativeFailure> {
+    (|| -> NativeResult<Option<AnalysisView>> {
+        let service = state.lock().map_err(error)?;
+        if let Some(reason) = &service.startup_error {
+            return Err(reason.clone());
+        }
+        Ok(service.latest.as_ref().map(AnalysisRecord::view))
+    })()
+    .map_err(|error| {
+        crate::native_error::NativeFailure::from_serializable(
+            error,
+            crate::native_error::NativeErrorKind::Command,
+        )
+    })
 }
 #[tauri::command]
 pub fn cancel_identity_analysis(
     state: IdentityState<'_>,
     job_id: Uuid,
-) -> NativeResult<AnalysisView> {
-    state.lock().map_err(error)?.cancel(job_id)
+) -> Result<AnalysisView, crate::native_error::NativeFailure> {
+    (|| -> NativeResult<AnalysisView> { state.lock().map_err(error)?.cancel(job_id) })().map_err(
+        |error| {
+            crate::native_error::NativeFailure::from_serializable(
+                error,
+                crate::native_error::NativeErrorKind::Command,
+            )
+        },
+    )
 }
 /// Access for an analysis of the selected connection, confirmed once more after sign-in.
 async fn identity_access(
@@ -1451,82 +1476,92 @@ pub fn analyze_identity(
     state: IdentityState<'_>,
     source_id: Uuid,
     file_ids: Vec<Uuid>,
-) -> NativeResult<AnalysisView> {
-    let (view, cancellation) = state.lock().map_err(error)?.reserve(source_id, file_ids)?;
-    let job_id = view.job_id;
-    tauri::async_runtime::spawn(async move {
-        let generation = app.state::<Mutex<AiSettingsStore>>();
-        let chatgpt = app.state::<ChatgptState>();
-        let provider = generation
-            .lock()
-            .ok()
-            .map(|service| service.connection().provider);
-        let access = match identity_access(&generation, &chatgpt, &cancellation).await {
-            Ok(access) => access,
-            Err(reason) => {
-                if let Ok(mut service) = app.state::<Mutex<IdentityService>>().lock() {
-                    if let Some(record) = service
-                        .latest
-                        .as_mut()
-                        .filter(|record| record.requirements.job_id == job_id)
-                    {
-                        record.provider = provider;
-                        record.provider_error = reason.provider_error.map(|error| *error);
-                    }
-                    report(service.fail_before_send(job_id, reason.message));
-                }
-                return;
-            }
-        };
-        let begin = || {
-            app.state::<Mutex<IdentityService>>()
+) -> Result<AnalysisView, crate::native_error::NativeFailure> {
+    (|| -> NativeResult<AnalysisView> {
+        let (view, cancellation) = state.lock().map_err(error)?.reserve(source_id, file_ids)?;
+        let job_id = view.job_id;
+        tauri::async_runtime::spawn(async move {
+            let generation = app.state::<Mutex<AiSettingsStore>>();
+            let chatgpt = app.state::<ChatgptState>();
+            let provider = generation
                 .lock()
-                .map_err(error)?
-                .begin(job_id, &access)
-        };
-        let prepared = access.while_signed_in(&chatgpt, begin);
-        let (snapshot, images, schema) = match prepared {
-            Ok(value) => value,
-            Err(reason) => {
-                if let Ok(mut service) = app.state::<Mutex<IdentityService>>().lock() {
-                    report(service.fail_before_send(job_id, reason));
-                }
-                return;
-            }
-        };
-        let progress_app = app.clone();
-        let result = access
-            .client
-            .analyze_identity(
-                desegnos_ai::IdentityRequest {
-                    authentication: access.authentication,
-                    snapshot: &snapshot,
-                    schema: &schema,
-                    settings: &access.settings,
-                    key: &access.key,
-                    cancellation: &cancellation,
-                    images: &images,
-                },
-                move |progress| {
-                    if let Ok(mut service) = progress_app.state::<Mutex<IdentityService>>().lock() {
-                        service.progress(job_id, progress);
+                .ok()
+                .map(|service| service.connection().provider);
+            let access = match identity_access(&generation, &chatgpt, &cancellation).await {
+                Ok(access) => access,
+                Err(reason) => {
+                    if let Ok(mut service) = app.state::<Mutex<IdentityService>>().lock() {
+                        if let Some(record) = service
+                            .latest
+                            .as_mut()
+                            .filter(|record| record.requirements.job_id == job_id)
+                        {
+                            record.provider = provider;
+                            record.provider_error = reason.provider_error.map(|error| *error);
+                        }
+                        report(service.fail_before_send(job_id, reason.message));
                     }
-                },
-            )
-            .await;
-        let finish = || {
-            app.state::<Mutex<IdentityService>>()
-                .lock()
-                .map_err(error)?
-                .finish(job_id, result)
-        };
-        if access.while_signed_in(&chatgpt, finish).is_err()
-            && let Ok(mut service) = app.state::<Mutex<IdentityService>>().lock()
-        {
-            report(service.cancel(job_id));
-        }
-    });
-    Ok(view)
+                    return;
+                }
+            };
+            let begin = || {
+                app.state::<Mutex<IdentityService>>()
+                    .lock()
+                    .map_err(error)?
+                    .begin(job_id, &access)
+            };
+            let prepared = access.while_signed_in(&chatgpt, begin);
+            let (snapshot, images, schema) = match prepared {
+                Ok(value) => value,
+                Err(reason) => {
+                    if let Ok(mut service) = app.state::<Mutex<IdentityService>>().lock() {
+                        report(service.fail_before_send(job_id, reason));
+                    }
+                    return;
+                }
+            };
+            let progress_app = app.clone();
+            let result = access
+                .client
+                .analyze_identity(
+                    desegnos_ai::IdentityRequest {
+                        authentication: access.authentication,
+                        snapshot: &snapshot,
+                        schema: &schema,
+                        settings: &access.settings,
+                        key: &access.key,
+                        cancellation: &cancellation,
+                        images: &images,
+                    },
+                    move |progress| {
+                        if let Ok(mut service) =
+                            progress_app.state::<Mutex<IdentityService>>().lock()
+                        {
+                            service.progress(job_id, progress);
+                        }
+                    },
+                )
+                .await;
+            let finish = || {
+                app.state::<Mutex<IdentityService>>()
+                    .lock()
+                    .map_err(error)?
+                    .finish(job_id, result)
+            };
+            if access.while_signed_in(&chatgpt, finish).is_err()
+                && let Ok(mut service) = app.state::<Mutex<IdentityService>>().lock()
+            {
+                report(service.cancel(job_id));
+            }
+        });
+        Ok(view)
+    })()
+    .map_err(|error| {
+        crate::native_error::NativeFailure::from_serializable(
+            error,
+            crate::native_error::NativeErrorKind::Command,
+        )
+    })
 }
 
 #[cfg(test)]

@@ -1,6 +1,6 @@
 import type { Element, Page, PageSize, Project, SizePreset } from '../types';
 import { resolveElements } from './links';
-import { SIZE_PRESETS as PRESETS } from '../generated/limits';
+import { SIZE_LABELS, SIZE_PRESETS as PRESETS } from '../generated/limits';
 
 // Linked sizes: one element tree per page drawn as one boundary per size. The first size is the
 // base size; its values are what every other size inherits. The core resolves the same way in
@@ -12,11 +12,11 @@ export const SIZE_PRESETS: { preset: SizePreset; label: string; width: number; h
 export const baseSizeId = (page: Page): string => page.sizes[0].id;
 export const hasManySizes = (page: Page): boolean => page.sizes.length > 1;
 export function sizeLabel(width: number): string {
-  return width >= 1024 ? 'Desktop' : width >= 700 ? 'Tablet' : 'Phone';
+  return [...SIZE_LABELS].reverse().find(item => width >= item.min)!.label;
 }
 
 export function boundaryLabel(page: Page, size: PageSize): string {
-  return page.sizes.length > 1 ? `${page.name} · ${sizeLabel(size.width)}` : page.name;
+  return page.sizes.length > 1 ? `${page.name} · ${size.label}` : page.name;
 }
 
 export function applyOverrides(elements: Element[], sizeId: string) {

@@ -1,3 +1,4 @@
+import { MAX_FONT_WEIGHT } from '../generated/limits';
 import { useEffect, useState, useSyncExternalStore } from 'react';
 import { native } from '../api';
 import type { CanvasFont, Element } from '../types';
@@ -28,7 +29,7 @@ export function loadCanvasFont(style: TextStyle): Promise<LoadedFont> {
           const source = face.bundled
             ? `url("${new URL('../assets/brand/archivo-variable.woff2', import.meta.url).href}")`
             : `url("${await native<string>('load_canvas_font', { id: face.id })}")`;
-          const font = new FontFace(family, source, { weight: '1 1000' });
+          const font = new FontFace(family, source, { weight: `1 ${MAX_FONT_WEIGHT}` });
           document.fonts.add(await font.load());
           return family;
         })();

@@ -1,3 +1,4 @@
+import { errorValue, type ErrorValue } from './errorMessage.js';
 import { ProblemBanner } from './ProblemBanner.js';
 import { userError, generationError } from './userErrors.js';
 import { areaOutcome, declaredConflict, fixLabel, generationWarnings, jobOutcome, jsonBlocks, staleResult, staleResultMessage } from './generationProblems.js';
@@ -24,15 +25,15 @@ function elementName(element: Element): string {
 
 export function GenerationLog({ job: currentJob, operation, error, project, controller, close, settings, openSettings, openImport, openBrief, editRequest, reply }: {
   settings: AiSettingsView | null; openSettings: () => void; openImport?: () => void; openBrief?: () => void; editRequest: (id: string) => void;
-  job: GenerationJobView | null; operation: string | null; error: string | null; project: Project; controller: GenerationController; close: () => void;
+  job: GenerationJobView | null; operation: string | null; error: ErrorValue | null; project: Project; controller: GenerationController; close: () => void;
   reply: (targets: { pageId: string; elementId: string }[], text: string) => Promise<void>;
 }) {
   const [history, setHistory] = useState<GenerationHistory | null>(null);
   const [past, setPast] = useState<GenerationJobView | null>(null);
-  const [historyError, setHistoryError] = useState('');
+  const [historyError, setHistoryError] = useState<ErrorValue>('');
   const [loadingPast, setLoadingPast] = useState(false);
   const [replyText, setReplyText] = useState('');
-  const [replyError, setReplyError] = useState('');
+  const [replyError, setReplyError] = useState<ErrorValue>('');
   const [replySending, setReplySending] = useState(false);
   const replyBox = useRef<HTMLTextAreaElement>(null);
   useEffect(() => { const node = replyBox.current; if (!node) return; node.style.height = 'auto'; node.style.height = `${node.scrollHeight + node.offsetHeight - node.clientHeight}px`; node.style.overflowY = node.scrollHeight > node.clientHeight ? 'auto' : 'hidden'; }, [replyText]);
@@ -40,14 +41,14 @@ export function GenerationLog({ job: currentJob, operation, error, project, cont
   useEffect(() => {
     let active = true;
     historyEpoch.current += 1; setPast(null); setHistory(null); setLoadingPast(false); setHistoryError('');
-    void native<GenerationHistory>('list_generations', { projectId: project.id }).then(value => { if (active) setHistory(value); }, error => { if (active) setHistoryError(String(error)); });
+    void native<GenerationHistory>('list_generations', { projectId: project.id }).then(value => { if (active) setHistory(value); }, error => { if (active) setHistoryError(errorValue(error)); });
     return () => { active = false; };
   }, [project.id, currentJob?.jobId, currentJob?.status]);
   async function showPast(jobId: string) {
     const epoch = ++historyEpoch.current;
     setLoadingPast(true); setHistoryError('');
     try { const value = await native<GenerationJobView>('get_past_generation', { projectId: project.id, jobId }); if (epoch === historyEpoch.current) setPast(value); }
-    catch (error) { if (epoch === historyEpoch.current) setHistoryError(String(error)); }
+    catch (error) { if (epoch === historyEpoch.current) setHistoryError(errorValue(error)); }
     finally { if (epoch === historyEpoch.current) setLoadingPast(false); }
   }
   const job = past ?? currentJob;
@@ -79,7 +80,7 @@ export function GenerationLog({ job: currentJob, operation, error, project, cont
       await reply(targets, text);
       setReplyText('');
       if (past) { historyEpoch.current += 1; setLoadingPast(false); setPast(null); }
-    } catch (error) { setReplyError(String(error)); }
+    } catch (error) { setReplyError(errorValue(error)); }
     finally { setReplySending(false); }
   }
   const candidate = job?.candidate;

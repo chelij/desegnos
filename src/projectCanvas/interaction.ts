@@ -500,7 +500,7 @@ export function createCanvasInteraction(context: () => Context) {
       let rect = active.rect;
       // A drag too small to see places the default size, as a click does.
       if (!active.moved || Math.max(rect.width, rect.height) * camera.zoom < 6) {
-        const size = active.elementKind === 'text' ? { width: 0, height: 0 } : active.elementKind === 'line' ? { width: 160, height: 0 } : defaultSize(active.elementKind);
+        const size = active.elementKind === 'text' ? { width: 0, height: 0 } : active.elementKind === 'line' ? defaultSize('line') : defaultSize(active.elementKind);
         rect = { x: active.start.x, y: active.start.y, ...size };
       }
       if (active.elementKind === 'image' && pendingImage) {

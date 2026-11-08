@@ -1,3 +1,4 @@
+import { errorMessage } from './errorMessage.js';
 import { ProblemBanner } from './ProblemBanner.js';
 import { userError } from './userErrors.js';
 import { useState } from 'react';
@@ -9,7 +10,7 @@ export function ProjectLocationSettings({ location, change }: { location: Projec
   async function update(reset: boolean) {
     setBusy(true); setError('');
     try { await change(reset); }
-    catch (error) { setError(error instanceof Error ? error.message : String(error)); }
+    catch (error) { setError(errorMessage(error)); }
     finally { setBusy(false); }
   }
   return <details className="project-location-settings"><summary>Default project location</summary>

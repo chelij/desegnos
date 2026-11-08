@@ -23,20 +23,28 @@ pub fn resolve_canvas_font(
     family: String,
     weight: u16,
     italic: bool,
-) -> Result<CanvasFont, String> {
-    let face = resolve_font(&family, weight, italic);
-    let result = CanvasFont {
-        id: face.id.clone(),
-        bundled: face.bundled,
-        fell_back: face.fell_back,
-        italic: face.italic,
-    };
-    faces()
-        .lock()
-        .map_err(|e| e.to_string())?
-        .entry(face.id.clone())
-        .or_insert(face);
-    Ok(result)
+) -> Result<CanvasFont, crate::native_error::NativeFailure> {
+    (|| -> Result<CanvasFont, String> {
+        let face = resolve_font(&family, weight, italic);
+        let result = CanvasFont {
+            id: face.id.clone(),
+            bundled: face.bundled,
+            fell_back: face.fell_back,
+            italic: face.italic,
+        };
+        faces()
+            .lock()
+            .map_err(|e| e.to_string())?
+            .entry(face.id.clone())
+            .or_insert(face);
+        Ok(result)
+    })()
+    .map_err(|error| {
+        crate::native_error::NativeFailure::from_serializable(
+            error,
+            crate::native_error::NativeErrorKind::Command,
+        )
+    })
 }
 
 #[tauri::command]
@@ -45,14 +53,22 @@ pub fn list_canvas_fonts() -> Vec<String> {
 }
 
 #[tauri::command]
-pub fn load_canvas_font(id: String) -> Result<String, String> {
-    let faces = faces().lock().map_err(|e| e.to_string())?;
-    let face = faces
-        .get(&id)
-        .ok_or("Resolve the font before loading it.")?;
-    let bytes = standalone_face(&face.bytes, face.index).ok_or("Invalid font collection.")?;
-    Ok(format!(
-        "data:font/ttf;base64,{}",
-        base64::engine::general_purpose::STANDARD.encode(bytes)
-    ))
+pub fn load_canvas_font(id: String) -> Result<String, crate::native_error::NativeFailure> {
+    (|| -> Result<String, String> {
+        let faces = faces().lock().map_err(|e| e.to_string())?;
+        let face = faces
+            .get(&id)
+            .ok_or("Resolve the font before loading it.")?;
+        let bytes = standalone_face(&face.bytes, face.index).ok_or("Invalid font collection.")?;
+        Ok(format!(
+            "data:font/ttf;base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(bytes)
+        ))
+    })()
+    .map_err(|error| {
+        crate::native_error::NativeFailure::from_serializable(
+            error,
+            crate::native_error::NativeErrorKind::Command,
+        )
+    })
 }

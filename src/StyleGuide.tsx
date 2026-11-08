@@ -1,3 +1,4 @@
+import { errorMessage } from './errorMessage.js';
 import type { ProjectEdits } from './session/projectEdits';
 import { ProblemBanner } from './ProblemBanner.js';
 import { userError } from './userErrors.js';
@@ -63,14 +64,14 @@ export function StyleGuide({ project, edits, openBrief }: { project: Project; ed
   async function save(topic: string, value: string) {
     setBusy(true); setError('');
     try { await edits.setDecision({ topic, value, scope: { kind: 'project' }, protected: rule(topic)?.protected ?? false }); }
-    catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
+    catch (reason) { setError(errorMessage(reason)); }
     finally { setBusy(false); }
   }
   async function clear(topic: string) {
     const existing = rule(topic); if (!existing) return;
     setBusy(true); setError('');
     try { await edits.removeDecision(existing.id); }
-    catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
+    catch (reason) { setError(errorMessage(reason)); }
     finally { setBusy(false); }
   }
   return <div className="dialog-body style-guide">

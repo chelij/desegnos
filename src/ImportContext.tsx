@@ -1,3 +1,4 @@
+import { errorMessage, errorValue, type ErrorValue } from './errorMessage.js';
 import { MAX_IMPORT_PAGES } from './generated/limits';
 import { usePoll } from './usePoll';
 import { needsAiSettings, ProblemBanner, Notice } from './ProblemBanner.js';
@@ -11,7 +12,6 @@ import { Icon } from './icons';
 import './importContext.css';
 
 // One source supplies the page import and the optional brand review.
-function message(error: unknown) { return error instanceof Error ? error.message : String(error); }
 function skippedSummary(skipped: string[]) {
   const counts = { build: 0, code: 0, other: 0 };
   for (const item of skipped) {
@@ -165,7 +165,7 @@ function ReviewGroup({ name, className = '', disabled, choose, children }: { nam
 export function ImportContext({ busy, settings, openSettings, importInto, onPagesImported, close, initialSource }: Props) {
   const [step, setStep] = useState<Step>(initialSource ? { kind: 'choose', source: initialSource, choice: startChoice() } : { kind: 'source' });
   const [working, setWorking] = useState(false);
-  const [error, setError] = useState('');
+  const [error, setError] = useState<ErrorValue>('');
   const [brandChoice, setBrandChoice] = useState<BrandChoice>('default');
   const [previousBrand, setPreviousBrand] = useState<PreviousBrand>({ status: 'reading', retrying: '' });
   const mounted = useRef(false);
@@ -195,7 +195,7 @@ export function ImportContext({ busy, settings, openSettings, importInto, onPage
   const analysisMethod = lastAttempt?.authentication ?? settings?.authentication;
   const analysisAccount = settings?.chatgpt.accounts.find(item => item.id === lastAttempt?.chatgptAccountId);
   const account = settings?.chatgpt.accounts.find(item => item.id === settings.chatgpt.activeAccountId);
-  const connected = !settings?.configurationError && (settings?.authentication === 'chatgpt' ? account?.connected && account.planEnabled && !account.storageRepairRequired : settings?.credential.configured);
+  const connected = settings?.readiness.ready ?? false;
   const alsoBrand = connected && brandChoice !== 'skipped';
   const hasPages = !!pages.source?.pages.length && pages.phase.kind !== 'imported';
   const requestedFiles = automatic ? null : files;
@@ -227,7 +227,7 @@ export function ImportContext({ busy, settings, openSettings, importInto, onPage
     void native<IdentitySelection>('prepare_identity_selection', { sourceId: source.id, fileIds: requestedFiles }).then(value => {
       if (stopped) return;
       change({ type: 'selection', selection: value, files: requestedFiles === null ? value.fileIds : null });
-    }).catch(error => { if (!stopped) change({ type: 'selection', selection: { fileIds: requestedFiles ?? NO_STRINGS, fits: false, message: message(error), needsSettings: false }, files: null }); });
+    }).catch(error => { if (!stopped) change({ type: 'selection', selection: { fileIds: requestedFiles ?? NO_STRINGS, fits: false, message: errorMessage(error), needsSettings: false }, files: null }); });
     return () => { stopped = true; };
   }, [source, requestedFiles, pickVersion, settings?.provider, settings?.authentication, settings?.settings.model, settings?.settings.reasoningEffort, settings?.settings.maxOutputTokens, settings?.settings.spendingLimitUsd]);
 
@@ -238,7 +238,7 @@ export function ImportContext({ busy, settings, openSettings, importInto, onPage
     try {
       const analysis = await native<IdentityAnalysis | null>('get_identity_analysis');
       if (current()) setPreviousBrand({ status: 'ready', analysis });
-    } catch (error) { if (current()) setPreviousBrand({ status: 'failed', error: message(error) }); }
+    } catch (error) { if (current()) setPreviousBrand({ status: 'failed', error: errorMessage(error) }); }
   }, []);
   useEffect(() => {
     mounted.current = true;
@@ -252,10 +252,10 @@ export function ImportContext({ busy, settings, openSettings, importInto, onPage
   usePoll(!!jobId, jobId ?? '', 900, async active => {
     const value = await native<IdentityAnalysis | null>('get_identity_analysis');
     if (active() && value?.jobId === jobId) { change({ type: 'accepted', analysis: value }); setError(''); }
-  }, error => setError(message(error)), 900, 500);
+  }, error => setError(errorValue(error)), 900, 500);
   async function run(operation: () => Promise<void>) {
     setWorking(true); setError('');
-    try { await operation(); } catch (error) { if (mounted.current) setError(message(error)); }
+    try { await operation(); } catch (error) { if (mounted.current) setError(errorValue(error)); }
     finally { if (mounted.current) setWorking(false); }
   }
   function acceptRead(value: WebsiteImportSourceView | null) {

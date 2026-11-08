@@ -1,3 +1,5 @@
+import { MAX_EDITOR_COORDINATE, MAX_GRID_COLUMNS, MAX_FONT_WEIGHT, TEXT_SIZE_RANGE } from '../generated/limits';
+import { IMAGE_MIME_TYPES } from '../generated/limits';
 import { linkedDefinition } from './links';
 import { sizeTarget } from '../projectCanvasGeometry';
 import { sharedElementValues } from './sharedElementValues';
@@ -309,9 +311,9 @@ export function ElementProperties({ project, page, sizeId, elements, busy, updat
     </div>}
     {(single || multi) && <PropsSection id="props-layout" title="Layout">
       <div className="props-grid">
-        <CompactNumberField prefix="X" label="X" min={-1_000_000} max={1_000_000} value={x ?? ''} placeholder={mixed(x) ? 'Mixed' : undefined} disabled={busy}
+        <CompactNumberField prefix="X" label="X" min={-MAX_EDITOR_COORDINATE} max={MAX_EDITOR_COORDINATE} value={x ?? ''} placeholder={mixed(x) ? 'Mixed' : undefined} disabled={busy}
           valid={validNumber} commit={value => commitRects(rect => ({ ...rect, x: Number(value) }))} />
-        <CompactNumberField prefix="Y" label="Y" min={-1_000_000} max={1_000_000} value={y ?? ''} placeholder={mixed(y) ? 'Mixed' : undefined} disabled={busy}
+        <CompactNumberField prefix="Y" label="Y" min={-MAX_EDITOR_COORDINATE} max={MAX_EDITOR_COORDINATE} value={y ?? ''} placeholder={mixed(y) ? 'Mixed' : undefined} disabled={busy}
           valid={validNumber} commit={value => commitRects(rect => ({ ...rect, y: Number(value) }))} />
         {(['width', 'height'] as const).map(axis => {
           // A line's thickness axis may be zero; every other box keeps at least one pixel.
@@ -361,7 +363,7 @@ export function ElementProperties({ project, page, sizeId, elements, busy, updat
         </>}
         {layout?.kind === 'grid' && <>
           <div className="props-grid">
-            <CompactNumberField prefix="C" label="Columns" min={1} max={64} value={layout.columns} disabled={busy} valid={value => Number(value) >= 1 && Number(value) <= 64}
+            <CompactNumberField prefix="C" label="Columns" min={1} max={MAX_GRID_COLUMNS} value={layout.columns} disabled={busy} valid={value => Number(value) >= 1 && Number(value) <= MAX_GRID_COLUMNS}
               commit={value => update(elements.map(element => sized({ id: element.id, layout: element.layout.kind === 'free' ? element.layout : { ...element.layout, columns: Number(value) } })))} />
             <CompactNumberField prefix="G" label="Gap" min={0} unit="px" value={layout.gap} disabled={busy} valid={value => Number(value) >= 0}
               commit={value => update(elements.map(element => sized({ id: element.id, layout: element.layout.kind === 'free' ? element.layout : { ...element.layout, gap: Number(value) } })))} />
@@ -393,7 +395,7 @@ export function ElementProperties({ project, page, sizeId, elements, busy, updat
         {projectPictureUri(project, single.image) && <img className="dock-picture" src={projectPictureUri(project, single.image)!} alt="" />}
         <span className="dock-value">{pictureName(project, single.image)}</span>
         <button type="button" className="dock-action" disabled={busy} onClick={() => picture.current?.click()}>Replace</button>
-        <input ref={picture} type="file" hidden accept="image/png,image/jpeg,image/webp,image/gif" onChange={event => { choosePicture(event.target.files?.[0]); event.target.value = ''; }} />
+        <input ref={picture} type="file" hidden accept={IMAGE_MIME_TYPES.join(',')} onChange={event => { choosePicture(event.target.files?.[0]); event.target.value = ''; }} />
       </div>}
       {kind === 'embed' && single && <ProjectPageSelect label="Embed page…" project={project} value={single.url} disabled={busy} choose={commitUrl} />}
       {mediaKind && <CompactTextField label="Address" value={url ?? ''} disabled={busy} valid={kind === 'embed' ? validEmbedAddress : validUrl} commit={value => update(elements.map(element => ({ id: element.id, url: value.trim() })))} />}
@@ -403,9 +405,9 @@ export function ElementProperties({ project, page, sizeId, elements, busy, updat
       <FontField label="Font" value={textStyle?.fontFamily ?? ''} disabled={busy} commit={value => commitStyle(style => { style.textStyle.fontFamily = value; })} />
       {font?.fellBack && <span className="field-help">Not installed — using Archivo</span>}
       <div className="props-grid">
-        <CompactNumberField prefix="S" label="Size" min={1} unit="px" value={textStyle?.size ?? ''} placeholder={mixed(textStyle) ? 'Mixed' : undefined} disabled={busy} valid={value => Number(value) >= 1}
+        <CompactNumberField prefix="S" label="Size" min={TEXT_SIZE_RANGE[0]} max={TEXT_SIZE_RANGE[1]} unit="px" value={textStyle?.size ?? ''} placeholder={mixed(textStyle) ? 'Mixed' : undefined} disabled={busy} valid={value => Number(value) >= TEXT_SIZE_RANGE[0] && Number(value) <= TEXT_SIZE_RANGE[1]}
           commit={value => commitStyle(style => { style.textStyle.size = Number(value); })} />
-        <CompactNumberField prefix="W" label="Weight" min={1} max={1000} value={textStyle?.weight ?? ''} placeholder={mixed(textStyle) ? 'Mixed' : undefined} disabled={busy} valid={value => Number(value) >= 1 && Number(value) <= 1000}
+        <CompactNumberField prefix="W" label="Weight" min={1} max={MAX_FONT_WEIGHT} value={textStyle?.weight ?? ''} placeholder={mixed(textStyle) ? 'Mixed' : undefined} disabled={busy} valid={value => Number(value) >= 1 && Number(value) <= MAX_FONT_WEIGHT}
           commit={value => commitStyle(style => { style.textStyle.weight = Number(value); })} />
         <CompactNumberField prefix="LH" label="Line height" min={0} value={textStyle?.lineHeight ?? ''} placeholder={mixed(textStyle) ? 'Mixed' : undefined} disabled={busy} valid={value => Number(value) >= 0}
           commit={value => commitStyle(style => { style.textStyle.lineHeight = Number(value); })} />

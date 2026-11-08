@@ -1,3 +1,4 @@
+import { type ErrorValue } from '../errorMessage.js';
 import { native } from '../api';
 import { type ProjectCanvasHandle } from '../ProjectCanvas';
 import { isPendingRecovery, type PendingRecovery } from '../RecoveryBanner';
@@ -19,7 +20,7 @@ export type SaveState =
 
 type Context = {
   setPendingRecovery: import("react").Dispatch<import("react").SetStateAction<PendingRecovery | null>>;
-  setError: import("react").Dispatch<import("react").SetStateAction<string>>;
+  setError: import("react").Dispatch<import("react").SetStateAction<ErrorValue>>;
   saveState: import("react").RefObject<SaveState>;
   transitionSave: (state: SaveState) => void;
   current: import("react").RefObject<WorkspaceView | null>;

@@ -1,7 +1,8 @@
+import { ELEMENT_DEFAULTS } from '../generated/limits';
 import { type BoundaryToolKind } from './boundaryDefaults';
 import type { ProjectEdits } from '../session/projectEdits';
 import {
-  GRID_SPACING, drawnBoundaryRect, MIN_SIZE, snapValue, type Boundary,
+  drawnBoundaryRect, MIN_SIZE, snapValue, type Boundary,
   type CanvasCamera, type CanvasTarget, type ElementTarget, type FrameCorner, type Point,
   type RequestBox,
 } from '../projectCanvasGeometry';
@@ -179,7 +180,7 @@ export function elementAt<T extends RequestBox>(boxes: T[], point: Point): T | n
 
 export const intersects = (first: Rect, second: Rect) => first.x < second.x + second.width && first.x + first.width > second.x && first.y < second.y + second.height && first.y + first.height > second.y;
 
-export function elementMoveDelta(entries: ElementEntry[], start: Point, point: Point, snap: boolean, axisLock: boolean, spacing = GRID_SPACING): Point {
+export function elementMoveDelta(entries: ElementEntry[], start: Point, point: Point, snap: boolean, axisLock: boolean, spacing: number): Point {
   const travel = { x: point.x - start.x, y: point.y - start.y };
   if (!snap || !entries.length) return axisLock ? axisLockedDelta(travel) : travel;
   const first = entries[0].world;
@@ -190,7 +191,7 @@ export function elementMoveDelta(entries: ElementEntry[], start: Point, point: P
   return { x: axis.x === 0 ? 0 : delta.x, y: axis.y === 0 ? 0 : delta.y };
 }
 
-export function boundaryDrawRect(start: Point, point: Point, keys: { square?: boolean; fromCentre?: boolean } = {}, spacing = GRID_SPACING): Rect {
+export function boundaryDrawRect(start: Point, point: Point, keys: { square?: boolean; fromCentre?: boolean } = {}, spacing: number): Rect {
   if (!keys.square && !keys.fromCentre) return drawnBoundaryRect(start, point, spacing);
   const from = { x: snapValue(start.x, spacing), y: snapValue(start.y, spacing) };
   let dx = snapValue(point.x, spacing) - from.x;
@@ -214,18 +215,6 @@ export const targetKey = (targets: { pageId: string; elementId: string }[]): str
 export const entryTargetKey = (entries: { pageId: string; id: string }[]): string => targetKey(entries.map(entry => ({ pageId: entry.pageId, elementId: entry.id })));
 
 export function defaultSize(kind: ElementKind): { width: number; height: number } {
-  switch (kind) {
-    case 'ellipse': return { width: 160, height: 120 };
-    case 'line': return { width: 160, height: 0 };
-    case 'button': return { width: 160, height: 44 };
-    case 'link': return { width: 120, height: 28 };
-    case 'input': case 'select': return { width: 240, height: 40 };
-    case 'textarea': return { width: 240, height: 100 };
-    case 'checkbox': case 'radio': return { width: 160, height: 24 };
-    case 'video': case 'embed': return { width: 320, height: 180 };
-    case 'audio': return { width: 320, height: 64 };
-    case 'code': return { width: 360, height: 160 };
-    case 'image': return { width: 320, height: 200 };
-    default: return { width: 240, height: 160 };
-  }
+  const { width, height } = ELEMENT_DEFAULTS[kind];
+  return { width, height };
 }

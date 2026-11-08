@@ -1,3 +1,4 @@
+import { IMAGE_MIME_TYPES } from './generated/limits';
 import { layoutKind } from './projectCanvas/boundaryDefaults';
 import { boundaryVisible } from './projectCanvas/canvasView';
 import { fitCamera } from './projectCanvasGeometry';
@@ -69,7 +70,7 @@ export const ProjectCanvas = forwardRef<ProjectCanvasHandle, ProjectCanvasProps>
     onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) setPointerFocus(false); }}
     onPointerDown={pointerDown} onKeyDown={keyDown} onDoubleClickCapture={doubleClick} onPaste={paste}
     onDragOver={event => { if (!isTextField(event.target)) event.preventDefault(); }} onDrop={dropText}>
-    <input ref={imagePicker} type="file" hidden accept="image/png,image/jpeg,image/webp,image/gif" onChange={event => { chooseImage(event.target.files?.[0]); event.target.value = ''; }} />
+    <input ref={imagePicker} type="file" hidden accept={IMAGE_MIME_TYPES.join(',')} onChange={event => { chooseImage(event.target.files?.[0]); event.target.value = ''; }} />
     <div className="project-canvas-layer" style={{ transform: `translate(${camera.x}px, ${camera.y}px) scale(${camera.zoom})`, '--canvas-zoom': camera.zoom } as CSSProperties}>
       <BoundaryLayer project={scrubbed.project} boundaries={scrubbed.boundaries} focused={focused} focusedSize={focusedSize} selection={selection}
         moving={moving} tool={tool} spaceHeld={spaceHeld} openPage={openPage} editingId={editing?.elementId ?? null}

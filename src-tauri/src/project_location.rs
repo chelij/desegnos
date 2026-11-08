@@ -111,19 +111,35 @@ fn view(state: &crate::workspace::Workspace) -> Result<ProjectLocationView, Stri
 #[tauri::command]
 pub fn get_project_location(
     state: State<'_, Mutex<crate::workspace::Workspace>>,
-) -> Result<ProjectLocationView, String> {
-    let state = state.lock().map_err(|e| e.to_string())?;
-    view(&state)
+) -> Result<ProjectLocationView, crate::native_error::NativeFailure> {
+    (|| -> Result<ProjectLocationView, String> {
+        let state = state.lock().map_err(|e| e.to_string())?;
+        view(&state)
+    })()
+    .map_err(|error| {
+        crate::native_error::NativeFailure::from_serializable(
+            error,
+            crate::native_error::NativeErrorKind::Command,
+        )
+    })
 }
 
 #[tauri::command]
 pub fn get_app_settings(
     state: State<'_, Mutex<crate::workspace::Workspace>>,
-) -> Result<AppSettingsView, String> {
-    let state = state.lock().map_err(|e| e.to_string())?;
-    let settings = read_settings(state.directory())?;
-    Ok(AppSettingsView {
-        show_start_page: settings.show_start_page.unwrap_or(true),
+) -> Result<AppSettingsView, crate::native_error::NativeFailure> {
+    (|| -> Result<AppSettingsView, String> {
+        let state = state.lock().map_err(|e| e.to_string())?;
+        let settings = read_settings(state.directory())?;
+        Ok(AppSettingsView {
+            show_start_page: settings.show_start_page.unwrap_or(true),
+        })
+    })()
+    .map_err(|error| {
+        crate::native_error::NativeFailure::from_serializable(
+            error,
+            crate::native_error::NativeErrorKind::Command,
+        )
     })
 }
 
@@ -131,50 +147,77 @@ pub fn get_app_settings(
 pub fn set_show_start_page(
     state: State<'_, Mutex<crate::workspace::Workspace>>,
     value: bool,
-) -> Result<AppSettingsView, String> {
-    let state = state.lock().map_err(|e| e.to_string())?;
-    update_settings(state.directory(), |settings| {
-        settings.show_start_page = Some(value);
-    })?;
-    Ok(AppSettingsView {
-        show_start_page: value,
+) -> Result<AppSettingsView, crate::native_error::NativeFailure> {
+    (|| -> Result<AppSettingsView, String> {
+        let state = state.lock().map_err(|e| e.to_string())?;
+        update_settings(state.directory(), |settings| {
+            settings.show_start_page = Some(value);
+        })?;
+        Ok(AppSettingsView {
+            show_start_page: value,
+        })
+    })()
+    .map_err(|error| {
+        crate::native_error::NativeFailure::from_serializable(
+            error,
+            crate::native_error::NativeErrorKind::Command,
+        )
     })
 }
 
 #[tauri::command]
-pub async fn pick_project_location(app: AppHandle) -> Result<Option<PathBuf>, String> {
-    tauri::async_runtime::spawn_blocking(move || -> Result<Option<PathBuf>, String> {
-        let Some(picked) = crate::file_dialogs::picked(
-            app.dialog()
-                .file()
-                .set_title("Choose project location")
-                .blocking_pick_folder(),
-        )?
-        else {
-            return Ok(None);
-        };
-        picked.into_path().map(Some).map_err(|e| e.to_string())
+pub async fn pick_project_location(
+    app: AppHandle,
+) -> Result<Option<PathBuf>, crate::native_error::NativeFailure> {
+    let result: Result<Option<PathBuf>, String> = async {
+        tauri::async_runtime::spawn_blocking(move || -> Result<Option<PathBuf>, String> {
+            let Some(picked) = crate::file_dialogs::picked(
+                app.dialog()
+                    .file()
+                    .set_title("Choose project location")
+                    .blocking_pick_folder(),
+            )?
+            else {
+                return Ok(None);
+            };
+            picked.into_path().map(Some).map_err(|e| e.to_string())
+        })
+        .await
+        .map_err(|e| e.to_string())?
+    }
+    .await;
+    result.map_err(|error| {
+        crate::native_error::NativeFailure::from_serializable(
+            error,
+            crate::native_error::NativeErrorKind::Command,
+        )
     })
-    .await
-    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
 pub fn set_project_location(
     state: State<'_, Mutex<crate::workspace::Workspace>>,
     path: Option<PathBuf>,
-) -> Result<ProjectLocationView, String> {
-    let state = state.lock().map_err(|e| e.to_string())?;
-    if let Some(path) = &path {
-        validate(path)?;
-        if !path.is_dir() {
-            return Err("Choose an existing parent folder.".into());
+) -> Result<ProjectLocationView, crate::native_error::NativeFailure> {
+    (|| -> Result<ProjectLocationView, String> {
+        let state = state.lock().map_err(|e| e.to_string())?;
+        if let Some(path) = &path {
+            validate(path)?;
+            if !path.is_dir() {
+                return Err("Choose an existing parent folder.".into());
+            }
         }
-    }
-    update_settings(state.directory(), |settings| {
-        settings.default_project_location = path;
-    })?;
-    view(&state)
+        update_settings(state.directory(), |settings| {
+            settings.default_project_location = path;
+        })?;
+        view(&state)
+    })()
+    .map_err(|error| {
+        crate::native_error::NativeFailure::from_serializable(
+            error,
+            crate::native_error::NativeErrorKind::SaveLocation,
+        )
+    })
 }
 
 #[cfg(test)]

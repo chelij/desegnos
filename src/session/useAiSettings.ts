@@ -1,6 +1,6 @@
 import type { CommandName } from '../generated/commands';
 import { usePoll } from '../usePoll';
-import { errorMessage } from '../editorShared';
+import { errorMessage } from '../errorMessage.js';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { native } from '../api';
 import type { AiSettingsView } from '../types';

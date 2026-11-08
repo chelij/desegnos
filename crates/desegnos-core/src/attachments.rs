@@ -60,10 +60,11 @@ impl RequestAttachment {
             AttachmentKind::Text => ensure(
                 self.data_uri.is_none()
                     && self.url.is_none()
-                    && self
-                        .text
-                        .as_ref()
-                        .is_some_and(|text| !text.trim().is_empty() && !text.contains('\0')),
+                    && self.text.as_ref().is_some_and(|text| {
+                        !text.trim().is_empty()
+                            && !text.contains('\0')
+                            && text.chars().count() <= crate::limits::MAX_ATTACHMENT_TEXT_CHARS
+                    }),
                 "Attach a text file that is not empty.",
             ),
             AttachmentKind::Link => ensure(

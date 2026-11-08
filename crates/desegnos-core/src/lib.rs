@@ -44,9 +44,9 @@ pub use elements::{
     MAX_ELEMENT_CONTEXT, MAX_ELEMENT_DEPTH, MAX_ELEMENT_NAME_CHARS, MAX_ELEMENT_OPTIONS,
     MAX_ELEMENT_REQUESTS, MAX_ELEMENTS, MAX_LINKED_DEFINITIONS, RequestRecord, SizingMode,
     StackAlign, StackDirection, StackJustify, StyleReferences, TextAlign, TextDecoration,
-    default_layer_name_base, element_outline, element_subtree, empty_element,
-    is_default_layer_name, link_location, nested_element_id, resolve_element, resolve_elements,
-    resolve_for_size, resolve_shared_styles,
+    default_element_size, default_element_text, default_layer_name_base, element_outline,
+    element_subtree, empty_element, is_default_layer_name, link_location, nested_element_id,
+    resolve_element, resolve_elements, resolve_for_size, resolve_shared_styles,
 };
 pub use export::{
     CommentReply, EXPORT_MANIFEST_FILE, EXPORT_MANIFEST_VERSION, ExportAssetPlan, ExportBehaviour,
@@ -90,8 +90,8 @@ pub use model::{
     MAX_REQUESTS, MAX_VIEWPORT_SIDE, NamedView, OutputType, Page, PageSize, PendingRequest,
     PlayAction, Pointer, PointerKind, PointerSource, PointerTarget, PointerWiring, Project,
     ProjectStyles, Rect, ReferenceItem, ReferenceKind, ReferencePlacement, RequestArea,
-    RequestPoint, RequestShape, RequestTarget, SCHEMA_VERSION, Scope, SizePreset, TEMPLATE_GAP,
-    TextStyle, Viewport, size_label,
+    RequestPoint, RequestShape, RequestTarget, SCHEMA_VERSION, SIZE_LABELS, Scope, SizePreset,
+    TEMPLATE_GAP, TextStyle, Viewport, size_label,
 };
 pub use picture_scaling::{
     AI_PREVIEW_BYTES, AI_PREVIEW_EDGE, AI_PREVIEW_TOKEN_RESERVE, ai_preview, scaled_for_display,

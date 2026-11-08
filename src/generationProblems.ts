@@ -1,5 +1,5 @@
 import type { Element, GenerationJobView, Page, Project, Rect, GenerationValidationEvent } from './types';
-import { generationError, outcomeReason, technicalReason, userError, providerFailureMessage } from './userErrors.js';
+import { generationError, outcomeReason, technicalReason, providerFailureMessage } from './userErrors.js';
 
 /// A specific place that can resolve an outcome the AI itself declared.
 export type OutcomeFix = 'aiSettings' | 'import' | 'brief';
@@ -16,10 +16,9 @@ export const fixLabel = (fix: OutcomeFix) => fix === 'aiSettings' ? 'AI settings
 
 const terminal = ['failed', 'unknown', 'cancelled', 'blocked', 'applied'];
 
-/// A finished result the boundary changed out from under; both app messages contain "is stale".
 export const staleResultMessage = "The boundary changed while the AI was working, so this result wasn't applied.";
 export function staleResult(job: GenerationJobView | null): boolean {
-  return job?.status === 'blocked' && /\bis stale\b/i.test(job.message ?? '');
+  return job?.status === 'blocked' && job.problemKind === 'stale';
 }
 
 /// The provider stopped because the reply reached the request's output-token limit: a
@@ -93,23 +92,20 @@ function jobReason(job: GenerationJobView): string {
   const events = [...(job.validationEvents ?? []), ...(job.batches ?? []).flatMap(batch => batch.validationEvents ?? [])];
   if (job.status === 'applied') {
     const skipped = warningEvents(job);
-    const kinds = new Set(skipped.map(event => /image/i.test(event.kind) ? 'image changes'
-      : /pointer/i.test(event.kind) ? 'interaction changes' : /page/i.test(event.kind) ? 'page changes' : /operation|element|layer/i.test(event.kind) ? 'layer changes' : 'changes'));
+    const kinds = new Set(skipped.map(event => event.kind === 'image' ? 'image changes'
+      : event.kind === 'pointer' ? 'interaction changes' : event.kind === 'pagePatch' ? 'page changes' : ['element', 'operation'].includes(event.kind) ? 'layer changes' : 'changes'));
     if (kinds.size) return `Some ${[...kinds].join(' and ')} were skipped. The rest was applied.`;
     if (job.candidate?.requests.some(request => request.status === 'conflict')) return 'Some requests were skipped. The rest was applied.';
-    if (/\b(?:skipped|dropped|warnings?)\b/i.test(job.message ?? '')) return 'Some changes were skipped. The rest was applied.';
+    if (job.problemKind === 'partial') return 'Some changes were skipped. The rest was applied.';
     return '';
   }
   if (!['blocked', 'failed', 'unknown'].includes(job.status)) return '';
   const provider = providerFailureMessage(job.providerError, job.provider, job.message);
   if (provider) return provider;
   const reply = events.find(event => event.elementId == null && event.kind === 'replyStructure');
-  const message = (job.message?.trim() || reply?.message || '').replace(/^Desegnos rejected the candidate:\s*/i, '');
-  if (reply || /missing field|incomplete|unexpected end|requirementsSha256/i.test(message)) return "The AI's reply was incomplete, so nothing was changed.";
-  if (/generation result|candidate|schema|JSON|deserializ|invalid.*(?:reply|response|format)/i.test(message)) return "The AI's reply couldn't be used, so nothing was changed.";
-  if (!message) return job.status === 'unknown' ? "Desegnos couldn't confirm whether the changes were applied." : "The AI couldn't finish these requests, so nothing was changed.";
-  const translated = userError(message);
-  return translated === message && technicalReason(message) ? generationError(message) : translated;
+  if (reply) return "The AI's reply was incomplete, so nothing was changed.";
+  if (job.problemKind === 'rejected') return "The AI's reply couldn't be used, so nothing was changed.";
+  return job.status === 'unknown' ? "Desegnos couldn't confirm whether the changes were applied." : "The AI couldn't finish these requests, so nothing was changed.";
 }
 
 /// Classify a whole job, keeping the retryable areas separate from the declared gaps.
@@ -122,7 +118,7 @@ export function jobOutcome(job: GenerationJobView | null, promptOf: (elementId: 
   const blocked: JobOutcome['blocked'] = [];
   // A stale result was never applied, so even its finished areas are worth resending.
   const stale = staleResult(job);
-  const rejected = ['blocked', 'failed', 'unknown'].includes(job.status) && ((job.validationEvents ?? []).some(event => event.elementId == null && event.kind === 'replyStructure') || /^Desegnos rejected the candidate:/i.test(job.message ?? ''));
+  const rejected = ['blocked', 'failed', 'unknown'].includes(job.status) && ((job.validationEvents ?? []).some(event => event.elementId == null && event.kind === 'replyStructure') || job.problemKind === 'rejected');
   for (const elementId of ids) {
     const outcome = areaOutcome(job, elementId, promptOf(elementId));
     if (!rejected && !outcome.retryable) { blocked.push({ elementId, reason: outcome.reason, fix: outcome.fix }); continue; }
@@ -188,7 +184,7 @@ function warningEvents(job: GenerationJobView | null): GenerationValidationEvent
   const events = [...(job?.validationEvents ?? []), ...(job?.batches ?? []).flatMap(batch => batch.validationEvents ?? [])];
   const seen = new Set<string>();
   return events.filter(event => {
-    if (!/^(?:dropped|skipped|conflicted|warning)$/.test(event.disposition) || event.kind === 'telemetryStorage' || event.kind === 'replyStructure') return false;
+    if (!['dropped', 'skipped', 'conflicted', 'warning'].includes(event.disposition) || event.kind === 'telemetryStorage' || event.kind === 'replyStructure') return false;
     const key = JSON.stringify([event.kind, event.disposition, event.elementId, event.message]);
     if (seen.has(key)) return false;
     seen.add(key);

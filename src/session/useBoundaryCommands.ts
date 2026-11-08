@@ -1,6 +1,7 @@
+import { sizeLabel } from '../projectCanvas/sizes';
 import { type BoundaryToolKind, boundaryDefaults, layoutKind, outputKind, pageKind, projectKind, nextBoundaryName } from '../projectCanvas/boundaryDefaults';
 import { useProjectSession } from './useProjectSession';
-import { sizeName, sizeBoundaries, suggestedPagePath } from '../editorShared';
+import { sizeBoundaries, suggestedPagePath } from '../editorShared';
 import { useCallback } from 'react';
 import { type ProjectCanvasHandle } from '../ProjectCanvas';
 import { BOUNDARY_GAP, unionBounds, referenceMoves, pushApartReference, boundaryMoves, pushApartBoundaries } from '../projectCanvasGeometry';
@@ -15,7 +16,7 @@ export function useBoundaryCommands(current: import('react').RefObject<Workspace
       const first = project.pages.find(page => pageKind(page) === kind);
       const template = source ?? (kind === 'page' && (first?.sizes.length ?? 0) > 1 ? first : null);
       const name = nextBoundaryName(project, kind);
-      const size: PageSize = { id: crypto.randomUUID(), label: sizeName(bounds.width), width: Math.round(bounds.width), height: Math.round(bounds.height), kind: layoutKind(kind, project), x: bounds.x, y: bounds.y };
+      const size: PageSize = { id: crypto.randomUUID(), label: sizeLabel(bounds.width), width: Math.round(bounds.width), height: Math.round(bounds.height), kind: layoutKind(kind, project), x: bounds.x, y: bounds.y };
       let nextX = bounds.x;
       const sizes = template ? template.sizes.map((old, index) => {
         const next = { ...old, id: index === 0 ? size.id : crypto.randomUUID(),
@@ -90,7 +91,7 @@ export function useBoundaryCommands(current: import('react').RefObject<Workspace
       if (!page) return null;
       const last = page.sizes.at(-1)!;
       const dimensions = SIZE_PRESETS.find(item => item.preset === preset)
-        ?? { label: sizeName(Math.round(width)), width: Math.round(width), height: Math.round(height) };
+        ?? { label: sizeLabel(Math.round(width)), width: Math.round(width), height: Math.round(height) };
       // A linked size of the same width already covers this preset: focus it instead of adding a
       // duplicate. The base size is never a match; a small base can still gain a phone size.
       const existing = preset !== 'custom' && page.sizes.slice(1).find(size => size.width === dimensions.width);

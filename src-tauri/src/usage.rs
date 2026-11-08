@@ -97,17 +97,28 @@ fn append(directory: &Path, today: i64, events: &[UsageEvent]) -> Result<(), Str
 }
 
 #[tauri::command]
-pub fn record_usage(app: tauri::AppHandle, events: Vec<UsageEvent>) -> Result<(), String> {
-    if events.len() > MAX_EVENTS || !events.iter().all(UsageEvent::valid) {
-        return Err("The usage record was not in the expected form.".into());
-    }
-    let today = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|error| error.to_string())?
-        .as_secs() as i64
-        / 86_400;
-    let directory = crate::data_location::directory(&app).join("usage");
-    append(&directory, today, &events)
+pub fn record_usage(
+    app: tauri::AppHandle,
+    events: Vec<UsageEvent>,
+) -> Result<(), crate::native_error::NativeFailure> {
+    (|| -> Result<(), String> {
+        if events.len() > MAX_EVENTS || !events.iter().all(UsageEvent::valid) {
+            return Err("The usage record was not in the expected form.".into());
+        }
+        let today = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|error| error.to_string())?
+            .as_secs() as i64
+            / 86_400;
+        let directory = crate::data_location::directory(&app).join("usage");
+        append(&directory, today, &events)
+    })()
+    .map_err(|error| {
+        crate::native_error::NativeFailure::from_serializable(
+            error,
+            crate::native_error::NativeErrorKind::Command,
+        )
+    })
 }
 
 #[cfg(test)]
@@ -158,8 +169,17 @@ mod tests {
             ms: Some(12),
             ok: Some(false),
         };
-        assert!(failure.valid(), "a failure reason of 200 characters is kept");
-        assert!(!UsageEvent { detail: Some("x".repeat(201)), ..failure }.valid());
+        assert!(
+            failure.valid(),
+            "a failure reason of 200 characters is kept"
+        );
+        assert!(
+            !UsageEvent {
+                detail: Some("x".repeat(201)),
+                ..failure
+            }
+            .valid()
+        );
         fs::remove_dir_all(directory).unwrap();
     }
 }

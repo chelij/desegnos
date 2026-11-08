@@ -1,3 +1,4 @@
+import { SWATCH_SIZE } from '../generated/limits';
 import type { ProjectCanvasProps } from './interactionTypes';
 import { type DragEvent as ReactDragEvent } from 'react';
 import { isTextField } from '../WorkspaceSurface';
@@ -203,7 +204,7 @@ export function createPasteDrop(context: () => Context) {
     const { addReference, selectReference } = context();
     if (/^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(text)) {
       const id = crypto.randomUUID();
-      void addReference({ id, rect: { x: point.x, y: point.y, width: 120, height: 120 }, kind: { kind: 'swatch', color: text.toLowerCase() } })
+      void addReference({ id, rect: { x: point.x, y: point.y, width: SWATCH_SIZE, height: SWATCH_SIZE }, kind: { kind: 'swatch', color: text.toLowerCase() } })
         .then(() => selectReference(id));
       return true;
     }

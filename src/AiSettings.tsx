@@ -1,3 +1,4 @@
+import { errorMessage } from './errorMessage.js';
 import type { CommandName } from './generated/commands';
 import { Notice, ProblemBanner } from './ProblemBanner.js';
 import { userError, providerProblem } from './userErrors.js';
@@ -11,7 +12,6 @@ import './dialogs.css';
 import type { AccessResult, AiSettingsView, ProviderSettings, ProviderError, ProviderId } from './types';
 import { MAX_HTTP_URL_BYTES } from './generated/limits';
 
-function message(error: unknown) { return error instanceof Error ? error.message : String(error); }
 // A model that offers only some levels keeps the request as strong as the user asked for,
 // rather than dropping to its weakest one.
 const reasoningOrder = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
@@ -80,7 +80,7 @@ export function AiSettings({ current, refresh, update, manageUsage, pollingError
   const perform = useCallback(async <T,>(next: Activity, task: () => Promise<T>): Promise<T | undefined> => {
     setActivity(next); setFeedback({ kind: 'none' });
     try { return await task(); }
-    catch (error) { setFeedback({ kind: 'error', message: message(error) }); return undefined; }
+    catch (error) { setFeedback({ kind: 'error', message: errorMessage(error) }); return undefined; }
     finally { setActivity('idle'); }
   }, []);
   const load = useCallback(() => perform('loading', async () => { receive(await refresh(true)); }), [perform, receive, refresh]);
@@ -91,7 +91,7 @@ export function AiSettings({ current, refresh, update, manageUsage, pollingError
     return perform(probesImages ? 'checkingImages' : 'saving', async () => {
       try { const value = await update(command, args); receive(value); return value; }
       catch (error) {
-        try { receive(await refresh()); } catch (refreshError) { throw new Error(`${message(error)} Settings could not be refreshed: ${message(refreshError)}`); }
+        try { receive(await refresh()); } catch (refreshError) { throw new Error(`${errorMessage(error)} Settings could not be refreshed: ${errorMessage(refreshError)}`); }
         throw error;
       }
     });
@@ -151,7 +151,7 @@ export function AiSettings({ current, refresh, update, manageUsage, pollingError
         }
         setFeedback({ kind: 'status', message: result.message ? 'Connection checked.' : 'Access checked.' });
       } catch (error) {
-        try { receive(await refresh()); } catch (refreshError) { throw new Error(`${message(error)} Settings could not be refreshed: ${message(refreshError)}`); }
+        try { receive(await refresh()); } catch (refreshError) { throw new Error(`${errorMessage(error)} Settings could not be refreshed: ${errorMessage(refreshError)}`); }
         throw error;
       }
     });
@@ -166,7 +166,7 @@ export function AiSettings({ current, refresh, update, manageUsage, pollingError
       const changed = accepted.current?.authentication !== wanted;
       if (changed && !await action('set_ai_authentication', { authentication: wanted })) return;
       if (changed || wanted === 'chatgpt') {
-        try { receive(await refresh(true)); } catch (error) { setFeedback({ kind: 'error', message: message(error) }); }
+        try { receive(await refresh(true)); } catch (error) { setFeedback({ kind: 'error', message: errorMessage(error) }); }
       }
     }
   }
@@ -180,8 +180,8 @@ export function AiSettings({ current, refresh, update, manageUsage, pollingError
   const providerName = provider?.name ?? 'OpenAI';
   const pending = view?.chatgpt.signIn.status === 'awaitingBrowser';
   const account = view?.chatgpt.accounts.find(item => item.id === view.chatgpt.activeAccountId);
-  const canTest = !!view && !dirty && !endpointDirty && !view.configurationError && !pending && (usesChatgpt ? !!account?.connected && account.planEnabled && !account.storageRepairRequired : !!model && view.credential.configured && !key.trim());
-  const testHelp = pending ? 'Finish signing in through your browser first.' : key.trim() ? 'Connect the key above before testing access.' : dirty || view?.configurationError ? 'Save your settings below before testing access.' : usesChatgpt ? !account?.connected ? 'Sign in above to test your connection.' : !account.planEnabled ? 'Allow ChatGPT plan usage when signing in.' : account.storageRepairRequired ? 'Repair secure storage above before testing access.' : 'Checks your connection without generating.' : !view?.credential.configured ? `Add and connect a ${providerName} API key above first.` : 'Checks your connection without generating.';
+  const canTest = !!view?.readiness.canTest && !dirty && !endpointDirty && !pending && !key.trim();
+  const testHelp = pending ? 'Finish signing in through your browser first.' : key.trim() ? 'Connect the key above before testing access.' : dirty || endpointDirty ? 'Save your settings below before testing access.' : view?.readiness.blockedReason ?? 'Checks your connection without generating.';
   const connected = usesChatgpt ? !!account?.connected : view?.credential.configured;
   // A local server that rejected its anonymous key is not a working connection.
   const connectedHealthy = connected && !(usesLocal && view?.modelsAuthRequired);
@@ -190,12 +190,12 @@ export function AiSettings({ current, refresh, update, manageUsage, pollingError
   const loading = activity === 'loading';
   // Testing access re-probes images too, so both activities show "Checking…".
   const checkingImages = activity === 'checking' || activity === 'checkingImages';
-  const canRefreshModels = !busy && !pending && !endpointDirty && !!connected && !key.trim() && (usesChatgpt ? !!account?.planEnabled && !account.storageRepairRequired : true);
+  const canRefreshModels = !!view?.readiness.canRefreshModels && !busy && !pending && !endpointDirty && !key.trim();
   const modelsError = usesChatgpt ? view?.chatgpt.modelsError : view?.modelsError;
   const modelsProviderError = usesChatgpt ? view?.chatgpt.modelsProviderError : view?.modelsProviderError;
   const identity = usesChatgpt ? account?.email ?? account?.label ?? 'ChatGPT' : view?.credential.maskedIdentifier ?? `${providerName} API key`;
   // An unusable switch reads as off; the saved preference returns once images are available.
-  const imagesUsable = view?.imageAccess?.available === 'yes' && connectedHealthy && !(usesChatgpt && !account?.planEnabled) && !!provider?.capabilities.imageGeneration;
+  const imagesUsable = !!view?.readiness.imagesUsable;
   const imageStatus = view?.imageAccessChecking || checkingImages || pending ? 'Checking…' : !provider?.capabilities.imageGeneration || view?.imageAccess?.available === 'no' ? 'Not available' : !connectedHealthy ? 'Not connected' : view?.imageAccess?.available === 'yes' ? 'Available' : "Couldn't check";
   return <div className="ai-settings dialog-body">
     {feedback.kind === 'error' && <ProblemBanner message={userError(feedback)} action={feedback.access ? { label: providerProblem(feedback.providerError, feedback.provider)?.action ?? 'Try again', disabled: busy, onClick: () => { if (providerProblem(feedback.providerError, feedback.provider)?.settings) showAccountSettings(); else void testAccess(); } } : undefined} dismiss={() => setFeedback({ kind: 'none' })} />}
@@ -310,7 +310,7 @@ export function ChatgptWelcome({ update, manageUsage, dismissed }: { update: AiS
   async function perform<T>(next: 'acknowledging' | 'managingUsage', task: () => Promise<T>): Promise<T | undefined> {
     setActivity(next); setError('');
     try { return await task(); }
-    catch (error) { setError(message(error)); return undefined; }
+    catch (error) { setError(errorMessage(error)); return undefined; }
     finally { setActivity('idle'); }
   }
   async function acknowledge() {

@@ -1,3 +1,4 @@
+import { errorValue, nativeErrorKind, type ErrorValue } from '../errorMessage.js';
 import type { CommandName } from '../generated/commands';
 import { useBoundaryCommands } from './useBoundaryCommands';
 import { propertySelection } from '../dock/selection';
@@ -10,7 +11,8 @@ import { useProjectSession } from './useProjectSession';
 import { type SaveState, createProjectCommands } from './projectCommands';
 import { useExportJobs } from '../exportJobs/useExportJobs';
 import { createEditorShortcuts } from '../editorShortcuts';
-import { Theme, Replacement, Confirmation, errorMessage, ownerPageId, selectionBounds, menuPaletteCommands } from '../editorShared';
+import { Theme, Replacement, Confirmation, ownerPageId, selectionBounds, menuPaletteCommands } from '../editorShared';
+import { errorMessage } from '../errorMessage.js';
 import { readRequestAttachments } from '../requestAttachments';
 import { elementTree, elementTreeIds } from '../projectCanvas/elementGeometry';
 import { needsAiSettings } from '../ProblemBanner.js';
@@ -73,7 +75,7 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
 
   const [closeRequest, setCloseRequest] = useState<{ message: string; resolve: (answer: boolean) => void } | null>(null);
   const [loading, setLoading] = useState(!initialView);
-  const [error, setError] = useState('');
+  const [error, setError] = useState<ErrorValue>('');
   const { view, current, pending, accept, queue, mutate, settle } = useProjectSession(initialView, setError);
   const edits = useMemo(() => projectEdits(mutate), [mutate]);
   const [openFailure, setOpenFailure] = useState<{ message: string; url: string } | null>(null);
@@ -151,9 +153,7 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
   const briefGenerateFlight = useRef(false);
   const project = view?.project ?? null;
   const selectedElementPageId = propertySelection(project, canvasSelection, canvasFocus, {}).selectedElementPageId;
-  const exportAccount = aiSettings?.chatgpt.accounts.find(account => account.id === aiSettings.chatgpt.activeAccountId);
-  const exportConnected = !!aiSettings && !aiSettings.configurationError && (aiSettings.authentication === 'chatgpt'
-    ? !!exportAccount?.connected && exportAccount.planEnabled && !exportAccount.storageRepairRequired : aiSettings.credential.configured);
+  const exportConnected = aiSettings?.readiness.ready ?? false;
   const exports = useExportJobs({ current, panels, panelActions, accept, setNotice, settle, setError, setOpenFailure, openPanel, closePanel, mutate, canvasFocus, selectedElementPageId, play, setPlay, view, panel, aiConnected: exportConnected, spendingLimitUsd: aiSettings?.settings.spendingLimitUsd ?? null });
   const { openPanel: openExportPanel, run: runExport, previewBoundary: previewSelectedBoundary, closePreview, checkedStates, checkedProject, preview } = exports;
 
@@ -162,10 +162,10 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
       const value = await native<RecentProjectsView>('get_recent_projects');
       setRecentProjects(value.projects);
       if (value.error) setError(`Recent projects: ${value.error}`);
-    } catch (error) { setError(errorMessage(error)); }
+    } catch (error) { setError(errorValue(error)); }
   }, []);
-  useEffect(() => { void refreshRecent().catch(error => setError(errorMessage(error))); }, [refreshRecent]);
-  useEffect(() => { void native<ProjectLocationView>('get_project_location').then(setProjectLocation).catch(error => setError(errorMessage(error))); }, []);
+  useEffect(() => { void refreshRecent().catch(error => setError(errorValue(error))); }, [refreshRecent]);
+  useEffect(() => { void native<ProjectLocationView>('get_project_location').then(setProjectLocation).catch(error => setError(errorValue(error))); }, []);
   // The export panel belongs to an open canvas; Home and project switches close it.
   useEffect(() => { if (showStartPage) closePanel('export'); }, [showStartPage]);
   async function changeProjectLocation(reset: boolean) {
@@ -299,14 +299,14 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
       setShowStartPage(settings.showStartPage && !loaded.project);
       if (!settings.showStartPage && loaded.recoveries.length) openPanel({ kind: 'recovery' });
     }
-    catch (error) { setError(errorMessage(error)); }
+    catch (error) { setError(errorValue(error)); }
     finally { setLoading(false); }
   }, [accept]);
   useEffect(() => { void load(); }, [load]);
   useEffect(() => {
     const active = view?.project;
     if (!view?.dirty || !active) return;
-    const timer = window.setInterval(() => { void native('autosave_project').catch(error => setError(errorMessage(error))); }, 3000);
+    const timer = window.setInterval(() => { void native('autosave_project').catch(error => setError(errorValue(error))); }, 3000);
     return () => window.clearInterval(timer);
   }, [view?.dirty, view?.project?.id]);
   useEffect(() => {
@@ -324,9 +324,9 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
         const plan = identity?.status === 'analyzing' ? (identity.authentication ?? aiCurrent.current?.authentication) === 'chatgpt' : generationRef.current?.authentication === 'chatgpt';
         if ((current.current?.anyDirty || current.current?.dirty || generating) && !await new Promise<boolean>(resolve => setCloseRequest({ resolve, message: `${generating ? `Generation is still running. Closing may interrupt the request, and ${plan ? 'submitted work may still use your ChatGPT plan or credits' : 'OpenAI may still charge for submitted work'}. Its outcome will be shown as uncertain when you return. ` : ''}${current.current?.dirty ? 'This project has changes that have not been saved to its file. ' : ''}Close Desegnos?` }))) return;
         await getCurrentWindow().destroy();
-      } catch (error) { setError(errorMessage(error)); }
+      } catch (error) { setError(errorValue(error)); }
       finally { closing.current = false; }
-    }).then(stop => { if (disposed) stop(); else unlisten = stop; }, error => setError(errorMessage(error)));
+    }).then(stop => { if (disposed) stop(); else unlisten = stop; }, error => setError(errorValue(error)));
     return () => { disposed = true; unlisten?.(); };
   }, [settle]);
 
@@ -352,7 +352,7 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
   }
   async function changeShowStartPage(value: boolean) {
     try { setAppSettings(await native<AppSettingsView>('set_show_start_page', { value })); }
-    catch (error) { setError(errorMessage(error)); }
+    catch (error) { setError(errorValue(error)); }
   }
   // The only update request: a manual read of the newest release, with no install step.
   async function checkForUpdates() {
@@ -429,13 +429,7 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
     if (!activeProjectId || workspace?.project?.id !== activeProjectId) throw new Error('Return to the project that owns this generation request.');
     if (command === 'prepare_generation') {
       await settleAiSettings();
-      const settings = await refreshAiSettings();
-      if (settings.authentication === 'chatgpt') {
-        const account = settings.chatgpt.accounts.find(account => account.id === settings.chatgpt.activeAccountId);
-        if (!account?.connected || !account.planEnabled) { setShowAiSettings(true); throw new Error('Connect a ChatGPT account with plan usage enabled in AI settings, then prepare the request again.'); }
-        if (settings.chatgpt.models.length > 0 && !settings.catalogue.some(model => model.id === settings.settings.model)) { setShowAiSettings(true); throw new Error('Choose and save a supported model for this ChatGPT account, then prepare the request again.'); }
-      } else if (!settings.credential.configured) { setShowAiSettings(true); throw new Error(`Add your ${settings.providers?.find(item => item.id === settings.provider)?.name ?? 'AI'} key in AI settings, then try again.`); }
-      if (settings.configurationError) { setShowAiSettings(true); throw new Error('Review and save your AI settings, then prepare the request again.'); }
+      await refreshAiSettings();
     }
     signal?.throwIfAborted();
     const result = await native<T>(command, args);
@@ -472,12 +466,11 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
   const composeJob = generation.job && ['prepared', 'generating', 'ready', 'blocked', 'applying'].includes(generation.job.status) ? generation.job : null;
   const composeUsesChatgpt = (composeJob?.authentication ?? aiSettings?.authentication) === 'chatgpt';
   const composeAccountId = composeJob ? composeJob.chatgptAccountId : aiSettings?.chatgpt.activeAccountId;
-  const composeAccount = aiSettings?.chatgpt.accounts.find(account => account.id === composeAccountId);
-  const aiConnected = !!aiSettings && !aiSettings.configurationError && (composeUsesChatgpt ? !!composeAccount?.connected && composeAccount.planEnabled && !composeAccount.storageRepairRequired : aiSettings.credential.configured);
+  const aiConnected = !!aiSettings && (composeJob ? composeUsesChatgpt ? !!composeAccountId && !!aiSettings.readiness.accounts[composeAccountId] : aiSettings.readiness.apiKeyReady : aiSettings.readiness.ready);
   function openGeneration() {
     openPanel({ kind: 'log', focus: panel.kind === 'log' ? panel.focus + 1 : 1 });
     void generation.refresh();
-    void refreshAiSettings().catch(error => setError(errorMessage(error)));
+    void refreshAiSettings().catch(error => setError(errorValue(error)));
   }
   function editGenerationRequest(id: string) {
     const owner = project?.pages.find(item => !!findElementIn(item.elements, id));
@@ -503,8 +496,7 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
     // With nothing described, a filled brief captures the first empty page as one request area.
     const page = project?.pages[0];
     const boundary = page && canvasBoundaries.find(item => item.pageId === page.id && item.sizeId === baseSizeId(page));
-    const fromBrief = !!project && !!page && !!boundary && !page.elements.length && !!project.brief.purpose.trim()
-      && !(project.requests ?? []).some(request => request.text.trim());
+    const fromBrief = !!view?.canGenerateFromBrief && !!project && !!page && !!boundary;
     if (!fromBrief) { await generation.prepare(elementIds, contextItems); return; }
     // The request is added before the job is prepared, so a second click must not add another.
     if (briefGenerateFlight.current) return;
@@ -571,7 +563,7 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
       removedWithUndo(`Removed ${name}.`);
     });
   }
-  const run = (operation: () => Promise<unknown>) => { void operation().catch(error => setError(errorMessage(error))); };
+  const run = (operation: () => Promise<unknown>) => { void operation().catch(error => setError(errorValue(error))); };
   const canEditProject = !!project && !onStartPage;
 
   const { views, saveCurrentView, addNamedViewAt, addNamedView, renameNamedView, removeNamedView } = useNamedViews(project, mutate, canvasRef, run);
@@ -614,7 +606,7 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
   ];
 
   const problemAction = needsAiSettings(error) ? { label: 'AI settings', onClick: () => setShowAiSettings(true) }
-    : project && /permission denied|not writable|read.only|access denied|can't save here/i.test(error) ? { label: 'Choose another location', disabled: pending > 0, onClick: () => run(() => save(true)) } : undefined;
+    : project && nativeErrorKind(error) === 'saveLocation' ? { label: 'Choose another location', disabled: pending > 0, onClick: () => run(() => save(true)) } : undefined;
   const recovery: RecoveryChoices | null = pendingRecovery ? {
     path: pendingRecovery.path, busy: pending > 0,
     recover: () => run(() => recover(pendingRecovery.projectId)),

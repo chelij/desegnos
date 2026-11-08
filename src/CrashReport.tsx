@@ -1,3 +1,4 @@
+import { errorMessage } from './errorMessage.js';
 import { Component, useEffect, useState, type ErrorInfo, type ReactNode } from 'react';
 import { native } from './api';
 import { Notice, ProblemBanner } from './ProblemBanner';
@@ -9,7 +10,7 @@ let reported = false;
 function recordEditorCrash(error: unknown, componentStack = '') {
   if (reported) return;
   reported = true;
-  const message = error instanceof Error ? error.message : String(error ?? 'The editor failed to render.');
+  const message = errorMessage(error) || 'The editor failed to render.';
   const stack = [error instanceof Error ? error.stack ?? '' : '', componentStack].filter(Boolean).join('\n');
   void native('record_frontend_crash', { message: message.slice(0, 2000), stack: stack.slice(0, 8000) }).catch(error => console.warn('Could not record editor crash', error));
 }

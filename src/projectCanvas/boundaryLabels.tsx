@@ -1,6 +1,6 @@
 import { useLayoutEffect, useRef } from 'react';
 import { boundaryKindLabel, type BoundaryToolKind } from './boundaryDefaults';
-import { boundaryLabel, sizeLabel } from './sizes';
+import { boundaryLabel } from './sizes';
 import type { Boundary, CanvasCamera, CanvasTarget } from '../projectCanvasGeometry';
 import type { Project, Rect } from '../types';
 
@@ -62,7 +62,7 @@ export function BoundaryLabels({ project, boundaries, moving, draft, draftKind =
         </span>
         {page.sizes.length > 1 && <span className="boundary-label-name" data-boundary-handle={sizeId} data-label-short title={boundaryLabel(page, size)}
           onDoubleClick={event => { event.stopPropagation(); openPage(pageId); }}>
-          {sizeLabel(size.width)}
+          {size.label}
         </span>}
         {resizing && <span className="boundary-label-size" data-boundary-size>{dimensionsLabel(shown)}</span>}
       </div>;

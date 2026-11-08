@@ -1,6 +1,7 @@
 use crate::{Error, Result, ensure};
 use base64::{Engine, engine::general_purpose::STANDARD};
 
+pub const MAX_LAYER_LABEL_CHARS: usize = 80;
 pub const MAX_NAME_CHARS: usize = 120;
 pub const MAX_HTTP_URL_BYTES: usize = 2048;
 pub const MAX_IMAGE_PIXELS: u64 = 256_000_000;
@@ -177,3 +178,38 @@ pub const MAX_LOCAL_PREVIEW_BYTES: u64 = 64 * 1024 * 1024;
 pub const MAX_IDENTITY_RECORD_BYTES: u64 = 8 * 1024 * 1024;
 pub const MAX_CLIPBOARD_BYTES: usize = 8 * 1024 * 1024;
 pub const MAX_EXPORT_CHECK_BYTES: usize = 8 * 1024 * 1024;
+
+/// Editor creation defaults and shared route validation data.
+pub const MAX_ATTACHMENT_TEXT_CHARS: usize = 65_536;
+pub const MAX_EDITOR_COORDINATE: f64 = 1_000_000.0;
+pub const MAX_PASTED_IMAGE_WIDTH: u32 = 480;
+pub const PASTED_NOTE_WIDTH: u32 = 240;
+pub const PASTED_NOTE_HEIGHT: u32 = 140;
+pub const SWATCH_SIZE: u32 = 120;
+pub const RESERVED_ROUTE_NAMES: &[&str] = &[
+    "assets",
+    "src",
+    "node_modules",
+    "con",
+    "prn",
+    "aux",
+    "nul",
+    "com1",
+    "com2",
+    "com3",
+    "com4",
+    "com5",
+    "com6",
+    "com7",
+    "com8",
+    "com9",
+    "lpt1",
+    "lpt2",
+    "lpt3",
+    "lpt4",
+    "lpt5",
+    "lpt6",
+    "lpt7",
+    "lpt8",
+    "lpt9",
+];

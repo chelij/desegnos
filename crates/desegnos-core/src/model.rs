@@ -483,7 +483,7 @@ impl CanvasTemplate {
         }
     }
 
-    pub(crate) fn pages(self) -> Vec<Page> {
+    pub fn pages(self) -> Vec<Page> {
         match self {
             Self::Blank => vec![],
             Self::Website => {
@@ -537,14 +537,14 @@ impl CanvasTemplate {
 }
 
 /// The name a new size gets from its width, so a boundary reads as Phone, Tablet or Desktop.
+pub const SIZE_LABELS: &[(u32, &str)] = &[(0, "Phone"), (700, "Tablet"), (1024, "Desktop")];
 pub fn size_label(width: u32) -> &'static str {
-    if width >= 1024 {
-        "Desktop"
-    } else if width >= 700 {
-        "Tablet"
-    } else {
-        "Phone"
-    }
+    SIZE_LABELS
+        .iter()
+        .rev()
+        .find(|(minimum, _)| width >= *minimum)
+        .unwrap()
+        .1
 }
 
 /// One size's spot on the project canvas, as sent by a layout command. Field names stay
@@ -1669,10 +1669,7 @@ pub(crate) fn validate_path(path: &str) -> Result<()> {
         )?;
         let stem = segment.split('.').next().unwrap_or("").to_ascii_lowercase();
         ensure(
-            !["assets", "src", "node_modules", "con", "prn", "aux", "nul"].contains(&stem.as_str())
-                && !(stem.len() == 4
-                    && (stem.starts_with("com") || stem.starts_with("lpt"))
-                    && stem.ends_with(['1', '2', '3', '4', '5', '6', '7', '8', '9'])),
+            !crate::limits::RESERVED_ROUTE_NAMES.contains(&stem.as_str()),
             "The page path uses a reserved name.",
         )?;
     }

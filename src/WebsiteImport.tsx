@@ -1,3 +1,4 @@
+import { errorMessage } from './errorMessage.js';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { native } from './api';
 import { Notice } from './ProblemBanner.js';
@@ -17,9 +18,6 @@ type Phase =
   | { kind: 'applying'; progress: Progress }
   | { kind: 'imported' };
 
-function messageOf(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
-}
 
 /** Read a website, render its pages locally, and turn the captures into canvas boundaries. */
 export function useWebsiteImport(busy: boolean, onImported: (result: WebsiteImportResultView) => void) {
@@ -65,7 +63,7 @@ export function useWebsiteImport(busy: boolean, onImported: (result: WebsiteImpo
       window.clearTimeout(current.capture.timer);
       current.capture.reject(new Error('The import was stopped.'));
     }
-    if (current.kind !== 'applying') void native('cancel_website_import').catch(error => setError(messageOf(error)));
+    if (current.kind !== 'applying') void native('cancel_website_import').catch(error => setError(errorMessage(error)));
   }, []);
 
   async function read(operation: () => Promise<WebsiteImportSourceView | null>) {
@@ -78,7 +76,7 @@ export function useWebsiteImport(busy: boolean, onImported: (result: WebsiteImpo
       if (view) { setSource(view); setWarnings(view.skipped); }
       return view;
     } catch (reason) {
-      if (request === serial.current) setError(messageOf(reason));
+      if (request === serial.current) setError(errorMessage(reason));
     } finally {
       if (request === serial.current) setPhase({ kind: 'idle' });
     }
@@ -124,7 +122,7 @@ export function useWebsiteImport(busy: boolean, onImported: (result: WebsiteImpo
           captures.push(await capturePage(page, SIZE_PRESETS.desktop.width));
         } catch (reason) {
           if (stopped.current) throw reason;
-          const note = `${page.title || page.route} (${page.route}): skipped because it could not render. ${messageOf(reason)}`;
+          const note = `${page.title || page.route} (${page.route}): skipped because it could not render. ${errorMessage(reason)}`;
           notes.push(note);
           setWarnings(items => [...items, note]);
           continue;
@@ -151,7 +149,7 @@ export function useWebsiteImport(busy: boolean, onImported: (result: WebsiteImpo
       // What this import left out beyond the files the read already listed.
       return [...notes.slice(source.skipped.length), ...result.warnings];
     } catch (reason) {
-      if (!stopped.current) setError(messageOf(reason));
+      if (!stopped.current) setError(errorMessage(reason));
       setPhase({ kind: 'idle' });
       return null;
     }
@@ -163,7 +161,7 @@ export function useWebsiteImport(busy: boolean, onImported: (result: WebsiteImpo
     serial.current += 1;
     stopped.current = true;
     if (current.kind === 'rendering' && current.capture) finishCapture(current.capture.id, 'The import was stopped.');
-    await native('cancel_website_import').catch(error => setError(messageOf(error)));
+    await native('cancel_website_import').catch(error => setError(errorMessage(error)));
     setSource(null); setPhase({ kind: 'idle' });
   }
 

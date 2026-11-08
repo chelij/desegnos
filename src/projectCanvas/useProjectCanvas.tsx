@@ -208,7 +208,7 @@ export function useProjectCanvas({
   const draftArea: RequestShape | null = activeDrag?.kind === 'polygon-request' ? { kind: 'polygon', points: activeDrag.points }
     : activeDrag?.kind === 'draw-request-area' ? activeDrag.shape === 'freehand'
       ? { kind: 'freehand', points: [...activeDrag.points, activeDrag.current] }
-      : { kind: activeDrag.shape === 'ellipse' ? 'ellipse' : 'rect', rect: drawRectWithKeys(activeDrag.start, activeDrag.current, activeDrag.keys) } : null;
+      : { kind: activeDrag.shape === 'ellipse' ? 'ellipse' : 'rect', rect: drawRectWithKeys(activeDrag.start, activeDrag.current, { ...activeDrag.keys, spacing: project.gridSettings.spacing }) } : null;
   // Resolve the pointer preview below, after the model hit-testing helpers exist.
 
   const [armedPointer, setArmedPointer] = useState<{ pointerId: string; end: 'from' | 'to' } | null>(null);

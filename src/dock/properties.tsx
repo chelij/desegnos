@@ -1,3 +1,4 @@
+import { TEMPLATE_DEFAULTS } from '../generated/limits';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { Icon } from '../icons';
 import { CompactNumberField, CompactTextField } from '../CompactField';
@@ -5,7 +6,7 @@ import { useDraftText } from '../DraftText';
 import { pointerBroken, pointerEndpointName } from '../projectCanvasGeometry';
 import type { BoundaryKind, Page, PageSize, PendingRequest, Pointer, PointerStateView, Project, ProjectLocationView, ReferenceItem, RequestAttachment, SizePreset } from '../types';
 import { ColourField } from '../projectCanvas/ColourField';
-import { SIZE_PRESETS, sizeLabel } from '../projectCanvas/sizes';
+import { SIZE_PRESETS } from '../projectCanvas/sizes';
 import { requestAreaLabel, requestTargetLabel } from '../projectCanvas/requests';
 import { behaviourStateLabel } from '../projectCanvas/behaviours';
 import { PROJECT_NAME_MAX_LENGTH } from '../editorShared';
@@ -40,11 +41,11 @@ export function BoundaryProperties({ page, commit, updateSize, adaptSize, addSiz
   const [customOpen, setCustomOpen] = useState(false);
   const customValid = wholeSize(customWidth, 1, MAX_VIEWPORT_SIDE) && wholeSize(customHeight, 1, MAX_VIEWPORT_SIDE);
   const presets = page.output === 'slide'
-    ? [{ label: '16:9', width: 1920, height: 1080 }, { label: '4:3', width: 1024, height: 768 }]
-    : page.output === 'image' ? [{ label: 'Square', width: 1080, height: 1080 }, { label: 'Portrait', width: 1080, height: 1350 }, { label: 'Story', width: 1080, height: 1920 }, { label: 'Landscape', width: 1200, height: 630 }] : null;
+    ? [{ label: '16:9', width: TEMPLATE_DEFAULTS.slideDeck.width, height: TEMPLATE_DEFAULTS.slideDeck.height }, { label: '4:3', width: 1024, height: 768 }]
+    : page.output === 'image' ? [{ label: 'Square', width: TEMPLATE_DEFAULTS.socialImage.width, height: TEMPLATE_DEFAULTS.socialImage.height }, { label: 'Portrait', width: 1080, height: 1350 }, { label: 'Story', width: 1080, height: 1920 }, { label: 'Landscape', width: 1200, height: 630 }] : null;
   const labelForSize = (size: PageSize) => presets
     ? presets.find(preset => preset.width === size.width && preset.height === size.height)?.label ?? `${size.width} × ${size.height}`
-    : sizeLabel(size.width);
+    : size.label;
   const hasPath = page.output === 'webpage' || page.output === 'appScreen';
   const selectedSize = page.sizes.find(size => size.id === selectedSizeId) ?? page.sizes[0];
   const minWidth = Math.min(...page.sizes.map(size => size.width));

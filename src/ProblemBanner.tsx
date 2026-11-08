@@ -1,3 +1,4 @@
+import { nativeErrorKind } from './errorMessage.js';
 import { createContext, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type ReactElement } from 'react';
 import { Icon } from './icons';
 import { providerProblem } from './userErrors.js';
@@ -169,8 +170,8 @@ export function ProblemBanner({ variant = 'error', ...props }: ProblemBannerProp
   return <Notice {...props} variant={variant} />;
 }
 
-export function needsAiSettings(error: string, structured?: ProviderError | null, provider?: ProviderId | null): boolean {
+export function needsAiSettings(error: unknown, structured?: ProviderError | null, provider?: ProviderId | null): boolean {
   const problem = providerProblem(structured, provider);
   if (problem) return problem.settings;
-  return /auth|credential|API.?key|sign.?in|signed out|quota|usage limit|budget|spending|billing|credit|payment|model.*(?:unavailable|not available|not supported)|vault|keyring|secure storage/i.test(error);
+  return nativeErrorKind(error) === 'aiSettings';
 }

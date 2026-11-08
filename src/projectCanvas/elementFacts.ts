@@ -1,37 +1,19 @@
+import { ELEMENT_DEFAULTS, MAX_LAYER_LABEL_CHARS } from '../generated/limits';
 import type { Element, ElementKind } from '../types';
 
-export const ELEMENT_KIND_LABELS: Record<ElementKind, string> = {
-  box: 'Box', group: 'Group', text: 'Text', ellipse: 'Ellipse', line: 'Line', image: 'Image',
-  button: 'Button', link: 'Link', input: 'Input', textarea: 'Textarea', select: 'Select',
-  checkbox: 'Checkbox', radio: 'Radio', video: 'Video', audio: 'Audio', embed: 'Embed', code: 'Code',
-};
-
-export function defaultText(kind: ElementKind): string {
-  switch (kind) {
-    case 'text': return 'Text';
-    case 'button': return 'Button';
-    case 'link': return 'Link';
-    case 'input': return 'Input';
-    case 'textarea': return 'Textarea';
-    case 'select': return 'Option 1';
-    case 'checkbox': return 'Checkbox';
-    case 'radio': return 'Radio';
-    default: return '';
-  }
-}
+export const ELEMENT_KIND_LABELS = Object.fromEntries(Object.entries(ELEMENT_DEFAULTS).map(([kind, facts]) => [kind, facts.label])) as Record<ElementKind, string>;
+export const defaultText = (kind: ElementKind): string => ELEMENT_DEFAULTS[kind].text;
 
 export function elementLabel(element: Element): string {
   const name = element.name?.trim() ?? '';
   if (name && !isDefaultLayerName(element)) return name;
   const line = element.text.trim().split('\n')[0];
-  if (line && line !== defaultText(element.kind)) return line.slice(0, 80);
+  if (line && line !== defaultText(element.kind)) return Array.from(line).slice(0, MAX_LAYER_LABEL_CHARS).join('');
   if (element.kind === 'code') return `${element.language || 'Code'} code`;
-  return name || line.slice(0, 80) || ELEMENT_KIND_LABELS[element.kind];
+  return name || Array.from(line).slice(0, MAX_LAYER_LABEL_CHARS).join('') || ELEMENT_KIND_LABELS[element.kind];
 }
 
-export function defaultLayerNameBase(kind: ElementKind): string {
-  return kind === 'box' ? 'Rectangle' : ELEMENT_KIND_LABELS[kind];
-}
+export const defaultLayerNameBase = (kind: ElementKind): string => ELEMENT_DEFAULTS[kind].name;
 
 export function isDefaultLayerName(element: Element): boolean {
   const name = element.name?.trim() ?? '';

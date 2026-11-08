@@ -6,7 +6,7 @@ import { MAX_ZOOM, type Boundary, type CanvasTarget } from './projectCanvasGeome
 import { elementWorldRect, findElementIn, unionRects } from './projectCanvas/elementGeometry';
 import { type PaletteCommand } from './CommandPalette';
 import type { GridSettings, Project, Rect, RecoveryInfo } from './types';
-import { MAX_NAME_CHARS } from './generated/limits';
+import { GRID_PERCENT_MIN, GRID_PERCENT_MAX, GRID_PIXEL_MIN, GRID_PIXEL_MAX, RESERVED_ROUTE_NAMES, MAX_NAME_CHARS } from './generated/limits';
 
 export type Theme = 'system' | 'light' | 'dark';
 
@@ -20,12 +20,6 @@ export const NO_ACTION_EVENT: ActionEvent = { preventDefault: () => {}, key: '' 
 
 export const PROJECT_COLOURS = ['#2f6fde', '#c2410c', '#267a36', '#ae3ec9', '#0e7490', '#b35c00'];
 export const PROJECT_NAME_MAX_LENGTH = MAX_NAME_CHARS;
-
-export function errorMessage(error: unknown) { if (error && typeof error === 'object' && 'message' in error) return String((error as { message: unknown }).message); return String(error ?? ''); }
-
-export function sizeName(width: number): string {
-  return width >= 1024 ? 'Desktop' : width >= 700 ? 'Tablet' : 'Phone';
-}
 
 export function sizeBoundaries(project: Project): Boundary[] {
   return canvasView(project).boundaries;
@@ -106,7 +100,7 @@ export function RenameProject({ name, submit }: { name: string; submit: (value: 
 
 export function suggestedPagePath(name: string, paths: string[]) {
   let slug = name.trim().toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '-').replace(/^-|-$/g, '') || 'page';
-  if (/^(assets|src|node_modules|con|prn|aux|nul|com[1-9]|lpt[1-9])$/.test(slug)) slug += '-page';
+  if (RESERVED_ROUTE_NAMES.includes(slug)) slug += '-page';
   const base = `/${slug}`;
   let path = base; let suffix = 2;
   while (paths.some(existing => existing.toLowerCase() === path.toLowerCase())) path = `${base}-${suffix++}`;
@@ -117,8 +111,8 @@ export function GridForm({ settings, showGrid, busy, submit }: { settings: GridS
   const [draft, setDraft] = useState(settings);
   const [visible, setVisible] = useState(showGrid);
   const [saving, setSaving] = useState(false);
-  const min = draft.unit === 'percent' ? 0.25 : 1;
-  const max = draft.unit === 'percent' ? 100 : 512;
+  const min = draft.unit === 'percent' ? GRID_PERCENT_MIN : GRID_PIXEL_MIN;
+  const max = draft.unit === 'percent' ? GRID_PERCENT_MAX : GRID_PIXEL_MAX;
   const valid = Number.isFinite(draft.spacing) && draft.spacing >= min && draft.spacing <= max;
   return <form className="dialog-body grid-form" onSubmit={event => {
     event.preventDefault(); if (!valid) return; setSaving(true); void submit(draft, visible).finally(() => setSaving(false));
@@ -127,7 +121,7 @@ export function GridForm({ settings, showGrid, busy, submit }: { settings: GridS
     <div className="field-pair"><label>Grid spacing<input autoFocus type="number" required min={min} max={max} step="any" value={draft.spacing} onChange={event => setDraft({ ...draft, spacing: Number(event.target.value) })} /></label>
       <label>Unit<select value={draft.unit} onChange={event => {
         const unit = event.target.value as GridSettings['unit'];
-        setDraft({ ...draft, unit, spacing: unit === 'percent' ? Math.max(0.25, Math.min(100, draft.spacing)) : Math.max(1, Math.min(512, draft.spacing)) });
+        setDraft({ ...draft, unit, spacing: unit === 'percent' ? Math.max(GRID_PERCENT_MIN, Math.min(GRID_PERCENT_MAX, draft.spacing)) : Math.max(GRID_PIXEL_MIN, Math.min(GRID_PIXEL_MAX, draft.spacing)) });
       }}><option value="pixels">Pixels</option><option value="percent">Percent</option></select></label></div>
     <label className="check-label"><input type="checkbox" checked={draft.snap} onChange={event => setDraft({ ...draft, snap: event.target.checked })} />Snap requests to the grid</label>
     <div className="form-actions"><button className="primary" disabled={busy || saving || !valid}>Save grid settings</button></div>

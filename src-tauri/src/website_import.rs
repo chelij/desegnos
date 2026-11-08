@@ -215,48 +215,57 @@ pub async fn prepare_website_import_url(
     identity: State<'_, Mutex<crate::identity::IdentityService>>,
     url: String,
     extractor: String,
-) -> NativeResult<WebsiteImportView> {
-    let revision = begin_read(&state)?;
-    let fetcher = desegnos_ai::WebsiteFetcher::new();
-    #[cfg(feature = "native-tests")]
-    let fetcher = match std::env::var("DESEGNOS_NATIVE_TEST_WEBSITE_ORIGIN") {
-        Ok(origin) => desegnos_ai::WebsiteFetcher::for_fixture(
-            &desegnos_ai::WebUrl::parse(&origin).map_err(message)?,
-        )?,
-        Err(std::env::VarError::NotPresent) => fetcher,
-        Err(error) => return Err(message(error)),
-    };
-    let snapshot = fetcher.fetch_website_snapshot(&url).await?;
-    install(
-        &state,
-        revision,
-        WebsiteSnapshot {
-            name: snapshot.name,
-            files: snapshot.files,
-            pages: snapshot
-                .pages
-                .into_iter()
-                .map(|page| desegnos_storage::WebsitePage {
-                    file: {
-                        let route = page.route.trim_start_matches('/');
-                        if route.is_empty() || route.ends_with('/') {
-                            format!("{route}index.html")
-                        } else if route.ends_with(".html") || route.ends_with(".htm") {
-                            route.to_owned()
-                        } else {
-                            format!("{route}.html")
-                        }
-                    },
-                    route: page.route,
-                    title: page.title,
-                })
-                .collect(),
-            skipped: snapshot.skipped,
-        },
-        &identity,
-        None,
-        &extractor,
-    )
+) -> Result<WebsiteImportView, crate::native_error::NativeFailure> {
+    let result: NativeResult<WebsiteImportView> = async {
+        let revision = begin_read(&state)?;
+        let fetcher = desegnos_ai::WebsiteFetcher::new();
+        #[cfg(feature = "native-tests")]
+        let fetcher = match std::env::var("DESEGNOS_NATIVE_TEST_WEBSITE_ORIGIN") {
+            Ok(origin) => desegnos_ai::WebsiteFetcher::for_fixture(
+                &desegnos_ai::WebUrl::parse(&origin).map_err(message)?,
+            )?,
+            Err(std::env::VarError::NotPresent) => fetcher,
+            Err(error) => return Err(message(error)),
+        };
+        let snapshot = fetcher.fetch_website_snapshot(&url).await?;
+        install(
+            &state,
+            revision,
+            WebsiteSnapshot {
+                name: snapshot.name,
+                files: snapshot.files,
+                pages: snapshot
+                    .pages
+                    .into_iter()
+                    .map(|page| desegnos_storage::WebsitePage {
+                        file: {
+                            let route = page.route.trim_start_matches('/');
+                            if route.is_empty() || route.ends_with('/') {
+                                format!("{route}index.html")
+                            } else if route.ends_with(".html") || route.ends_with(".htm") {
+                                route.to_owned()
+                            } else {
+                                format!("{route}.html")
+                            }
+                        },
+                        route: page.route,
+                        title: page.title,
+                    })
+                    .collect(),
+                skipped: snapshot.skipped,
+            },
+            &identity,
+            None,
+            &extractor,
+        )
+    }
+    .await;
+    result.map_err(|error| {
+        crate::native_error::NativeFailure::from_serializable(
+            error,
+            crate::native_error::NativeErrorKind::Command,
+        )
+    })
 }
 
 #[tauri::command]
@@ -266,64 +275,84 @@ pub async fn pick_website_import_source(
     identity: State<'_, Mutex<crate::identity::IdentityService>>,
     kind: WebsiteSourceKind,
     extractor: String,
-) -> NativeResult<Option<WebsiteImportView>> {
-    let revision = begin_read(&state)?;
-    let picked = tauri::async_runtime::spawn_blocking(move || {
-        let dialog = app.dialog().file();
-        let picked = crate::file_dialogs::picked(match kind {
-            WebsiteSourceKind::Folder => dialog.blocking_pick_folder().map(|path| vec![path]),
-            WebsiteSourceKind::File => dialog
-                .add_filter("HTML files", &["html", "htm"])
-                .add_filter("Desegnos project", &["desegnos"])
-                .blocking_pick_files(),
-            WebsiteSourceKind::Zip => dialog
-                .add_filter("Website ZIP", &["zip"])
-                .blocking_pick_file()
-                .map(|path| vec![path]),
-        })?;
-        let Some(picked) = picked else {
-            return Ok(None);
-        };
-        let paths = picked
-            .into_iter()
-            .map(|path| path.into_path().map_err(message))
-            .collect::<NativeResult<Vec<_>>>()?;
-        if matches!(kind, WebsiteSourceKind::File)
-            && paths.len() == 1
-            && paths[0]
-                .extension()
-                .is_some_and(|ext| ext.eq_ignore_ascii_case("desegnos"))
-        {
-            let source = desegnos_storage::collect_identity_source(&paths[0]).map_err(message)?;
-            let snapshot = WebsiteSnapshot {
-                name: source.name.clone(),
-                ..Default::default()
+) -> Result<Option<WebsiteImportView>, crate::native_error::NativeFailure> {
+    let result: NativeResult<Option<WebsiteImportView>> = async {
+        let revision = begin_read(&state)?;
+        let picked = tauri::async_runtime::spawn_blocking(move || {
+            let dialog = app.dialog().file();
+            let picked = crate::file_dialogs::picked(match kind {
+                WebsiteSourceKind::Folder => dialog.blocking_pick_folder().map(|path| vec![path]),
+                WebsiteSourceKind::File => dialog
+                    .add_filter("HTML files", &["html", "htm"])
+                    .add_filter("Desegnos project", &["desegnos"])
+                    .blocking_pick_files(),
+                WebsiteSourceKind::Zip => dialog
+                    .add_filter("Website ZIP", &["zip"])
+                    .blocking_pick_file()
+                    .map(|path| vec![path]),
+            })?;
+            let Some(picked) = picked else {
+                return Ok(None);
             };
-            return Ok(Some((snapshot, Some(source))));
-        }
-        let snapshot = if matches!(kind, WebsiteSourceKind::File) {
-            desegnos_storage::website_snapshot::collect_import_html(&paths)
-        } else {
-            desegnos_storage::website_snapshot::collect_import_snapshot(
-                paths.first().ok_or("Choose a website folder or ZIP.")?,
-            )
-        }
-        .map_err(message)?;
-        Ok::<_, String>(Some((snapshot, None)))
-    })
-    .await
-    .map_err(message)??;
-    picked
-        .map(|(snapshot, project)| {
-            install(&state, revision, snapshot, &identity, project, &extractor)
+            let paths = picked
+                .into_iter()
+                .map(|path| path.into_path().map_err(message))
+                .collect::<NativeResult<Vec<_>>>()?;
+            if matches!(kind, WebsiteSourceKind::File)
+                && paths.len() == 1
+                && paths[0]
+                    .extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("desegnos"))
+            {
+                let source =
+                    desegnos_storage::collect_identity_source(&paths[0]).map_err(message)?;
+                let snapshot = WebsiteSnapshot {
+                    name: source.name.clone(),
+                    ..Default::default()
+                };
+                return Ok(Some((snapshot, Some(source))));
+            }
+            let snapshot = if matches!(kind, WebsiteSourceKind::File) {
+                desegnos_storage::website_snapshot::collect_import_html(&paths)
+            } else {
+                desegnos_storage::website_snapshot::collect_import_snapshot(
+                    paths.first().ok_or("Choose a website folder or ZIP.")?,
+                )
+            }
+            .map_err(message)?;
+            Ok::<_, String>(Some((snapshot, None)))
         })
-        .transpose()
+        .await
+        .map_err(message)??;
+        picked
+            .map(|(snapshot, project)| {
+                install(&state, revision, snapshot, &identity, project, &extractor)
+            })
+            .transpose()
+    }
+    .await;
+    result.map_err(|error| {
+        crate::native_error::NativeFailure::from_serializable(
+            error,
+            crate::native_error::NativeErrorKind::Command,
+        )
+    })
 }
 
 #[tauri::command]
-pub fn cancel_website_import(state: ImportState<'_>) -> NativeResult<()> {
-    state.lock().map_err(message)?.clear();
-    Ok(())
+pub fn cancel_website_import(
+    state: ImportState<'_>,
+) -> Result<(), crate::native_error::NativeFailure> {
+    (|| -> NativeResult<()> {
+        state.lock().map_err(message)?.clear();
+        Ok(())
+    })()
+    .map_err(|error| {
+        crate::native_error::NativeFailure::from_serializable(
+            error,
+            crate::native_error::NativeErrorKind::Command,
+        )
+    })
 }
 
 fn image_mime(name: &str) -> Option<&'static str> {
@@ -386,7 +415,8 @@ pub async fn import_website_pages(
     state: ImportState<'_>,
     workspace: WorkspaceState<'_>,
     captures: Vec<WebCapture>,
-) -> NativeResult<WebsiteImportResultView> {
+) -> Result<WebsiteImportResultView, crate::native_error::NativeFailure> {
+    let result: NativeResult<WebsiteImportResultView> = async {
     if captures.is_empty() {
         return Err("Render at least one page before importing it.".into());
     }
@@ -499,6 +529,14 @@ pub async fn import_website_pages(
         layers,
         pictures: picture_count,
         warnings,
+    })
+
+    }.await;
+    result.map_err(|error| {
+        crate::native_error::NativeFailure::from_serializable(
+            error,
+            crate::native_error::NativeErrorKind::Command,
+        )
     })
 }
 

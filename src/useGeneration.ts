@@ -1,3 +1,4 @@
+import { errorValue, type ErrorValue } from './errorMessage.js';
 import type { CommandName } from './generated/commands';
 import { usePoll } from './usePoll';
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -17,7 +18,6 @@ const inStatus = (job: GenerationJobView | null, statuses: readonly GenerationSt
 export const activeGeneration = (job: GenerationJobView | null) => inStatus(job, activeStatuses);
 const resumesOnItsOwn = (job: GenerationJobView | null) => inStatus(job, resumeStatuses);
 const discardable = (job: GenerationJobView | null) => inStatus(job, discardableStatuses);
-const describe = (error: unknown) => error instanceof Error ? error.message : String(error);
 
 /** The one thing the hook is doing right now. The label the UI shows is derived from it, never stored. */
 export type GenerationPhase =
@@ -61,7 +61,7 @@ export function useGeneration(projectId: string | null, call: GenerationCall, ap
   const [phase, setPhase] = useState<GenerationPhase>(idle);
   const [operationStartedAt, setOperationStartedAt] = useState(0);
   const [clock, setClock] = useState(Date.now);
-  const [error, setError] = useState('');
+  const [error, setError] = useState<ErrorValue>('');
   // The abort scope of the current flow. It outlives the phase on purpose: a later canvas apply
   // reuses it so Stop also blocks that, and only a project switch drops it.
   const flow = useRef<{ controller: AbortController; jobId?: string; done: Promise<void> } | null>(null);
@@ -78,7 +78,7 @@ export function useGeneration(projectId: string | null, call: GenerationCall, ap
   useEffect(() => {
     if (!recorded || !job) return;
     let active = true;
-    void recorded().catch(error => { if (active) setError(`The project brief could not be refreshed: ${describe(error)}`); });
+    void recorded().catch(error => { if (active) setError(`The project brief could not be refreshed: ${errorValue(error)}`); });
     return () => { active = false; };
   }, [job?.jobId, job?.status, recorded]);
   const busy = working || activeGeneration(job);
@@ -97,7 +97,7 @@ export function useGeneration(projectId: string | null, call: GenerationCall, ap
     const version = ++epoch.current; action.current += 1; setJob(null); setOwned(null); setVisible(false); setPhase(idle); setError(''); flow.current?.controller.abort(); flow.current = null;
     if (projectId) void native<GenerationJobView | null>('get_generation', { projectId }).then(value => {
       if (active && context.current === projectId && version === epoch.current) { setJob(value); if (value && resumesOnItsOwn(value)) automatic.current = value.jobId; }
-    }, error => { if (active && version === epoch.current) setError(describe(error)); });
+    }, error => { if (active && version === epoch.current) setError(errorValue(error)); });
     return () => { active = false; };
   }, [projectId]);
   usePoll(!!projectId && activeGeneration(job) && !flow.current?.controller.signal.aborted, `${projectId}:${job?.jobId}:${job?.status}`, 700,
@@ -106,19 +106,19 @@ export function useGeneration(projectId: string | null, call: GenerationCall, ap
       const jobId = job?.jobId;
       const value = await native<GenerationJobView | null>('get_generation', { projectId });
       if (active() && context.current === projectId && version === epoch.current && value?.jobId === jobId) { setJob(value); setError(''); }
-    }, error => setError(`Progress could not be refreshed: ${describe(error)}`));
+    }, error => setError(`Progress could not be refreshed: ${errorValue(error)}`));
   const refresh = useCallback(async () => {
     if (!projectId) return;
     const version = ++epoch.current;
     try { const value = await native<GenerationJobView | null>('get_generation', { projectId }); if (context.current === projectId && version === epoch.current) { setJob(value); setError(''); } }
-    catch (error) { if (context.current === projectId && version === epoch.current) setError(describe(error)); }
+    catch (error) { if (context.current === projectId && version === epoch.current) setError(errorValue(error)); }
   }, [projectId]);
   async function perform(command: CommandName, next: GenerationPhase, args?: Record<string, unknown>, signal?: AbortSignal) {
     const id = projectId;
     const version = ++epoch.current;
     const token = ++action.current; setOperationStartedAt(Date.now()); setPhase(next); setError('');
     try { const value = await call<GenerationJobView>(command, args, signal); if (context.current === id && version === epoch.current) { setJob(value); if (id) setOwned({ projectId: id, jobId: value.jobId }); } return value; }
-    catch (error) { if (!signal?.aborted && context.current === id && version === epoch.current) setError(describe(error)); throw error; }
+    catch (error) { if (!signal?.aborted && context.current === id && version === epoch.current) setError(errorValue(error)); throw error; }
     finally { if (!signal?.aborted && context.current === id && token === action.current) setPhase(idle); }
   }
   async function prepare(elementIds?: string[], referenceIds?: string[]) {
@@ -139,7 +139,7 @@ export function useGeneration(projectId: string | null, call: GenerationCall, ap
       automatic.current = prepared.jobId;
       const started = await perform('start_generation', preparing('starting'), { jobId: prepared.jobId }, signal);
       current.jobId = started.jobId; automatic.current = started.jobId;
-    } catch (error) { if (!signal.aborted && context.current === projectId) setError(describe(error)); } finally {
+    } catch (error) { if (!signal.aborted && context.current === projectId) setError(errorValue(error)); } finally {
       finish();
     }
   }
@@ -162,7 +162,7 @@ export function useGeneration(projectId: string | null, call: GenerationCall, ap
         const value = await native<GenerationJobView>('cancel_generation', { jobId });
         if (context.current === id) setJob(value);
       } else if (context.current === id) { setJob(null); settled = stopped; }
-    } catch (error) { if (context.current === id) setError(describe(error)); }
+    } catch (error) { if (context.current === id) setError(errorValue(error)); }
     finally { if (context.current === id && token === action.current) setPhase(settled); }
   }
   async function launch(command: CommandName, next: GenerationPhase) {
@@ -174,7 +174,7 @@ export function useGeneration(projectId: string | null, call: GenerationCall, ap
       current.jobId = submitted.jobId; automatic.current = submitted.jobId;
       return submitted;
     }
-    catch (error) { if (!current.controller.signal.aborted && context.current === projectId) setError(describe(error)); }
+    catch (error) { if (!current.controller.signal.aborted && context.current === projectId) setError(errorValue(error)); }
     finally { finish(); }
   }
   const args = () => ({ jobId: job!.jobId });
@@ -189,7 +189,7 @@ export function useGeneration(projectId: string | null, call: GenerationCall, ap
     } catch (error) {
       if (!flow.current?.controller.signal.aborted && context.current === id) {
         await refresh();
-        if (context.current === id) setError(describe(error));
+        if (context.current === id) setError(errorValue(error));
       }
     }
     finally { if (context.current === id && token === action.current) setPhase(idle); }
@@ -206,7 +206,7 @@ export function useGeneration(projectId: string | null, call: GenerationCall, ap
   return { owns, job, phase, visible, operation, error, elapsedSeconds, stopped: phase.name === 'stopped', canStop, open: () => setVisible(true), close: () => setVisible(false), refresh, prepare, apply,
     start: () => launch('start_generation', { name: 'starting' }),
     cancel,
-    discard: () => perform('discard_generation', { name: 'discarding' }, args()).catch(error => { setError(describe(error)); }),
+    discard: () => perform('discard_generation', { name: 'discarding' }, args()).catch(error => { setError(errorValue(error)); }),
     retry: () => launch('retry_generation', { name: 'retrying' }) };
 }
 

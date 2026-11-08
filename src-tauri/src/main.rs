@@ -21,6 +21,7 @@ mod image_drop;
 #[cfg(target_os = "linux")]
 mod linux_startup;
 mod local_site;
+mod native_error;
 mod native_files;
 #[cfg(all(target_os = "linux", feature = "portal-dialogs"))]
 mod portal;

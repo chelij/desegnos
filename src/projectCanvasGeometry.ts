@@ -1,3 +1,4 @@
+import { DEFAULT_GRID_SPACING } from './generated/limits';
 export { findElementIn } from './projectCanvas/elementFacts';
 import { elementLabel, findElementIn } from './projectCanvas/elementFacts';
 export const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
@@ -12,14 +13,14 @@ export function wheelZoom(zoom: number, delta: number): number {
   return Number.isFinite(delta) ? clamp(Math.round(zoom * Math.exp(-clamp(delta, -800, 800) * 0.0015) * 1e6) / 1e6, MIN_ZOOM, MAX_ZOOM) : zoom;
 }
 
-export const GRID_SPACING = 8;
+
 export const MIN_SIZE = 1;
-export function snapValue(value: number, spacing = GRID_SPACING): number {
+export function snapValue(value: number, spacing: number): number {
   if (spacing === 0) return value;
-  const step = Number.isFinite(spacing) && spacing > 0 ? spacing : GRID_SPACING;
+  const step = Number.isFinite(spacing) && spacing > 0 ? spacing : DEFAULT_GRID_SPACING;
   return Number.isFinite(value) ? Math.round(value / step) * step : 0;
 }
-import { resolveForSize, sizeLabel } from './projectCanvas/sizes';
+import { resolveForSize } from './projectCanvas/sizes';
 import { TEMPLATE_GAP } from './generated/limits';
 import type { BoundaryKind, PageSize, Pointer, PointerSource, PointerTarget, Project, Rect, Viewport } from './types';
 
@@ -62,7 +63,7 @@ export function layoutBoundaries(pages: BoundaryPage[], homePageId: string, gap 
       const placedHere = placeable(size);
       const height = size.kind === 'screen' ? fixedHeight(size.height) : boundaryHeight(size.height);
       rows.push({
-        pageId: page.id, sizeId: size.id, label: sizeLabel(size.width), kind: size.kind,
+        pageId: page.id, sizeId: size.id, label: size.label, kind: size.kind,
         rect: placedHere ? { x: size.x, y: size.y, width, height } : { x, y: 0, width, height },
       });
       if (!placedHere) x += width + gap;
@@ -79,7 +80,7 @@ function fixedHeight(height: number): number {
   return Number.isFinite(height) && height > 0 ? Math.round(height) : MIN_SIZE;
 }
 
-export function drawnBoundaryRect(start: Point, end: Point, spacing = GRID_SPACING): Rect {
+export function drawnBoundaryRect(start: Point, end: Point, spacing: number): Rect {
   const left = Math.min(snapValue(start.x, spacing), snapValue(end.x, spacing));
   const top = Math.min(snapValue(start.y, spacing), snapValue(end.y, spacing));
   return { x: left, y: top, width: Math.max(MIN_SIZE, Math.abs(snapValue(end.x, spacing) - snapValue(start.x, spacing))),
@@ -106,7 +107,7 @@ function frameBox(rect: Rect, boundary: Rect): Rect {
 
 // Frames stay inside the boundary they were drawn in.
 // A drag that starts inside a boundary draws a snapped frame; starting outside draws nothing.
-export function drawnFrameRect(start: Point, end: Point, boundary: Rect, spacing = GRID_SPACING): Rect | null {
+export function drawnFrameRect(start: Point, end: Point, boundary: Rect, spacing: number): Rect | null {
   if (!Number.isFinite(start.x) || !Number.isFinite(start.y) || !Number.isFinite(end.x) || !Number.isFinite(end.y)) return null;
   if (start.x < boundary.x || start.x > boundary.x + boundary.width || start.y < boundary.y || start.y > boundary.y + boundary.height) return null;
   // Snap first, then clamp: snapping an edge that is already at the boundary must not make the
@@ -171,10 +172,10 @@ export function boundariesByPosition(boundaries: Boundary[]): Boundary[] {
 
 type DotGrid = { spacing: number; size: number; x: number; y: number; fade: number };
 
-export function dotGrid(camera: CanvasCamera, showGrid: boolean, gridSpacing = GRID_SPACING): DotGrid | null {
+export function dotGrid(camera: CanvasCamera, showGrid: boolean, gridSpacing: number): DotGrid | null {
   const zoom = camera.zoom;
   if (!showGrid || !Number.isFinite(zoom) || zoom <= 0) return null;
-  let spacing = Number.isFinite(gridSpacing) && gridSpacing > 0 ? gridSpacing : GRID_SPACING;
+  let spacing = Number.isFinite(gridSpacing) && gridSpacing > 0 ? gridSpacing : DEFAULT_GRID_SPACING;
   for (let step = 0; step < 32 && spacing * zoom < CANVAS_DOT_MIN_SCREEN; step++) spacing *= 2;
   const size = spacing * zoom;
   const wrap = (value: number) => Number.isFinite(value) ? ((value % size) + size) % size : 0;
@@ -263,7 +264,7 @@ export function insideAnyBoundary(boundaries: { rect: Rect }[], point: Point): b
   return boundaries.some(boundary => insideRect(boundary.rect, point));
 }
 
-export function referenceNoteRect(start: Point, end: Point, spacing = GRID_SPACING): Rect {
+export function referenceNoteRect(start: Point, end: Point, spacing: number): Rect {
   const clampPoint = (point: Point) => ({ x: snapValue(point.x, spacing), y: snapValue(point.y, spacing) });
   const from = clampPoint(start), to = clampPoint(end);
   return {
@@ -274,11 +275,11 @@ export function referenceNoteRect(start: Point, end: Point, spacing = GRID_SPACI
 }
 
 // Reference items move freely over the canvas; boundaries push them aside instead.
-export function movedReferenceRect(rect: Rect, delta: Point, spacing = GRID_SPACING): Rect {
+export function movedReferenceRect(rect: Rect, delta: Point, spacing: number): Rect {
   return { ...rect, x: snapValue(rect.x + delta.x, spacing), y: snapValue(rect.y + delta.y, spacing) };
 }
 
-export function resizedReferenceRect(rect: Rect, corner: FrameCorner, point: Point, spacing = GRID_SPACING): Rect {
+export function resizedReferenceRect(rect: Rect, corner: FrameCorner, point: Point, spacing: number): Rect {
   const px = snapValue(point.x, spacing), py = snapValue(point.y, spacing);
   const dragsLeft = corner === 'nw' || corner === 'sw', dragsTop = corner === 'nw' || corner === 'ne';
   let left = dragsLeft ? px : rect.x, right = dragsLeft ? rect.x + rect.width : px;
@@ -303,7 +304,7 @@ export function convertedReferenceRects(frame: Rect, attachmentCount: number): {
 }
 
 // A reference item dropped into a boundary keeps its size where it fits and is clamped inside.
-export function referenceFrameRect(rect: Rect, boundary: Rect, spacing = GRID_SPACING): Rect {
+export function referenceFrameRect(rect: Rect, boundary: Rect, spacing: number): Rect {
   return frameBox({
     x: snapValue(rect.x, spacing), y: snapValue(rect.y, spacing),
     width: Math.max(MIN_SIZE, Math.round(rect.width)), height: Math.max(MIN_SIZE, Math.round(rect.height)),

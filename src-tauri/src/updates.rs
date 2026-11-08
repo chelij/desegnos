@@ -208,16 +208,25 @@ fn newest_of(payloads: Vec<ReleasePayload>) -> Option<(semver::Version, Release)
 /// Reports the newest public release and its page. This performs one read-only request
 /// only when the user asks; there is no startup check and no automatic install.
 #[tauri::command]
-pub async fn check_for_updates() -> Result<UpdateCheck, String> {
-    let current = env!("CARGO_PKG_VERSION");
-    let latest = newest(&client()?).await?;
-    let newer = latest
-        .as_ref()
-        .is_some_and(|(version, _)| newer_than(current, &version.to_string()));
-    Ok(UpdateCheck {
-        current: current.to_owned(),
-        latest: latest.map(|(_, release)| release),
-        newer,
+pub async fn check_for_updates() -> Result<UpdateCheck, crate::native_error::NativeFailure> {
+    let result: Result<UpdateCheck, String> = async {
+        let current = env!("CARGO_PKG_VERSION");
+        let latest = newest(&client()?).await?;
+        let newer = latest
+            .as_ref()
+            .is_some_and(|(version, _)| newer_than(current, &version.to_string()));
+        Ok(UpdateCheck {
+            current: current.to_owned(),
+            latest: latest.map(|(_, release)| release),
+            newer,
+        })
+    }
+    .await;
+    result.map_err(|error| {
+        crate::native_error::NativeFailure::from_serializable(
+            error,
+            crate::native_error::NativeErrorKind::Command,
+        )
     })
 }
 

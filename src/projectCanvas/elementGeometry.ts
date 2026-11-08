@@ -1,6 +1,6 @@
 import { defaultText, ELEMENT_KIND_LABELS, findElementIn } from './elementFacts';
 export { ELEMENT_KIND_LABELS, defaultText, elementLabel, defaultLayerNameBase, isDefaultLayerName } from './elementFacts';
-import { GRID_SPACING, MIN_SIZE, snapValue } from '../projectCanvasGeometry';
+import { MIN_SIZE, snapValue } from '../projectCanvasGeometry';
 export { MIN_SIZE, snapValue, sameRect, unionBounds as unionRects, findElementIn } from '../projectCanvasGeometry';
 import { canvasFont } from './fonts';
 import type { Element, ElementKind, ElementLayout, ElementPadding, ElementStyle, InputType, OutputType, Page, Project, Rect } from '../types';
@@ -145,7 +145,7 @@ export const roundRect = (rect: Rect): Rect => ({
   x: Math.round(rect.x), y: Math.round(rect.y), width: Math.round(rect.width), height: Math.round(rect.height),
 });
 
-export const snapPoint = (point: Point, spacing = GRID_SPACING): Point => ({ x: snapValue(point.x, spacing), y: snapValue(point.y, spacing) });
+export const snapPoint = (point: Point, spacing: number): Point => ({ x: snapValue(point.x, spacing), y: snapValue(point.y, spacing) });
 
 /** A boundary's layers as the canvas draws them in one size: linked copies resolved, then that
  * size's overrides. Without a size, the base size, the design every other size inherits. */
@@ -261,11 +261,11 @@ export function reparentedElementRect(
   return elementLocalRect(elementCanvasRect(rect, fromBoundary, fromParent), toBoundary, toParent);
 }
 
-export function movedElementRect(rect: Rect, delta: Point, snap: boolean, spacing = GRID_SPACING): Rect {
+export function movedElementRect(rect: Rect, delta: Point, snap: boolean, spacing: number): Rect {
   return snap ? { ...rect, x: snapValue(rect.x + delta.x, spacing), y: snapValue(rect.y + delta.y, spacing) } : { ...rect, x: rect.x + delta.x, y: rect.y + delta.y };
 }
 
-export function resizedElementRect(rect: Rect, corner: ElementCorner, point: Point, snap: boolean, spacing = GRID_SPACING): Rect {
+export function resizedElementRect(rect: Rect, corner: ElementCorner, point: Point, snap: boolean, spacing: number): Rect {
   const px = snap ? snapValue(point.x, spacing) : point.x, py = snap ? snapValue(point.y, spacing) : point.y;
   const left = corner === 'nw' || corner === 'w' || corner === 'sw';
   const right = corner === 'ne' || corner === 'e' || corner === 'se';
@@ -286,7 +286,7 @@ export function resizedElementRect(rect: Rect, corner: ElementCorner, point: Poi
 }
 
 /** Shift-resize keeps the original ratio; the corner that is not dragged stays anchored. */
-export function ratioResizedRect(rect: Rect, corner: ElementCorner, point: Point, snap: boolean, spacing = GRID_SPACING): Rect {
+export function ratioResizedRect(rect: Rect, corner: ElementCorner, point: Point, snap: boolean, spacing: number): Rect {
   const free = resizedElementRect(rect, corner, point, snap, spacing);
   if (!rect.width || !rect.height) return free;
   const ratio = rect.width / rect.height;
@@ -302,13 +302,13 @@ export function ratioResizedRect(rect: Rect, corner: ElementCorner, point: Point
   };
 }
 
-export type ResizeKeys = { spacing?: number; snap?: boolean; ratio?: boolean; fromCentre?: boolean };
+export type ResizeKeys = { spacing: number; snap?: boolean; ratio?: boolean; fromCentre?: boolean };
 
 /**
  * A handle drag with the transform keys applied: Shift keeps the ratio, Alt resizes from the
  * centre, and both combine. The caller decides what Shift means for the layer kind.
  */
-export function resizedRectWithKeys(rect: Rect, corner: ElementCorner, point: Point, keys: ResizeKeys = {}): Rect {
+export function resizedRectWithKeys(rect: Rect, corner: ElementCorner, point: Point, keys: ResizeKeys): Rect {
   const next = keys.ratio
     ? ratioResizedRect(rect, corner, point, keys.snap === true, keys.spacing)
     : resizedElementRect(rect, corner, point, keys.snap === true, keys.spacing);
@@ -318,13 +318,13 @@ export function resizedRectWithKeys(rect: Rect, corner: ElementCorner, point: Po
   return { x: rect.x + rect.width / 2 - width / 2, y: rect.y + rect.height / 2 - height / 2, width, height };
 }
 
-export type DrawKeys = { spacing?: number; snap?: boolean; square?: boolean; fromCentre?: boolean };
+export type DrawKeys = { spacing: number; snap?: boolean; square?: boolean; fromCentre?: boolean };
 
 /**
  * A shape drag with the transform keys applied: Shift constrains to a square (a circle inside
  * the square), Alt draws from the press point as the centre, and both combine.
  */
-export function drawRectWithKeys(start: Point, point: Point, keys: DrawKeys = {}): Rect {
+export function drawRectWithKeys(start: Point, point: Point, keys: DrawKeys): Rect {
   const end = keys.snap === true ? snapPoint(point, keys.spacing) : point;
   let dx = end.x - start.x, dy = end.y - start.y;
   if (keys.square) {
@@ -359,7 +359,7 @@ export function rectFromPoints(start: Point, end: Point): Rect {
   return { x: Math.min(start.x, end.x), y: Math.min(start.y, end.y), width: Math.abs(end.x - start.x), height: Math.abs(end.y - start.y) };
 }
 
-export function draggedElementRect(rect: Rect, start: Point, point: Point, snap: boolean, spacing = GRID_SPACING): Rect {
+export function draggedElementRect(rect: Rect, start: Point, point: Point, snap: boolean, spacing: number): Rect {
   return movedElementRect(rect, { x: point.x - start.x, y: point.y - start.y }, snap, spacing);
 }
 

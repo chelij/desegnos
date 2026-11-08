@@ -15,7 +15,25 @@ const modules = await compileModules([
   'src/shortcuts.ts',
 ]);
 try {
+  const { DEFAULT_GRID_SPACING: GRID_SPACING } = await modules.load('generated/limits.js');
   const { arrangeSiblingOrder } = await modules.load('projectCanvas/arrange.js');
+  await test('live layer labels and default-name detection agree with Rust', async () => {
+    const facts = await modules.load('projectCanvas/elementFacts.js');
+    const cases = JSON.parse(await readFile(join(root, 'src/generated/elementFacts.json'), 'utf8'));
+    for (const item of cases) {
+      assert.equal(facts.elementLabel(item.element), item.label, JSON.stringify(item.element));
+      assert.equal(facts.isDefaultLayerName(item.element), item.isDefault, JSON.stringify(item.element));
+    }
+  });
+  await test('a page added to a slide or image project keeps page defaults', async () => {
+    const { boundaryDefaults, layoutKind } = await modules.load('projectCanvas/boundaryDefaults.js');
+    for (const template of ['slideDeck', 'socialImage']) {
+      const project = { template, pages: [] };
+      assert.deepEqual(boundaryDefaults(project, 'page'), { x: 0, y: 0, width: 1440, height: 900 });
+      assert.equal(layoutKind('page', project), 'page');
+    }
+    assert.deepEqual(boundaryDefaults({ template: 'appScreen', pages: [] }, 'page'), { x: 0, y: 0, width: 390, height: 844 });
+  });
   await test('arranging siblings distinguishes steps from edges and preserves selected blocks', () => {
     const ids = ['a', 'b', 'c', 'd', 'e'];
     assert.deepEqual(arrangeSiblingOrder(ids, ['b', 'c'], 'forward'), ['a', 'd', 'b', 'c', 'e']);
@@ -266,7 +284,7 @@ try {
   // -------------------------------------------------------------------------
 
   await test('element creation gives each kind sensible defaults', () => {
-    assert.equal(geometry.GRID_SPACING, 8);
+    assert.equal(GRID_SPACING, 8);
     assert.equal(geometry.MIN_SIZE, 1);
     const input = elementGeometry.createElement('input', { x: 0, y: 0, width: 100, height: 40 });
     assert.equal(input.inputType, 'text');
@@ -284,8 +302,8 @@ try {
     assert.equal(text.text, 'Hi');
     assert.equal(text.style.fill, null);
     assert.deepEqual(elementGeometry.roundRect({ x: 1.4, y: 1.6, width: 2.5, height: 3.5 }), { x: 1, y: 2, width: 3, height: 4 });
-    assert.equal(elementGeometry.snapValue(13), 16);
-    assert.deepEqual(elementGeometry.snapPoint({ x: 4, y: 12 }), { x: 8, y: 16 });
+    assert.equal(elementGeometry.snapValue(13, GRID_SPACING), 16);
+    assert.deepEqual(elementGeometry.snapPoint({ x: 4, y: 12 }, GRID_SPACING), { x: 8, y: 16 });
     assert.equal(elementGeometry.sameRect({ x: 0, y: 0, width: 1, height: 1 }, { x: 0, y: 0, width: 1, height: 1 }), true);
     assert.equal(elementGeometry.sameRect({ x: 0, y: 0, width: 1, height: 1 }, { x: 0, y: 0, width: 2, height: 1 }), false);
     assert.deepEqual(elementGeometry.unionRects([]), { x: 0, y: 0, width: 0, height: 0 });
@@ -348,17 +366,17 @@ try {
   });
 
   await test('move and resize math snaps, anchors and keeps a minimum size', () => {
-    assert.deepEqual(elementGeometry.movedElementRect({ x: 10, y: 13, width: 30, height: 30 }, { x: 5, y: 6 }, true), { x: 16, y: 16, width: 30, height: 30 });
-    assert.deepEqual(elementGeometry.movedElementRect({ x: 10, y: 13, width: 30, height: 30 }, { x: 5, y: 6 }, false), { x: 15, y: 19, width: 30, height: 30 });
-    assert.deepEqual(elementGeometry.draggedElementRect({ x: 10, y: 10, width: 30, height: 30 }, { x: 5, y: 5 }, { x: 20, y: 20 }, false), { x: 25, y: 25, width: 30, height: 30 });
+    assert.deepEqual(elementGeometry.movedElementRect({ x: 10, y: 13, width: 30, height: 30 }, { x: 5, y: 6 }, true, GRID_SPACING), { x: 16, y: 16, width: 30, height: 30 });
+    assert.deepEqual(elementGeometry.movedElementRect({ x: 10, y: 13, width: 30, height: 30 }, { x: 5, y: 6 }, false, GRID_SPACING), { x: 15, y: 19, width: 30, height: 30 });
+    assert.deepEqual(elementGeometry.draggedElementRect({ x: 10, y: 10, width: 30, height: 30 }, { x: 5, y: 5 }, { x: 20, y: 20 }, false, GRID_SPACING), { x: 25, y: 25, width: 30, height: 30 });
     const rect = { x: 10, y: 20, width: 100, height: 80 };
-    assert.deepEqual(elementGeometry.resizedElementRect(rect, 'se', { x: 150, y: 140 }, false), { x: 10, y: 20, width: 140, height: 120 });
-    assert.deepEqual(elementGeometry.resizedElementRect(rect, 'nw', { x: 0, y: 0 }, false), { x: 0, y: 0, width: 110, height: 100 });
-    assert.deepEqual(elementGeometry.resizedElementRect(rect, 'e', { x: 150, y: 400 }, false), { x: 10, y: 20, width: 140, height: 80 });
-    assert.deepEqual(elementGeometry.resizedElementRect(rect, 'n', { x: 0, y: 0 }, false), { x: 10, y: 0, width: 100, height: 100 });
-    assert.deepEqual(elementGeometry.resizedElementRect(rect, 'se', { x: -100, y: -100 }, false), { x: 10, y: 20, width: 1, height: 1 });
-    assert.deepEqual(elementGeometry.resizedElementRect(rect, 'nw', { x: 500, y: 500 }, false), { x: 109, y: 99, width: 1, height: 1 });
-    assert.deepEqual(elementGeometry.ratioResizedRect(rect, 'se', { x: 400, y: 300 }, false), { x: 10, y: 20, width: 390, height: 312 });
+    assert.deepEqual(elementGeometry.resizedElementRect(rect, 'se', { x: 150, y: 140 }, false, GRID_SPACING), { x: 10, y: 20, width: 140, height: 120 });
+    assert.deepEqual(elementGeometry.resizedElementRect(rect, 'nw', { x: 0, y: 0 }, false, GRID_SPACING), { x: 0, y: 0, width: 110, height: 100 });
+    assert.deepEqual(elementGeometry.resizedElementRect(rect, 'e', { x: 150, y: 400 }, false, GRID_SPACING), { x: 10, y: 20, width: 140, height: 80 });
+    assert.deepEqual(elementGeometry.resizedElementRect(rect, 'n', { x: 0, y: 0 }, false, GRID_SPACING), { x: 10, y: 0, width: 100, height: 100 });
+    assert.deepEqual(elementGeometry.resizedElementRect(rect, 'se', { x: -100, y: -100 }, false, GRID_SPACING), { x: 10, y: 20, width: 1, height: 1 });
+    assert.deepEqual(elementGeometry.resizedElementRect(rect, 'nw', { x: 500, y: 500 }, false, GRID_SPACING), { x: 109, y: 99, width: 1, height: 1 });
+    assert.deepEqual(elementGeometry.ratioResizedRect(rect, 'se', { x: 400, y: 300 }, false, GRID_SPACING), { x: 10, y: 20, width: 390, height: 312 });
     assert.equal(elementGeometry.layoutChildren({ kind: 'free' }), false);
     assert.equal(elementGeometry.layoutChildren({ kind: 'stack', direction: 'row', gap: 0, padding: 0, align: 'start', justify: 'start', wrap: false }), true);
     assert.deepEqual(elementGeometry.rectFromPoints({ x: 30, y: 40 }, { x: 10, y: 20 }), { x: 10, y: 20, width: 20, height: 20 });
@@ -377,15 +395,15 @@ try {
 
   await test('transform keys resize from the centre, keep ratios and lock axes', () => {
     const rect = { x: 10, y: 20, width: 100, height: 80 };
-    assert.deepEqual(elementGeometry.resizedRectWithKeys(rect, 'se', { x: 210, y: 180 }, { snap: false }), { x: 10, y: 20, width: 200, height: 160 });
-    assert.deepEqual(elementGeometry.resizedRectWithKeys(rect, 'se', { x: 210, y: 180 }, { snap: false, fromCentre: true }), { x: -40, y: -20, width: 200, height: 160 });
-    assert.deepEqual(elementGeometry.resizedRectWithKeys(rect, 'nw', { x: 0, y: 0 }, { snap: false, fromCentre: true }), { x: 5, y: 10, width: 110, height: 100 });
-    assert.deepEqual(elementGeometry.resizedRectWithKeys(rect, 'se', { x: 400, y: 300 }, { snap: false, ratio: true }), { x: 10, y: 20, width: 390, height: 312 });
-    assert.deepEqual(elementGeometry.resizedRectWithKeys(rect, 'se', { x: 400, y: 300 }, { snap: false, ratio: true, fromCentre: true }), { x: -135, y: -96, width: 390, height: 312 });
-    assert.deepEqual(elementGeometry.drawRectWithKeys({ x: 100, y: 100 }, { x: 143, y: 121 }, { snap: true }), { x: 100, y: 100, width: 44, height: 20 });
-    assert.deepEqual(elementGeometry.drawRectWithKeys({ x: 100, y: 100 }, { x: 140, y: 120 }, { square: true }), { x: 100, y: 100, width: 40, height: 40 });
-    assert.deepEqual(elementGeometry.drawRectWithKeys({ x: 100, y: 100 }, { x: 140, y: 120 }, { fromCentre: true }), { x: 60, y: 80, width: 80, height: 40 });
-    assert.deepEqual(elementGeometry.drawRectWithKeys({ x: 100, y: 100 }, { x: 140, y: 120 }, { square: true, fromCentre: true }), { x: 60, y: 60, width: 80, height: 80 });
+    assert.deepEqual(elementGeometry.resizedRectWithKeys(rect, 'se', { x: 210, y: 180 }, { ...{ snap: false }, spacing: GRID_SPACING }), { x: 10, y: 20, width: 200, height: 160 });
+    assert.deepEqual(elementGeometry.resizedRectWithKeys(rect, 'se', { x: 210, y: 180 }, { ...{ snap: false, fromCentre: true }, spacing: GRID_SPACING }), { x: -40, y: -20, width: 200, height: 160 });
+    assert.deepEqual(elementGeometry.resizedRectWithKeys(rect, 'nw', { x: 0, y: 0 }, { ...{ snap: false, fromCentre: true }, spacing: GRID_SPACING }), { x: 5, y: 10, width: 110, height: 100 });
+    assert.deepEqual(elementGeometry.resizedRectWithKeys(rect, 'se', { x: 400, y: 300 }, { ...{ snap: false, ratio: true }, spacing: GRID_SPACING }), { x: 10, y: 20, width: 390, height: 312 });
+    assert.deepEqual(elementGeometry.resizedRectWithKeys(rect, 'se', { x: 400, y: 300 }, { ...{ snap: false, ratio: true, fromCentre: true }, spacing: GRID_SPACING }), { x: -135, y: -96, width: 390, height: 312 });
+    assert.deepEqual(elementGeometry.drawRectWithKeys({ x: 100, y: 100 }, { x: 143, y: 121 }, { ...{ snap: true }, spacing: GRID_SPACING }), { x: 100, y: 100, width: 44, height: 20 });
+    assert.deepEqual(elementGeometry.drawRectWithKeys({ x: 100, y: 100 }, { x: 140, y: 120 }, { ...{ square: true }, spacing: GRID_SPACING }), { x: 100, y: 100, width: 40, height: 40 });
+    assert.deepEqual(elementGeometry.drawRectWithKeys({ x: 100, y: 100 }, { x: 140, y: 120 }, { ...{ fromCentre: true }, spacing: GRID_SPACING }), { x: 60, y: 80, width: 80, height: 40 });
+    assert.deepEqual(elementGeometry.drawRectWithKeys({ x: 100, y: 100 }, { x: 140, y: 120 }, { ...{ square: true, fromCentre: true }, spacing: GRID_SPACING }), { x: 60, y: 60, width: 80, height: 80 });
     assert.deepEqual(elementGeometry.axisLockedDelta({ x: 10, y: 3 }), { x: 10, y: 0 });
     assert.deepEqual(elementGeometry.axisLockedDelta({ x: 2, y: -9 }), { x: 0, y: -9 });
     const snapped = elementGeometry.snappedLineEnd({ x: 0, y: 0 }, { x: 10, y: 3 }, 15);

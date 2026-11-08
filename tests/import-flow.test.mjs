@@ -15,7 +15,7 @@ try {
   const compiler = fileURLToPath(new URL('bin/tsc', import.meta.resolve('typescript/package.json')));
   const result = spawnSync(process.execPath, [compiler, '--ignoreConfig', '--types', 'vite/client', '--jsx', 'react-jsx', '--module', 'esnext', '--target', 'ES2022', '--moduleResolution', 'bundler', '--skipLibCheck', '--outDir', temporary, 'src/ImportContext.tsx'], { cwd: root, encoding: 'utf8' });
   assert.equal(result.status, 0, result.stderr || result.stdout);
-  const code = (await Promise.all(['generated/limits.js', 'usePoll.js', 'WebsiteImport.js', 'ImportContext.js'].map(file => readFile(join(temporary, file), 'utf8')))).map(code => code.replace(/^import .*;$/gm, '').replace(/^export /gm, '')).join('\n');
+  const code = (await Promise.all(['errorMessage.js', 'generated/limits.js', 'usePoll.js', 'WebsiteImport.js', 'ImportContext.js'].map(file => readFile(join(temporary, file), 'utf8')))).map(code => code.replace(/^import .*;$/gm, '').replace(/^export /gm, '')).join('\n');
   function setup({ connected = true, previous = false, initialSource = null, pageCount = 0, fail = '', deferred = '', pageWarnings = ['A picture was skipped.'] } = {}) {
     let cursor = 0, closed = 0, configured = connected, completeDeferred;
     const state = [], dependencies = [], effects = [], cleanups = [], calls = [], kept = [], imported = [], listeners = new Set();
@@ -39,11 +39,11 @@ try {
     };
     const jsx = (type, props) => typeof type === 'function' ? type(props) : ({ type, props });
     const window = { addEventListener: (_, listener) => listeners.add(listener), removeEventListener: (_, listener) => listeners.delete(listener), setTimeout: () => 1, clearTimeout() {} };
-    const bindings = { useState, useEffect, useRef, useMemo: fn => fn(), useCallback: fn => fn, native, window, EXTRACTOR_SCRIPT: 'extract', _jsx: jsx, _jsxs: jsx, _Fragment: 'fragment', Icon: 'icon', Notice: 'notice', ProblemBanner: 'problem', userError: String, needsAiSettings: () => false, groupIdentityPages: () => [], selectedPageContent: () => ({ photos: [], items: [] }), findingSection: () => 'Other', parseColours: () => [], parseFonts: () => [], parseTone: () => [] };
+    const bindings = { useState, useEffect, useRef, useMemo: fn => fn(), useCallback: fn => fn, native, window, EXTRACTOR_SCRIPT: 'extract', _jsx: jsx, _jsxs: jsx, _Fragment: 'fragment', Icon: 'icon', Notice: 'notice', ProblemBanner: 'problem', userError: error => error?.message ?? String(error), needsAiSettings: () => false, groupIdentityPages: () => [], selectedPageContent: () => ({ photos: [], items: [] }), findingSection: () => 'Other', parseColours: () => [], parseFonts: () => [], parseTone: () => [] };
     const Component = new Function(...Object.keys(bindings), `${code}\nreturn ImportContext;`)(...Object.values(bindings));
     const render = () => {
       cursor = 0;
-      const tree = Component({ initialSource, busy: false, settings: { credential: { configured }, configurationError: null, settings: {}, providers: [], authentication: 'apiKey', chatgpt: { accounts: [], activeAccountId: null } }, openSettings() { configured = true; }, importInto: async (...args) => kept.push(args), onPagesImported: result => imported.push(result), close() { closed += 1; } });
+      const tree = Component({ initialSource, busy: false, settings: { readiness: { ready: configured }, credential: { configured }, configurationError: null, settings: {}, providers: [], authentication: 'apiKey', chatgpt: { accounts: [], activeAccountId: null } }, openSettings() { configured = true; }, importInto: async (...args) => kept.push(args), onPagesImported: result => imported.push(result), close() { closed += 1; } });
       effects.splice(0).forEach(effect => effect());
       return tree;
     };

@@ -4,6 +4,7 @@ import { compileModules } from './typescript.mjs';
 
 const modules = await compileModules(['src/projectCanvasGeometry.ts']);
 try {
+  const { DEFAULT_GRID_SPACING: GRID_SPACING } = await modules.load('generated/limits.js');
   const geometry = await modules.load('projectCanvasGeometry.js');
   const {
     boundaryHeight, layoutBoundaries, drawnBoundaryRect, snapValue, canvasRectFromPage, pageRectFromCanvas,
@@ -14,7 +15,7 @@ try {
     selectedElementTargets, hasCanvasTarget, toggleCanvasTarget, sizeTarget, nearestEdgeAnchors, pointerEndpointKey,
     samePointerEndpoint, pointerEndpointRect, pointerRoute, pointerAt, pointSegmentDistance, pointerVisible,
     viewportWorldRect, screenPoint, pointerBroken, pointerLabel, pointerEndpointName, automaticLinks,
-    BOUNDARY_GAP, BOUNDARY_PUSH_GAP, GRID_SPACING, MIN_SIZE, MAX_BOUNDARY_HEIGHT, FIT_PADDING, CANVAS_DOT_MIN_SCREEN, REFERENCE_ATTACHMENT_WIDTH, REFERENCE_ATTACHMENT_HEIGHT, REFERENCE_ATTACHMENT_GAP,
+    BOUNDARY_GAP, BOUNDARY_PUSH_GAP, MIN_SIZE, MAX_BOUNDARY_HEIGHT, FIT_PADDING, CANVAS_DOT_MIN_SCREEN, REFERENCE_ATTACHMENT_WIDTH, REFERENCE_ATTACHMENT_HEIGHT, REFERENCE_ATTACHMENT_GAP,
     POINTER_HIT_PX,
   } = geometry;
   const { MIN_ZOOM, ZOOM_LEVELS } = await modules.load('projectCanvasGeometry.js');
@@ -62,12 +63,12 @@ try {
     assert.equal(GRID_SPACING, 8);
     assert.equal(MIN_SIZE, 1);
     assert.equal(MIN_SIZE, 1);
-    assert.equal(snapValue(13), 16);
-    assert.equal(snapValue(Number.NaN), 0);
-    assert.deepEqual(drawnBoundaryRect({ x: 3, y: 5 }, { x: 100, y: 60 }), { x: 0, y: 8, width: 104, height: 56 });
-    const large = drawnBoundaryRect({ x: 0, y: 0 }, { x: 1000, y: 700 });
+    assert.equal(snapValue(13, GRID_SPACING), 16);
+    assert.equal(snapValue(Number.NaN, GRID_SPACING), 0);
+    assert.deepEqual(drawnBoundaryRect({ x: 3, y: 5 }, { x: 100, y: 60 }, GRID_SPACING), { x: 0, y: 8, width: 104, height: 56 });
+    const large = drawnBoundaryRect({ x: 0, y: 0 }, { x: 1000, y: 700 }, GRID_SPACING);
     assert.deepEqual(large, { x: 0, y: 0, width: 1000, height: 704 });
-    assert.deepEqual(drawnBoundaryRect({ x: 1000, y: 700 }, { x: 0, y: 0 }), large);
+    assert.deepEqual(drawnBoundaryRect({ x: 1000, y: 700 }, { x: 0, y: 0 }, GRID_SPACING), large);
   });
 
   await test('a moved boundary pushes neighbours aside and the push chains', () => {
@@ -125,17 +126,17 @@ try {
   await test('the dot grid keeps at least six screen pixels between dots and fades out', () => {
     assert.equal(GRID_SPACING, 8);
     assert.equal(CANVAS_DOT_MIN_SCREEN, 6);
-    assert.equal(dotGrid({ x: 0, y: 0, zoom: 1 }, false), null);
-    assert.equal(dotGrid({ x: 0, y: 0, zoom: 0 }, true), null);
-    assert.equal(dotGrid({ x: 0, y: 0, zoom: Number.NaN }, true), null);
-    const one = dotGrid({ x: 0, y: 0, zoom: 1 }, true);
+    assert.equal(dotGrid({ x: 0, y: 0, zoom: 1 }, false, GRID_SPACING), null);
+    assert.equal(dotGrid({ x: 0, y: 0, zoom: 0 }, true, GRID_SPACING), null);
+    assert.equal(dotGrid({ x: 0, y: 0, zoom: Number.NaN }, true, GRID_SPACING), null);
+    const one = dotGrid({ x: 0, y: 0, zoom: 1 }, true, GRID_SPACING);
     assert.equal(one.spacing, 8);
     assert.equal(one.size, 8);
     assert.equal(one.fade, 1);
-    const half = dotGrid({ x: 0, y: 0, zoom: 0.5 }, true);
+    const half = dotGrid({ x: 0, y: 0, zoom: 0.5 }, true, GRID_SPACING);
     assert.equal(half.spacing, 16);
     assert.equal(half.size, 8);
-    const tiny = dotGrid({ x: 3, y: -5, zoom: 0.05 }, true);
+    const tiny = dotGrid({ x: 3, y: -5, zoom: 0.05 }, true, GRID_SPACING);
     assert.ok(tiny.spacing * 0.05 >= 6);
     assert.equal(tiny.fade, 0.5);
     assert.ok(tiny.x >= 0 && tiny.x < tiny.size);
@@ -218,15 +219,15 @@ try {
     const area = box(100, 100, 400, 300);
     assert.equal(GRID_SPACING, 8);
     assert.equal(MIN_SIZE, 1);
-    assert.deepEqual(drawnFrameRect({ x: 120, y: 120 }, { x: 320, y: 280 }, area), box(120, 120, 200, 160));
-    const reversed = drawnFrameRect({ x: 320, y: 280 }, { x: 120, y: 120 }, area);
+    assert.deepEqual(drawnFrameRect({ x: 120, y: 120 }, { x: 320, y: 280 }, area, GRID_SPACING), box(120, 120, 200, 160));
+    const reversed = drawnFrameRect({ x: 320, y: 280 }, { x: 120, y: 120 }, area, GRID_SPACING);
     assert.deepEqual(reversed, box(120, 120, 200, 160));
-    const clamped = drawnFrameRect({ x: 120, y: 120 }, { x: 900, y: 900 }, area);
+    const clamped = drawnFrameRect({ x: 120, y: 120 }, { x: 900, y: 900 }, area, GRID_SPACING);
     assert.deepEqual(clamped, box(120, 120, 380, 280));
-    const minimal = drawnFrameRect({ x: 120, y: 120 }, { x: 121, y: 121 }, area);
+    const minimal = drawnFrameRect({ x: 120, y: 120 }, { x: 121, y: 121 }, area, GRID_SPACING);
     assert.deepEqual(minimal, box(120, 120, 1, 1));
-    assert.equal(drawnFrameRect({ x: 10, y: 10 }, { x: 200, y: 200 }, area), null);
-    assert.equal(drawnFrameRect({ x: Number.NaN, y: 120 }, { x: 200, y: 200 }, area), null);
+    assert.equal(drawnFrameRect({ x: 10, y: 10 }, { x: 200, y: 200 }, area, GRID_SPACING), null);
+    assert.equal(drawnFrameRect({ x: Number.NaN, y: 120 }, { x: 200, y: 200 }, area, GRID_SPACING), null);
   });
 
   await test('a Frame drag outside boundaries draws a snapped note of any size', () => {
@@ -234,17 +235,17 @@ try {
     assert.equal(MIN_SIZE, 1);
     assert.equal(MIN_SIZE, 1);
     assert.equal(MIN_SIZE, 1);
-    assert.deepEqual(referenceNoteRect({ x: 2, y: 3 }, { x: 100, y: 60 }), { x: 0, y: 0, width: 104, height: 64 });
-    assert.deepEqual(referenceNoteRect({ x: 400, y: 400 }, { x: 200, y: 200 }), { x: 200, y: 200, width: 200, height: 200 });
+    assert.deepEqual(referenceNoteRect({ x: 2, y: 3 }, { x: 100, y: 60 }, GRID_SPACING), { x: 0, y: 0, width: 104, height: 64 });
+    assert.deepEqual(referenceNoteRect({ x: 400, y: 400 }, { x: 200, y: 200 }, GRID_SPACING), { x: 200, y: 200, width: 200, height: 200 });
   });
 
   await test('reference items move and resize freely', () => {
-    assert.deepEqual(movedReferenceRect(box(13, 21), { x: 5, y: 6 }), box(16, 24));
+    assert.deepEqual(movedReferenceRect(box(13, 21), { x: 5, y: 6 }, GRID_SPACING), box(16, 24));
     assert.equal(MIN_SIZE, 1);
-    assert.deepEqual(resizedReferenceRect(box(100, 100, 200, 150), 'se', { x: 400, y: 400 }), box(100, 100, 300, 300));
-    assert.deepEqual(resizedReferenceRect(box(100, 100, 200, 150), 'nw', { x: 50, y: 50 }), box(48, 48, 252, 202));
-    assert.deepEqual(resizedReferenceRect(box(100, 100, 200, 150), 'se', { x: 101, y: 101 }), box(100, 100, 4, 4));
-    assert.deepEqual(resizedReferenceRect(box(100, 100, 200, 150), 'nw', { x: 399, y: 399 }), box(299, 249, 1, 1));
+    assert.deepEqual(resizedReferenceRect(box(100, 100, 200, 150), 'se', { x: 400, y: 400 }, GRID_SPACING), box(100, 100, 300, 300));
+    assert.deepEqual(resizedReferenceRect(box(100, 100, 200, 150), 'nw', { x: 50, y: 50 }, GRID_SPACING), box(48, 48, 252, 202));
+    assert.deepEqual(resizedReferenceRect(box(100, 100, 200, 150), 'se', { x: 101, y: 101 }, GRID_SPACING), box(100, 100, 4, 4));
+    assert.deepEqual(resizedReferenceRect(box(100, 100, 200, 150), 'nw', { x: 399, y: 399 }, GRID_SPACING), box(299, 249, 1, 1));
   });
 
   await test('a frame dragged out places a note and its attachment cards one row beside it', () => {
@@ -261,9 +262,9 @@ try {
   });
 
   await test('a reference item dropped into a boundary keeps its size where it fits and clamps inside', () => {
-    assert.deepEqual(referenceFrameRect(box(110, 110, 100, 60), box(100, 100, 400, 300)), box(112, 112, 100, 60));
-    assert.deepEqual(referenceFrameRect(box(10, 10, 10, 10), box(100, 100, 400, 300)), box(100, 100, 10, 10));
-    assert.deepEqual(referenceFrameRect(box(480, 380, 200, 200), box(100, 100, 400, 300)), box(300, 200, 200, 200));
+    assert.deepEqual(referenceFrameRect(box(110, 110, 100, 60), box(100, 100, 400, 300), GRID_SPACING), box(112, 112, 100, 60));
+    assert.deepEqual(referenceFrameRect(box(10, 10, 10, 10), box(100, 100, 400, 300), GRID_SPACING), box(100, 100, 10, 10));
+    assert.deepEqual(referenceFrameRect(box(480, 380, 200, 200), box(100, 100, 400, 300), GRID_SPACING), box(300, 200, 200, 200));
   });
 
   await test('boundaries push reference items aside and items do not push each other', () => {

@@ -1,3 +1,4 @@
+import { TEXT_SIZE_RANGE } from '../generated/limits';
 import { sizeTarget } from '../projectCanvasGeometry';
 import { isTextField } from '../WorkspaceSurface';
 import { pageKind } from './boundaryDefaults';
@@ -214,7 +215,7 @@ export function createKeyboardActions(context: () => Context) {
               if (element.kind !== 'text') continue;
               if (action === 'bold') style.textStyle.weight = style.textStyle.weight >= 700 ? 400 : 700;
               else if (action === 'italic') style.textStyle.italic = !style.textStyle.italic;
-              else style.textStyle.size = Math.min(512, Math.max(1, style.textStyle.size + (action === 'fontSizeUp' ? 1 : -1)));
+              else style.textStyle.size = Math.min(TEXT_SIZE_RANGE[1], Math.max(TEXT_SIZE_RANGE[0], style.textStyle.size + (action === 'fontSizeUp' ? 1 : -1)));
               style.references = { ...style.references, text: null };
             }
             patches.push({ id: element.id, style, ...scope });

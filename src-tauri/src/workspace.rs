@@ -101,6 +101,7 @@ struct RecoveryCandidate {
 #[derive(ts_rs::TS, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkspaceView {
+    can_generate_from_brief: bool,
     project: Option<Project>,
     path: Option<String>,
     dirty: bool,
@@ -564,6 +565,18 @@ impl Workspace {
 
     pub(super) fn view(&self) -> WorkspaceView {
         WorkspaceView {
+            can_generate_from_brief: self.session().is_some_and(|session| {
+                let project = session.project();
+                !project.brief.purpose.trim().is_empty()
+                    && project
+                        .pages
+                        .first()
+                        .is_some_and(|page| page.elements.is_empty())
+                    && !project
+                        .requests
+                        .iter()
+                        .any(|request| !request.text.trim().is_empty())
+            }),
             pointer_states: self
                 .session()
                 .map(|session| session.project().pointer_states())
@@ -1559,10 +1572,20 @@ impl Workspace {
 }
 
 #[tauri::command(async)]
-pub fn get_workspace(state: WorkspaceState<'_>) -> NativeResult<WorkspaceView> {
-    let mut state = state.lock().map_err(message)?;
-    state.refresh_recoveries();
-    Ok(state.view())
+pub fn get_workspace(
+    state: WorkspaceState<'_>,
+) -> Result<WorkspaceView, crate::native_error::NativeFailure> {
+    (|| -> NativeResult<WorkspaceView> {
+        let mut state = state.lock().map_err(message)?;
+        state.refresh_recoveries();
+        Ok(state.view())
+    })()
+    .map_err(|error| {
+        crate::native_error::NativeFailure::from_serializable(
+            error,
+            crate::native_error::NativeErrorKind::Command,
+        )
+    })
 }
 
 #[tauri::command]
@@ -1570,13 +1593,21 @@ pub fn new_untitled_project(
     state: WorkspaceState<'_>,
     appearance: Option<Appearance>,
     template: Option<CanvasTemplate>,
-) -> NativeResult<WorkspaceView> {
-    let mut state = state.lock().map_err(message)?;
-    state.create_untitled(
-        appearance.unwrap_or(Appearance::Light),
-        template.unwrap_or_default(),
-    )?;
-    Ok(state.view())
+) -> Result<WorkspaceView, crate::native_error::NativeFailure> {
+    (|| -> NativeResult<WorkspaceView> {
+        let mut state = state.lock().map_err(message)?;
+        state.create_untitled(
+            appearance.unwrap_or(Appearance::Light),
+            template.unwrap_or_default(),
+        )?;
+        Ok(state.view())
+    })()
+    .map_err(|error| {
+        crate::native_error::NativeFailure::from_serializable(
+            error,
+            crate::native_error::NativeErrorKind::Command,
+        )
+    })
 }
 
 /// The first save of an untitled project: name it and write the chosen `.desegnos` file.
@@ -1586,36 +1617,44 @@ pub fn save_untitled_project(
     name: String,
     path: Option<PathBuf>,
     label: Option<String>,
-) -> NativeResult<SaveProjectOutcome> {
-    let mut state = state.lock().map_err(message)?;
-    if !state.is_untitled() {
-        return Err("This project already has a file. Use Save instead.".into());
-    }
-    let name = name.trim();
-    if name.is_empty() || name.chars().count() > 120 {
-        return Err("Enter a project name of up to 120 characters.".into());
-    }
-    let current = state.project()?.clone();
-    if current.name != name {
-        let revision = current.revision;
-        state.with_session(|session| {
-            session.execute(
-                revision,
-                Command::RenameProject {
-                    name: name.to_owned(),
-                },
-            )
-        })?;
-    }
-    if let Some(session) = state.session_mut() {
-        session.end_history_step();
-    }
-    let path = match path {
-        Some(path) => path,
-        None => free_project_path(&state.project_location()?, name)?,
-    };
-    let project = state.project()?.clone();
-    state.save_untitled_checked(&project, path, label)
+) -> Result<SaveProjectOutcome, crate::native_error::NativeFailure> {
+    (|| -> NativeResult<SaveProjectOutcome> {
+        let mut state = state.lock().map_err(message)?;
+        if !state.is_untitled() {
+            return Err("This project already has a file. Use Save instead.".into());
+        }
+        let name = name.trim();
+        if name.is_empty() || name.chars().count() > 120 {
+            return Err("Enter a project name of up to 120 characters.".into());
+        }
+        let current = state.project()?.clone();
+        if current.name != name {
+            let revision = current.revision;
+            state.with_session(|session| {
+                session.execute(
+                    revision,
+                    Command::RenameProject {
+                        name: name.to_owned(),
+                    },
+                )
+            })?;
+        }
+        if let Some(session) = state.session_mut() {
+            session.end_history_step();
+        }
+        let path = match path {
+            Some(path) => path,
+            None => free_project_path(&state.project_location()?, name)?,
+        };
+        let project = state.project()?.clone();
+        state.save_untitled_checked(&project, path, label)
+    })()
+    .map_err(|error| {
+        crate::native_error::NativeFailure::from_serializable(
+            error,
+            crate::native_error::NativeErrorKind::SaveLocation,
+        )
+    })
 }
 
 /// Without a picked file, the first save goes to the default project folder under the
@@ -1642,41 +1681,61 @@ pub async fn pick_project_save_path(
     app: AppHandle,
     state: WorkspaceState<'_>,
     name: String,
-) -> NativeResult<Option<PathBuf>> {
-    let directory = {
-        let state = state.lock().map_err(message)?;
-        state.project_location().ok()
-    };
-    let suggested = format!(
-        "{}.desegnos",
-        desegnos_storage::sanitize_project_name(&name)
-    );
-    let picked = tauri::async_runtime::spawn_blocking(move || {
-        let mut dialog = app
-            .dialog()
-            .file()
-            .add_filter(
-                "Desegnos project",
-                &desegnos_storage::PROJECT_FILE_EXTENSIONS,
-            )
-            .set_file_name(suggested);
-        if let Some(directory) = directory {
-            dialog = dialog.set_directory(directory);
-        }
-        crate::file_dialogs::picked(dialog.blocking_save_file())
+) -> Result<Option<PathBuf>, crate::native_error::NativeFailure> {
+    let result: NativeResult<Option<PathBuf>> = async {
+        let directory = {
+            let state = state.lock().map_err(message)?;
+            state.project_location().ok()
+        };
+        let suggested = format!(
+            "{}.desegnos",
+            desegnos_storage::sanitize_project_name(&name)
+        );
+        let picked = tauri::async_runtime::spawn_blocking(move || {
+            let mut dialog = app
+                .dialog()
+                .file()
+                .add_filter(
+                    "Desegnos project",
+                    &desegnos_storage::PROJECT_FILE_EXTENSIONS,
+                )
+                .set_file_name(suggested);
+            if let Some(directory) = directory {
+                dialog = dialog.set_directory(directory);
+            }
+            crate::file_dialogs::picked(dialog.blocking_save_file())
+        })
+        .await
+        .map_err(message)??;
+        picked
+            .map(|picked| picked.into_path().map_err(message))
+            .transpose()
+    }
+    .await;
+    result.map_err(|error| {
+        crate::native_error::NativeFailure::from_serializable(
+            error,
+            crate::native_error::NativeErrorKind::SaveLocation,
+        )
     })
-    .await
-    .map_err(message)??;
-    picked
-        .map(|picked| picked.into_path().map_err(message))
-        .transpose()
 }
 
 #[tauri::command]
-pub fn switch_project(state: WorkspaceState<'_>, project_id: Uuid) -> NativeResult<WorkspaceView> {
-    let mut state = state.lock().map_err(message)?;
-    state.switch_to(project_id)?;
-    Ok(state.view())
+pub fn switch_project(
+    state: WorkspaceState<'_>,
+    project_id: Uuid,
+) -> Result<WorkspaceView, crate::native_error::NativeFailure> {
+    (|| -> NativeResult<WorkspaceView> {
+        let mut state = state.lock().map_err(message)?;
+        state.switch_to(project_id)?;
+        Ok(state.view())
+    })()
+    .map_err(|error| {
+        crate::native_error::NativeFailure::from_serializable(
+            error,
+            crate::native_error::NativeErrorKind::Command,
+        )
+    })
 }
 
 #[tauri::command]
@@ -1684,10 +1743,18 @@ pub fn close_project(
     state: WorkspaceState<'_>,
     project_id: Option<Uuid>,
     discard: bool,
-) -> NativeResult<WorkspaceView> {
-    let mut state = state.lock().map_err(message)?;
-    state.close_tab(project_id, discard)?;
-    Ok(state.view())
+) -> Result<WorkspaceView, crate::native_error::NativeFailure> {
+    (|| -> NativeResult<WorkspaceView> {
+        let mut state = state.lock().map_err(message)?;
+        state.close_tab(project_id, discard)?;
+        Ok(state.view())
+    })()
+    .map_err(|error| {
+        crate::native_error::NativeFailure::from_serializable(
+            error,
+            crate::native_error::NativeErrorKind::Command,
+        )
+    })
 }
 
 /// Import context: merge the reviewed findings and logos of a completed analysis into the
@@ -1705,23 +1772,31 @@ pub fn import_context(
     identity_item_indices: Option<Vec<usize>>,
     identity_page_paths: Option<Vec<String>>,
     attach_matching_pages: Option<bool>,
-) -> NativeResult<WorkspaceView> {
-    let mut context = identity
-        .lock()
-        .map_err(message)?
-        .reviewed_context_selected(
-            identity_analysis_id,
-            &identity_finding_indices,
-            &identity_asset_ids,
-            identity_photo_ids.as_deref(),
-            identity_item_indices.as_deref(),
-            identity_page_paths.as_deref(),
-        )?;
-    context.attach_matching_pages = attach_matching_pages.unwrap_or(true);
-    let mut state = state.lock().map_err(message)?;
-    state.with_session(|session| session.import_context(revision, context))?;
-    state.active.as_mut().expect("active project").prepared = None;
-    Ok(state.view())
+) -> Result<WorkspaceView, crate::native_error::NativeFailure> {
+    (|| -> NativeResult<WorkspaceView> {
+        let mut context = identity
+            .lock()
+            .map_err(message)?
+            .reviewed_context_selected(
+                identity_analysis_id,
+                &identity_finding_indices,
+                &identity_asset_ids,
+                identity_photo_ids.as_deref(),
+                identity_item_indices.as_deref(),
+                identity_page_paths.as_deref(),
+            )?;
+        context.attach_matching_pages = attach_matching_pages.unwrap_or(true);
+        let mut state = state.lock().map_err(message)?;
+        state.with_session(|session| session.import_context(revision, context))?;
+        state.active.as_mut().expect("active project").prepared = None;
+        Ok(state.view())
+    })()
+    .map_err(|error| {
+        crate::native_error::NativeFailure::from_serializable(
+            error,
+            crate::native_error::NativeErrorKind::Command,
+        )
+    })
 }
 
 impl Workspace {
@@ -1808,18 +1883,34 @@ pub fn edit_project(
     state: WorkspaceState<'_>,
     revision: u64,
     command: Command,
-) -> NativeResult<WorkspaceView> {
-    let mut state = state.lock().map_err(message)?;
-    state.with_session(|session| session.execute(revision, command))?;
-    Ok(state.view())
+) -> Result<WorkspaceView, crate::native_error::NativeFailure> {
+    (|| -> NativeResult<WorkspaceView> {
+        let mut state = state.lock().map_err(message)?;
+        state.with_session(|session| session.execute(revision, command))?;
+        Ok(state.view())
+    })()
+    .map_err(|error| {
+        crate::native_error::NativeFailure::from_serializable(
+            error,
+            crate::native_error::NativeErrorKind::Command,
+        )
+    })
 }
 
 /// A web link the user clicked in a preview, opened in their browser after they confirm it.
 #[tauri::command]
-pub fn open_preview_link(url: String) -> NativeResult<()> {
-    let parsed = preview_link(&url)?;
-    crate::system_open::open(parsed.as_str())
-        .map_err(|_| "Couldn't open a browser. Copy the link and open it manually.".into())
+pub fn open_preview_link(url: String) -> Result<(), crate::native_error::NativeFailure> {
+    (|| -> NativeResult<()> {
+        let parsed = preview_link(&url)?;
+        crate::system_open::open(parsed.as_str())
+            .map_err(|_| "Couldn't open a browser. Copy the link and open it manually.".into())
+    })()
+    .map_err(|error| {
+        crate::native_error::NativeFailure::from_serializable(
+            error,
+            crate::native_error::NativeErrorKind::Browser,
+        )
+    })
 }
 
 fn preview_link(url: &str) -> NativeResult<desegnos_ai::WebUrl> {
@@ -1837,26 +1928,56 @@ fn preview_link(url: &str) -> NativeResult<desegnos_ai::WebUrl> {
 }
 
 #[tauri::command(async)]
-pub fn undo_project(state: WorkspaceState<'_>) -> NativeResult<WorkspaceView> {
-    let mut state = state.lock().map_err(message)?;
-    state.with_session(|session| session.undo())?;
-    Ok(state.view())
+pub fn undo_project(
+    state: WorkspaceState<'_>,
+) -> Result<WorkspaceView, crate::native_error::NativeFailure> {
+    (|| -> NativeResult<WorkspaceView> {
+        let mut state = state.lock().map_err(message)?;
+        state.with_session(|session| session.undo())?;
+        Ok(state.view())
+    })()
+    .map_err(|error| {
+        crate::native_error::NativeFailure::from_serializable(
+            error,
+            crate::native_error::NativeErrorKind::Command,
+        )
+    })
 }
 
 #[tauri::command(async)]
-pub fn redo_project(state: WorkspaceState<'_>) -> NativeResult<WorkspaceView> {
-    let mut state = state.lock().map_err(message)?;
-    state.with_session(|session| session.redo())?;
-    Ok(state.view())
+pub fn redo_project(
+    state: WorkspaceState<'_>,
+) -> Result<WorkspaceView, crate::native_error::NativeFailure> {
+    (|| -> NativeResult<WorkspaceView> {
+        let mut state = state.lock().map_err(message)?;
+        state.with_session(|session| session.redo())?;
+        Ok(state.view())
+    })()
+    .map_err(|error| {
+        crate::native_error::NativeFailure::from_serializable(
+            error,
+            crate::native_error::NativeErrorKind::Command,
+        )
+    })
 }
 
 #[tauri::command(async)]
-pub fn end_history_step(state: WorkspaceState<'_>) -> NativeResult<()> {
-    let mut state = state.lock().map_err(message)?;
-    if let Some(session) = state.session_mut() {
-        session.end_history_step();
-    }
-    Ok(())
+pub fn end_history_step(
+    state: WorkspaceState<'_>,
+) -> Result<(), crate::native_error::NativeFailure> {
+    (|| -> NativeResult<()> {
+        let mut state = state.lock().map_err(message)?;
+        if let Some(session) = state.session_mut() {
+            session.end_history_step();
+        }
+        Ok(())
+    })()
+    .map_err(|error| {
+        crate::native_error::NativeFailure::from_serializable(
+            error,
+            crate::native_error::NativeErrorKind::Command,
+        )
+    })
 }
 
 #[tauri::command]
@@ -1866,35 +1987,44 @@ pub async fn open_project(
     folder: Option<bool>,
     path: Option<PathBuf>,
     discard_recovery: Option<bool>,
-) -> OpenResult<Option<WorkspaceView>> {
-    let path = if let Some(path) = path {
-        path
-    } else {
-        let picked = tauri::async_runtime::spawn_blocking(move || {
-            let dialog = app.dialog().file();
-            crate::file_dialogs::picked(if folder.unwrap_or(false) {
-                dialog
-                    .set_title("Open project folder")
-                    .blocking_pick_folder()
-            } else {
-                dialog
-                    .add_filter(
-                        "Desegnos project",
-                        &desegnos_storage::PROJECT_FILE_EXTENSIONS,
-                    )
-                    .blocking_pick_file()
+) -> Result<Option<WorkspaceView>, crate::native_error::NativeFailure> {
+    let result: OpenResult<Option<WorkspaceView>> = async {
+        let path = if let Some(path) = path {
+            path
+        } else {
+            let picked = tauri::async_runtime::spawn_blocking(move || {
+                let dialog = app.dialog().file();
+                crate::file_dialogs::picked(if folder.unwrap_or(false) {
+                    dialog
+                        .set_title("Open project folder")
+                        .blocking_pick_folder()
+                } else {
+                    dialog
+                        .add_filter(
+                            "Desegnos project",
+                            &desegnos_storage::PROJECT_FILE_EXTENSIONS,
+                        )
+                        .blocking_pick_file()
+                })
             })
-        })
-        .await
-        .map_err(message)??;
-        let Some(picked) = picked else {
-            return Ok(None);
+            .await
+            .map_err(message)??;
+            let Some(picked) = picked else {
+                return Ok(None);
+            };
+            picked.into_path().map_err(message)?
         };
-        picked.into_path().map_err(message)?
-    };
-    let mut state = state.lock().map_err(message)?;
-    state.open_file_tab(&path, discard_recovery.unwrap_or(false))?;
-    Ok(Some(state.view()))
+        let mut state = state.lock().map_err(message)?;
+        state.open_file_tab(&path, discard_recovery.unwrap_or(false))?;
+        Ok(Some(state.view()))
+    }
+    .await;
+    result.map_err(|error| {
+        crate::native_error::NativeFailure::from_serializable(
+            error,
+            crate::native_error::NativeErrorKind::Command,
+        )
+    })
 }
 
 async fn choose_save_path(app: AppHandle, suggested: String) -> NativeResult<Option<PathBuf>> {
@@ -1952,32 +2082,41 @@ pub async fn save_project_checked(
     state: WorkspaceState<'_>,
     save_as: bool,
     label: Option<String>,
-) -> NativeResult<SaveProjectOutcome> {
-    let (project, choose_path) = {
-        let mut state = state.lock().map_err(message)?;
-        let project = state.project()?.clone();
-        state.invalidate_pending_save();
-        (project, save_as)
-    };
-    let picked = if choose_path {
-        let suggested = format!(
-            "{}.desegnos",
-            desegnos_storage::sanitize_project_name(&project.name)
-        );
-        let Some(path) = choose_save_path(app, suggested).await? else {
-            return Ok(SaveProjectOutcome::Cancelled);
+) -> Result<SaveProjectOutcome, crate::native_error::NativeFailure> {
+    let result: NativeResult<SaveProjectOutcome> = async {
+        let (project, choose_path) = {
+            let mut state = state.lock().map_err(message)?;
+            let project = state.project()?.clone();
+            state.invalidate_pending_save();
+            (project, save_as)
         };
-        Some(path)
-    } else {
-        None
-    };
-    let mut state = state.lock().map_err(message)?;
-    if let Some(session) = state.session_mut() {
-        session.end_history_step();
+        let picked = if choose_path {
+            let suggested = format!(
+                "{}.desegnos",
+                desegnos_storage::sanitize_project_name(&project.name)
+            );
+            let Some(path) = choose_save_path(app, suggested).await? else {
+                return Ok(SaveProjectOutcome::Cancelled);
+            };
+            Some(path)
+        } else {
+            None
+        };
+        let mut state = state.lock().map_err(message)?;
+        if let Some(session) = state.session_mut() {
+            session.end_history_step();
+        }
+        state.check_snapshot(&project)?;
+        let picked = copy_destination(picked)?;
+        state.save_snapshot_checked(&project, picked, choose_path, label)
     }
-    state.check_snapshot(&project)?;
-    let picked = copy_destination(picked)?;
-    state.save_snapshot_checked(&project, picked, choose_path, label)
+    .await;
+    result.map_err(|error| {
+        crate::native_error::NativeFailure::from_serializable(
+            error,
+            crate::native_error::NativeErrorKind::SaveLocation,
+        )
+    })
 }
 
 #[tauri::command]
@@ -1986,57 +2125,84 @@ pub async fn resolve_save_conflict(
     state: WorkspaceState<'_>,
     token: Uuid,
     choice: SaveConflictChoice,
-) -> NativeResult<SaveProjectOutcome> {
-    match choice {
-        SaveConflictChoice::Replace => state.lock().map_err(message)?.replace_save_conflict(token),
-        SaveConflictChoice::Cancel => {
-            state.lock().map_err(message)?.cancel_save_conflict(token)?;
-            Ok(SaveProjectOutcome::Cancelled)
-        }
-        SaveConflictChoice::Copy => {
-            let (project, suggested, label) = {
+) -> Result<SaveProjectOutcome, crate::native_error::NativeFailure> {
+    let result: NativeResult<SaveProjectOutcome> = async {
+        match choice {
+            SaveConflictChoice::Replace => {
+                state.lock().map_err(message)?.replace_save_conflict(token)
+            }
+            SaveConflictChoice::Cancel => {
+                state.lock().map_err(message)?.cancel_save_conflict(token)?;
+                Ok(SaveProjectOutcome::Cancelled)
+            }
+            SaveConflictChoice::Copy => {
+                let (project, suggested, label) = {
+                    let mut state = state.lock().map_err(message)?;
+                    let pending = state.take_save_conflict(token)?;
+                    let stem = state
+                        .destination_path(&pending.destination)?
+                        .file_stem()
+                        .map(|name| name.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| "project".into());
+                    (
+                        state.project()?.clone(),
+                        format!("{stem}-copy.desegnos"),
+                        pending.label,
+                    )
+                };
+                let Some(path) = choose_save_path(app, suggested).await? else {
+                    return Ok(SaveProjectOutcome::Cancelled);
+                };
                 let mut state = state.lock().map_err(message)?;
-                let pending = state.take_save_conflict(token)?;
-                let stem = state
-                    .destination_path(&pending.destination)?
-                    .file_stem()
-                    .map(|name| name.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| "project".into());
-                (
-                    state.project()?.clone(),
-                    format!("{stem}-copy.desegnos"),
-                    pending.label,
-                )
-            };
-            let Some(path) = choose_save_path(app, suggested).await? else {
-                return Ok(SaveProjectOutcome::Cancelled);
-            };
-            let mut state = state.lock().map_err(message)?;
-            state.check_snapshot(&project)?;
-            let path = copy_destination(Some(path))?;
-            state.save_snapshot_checked(&project, path, true, label)
+                state.check_snapshot(&project)?;
+                let path = copy_destination(Some(path))?;
+                state.save_snapshot_checked(&project, path, true, label)
+            }
         }
     }
+    .await;
+    result.map_err(|error| {
+        crate::native_error::NativeFailure::from_serializable(
+            error,
+            crate::native_error::NativeErrorKind::SaveLocation,
+        )
+    })
 }
 
 #[tauri::command]
 pub fn dismiss_recovery(
     state: WorkspaceState<'_>,
     project_id: Uuid,
-) -> NativeResult<WorkspaceView> {
-    let mut state = state.lock().map_err(message)?;
-    state.dismiss_recovery(project_id)?;
-    Ok(state.view())
+) -> Result<WorkspaceView, crate::native_error::NativeFailure> {
+    (|| -> NativeResult<WorkspaceView> {
+        let mut state = state.lock().map_err(message)?;
+        state.dismiss_recovery(project_id)?;
+        Ok(state.view())
+    })()
+    .map_err(|error| {
+        crate::native_error::NativeFailure::from_serializable(
+            error,
+            crate::native_error::NativeErrorKind::Command,
+        )
+    })
 }
 
 #[tauri::command]
 pub fn recover_project(
     state: WorkspaceState<'_>,
     project_id: Option<Uuid>,
-) -> NativeResult<WorkspaceView> {
-    let mut state = state.lock().map_err(message)?;
-    state.recover(project_id)?;
-    Ok(state.view())
+) -> Result<WorkspaceView, crate::native_error::NativeFailure> {
+    (|| -> NativeResult<WorkspaceView> {
+        let mut state = state.lock().map_err(message)?;
+        state.recover(project_id)?;
+        Ok(state.view())
+    })()
+    .map_err(|error| {
+        crate::native_error::NativeFailure::from_serializable(
+            error,
+            crate::native_error::NativeErrorKind::Command,
+        )
+    })
 }
 
 #[derive(ts_rs::TS, Serialize)]
@@ -2047,18 +2213,28 @@ pub struct RecentProjectsView {
 }
 
 #[tauri::command]
-pub fn get_recent_projects(state: WorkspaceState<'_>) -> NativeResult<RecentProjectsView> {
-    let state = state.lock().map_err(message)?;
-    match crate::recent::read(&state.directory) {
-        Ok(projects) => Ok(RecentProjectsView {
-            projects,
-            error: state.recent_error.clone(),
-        }),
-        Err(error) => Ok(RecentProjectsView {
-            projects: vec![],
-            error: Some(error),
-        }),
-    }
+pub fn get_recent_projects(
+    state: WorkspaceState<'_>,
+) -> Result<RecentProjectsView, crate::native_error::NativeFailure> {
+    (|| -> NativeResult<RecentProjectsView> {
+        let state = state.lock().map_err(message)?;
+        match crate::recent::read(&state.directory) {
+            Ok(projects) => Ok(RecentProjectsView {
+                projects,
+                error: state.recent_error.clone(),
+            }),
+            Err(error) => Ok(RecentProjectsView {
+                projects: vec![],
+                error: Some(error),
+            }),
+        }
+    })()
+    .map_err(|error| {
+        crate::native_error::NativeFailure::from_serializable(
+            error,
+            crate::native_error::NativeErrorKind::Command,
+        )
+    })
 }
 
 #[derive(Debug, Serialize)]
@@ -2087,10 +2263,18 @@ pub fn open_recent_project(
     state: WorkspaceState<'_>,
     path: PathBuf,
     discard_recovery: Option<bool>,
-) -> OpenResult<WorkspaceView> {
-    open_recent(&state, &path, discard_recovery.unwrap_or(false)).map_err(|error| match error {
-        ProjectOpenError::Message(message) => RecentProjectOpenError::from(message).into(),
-        error => error,
+) -> Result<WorkspaceView, crate::native_error::NativeFailure> {
+    (|| -> OpenResult<WorkspaceView> {
+        open_recent(&state, &path, discard_recovery.unwrap_or(false)).map_err(|error| match error {
+            ProjectOpenError::Message(message) => RecentProjectOpenError::from(message).into(),
+            error => error,
+        })
+    })()
+    .map_err(|error| {
+        crate::native_error::NativeFailure::from_serializable(
+            error,
+            crate::native_error::NativeErrorKind::Command,
+        )
     })
 }
 
@@ -2129,45 +2313,95 @@ fn open_recent(
 
 /// Write unsaved in-memory edits to the hidden autosave branch, at most every few seconds.
 #[tauri::command(async)]
-pub fn autosave_project(state: WorkspaceState<'_>) -> NativeResult<()> {
-    state.lock().map_err(message)?.autosave_if_due();
-    Ok(())
+pub fn autosave_project(
+    state: WorkspaceState<'_>,
+) -> Result<(), crate::native_error::NativeFailure> {
+    (|| -> NativeResult<()> {
+        state.lock().map_err(message)?.autosave_if_due();
+        Ok(())
+    })()
+    .map_err(|error| {
+        crate::native_error::NativeFailure::from_serializable(
+            error,
+            crate::native_error::NativeErrorKind::SaveLocation,
+        )
+    })
 }
 
 #[tauri::command(async)]
-pub fn get_project_history(state: WorkspaceState<'_>) -> NativeResult<Option<ProjectHistoryView>> {
-    let state = state.lock().map_err(message)?;
-    match state.file() {
-        Some(file) => file.history().map(Some).map_err(message),
-        None => Ok(None),
-    }
+pub fn get_project_history(
+    state: WorkspaceState<'_>,
+) -> Result<Option<ProjectHistoryView>, crate::native_error::NativeFailure> {
+    (|| -> NativeResult<Option<ProjectHistoryView>> {
+        let state = state.lock().map_err(message)?;
+        match state.file() {
+            Some(file) => file.history().map(Some).map_err(message),
+            None => Ok(None),
+        }
+    })()
+    .map_err(|error| {
+        crate::native_error::NativeFailure::from_serializable(
+            error,
+            crate::native_error::NativeErrorKind::Command,
+        )
+    })
 }
 
 /// Restore a saved version. History is never rewritten: the restore is a new version, and it
 /// becomes the current state as one undo step.
 #[tauri::command(async)]
-pub fn restore_version(state: WorkspaceState<'_>, version: i64) -> NativeResult<WorkspaceView> {
-    let mut state = state.lock().map_err(message)?;
-    state.restore_version(version)?;
-    state.autosave_if_due();
-    Ok(state.view())
+pub fn restore_version(
+    state: WorkspaceState<'_>,
+    version: i64,
+) -> Result<WorkspaceView, crate::native_error::NativeFailure> {
+    (|| -> NativeResult<WorkspaceView> {
+        let mut state = state.lock().map_err(message)?;
+        state.restore_version(version)?;
+        state.autosave_if_due();
+        Ok(state.view())
+    })()
+    .map_err(|error| {
+        crate::native_error::NativeFailure::from_serializable(
+            error,
+            crate::native_error::NativeErrorKind::Command,
+        )
+    })
 }
 
 #[tauri::command(async)]
 pub fn switch_alternative(
     state: WorkspaceState<'_>,
     branch: String,
-) -> NativeResult<WorkspaceView> {
-    let mut state = state.lock().map_err(message)?;
-    state.switch_alternative(&branch)?;
-    Ok(state.view())
+) -> Result<WorkspaceView, crate::native_error::NativeFailure> {
+    (|| -> NativeResult<WorkspaceView> {
+        let mut state = state.lock().map_err(message)?;
+        state.switch_alternative(&branch)?;
+        Ok(state.view())
+    })()
+    .map_err(|error| {
+        crate::native_error::NativeFailure::from_serializable(
+            error,
+            crate::native_error::NativeErrorKind::Command,
+        )
+    })
 }
 
 #[tauri::command(async)]
-pub fn create_alternative(state: WorkspaceState<'_>, name: String) -> NativeResult<WorkspaceView> {
-    let mut state = state.lock().map_err(message)?;
-    state.create_alternative(&name)?;
-    Ok(state.view())
+pub fn create_alternative(
+    state: WorkspaceState<'_>,
+    name: String,
+) -> Result<WorkspaceView, crate::native_error::NativeFailure> {
+    (|| -> NativeResult<WorkspaceView> {
+        let mut state = state.lock().map_err(message)?;
+        state.create_alternative(&name)?;
+        Ok(state.view())
+    })()
+    .map_err(|error| {
+        crate::native_error::NativeFailure::from_serializable(
+            error,
+            crate::native_error::NativeErrorKind::Command,
+        )
+    })
 }
 
 #[tauri::command(async)]
@@ -2175,52 +2409,90 @@ pub fn rename_alternative(
     state: WorkspaceState<'_>,
     from: String,
     to: String,
-) -> NativeResult<WorkspaceView> {
-    let mut state = state.lock().map_err(message)?;
-    state.rename_alternative(&from, &to)?;
-    Ok(state.view())
+) -> Result<WorkspaceView, crate::native_error::NativeFailure> {
+    (|| -> NativeResult<WorkspaceView> {
+        let mut state = state.lock().map_err(message)?;
+        state.rename_alternative(&from, &to)?;
+        Ok(state.view())
+    })()
+    .map_err(|error| {
+        crate::native_error::NativeFailure::from_serializable(
+            error,
+            crate::native_error::NativeErrorKind::Command,
+        )
+    })
 }
 
 #[tauri::command(async)]
-pub fn delete_alternative(state: WorkspaceState<'_>, name: String) -> NativeResult<WorkspaceView> {
-    let mut state = state.lock().map_err(message)?;
-    state.delete_alternative(&name)?;
-    Ok(state.view())
+pub fn delete_alternative(
+    state: WorkspaceState<'_>,
+    name: String,
+) -> Result<WorkspaceView, crate::native_error::NativeFailure> {
+    (|| -> NativeResult<WorkspaceView> {
+        let mut state = state.lock().map_err(message)?;
+        state.delete_alternative(&name)?;
+        Ok(state.view())
+    })()
+    .map_err(|error| {
+        crate::native_error::NativeFailure::from_serializable(
+            error,
+            crate::native_error::NativeErrorKind::Command,
+        )
+    })
 }
 
 #[tauri::command(async)]
 pub async fn save_project_copy(
     app: AppHandle,
     state: WorkspaceState<'_>,
-) -> NativeResult<Option<WorkspaceView>> {
-    let (project, suggested) = {
-        let state = state.lock().map_err(message)?;
-        let project = state.project()?.clone();
-        let suggested = format!(
-            "{}-copy.desegnos",
-            desegnos_storage::sanitize_project_name(&project.name)
-        );
-        (project, suggested)
-    };
-    let Some(path) = choose_save_path(app, suggested).await? else {
-        return Ok(None);
-    };
-    let path = copy_destination(Some(path))?;
-    let mut state = state.lock().map_err(message)?;
-    state.check_snapshot(&project)?;
-    if let Some(path) = path {
-        state.save_copy(&project, path)?;
+) -> Result<Option<WorkspaceView>, crate::native_error::NativeFailure> {
+    let result: NativeResult<Option<WorkspaceView>> = async {
+        let (project, suggested) = {
+            let state = state.lock().map_err(message)?;
+            let project = state.project()?.clone();
+            let suggested = format!(
+                "{}-copy.desegnos",
+                desegnos_storage::sanitize_project_name(&project.name)
+            );
+            (project, suggested)
+        };
+        let Some(path) = choose_save_path(app, suggested).await? else {
+            return Ok(None);
+        };
+        let path = copy_destination(Some(path))?;
+        let mut state = state.lock().map_err(message)?;
+        state.check_snapshot(&project)?;
+        if let Some(path) = path {
+            state.save_copy(&project, path)?;
+        }
+        Ok(Some(state.view()))
     }
-    Ok(Some(state.view()))
+    .await;
+    result.map_err(|error| {
+        crate::native_error::NativeFailure::from_serializable(
+            error,
+            crate::native_error::NativeErrorKind::SaveLocation,
+        )
+    })
 }
 
 /// Keep recent versions in full, thin out older ones, drop unreferenced blobs and shrink.
 #[tauri::command(async)]
-pub fn compact_history(state: WorkspaceState<'_>) -> NativeResult<desegnos_storage::CompactReport> {
-    let state = state.lock().map_err(message)?;
-    let file = state.file().ok_or("Create or open a project first.")?;
-    file.compact(desegnos_storage::project_db::now_millis())
-        .map_err(message)
+pub fn compact_history(
+    state: WorkspaceState<'_>,
+) -> Result<desegnos_storage::CompactReport, crate::native_error::NativeFailure> {
+    (|| -> NativeResult<desegnos_storage::CompactReport> {
+        let state = state.lock().map_err(message)?;
+        let file = state.file().ok_or("Create or open a project first.")?;
+        file.compact(desegnos_storage::project_db::now_millis())
+            .map_err(message)
+    })()
+    .map_err(|error| {
+        crate::native_error::NativeFailure::from_serializable(
+            error,
+            crate::native_error::NativeErrorKind::Command,
+        )
+    })
 }
 
 #[cfg(test)]

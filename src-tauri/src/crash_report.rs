@@ -576,9 +576,7 @@ fn path_at(text: &str, bytes: &[u8], index: usize) -> Option<usize> {
         end += 1;
     }
     let token = &text[index..end];
-    let separators = token
-        .matches(['/', '\\'])
-        .count();
+    let separators = token.matches(['/', '\\']).count();
     (separators >= 2 || (home_path && separators >= 1)).then_some(end)
 }
 
@@ -923,18 +921,33 @@ pub fn pending_crash_report(app: tauri::AppHandle) -> Option<CrashReportView> {
 }
 
 #[tauri::command]
-pub fn dismiss_crash_report(app: tauri::AppHandle) -> Result<(), String> {
-    dismiss_at(&crate::data_location::directory(&app)).map_err(|_| {
-        "The crash report could not be removed. Check that Desegnos can write its data folder."
-            .to_owned()
+pub fn dismiss_crash_report(
+    app: tauri::AppHandle,
+) -> Result<(), crate::native_error::NativeFailure> {
+    (|| -> Result<(), String> {
+        dismiss_at(&crate::data_location::directory(&app)).map_err(|_| {
+            "The crash report could not be removed. Check that Desegnos can write its data folder."
+                .to_owned()
+        })
+    })()
+    .map_err(|error| {
+        crate::native_error::NativeFailure::from_serializable(
+            error,
+            crate::native_error::NativeErrorKind::Command,
+        )
     })
 }
 
 #[tauri::command]
-pub fn open_crash_report(
-    app: tauri::AppHandle,
-) -> Result<(), OpenFailure> {
-    open_at(&crate::data_location::directory(&app))
+pub fn open_crash_report(app: tauri::AppHandle) -> Result<(), crate::native_error::NativeFailure> {
+    (|| -> Result<(), OpenFailure> { open_at(&crate::data_location::directory(&app)) })().map_err(
+        |error| {
+            crate::native_error::NativeFailure::from_serializable(
+                error,
+                crate::native_error::NativeErrorKind::Command,
+            )
+        },
+    )
 }
 
 #[tauri::command]
@@ -942,15 +955,23 @@ pub fn record_frontend_crash(
     app: tauri::AppHandle,
     message: String,
     stack: String,
-) -> Result<(), String> {
-    record_frontend_at(
-        &crate::data_location::directory(&app),
-        &capped(&message, MAX_MESSAGE_BYTES),
-        &capped(&stack, MAX_BACKTRACE_BYTES),
-    )
-    .map_err(|_| {
-        "The crash report could not be saved. Check that Desegnos can write its data folder."
-            .to_owned()
+) -> Result<(), crate::native_error::NativeFailure> {
+    (|| -> Result<(), String> {
+        record_frontend_at(
+            &crate::data_location::directory(&app),
+            &capped(&message, MAX_MESSAGE_BYTES),
+            &capped(&stack, MAX_BACKTRACE_BYTES),
+        )
+        .map_err(|_| {
+            "The crash report could not be saved. Check that Desegnos can write its data folder."
+                .to_owned()
+        })
+    })()
+    .map_err(|error| {
+        crate::native_error::NativeFailure::from_serializable(
+            error,
+            crate::native_error::NativeErrorKind::Command,
+        )
     })
 }
 

@@ -1,3 +1,4 @@
+import { ELEMENT_DEFAULTS, MAX_PASTED_IMAGE_WIDTH, PASTED_NOTE_WIDTH, PASTED_NOTE_HEIGHT } from '../generated/limits';
 import type { Rect } from '../types';
 import type { Point } from '../projectCanvasGeometry';
 
@@ -5,10 +6,7 @@ import type { Point } from '../projectCanvasGeometry';
 // marker comes from another app, so its content is placed instead of Desegnos' layers.
 export const CLIPBOARD_MARKER = 'desegnos-layers:';
 
-/** Pasted pictures keep their natural size but never grow wider than this. */
-export const MAX_PASTED_IMAGE_WIDTH = 480;
-export const PASTED_NOTE_WIDTH = 240;
-export const PASTED_NOTE_HEIGHT = 140;
+export { MAX_PASTED_IMAGE_WIDTH, PASTED_NOTE_WIDTH, PASTED_NOTE_HEIGHT } from '../generated/limits';
 
 export const isClipboardMarker = (text: string) => text.startsWith(CLIPBOARD_MARKER);
 
@@ -52,8 +50,8 @@ export function readPastedImage(file: File): Promise<PastedImage | null> {
       if (!uri.startsWith('data:image/')) { resolve(null); return; }
       const name = file.name || 'Pasted image';
       const image = new Image();
-      image.onload = () => resolve({ uri, width: image.naturalWidth || 320, height: image.naturalHeight || 200, name });
-      image.onerror = () => resolve({ uri, width: 320, height: 200, name });
+      image.onload = () => resolve({ uri, width: image.naturalWidth || ELEMENT_DEFAULTS.image.width, height: image.naturalHeight || ELEMENT_DEFAULTS.image.height, name });
+      image.onerror = () => resolve({ uri, width: ELEMENT_DEFAULTS.image.width, height: ELEMENT_DEFAULTS.image.height, name });
       image.src = uri;
     };
     reader.readAsDataURL(file);

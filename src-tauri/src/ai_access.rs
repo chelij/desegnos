@@ -102,7 +102,7 @@ pub async fn active_account(chatgpt: &ChatgptState, action: &str) -> NativeResul
     Ok(account.id)
 }
 
-fn check_account(
+pub(super) fn check_account(
     connected: bool,
     plan_enabled: bool,
     repair_required: bool,

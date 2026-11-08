@@ -1,3 +1,4 @@
+import { errorValue, type ErrorValue } from '../errorMessage.js';
 import { readJsonPreference, writePreference } from '../preferences';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { defaultExportFolder } from './exportFolder';
@@ -5,7 +6,7 @@ import { native } from '../api';
 import type { Command, PointerStateView, Project, WorkspaceView, ExportCheck, ExportJobView, PickDestination } from '../types';
 import { idlePlay, playIsActive, type PlayState } from '../projectCanvas/play';
 import type { PreviewState } from '../ProjectCanvas';
-import { errorMessage } from '../editorShared';
+import { errorMessage } from '../errorMessage.js';
 import { projectHasPreviewPages } from '../visibleActions';
 
 type Context = {
@@ -19,7 +20,7 @@ type Context = {
   accept: (next: WorkspaceView) => void;
   setNotice: (message: string, undo?: () => void) => void;
   settle: () => Promise<void>;
-  setError: import("react").Dispatch<import("react").SetStateAction<string>>;
+  setError: import("react").Dispatch<import("react").SetStateAction<ErrorValue>>;
   setOpenFailure: import("react").Dispatch<import("react").SetStateAction<{ message: string; url: string; } | null>>;
   mutate: (command: Command | ((project: Project) => Command | null)) => Promise<WorkspaceView | null>;
   canvasFocus: string | null;
@@ -195,7 +196,7 @@ export function useExportJobs(context: Context) {
     const { current, setError } = context;
     const project = current.current?.project;
     if (!project) return;
-    void native('open_export_folder', { projectId: project.id, path }).catch(error => setError(errorMessage(error)));
+    void native('open_export_folder', { projectId: project.id, path }).catch(error => setError(errorValue(error)));
   }
 
   async function openInBrowser() {
@@ -206,7 +207,7 @@ export function useExportJobs(context: Context) {
     catch (error) {
       const message = errorMessage(error);
       const url = message.match(/https?:\/\/\S+/)?.[0];
-      setError(message);
+      setError(errorValue(error));
       if (url) setOpenFailure({ message, url });
     }
   }
@@ -218,7 +219,7 @@ export function useExportJobs(context: Context) {
     try {
       const job = await native<ExportJobView>('keep_pointer_code', { projectId: project.id, pointerId });
       setExportJob(job); openExportPanel(false);
-    } catch (error) { setError(errorMessage(error)); }
+    } catch (error) { setError(errorValue(error)); }
   }
 
   function forgetExportPointer(pointerId: string) {

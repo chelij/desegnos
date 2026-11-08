@@ -2,7 +2,9 @@
 
 export type AccessResult = { providerError: ProviderError | null, message: string, };
 
-export type AiSettingsView = { imageCredential: string | null, imageKey: CredentialInfo, mainImageAccess: ImageAccess | null, imageKeyAccess: ImageAccess | null, imageAccess: ImageAccess | null, imageAccessChecking: boolean, provider: ProviderId, providers: Array<ProviderDescriptor>, settings: ProviderSettings, credential: CredentialInfo, catalogue: Array<ModelInfo>, modelsError: string | null, modelsProviderError: ProviderError | null, modelsAuthRequired: boolean, configurationError: string | null, authentication: AuthenticationMethod, chatgpt: ChatgptView, };
+export type AiReadiness = { ready: boolean, apiKeyReady: boolean, blockedReason: string | null, canTest: boolean, canRefreshModels: boolean, imagesUsable: boolean, accounts: { [key in string]: boolean }, };
+
+export type AiSettingsView = { readiness: AiReadiness, imageCredential: string | null, imageKey: CredentialInfo, mainImageAccess: ImageAccess | null, imageKeyAccess: ImageAccess | null, imageAccess: ImageAccess | null, imageAccessChecking: boolean, provider: ProviderId, providers: Array<ProviderDescriptor>, settings: ProviderSettings, credential: CredentialInfo, catalogue: Array<ModelInfo>, modelsError: string | null, modelsProviderError: ProviderError | null, modelsAuthRequired: boolean, configurationError: string | null, authentication: AuthenticationMethod, chatgpt: ChatgptView, };
 
 export type AnalysisStatus = "analyzing"
   | "complete"
@@ -75,19 +77,19 @@ export type Command = { "type": "add_colour_style", style: ColourStyle, }
   | { "type": "update_page", page_id: string, name: string, path: string, background: string, included: boolean, }
   | { "type": "set_page_output", page_id: string, output: OutputType, }
   | { "type": "adapt_size", page_id: string, size_id: string, }
-  | { "type": "update_page_size", page_id: string, size_id: string, label?: string | null, width?: number | null, height?: number | null, kind?: BoundaryKind | null, 
+  | { "type": "update_page_size", page_id: string, size_id: string, label?: string | null, width?: number | null, height?: number | null, kind?: BoundaryKind | null,
 moves?: Array<CanvasPlacement>, reference?: Array<ReferencePlacement>, }
   | { "type": "create_boundary", page: Page, after_page_id?: string | null, moves?: Array<CanvasPlacement>, reference?: Array<ReferencePlacement>, }
-  | { "type": "add_canvas_page", name: string, path: string, size: PageSize, moves?: Array<CanvasPlacement>, 
+  | { "type": "add_canvas_page", name: string, path: string, size: PageSize, moves?: Array<CanvasPlacement>,
 reference?: Array<ReferencePlacement>, }
   | { "type": "add_page_size", page_id: string, size: PageSize, moves?: Array<CanvasPlacement>, reference?: Array<ReferencePlacement>, }
   | { "type": "remove_page_size", page_id: string, size_id: string, }
-  | { "type": "set_canvas_layout", placements: Array<CanvasPlacement>, 
+  | { "type": "set_canvas_layout", placements: Array<CanvasPlacement>,
 reference?: Array<ReferencePlacement>, }
   | { "type": "add_named_view", name: string, x: number, y: number, zoom: number, }
   | { "type": "update_named_view", view_id: string, name?: string | null, x?: number | null, y?: number | null, zoom?: number | null, }
   | { "type": "remove_named_view", view_id: string, }
-  | { "type": "add_reference_item", item: ReferenceItem, 
+  | { "type": "add_reference_item", item: ReferenceItem,
 picture_data_uri?: string | null, }
   | { "type": "update_reference_item", item_id: string, rect?: Rect | null, text?: string | null, url?: string | null, title?: string | null, color?: string | null, }
   | { "type": "remove_reference_items", ids: Array<string>, }
@@ -102,8 +104,8 @@ picture_data_uri?: string | null, }
   | { "type": "reference_to_element", item_id: string, page_id: string, rect: Rect, size_id?: string | null, }
   | { "type": "attach_reference_context", request_ids: Array<string>, item_ids: Array<string>, }
   | { "type": "delete_page", page_id: string, }
-  | { "type": "insert_elements", page_id: string, parent_id?: string | null, index: number, elements: Array<Element>, 
-picture_data_uri?: string | null, 
+  | { "type": "insert_elements", page_id: string, parent_id?: string | null, index: number, elements: Array<Element>,
+picture_data_uri?: string | null,
 size_id?: string | null, }
   | { "type": "import_website", pages: Array<Page>, reference: Array<ReferenceItem>, pointers: Array<Pointer>, pictures: { [key in string]: string }, }
   | { "type": "update_elements", page_id: string, patches: Array<ElementPatch>, }
@@ -159,12 +161,12 @@ export type DesignException = { id: string, rule: string, reason: string, scope:
 
 export type DossierTarget = { pageId: string, elementId: string, };
 
-export type Element = { id: string, 
-name: string | null, 
-link?: string | null, 
-rect: Rect, rotation: number, visible: boolean, locked: boolean, style: ElementStyle, text: string, 
-image: string | null, 
-url: string | null, layout: ElementLayout, 
+export type Element = { id: string,
+name: string | null,
+link?: string | null,
+rect: Rect, rotation: number, visible: boolean, locked: boolean, style: ElementStyle, text: string,
+image: string | null,
+url: string | null, layout: ElementLayout,
 overrides?: { [key in string]: ElementOverride }, children: Array<Element>, meta: ElementMeta, } & ({ "kind": "box" }
   | { "kind": "group" }
   | { "kind": "text" }
@@ -183,8 +185,8 @@ overrides?: { [key in string]: ElementOverride }, children: Array<Element>, meta
   | { "kind": "embed" }
   | { "kind": "code", language: string, source: string, });
 
-export type ElementDraft = { rect: Rect, name: string | null, rotation: number, visible: boolean, locked: boolean, style: ElementStyle, text: string, 
-image: string | null, 
+export type ElementDraft = { rect: Rect, name: string | null, rotation: number, visible: boolean, locked: boolean, style: ElementStyle, text: string,
+image: string | null,
 imageRequest: string | null, url: string | null, layout: ElementLayout, children: Array<ElementDraft>, } & ({ "kind": "box" }
   | { "kind": "group" }
   | { "kind": "text" }
@@ -207,11 +209,11 @@ export type ElementLayout = { "kind": "free" }
   | { "kind": "stack", direction: StackDirection, gap: number, padding: number, align: StackAlign, justify: StackJustify, wrap: boolean, }
   | { "kind": "grid", columns: number, gap: number, padding: number, };
 
-export type ElementMeta = { 
+export type ElementMeta = {
 requests: Array<RequestRecord>, context: Array<RequestAttachment>, };
 
-export type ElementMove = { id: string, to_page_id: string, to_parent_id: string | null, index: number, rect: Rect, 
-size_id?: string | null, 
+export type ElementMove = { id: string, to_page_id: string, to_parent_id: string | null, index: number, rect: Rect,
+size_id?: string | null,
 all_sizes?: boolean, };
 
 export type ElementOperation = { "kind": "setPage", pageId: string, name: string | null, path: string | null, background: string | null, }
@@ -223,33 +225,33 @@ export type ElementOperation = { "kind": "setPage", pageId: string, name: string
   | { "kind": "insertInBoundary", pageId: string, sizeId?: string | null, element: ElementDraft, }
   | { "kind": "addReference", item: ReferenceDraft, };
 
-export type ElementOverride = { 
+export type ElementOverride = {
 automatic?: boolean, rect?: Rect | null, style?: ElementStyle | null, layout?: ElementLayout | null, hidden: boolean, dismissed: boolean, };
 
 export type ElementPadding = { top: number, right: number, bottom: number, left: number, };
 
-export type ElementPatch = { id: string, rect?: Rect | null, rotation?: number | null, style?: ElementStyle | null, text?: string | null, image?: string | null | null, url?: string | null | null, layout?: ElementLayout | null, visible?: boolean | null, locked?: boolean | null, name?: string | null | null, 
-linked_name?: string | null | null, input_type?: InputType | null, options?: Array<string> | null, language?: string | null, source?: string | null, 
-picture_data_uri?: string | null, 
-size_id?: string | null, 
-all_sizes?: boolean, 
+export type ElementPatch = { id: string, rect?: Rect | null, rotation?: number | null, style?: ElementStyle | null, text?: string | null, image?: string | null | null, url?: string | null | null, layout?: ElementLayout | null, visible?: boolean | null, locked?: boolean | null, name?: string | null | null,
+linked_name?: string | null | null, input_type?: InputType | null, options?: Array<string> | null, language?: string | null, source?: string | null,
+picture_data_uri?: string | null,
+size_id?: string | null,
+all_sizes?: boolean,
 dismissed?: boolean | null, };
 
-export type ElementShadow = { x: number, y: number, blur: number, 
+export type ElementShadow = { x: number, y: number, blur: number,
 color: string | null, };
 
 export type ElementSizing = { width: SizingMode, height: SizingMode, minWidth?: number | null, maxWidth?: number | null, minHeight?: number | null, maxHeight?: number | null, };
 
-export type ElementStroke = { 
+export type ElementStroke = {
 color: string | null, width: number, };
 
-export type ElementStyle = { flipX?: boolean, flipY?: boolean, sizing?: ElementSizing, 
-padding?: ElementPadding | null, references?: StyleReferences, 
+export type ElementStyle = { flipX?: boolean, flipY?: boolean, sizing?: ElementSizing,
+padding?: ElementPadding | null, references?: StyleReferences,
 fill: string | null, stroke: ElementStroke, radius: number, opacity: number, shadow: ElementShadow, textStyle: ElementTextStyle, };
 
 export type ElementTextStyle = { fontFamily: string, size: number, weight: number, italic: boolean, lineHeight: number, letterSpacing: number, color: string, align: TextAlign, decoration?: TextDecoration | null, };
 
-export type ElementUpdate = { elementId: string, rect: Rect | null, rotation: number | null, style: ElementStyle | null, text: string | null, url: string | null, layout: ElementLayout | null, visible: boolean | null, locked: boolean | null, name: string | null, inputType: InputType | null, options: Array<string> | null, language: string | null, source: string | null, 
+export type ElementUpdate = { elementId: string, rect: Rect | null, rotation: number | null, style: ElementStyle | null, text: string | null, url: string | null, layout: ElementLayout | null, visible: boolean | null, locked: boolean | null, name: string | null, inputType: InputType | null, options: Array<string> | null, language: string | null, source: string | null,
 sizeId: string | null, };
 
 export type ErrorKind = "invalidSettings"
@@ -288,7 +290,7 @@ export type ErrorKind = "invalidSettings"
 
 export type ExportAttemptView = { ordinal: number, status: string, usage: TokenUsage | null, };
 
-export type ExportBehaviour = { 
+export type ExportBehaviour = {
 acceptedRevision: number, fingerprint: string, js: string, };
 
 export type ExportCheck = { states: Array<PointerStateView>, lastExport: ExportRecord | null, readable: boolean, };
@@ -300,9 +302,9 @@ export type ExportKind = "code"
 
 export type ExportPageView = { pageId: string, name: string, path: string, output: OutputType, file: string, };
 
-export type ExportRecord = { id: string, projectId: string, 
-version: number, 
-destination: string, exportedAt: string, pages: Array<ExportedPage>, pointers: { [key in string]: ExportedPointer }, 
+export type ExportRecord = { id: string, projectId: string,
+version: number,
+destination: string, exportedAt: string, pages: Array<ExportedPage>, pointers: { [key in string]: ExportedPointer },
 behaviours?: { [key in string]: ExportBehaviour }, };
 
 export type ExportResultView = { label: string, path: string, fileCount: number, pageCount: number, previewUrl: string | null, };
@@ -344,13 +346,17 @@ export type GenerationHistory = { jobs: Array<GenerationJobSummary>, skipped: nu
 
 export type GenerationJobSummary = { jobId: string, createdAt: string | null, status: GenerationStatus, usage: TokenUsage | null, summary: string, firstRequest: string, };
 
-export type GenerationJobView = { jobId: string, projectId: string, baseRevision: number, requirements: RequirementsSnapshot, 
-batches: Array<GenerationBatch>, 
-mergedRequirements?: RequirementsSnapshot | null, sourceFingerprints: { [key in string]: { [key in string]: string } }, appliedSourceFingerprints: { [key in string]: { [key in string]: string } }, context: RequirementsSnapshot | null, draftFeedback: Array<GenerationValidationEvent>, earlierContexts: Array<RequirementsSnapshot>, rawReply: string | null, validationEvents: Array<GenerationValidationEvent>, validationCountsRecorded: boolean, repairRounds: number, firstExchange: ValidationExchange | null, repairAreaCount: number, createdAt: string | null, areas: Array<GenerationTarget>, generationMode: GenerationMode, provider: ProviderId, settings: ProviderSettings, authentication: AuthenticationMethod, chatgptAccountId: string | null, failureKind: ErrorKind | null, providerError: ProviderError | null, providerRetry: ProviderRetry | null, status: GenerationStatus, estimateUsd: number, receivedBytes: number, 
+export type GenerationJobView = { problemKind: GenerationProblemKind | null, jobId: string, projectId: string, baseRevision: number, requirements: RequirementsSnapshot,
+batches: Array<GenerationBatch>,
+mergedRequirements?: RequirementsSnapshot | null, sourceFingerprints: { [key in string]: { [key in string]: string } }, appliedSourceFingerprints: { [key in string]: { [key in string]: string } }, context: RequirementsSnapshot | null, draftFeedback: Array<GenerationValidationEvent>, earlierContexts: Array<RequirementsSnapshot>, rawReply: string | null, validationEvents: Array<GenerationValidationEvent>, validationCountsRecorded: boolean, repairRounds: number, firstExchange: ValidationExchange | null, repairAreaCount: number, createdAt: string | null, areas: Array<GenerationTarget>, generationMode: GenerationMode, provider: ProviderId, settings: ProviderSettings, authentication: AuthenticationMethod, chatgptAccountId: string | null, failureKind: ErrorKind | null, providerError: ProviderError | null, providerRetry: ProviderRetry | null, status: GenerationStatus, estimateUsd: number, receivedBytes: number,
 pagesStarted: Array<string>, message: string, candidate: GenerationCandidate | null, usage: TokenUsage | null, attempts: Array<GenerationAttempt>, acceptedDecisionIndices: Array<number>, recommendedDecisionIndices: Array<number>, dossierError: string | null, };
 
 export type GenerationMode = "fuzzy"
   | "strict";
+
+export type GenerationProblemKind = "stale"
+  | "rejected"
+  | "partial";
 
 export type GenerationStatus = "prepared"
   | "generating"
@@ -380,8 +386,8 @@ export type IdentityAnalysis = { jobId: string, sourceId: string, source: Identi
 
 export type IdentityAsset = { id: string, name: string, mime: string, dataUri: string, sha256: string, };
 
-export type IdentityCandidate = { jobId: string, requirementsSha256: string, summary: string, brandName: string, tone: string, findings: Array<IdentityFinding>, logoAssetIds: Array<string>, warnings: Array<string>, 
-photos: Array<PhotoDescription>, 
+export type IdentityCandidate = { jobId: string, requirementsSha256: string, summary: string, brandName: string, tone: string, findings: Array<IdentityFinding>, logoAssetIds: Array<string>, warnings: Array<string>,
+photos: Array<PhotoDescription>,
 content: Array<ImportedItem>, };
 
 export type IdentityFileManifest = { id: string, name: string, textBytes: number, sourcePage: SourcePageRef | null, asset: IdentitySourceAsset | null, };
@@ -406,7 +412,7 @@ export type ImageGenerationCapability = { maxImages: number, sizes: Array<string
 
 export type ImportedIdentity = { sourceName: string, sourceSha256: string, summary: string, assets: Array<IdentityAsset>, photos: Array<ProjectPhoto>, content: Array<ImportedItem>, pages: Array<ImportedPageContext>, };
 
-export type ImportedItem = { kind: string, title: string, 
+export type ImportedItem = { kind: string, title: string,
 url: string, summary: string, sourcePages: Array<SourcePageRef>, };
 
 export type ImportedPageContext = { pageId: string, source: SourcePage, photoIds: Array<string>, content: Array<ImportedItem>, };
@@ -436,6 +442,14 @@ export type NamedView = { id: string, name: string, x: number, y: number, zoom: 
 
 export type NativeDrag = { phase: string, id: string, position: Position | null, picture: NativeFile | null, files: Array<NativeFile>, fileErrors: Array<string>, message: string | null, };
 
+export type NativeErrorKind = "command"
+  | "aiSettings"
+  | "saveLocation"
+  | "clipboard"
+  | "browser";
+
+export type NativeFailure = { kind: NativeErrorKind, message: string, };
+
 export type NativeFile = { name: string, mime: string, data: string, };
 
 export type OpenFailure = { message: string, url: string | null, };
@@ -449,16 +463,16 @@ export type OutputType = "webpage"
   | "slide"
   | "image";
 
-export type Page = { id: string, name: string, path: string, included: boolean, 
-output: OutputType, 
-sizes: Array<PageSize>, background: string, 
+export type Page = { id: string, name: string, path: string, included: boolean,
+output: OutputType,
+sizes: Array<PageSize>, background: string,
 elements: Array<Element>, };
 
 export type PageSize = { id: string, label: string, width: number, height: number, kind: BoundaryKind, x: number, y: number, };
 
 export type PendingCrash = { kind: string, summary: string, body: string, };
 
-export type PendingRequest = { id: string, text: string, attachments: Array<RequestAttachment>, targets: Array<RequestTarget>, area?: RequestArea | null, requestedAt: string, 
+export type PendingRequest = { id: string, text: string, attachments: Array<RequestAttachment>, targets: Array<RequestTarget>, area?: RequestArea | null, requestedAt: string,
 boundaryRetryOrder?: Array<string>, };
 
 export type PhotoDescription = { id: string, description: string, };
@@ -471,7 +485,7 @@ export type PlayAction = { "kind": "goTo", boundary: string, }
   | { "kind": "toggle", element: string, }
   | { "kind": "swap", element: string, withElement: string, };
 
-export type Pointer = { id: string, from: PointerSource, to: PointerTarget, comment: string, kind: PointerKind, wiring: PointerWiring | null, 
+export type Pointer = { id: string, from: PointerSource, to: PointerTarget, comment: string, kind: PointerKind, wiring: PointerWiring | null,
 play?: PlayAction | null, playComment?: string, };
 
 export type PointerClassification = { pointerId: string, comment: string, action: ClassifiedAction, };
@@ -490,7 +504,7 @@ export type PointerStateKind = "unwired"
   | "contradicts"
   | "broken";
 
-export type PointerStateView = { id: string, state: PointerStateKind, 
+export type PointerStateView = { id: string, state: PointerStateKind,
 clashWith: Array<string>, };
 
 export type PointerTarget = { "kind": "element", pageId: string, elementId: string, sizeId?: string | null, }
@@ -502,12 +516,12 @@ export type PointerWiring = { fingerprint: string, generatedComment: string, };
 
 export type Position = { x: number, y: number, };
 
-export type Project = { styles: ProjectStyles, schemaVersion: number, template: CanvasTemplate, id: string, name: string, revision: number, appearance: Appearance, showGrid: boolean, gridSettings: GridSettings, generationMode: GenerationMode, homePageId: string, pages: Array<Page>, brief: Brief, importedIdentity?: ImportedIdentity | null, pictures: { [key in string]: string }, 
-reference: Array<ReferenceItem>, 
-pointers: Array<Pointer>, 
-linked: { [key in string]: LinkedDefinition }, 
-requests: Array<PendingRequest>, 
-views: Array<NamedView>, decisions: Array<Decision>, exceptions: Array<DesignException>, appliedJobIds: Array<string>, latestGeneration: GenerationDossier | null, 
+export type Project = { styles: ProjectStyles, schemaVersion: number, template: CanvasTemplate, id: string, name: string, revision: number, appearance: Appearance, showGrid: boolean, gridSettings: GridSettings, generationMode: GenerationMode, homePageId: string, pages: Array<Page>, brief: Brief, importedIdentity?: ImportedIdentity | null, pictures: { [key in string]: string },
+reference: Array<ReferenceItem>,
+pointers: Array<Pointer>,
+linked: { [key in string]: LinkedDefinition },
+requests: Array<PendingRequest>,
+views: Array<NamedView>, decisions: Array<Decision>, exceptions: Array<DesignException>, appliedJobIds: Array<string>, latestGeneration: GenerationDossier | null,
 lastExport?: ExportRecord | null, };
 
 export type ProjectHistoryView = { branch: string, primaryBranch: string, branches: Array<BranchSummary>, versions: Array<VersionSummary>, };
@@ -535,8 +549,8 @@ export type ProviderSettings = { model: string, maxOutputTokens: number, reasoni
 
 export type ReasoningEffort = string;
 
-export type RecentProject = { path: string, name: string, 
-pinned: boolean, 
+export type RecentProject = { path: string, name: string,
+pinned: boolean,
 openedAtMs: number, };
 
 export type RecentProjectsView = { projects: Array<RecentProject>, error: string | null, };
@@ -552,21 +566,21 @@ export type ReferenceItem = { id: string, rect: Rect, kind: ReferenceKind, };
 export type ReferenceKind = { "kind": "element", element: Element, size?: string | null, }
   | { "kind": "note", text: string, }
   | { "kind": "link", url: string, title: string, }
-  | { "kind": "image", picture: string, 
+  | { "kind": "image", picture: string,
 name?: string, }
   | { "kind": "swatch", color: string, };
 
 export type ReferencePlacement = { item_id: string, x: number, y: number, };
 
-export type RequestArea = { 
+export type RequestArea = {
 page?: string | null, size?: string | null, shape: RequestShape, };
 
 export type RequestAttachment = { id: string, name: string, kind: AttachmentKind, dataUri?: string | null, text?: string | null, url?: string | null, };
 
 export type RequestImage = { attachmentId: string, dataUri: string, storedFormat?: string | null, transparent?: boolean | null, transparentPercent?: number | null, };
 
-export type RequestOutcome = { 
-requestId?: string | null, 
+export type RequestOutcome = {
+requestId?: string | null,
 elementId?: string | null, status: RequestStatus, explanation: string, operations: Array<ElementOperation>, };
 
 export type RequestPoint = { x: number, y: number, };
@@ -586,10 +600,10 @@ export type RequestTarget = { "kind": "element", page: string, size?: string | n
   | { "kind": "reference", id: string, }
   | { "kind": "pointer", id: string, };
 
-export type RequirementsSnapshot = { jobId: string, projectId: string, baseRevision: number, markdown: string, sha256: string, requestCount: number, pageCount: number, 
-dependencies: { [key in string]: string }, dossierContext?: GenerationDossierContext | null, 
-requestHistory?: string, capabilities?: GenerationCapabilities | null, 
-referenceIds: Array<string>, 
+export type RequirementsSnapshot = { jobId: string, projectId: string, baseRevision: number, markdown: string, sha256: string, requestCount: number, pageCount: number,
+dependencies: { [key in string]: string }, dossierContext?: GenerationDossierContext | null,
+requestHistory?: string, capabilities?: GenerationCapabilities | null,
+referenceIds: Array<string>,
 images: Array<RequestImage>, layerRequests: Array<FrozenLayerRequest>, };
 
 export type ResponseBodyKind = "unavailable"
@@ -697,11 +711,11 @@ export type TextStyle = { id: string, name: string, fontFamily: string, size: nu
 
 export type TokenUsage = { inputTokens: number, outputTokens: number, totalTokens: number, };
 
-export type UpdateCheck = { current: string, 
+export type UpdateCheck = { current: string,
 latest: UpdateRelease | null, newer: boolean, };
 
-export type UpdateRelease = { 
-version: string, name: string, 
+export type UpdateRelease = {
+version: string, name: string,
 url: string, publishedAt: string, };
 
 export type ValidationEventKind = "operation"
@@ -716,11 +730,11 @@ export type ValidationEventKind = "operation"
 
 export type ValidationExchange = { summary: string, requests: Array<RequestOutcome>, usage: TokenUsage | null, };
 
-export type VersionSummary = { id: number, parent: number | null, label: string, createdAt: number, 
+export type VersionSummary = { id: number, parent: number | null, label: string, createdAt: number,
 head: boolean, };
 
-export type WebCapture = { url: string, 
-site: string, 
+export type WebCapture = { url: string,
+site: string,
 route: string, title: string, width: number, height: number, nodes: Array<WebNode>, scripts: Array<WebScript>, };
 
 export type WebNode = { tag: string, rect: Rect, text: string | null, src: string | null, poster: string | null, href: string | null, inputType: string | null, placeholder: string | null, value: string | null, alt: string | null, options: Array<string>, attributes: WebNodeAttributes, styles: WebNodeStyles, children: Array<WebNode>, };
@@ -737,6 +751,6 @@ export type WebsiteImportResultView = { workspace: WorkspaceView, pages: number,
 
 export type WebsiteImportSourceView = { id: string, name: string, baseUrl: string, extractorUrl: string, pages: Array<WebsiteImportPageView>, totalPages: number, identitySource: IdentitySource | null, identityError: string | null, skipped: Array<string>, };
 
-export type WorkspaceView = { project: Project | null, path: string | null, dirty: boolean, 
-untitled: boolean, canUndo: boolean, canRedo: boolean, history: HistoryView | null, recovery: RecoveryInfo | null, recoveries: Array<RecoveryInfo>, recoveryError: string | null, openProjects: Array<OpenProjectSummary>, anyDirty: boolean, 
+export type WorkspaceView = { canGenerateFromBrief: boolean, project: Project | null, path: string | null, dirty: boolean,
+untitled: boolean, canUndo: boolean, canRedo: boolean, history: HistoryView | null, recovery: RecoveryInfo | null, recoveries: Array<RecoveryInfo>, recoveryError: string | null, openProjects: Array<OpenProjectSummary>, anyDirty: boolean,
 pointerStates: Array<PointerStateView>, };

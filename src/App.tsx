@@ -1,6 +1,7 @@
 import { PropertiesPanel } from './PropertiesPanel';
 import { useEditor } from './session/useEditor';
-import { PROJECT_COLOURS, errorMessage, zoomFromSlider, sliderFromZoom, RecoveryList, RenameProject, GridForm } from './editorShared';
+import { PROJECT_COLOURS, zoomFromSlider, sliderFromZoom, RecoveryList, RenameProject, GridForm } from './editorShared';
+import { errorValue } from './errorMessage.js';
 import { CrashReportNotice, EditorCrashBoundary } from './CrashReport';
 import { ProblemBanner, Notice, NoticeProvider, NoticeHost } from './ProblemBanner.js';
 import { userError } from './userErrors.js';
@@ -37,7 +38,6 @@ import { CommandPalette } from './CommandPalette';
 import type { WorkspaceView } from './types';
 import { ExportPanel } from './projectCanvas/exportPanel';
 import { idlePlay, playIsActive } from './projectCanvas/play';
-import { sizeLabel } from './projectCanvas/sizes';
 
 const ignoreCanvasLayout = () => {};
 
@@ -75,8 +75,8 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
   const presenting = !onStartPage && !!project && playIsActive(play) && project.pages.length > 0 && project.pages.every(page => page.output === 'slide');
   const playingPage = playIsActive(play) && project ? project.pages.find(page => page.id === play.boundary) ?? null : null;
   const playingSize = playingPage ? playingPage.sizes.find(size => size.id === canvasFocusSize) ?? playingPage.sizes[0] ?? null : null;
-  const playingLabel = playingPage && playingSize ? `${playingPage.name} · ${sizeLabel(playingSize.width)}` : null;
-  const briefOnly = requestedAreas === 0 && !!project && !!project.brief.purpose.trim() && project.pages[0]?.elements.length === 0;
+  const playingLabel = playingPage && playingSize ? `${playingPage.name} · ${playingSize.label}` : null;
+  const briefOnly = !!view?.canGenerateFromBrief;
   const nothingToGenerate = requestedAreas === 0 && !briefOnly;
   const previewAvailable = !onStartPage && !!project && projectHasPreviewPages(project);
   return <div className={presenting ? 'application editor-shell presenting' : 'application editor-shell'}>
@@ -116,7 +116,7 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
     <SurfaceHost place="banner" />
     {onStartPage && <NoticeHost />}
     {error && <ProblemBanner message={userError(error)} dismiss={() => setError('')} action={problemAction} />}
-    {openFailure && <Notice variant="warning" title="Couldn't open your browser" message={openFailure.message} action={{ label: 'Copy link', onClick: () => { const url = openFailure.url; void native('copy_text', { text: url }).then(() => setNotice('Link copied.')).catch(error => setError(errorMessage(error))); } }} dismiss={() => setOpenFailure(null)} />}
+    {openFailure && <Notice variant="warning" title="Couldn't open your browser" message={openFailure.message} action={{ label: 'Copy link', onClick: () => { const url = openFailure.url; void native('copy_text', { text: url }).then(() => setNotice('Link copied.')).catch(error => setError(errorValue(error))); } }} dismiss={() => setOpenFailure(null)} />}
     {updateState.kind === 'done' && <Notice variant={updateState.result.variant} message={updateState.result.message} action={updateState.result.download ? { label: 'Download', onClick: () => { const url = updateState.result.download; if (url) void openRelease(url); } } : undefined} dismiss={dismissUpdate} />}
     {updateState.kind === 'failed' && <ProblemBanner message={userError(updateState.message)} dismiss={dismissUpdate} />}
     {notices.map(item => <Notice key={item.id} variant="info" message={item.message} undo={item.undo ? { label: 'Undo', onClick: item.undo } : undefined} dismiss={() => setNotices(items => items.filter(queued => queued.id !== item.id))} />)}
@@ -128,7 +128,7 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
         openProject={() => run(open)} showStartPageOnLaunch={appSettings.showStartPage} changeShowStartPage={value => run(() => changeShowStartPage(value))}
         recentProjects={recentProjects} openRecent={path => run(() => openRecent(path))}
         forgetRecent={path => run(() => forgetRecent(path))} pinRecent={(path, pinned) => run(() => pinRecent(path, pinned))}
-        recovery={view.recoveries.length ? <RecoveryList items={view.recoveries} busy={pending > 0} recover={id => { void recover(id).catch(error => setError(errorMessage(error))); }} dismiss={ids => dismissRecoveries(ids).catch(error => setError(errorMessage(error)))} /> : null} />
+        recovery={view.recoveries.length ? <RecoveryList items={view.recoveries} busy={pending > 0} recover={id => { void recover(id).catch(error => setError(errorValue(error))); }} dismiss={ids => dismissRecoveries(ids).catch(error => setError(errorValue(error)))} /> : null} />
     </> : <>
       <div className="editor-body">
       {!panels.hidden && <ToolStrip tool={canvasTool.kind} onTool={chooseTool}
@@ -187,7 +187,7 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
     {recovery && <WorkspaceSurface place="banner" title="Unsaved changes" close={recovery.dismiss}><RecoveryChoice {...recovery} /></WorkspaceSurface>}
     {panel.kind === 'projectLocation' && <WorkspaceSurface place={onStartPage ? 'start' : 'panel'} title="Project location" close={() => closePanel('projectLocation')}><div className="dialog-body"><ProjectLocationSettings location={projectLocation} change={changeProjectLocation} /></div></WorkspaceSurface>}
     {panel.kind === 'recovery' && view && <WorkspaceSurface place={onStartPage ? 'start' : 'panel'} title={project ? 'Recover unsaved projects' : 'Unsaved work'} close={() => closePanel('recovery')}>
-      <RecoveryList items={view.recoveries} busy={pending > 0} recover={id => { void recover(id).catch(error => setError(errorMessage(error))); }} dismiss={ids => dismissRecoveries(ids).catch(error => setError(errorMessage(error)))} /></WorkspaceSurface>}
+      <RecoveryList items={view.recoveries} busy={pending > 0} recover={id => { void recover(id).catch(error => setError(errorValue(error))); }} dismiss={ids => dismissRecoveries(ids).catch(error => setError(errorValue(error)))} /></WorkspaceSurface>}
     {panel.kind === 'import' && <WorkspaceSurface place={onStartPage ? 'start' : 'panel'} title="Import" close={() => closePanel('import')}><ImportContext key={`${project?.id ?? 'new'}:${panel.source?.id ?? ''}`} initialSource={panel.source} busy={pending > 0} settings={aiSettings} openSettings={() => setShowAiSettings(true)} importInto={importContext} onPagesImported={result => { accept(result.workspace); setCanvasSelection([]); setCanvasFocus(null); setNotice(`Imported ${result.pages} ${result.pages === 1 ? 'page' : 'pages'} with ${result.layers} ${result.layers === 1 ? 'layer' : 'layers'}${result.warnings.length ? `; ${result.warnings.length} item${result.warnings.length === 1 ? '' : 's'} left out` : ''}.`); requestAnimationFrame(() => canvasRef.current?.fit()); }} close={() => closePanel('import')} /></WorkspaceSurface>}
     {panel.kind === 'styleGuide' && project && <WorkspaceSurface place={onStartPage ? 'start' : 'panel'} title="Style guide" close={() => closePanel('styleGuide')}><StyleGuide project={project} edits={edits} openBrief={() => openPanel({ kind: 'notes', section: 'decisions' })} /></WorkspaceSurface>}
     {panel.kind === 'notes' && project && <WorkspaceSurface place={onStartPage ? 'start' : 'panel'} title="Project brief" close={() => closePanel('notes')}><Notes project={project} initialSection={panel.section} reviewGeneration={project.latestGeneration?.jobId === generation.job?.jobId ? openGeneration : undefined} edits={edits} changeBrief={changeBrief} /></WorkspaceSurface>}
@@ -198,10 +198,10 @@ function Editor({ initialView }: { initialView?: WorkspaceView } = {}) {
     {panel.kind === 'rename' && project && <WorkspaceSurface place={onStartPage ? 'start' : 'panel'} title="Rename project" close={() => closePanel('rename')}><RenameProject name={project.name} submit={async name => { if (await mutate({ type: 'rename_project', name })) closePanel('rename'); }} /></WorkspaceSurface>}
     {saving.kind === 'conflict' && <SaveConflictDialog conflict={saving.conflict} choose={chooseSaveConflict} />}
     {replacement && <ModalDialog title="Save your changes?" close={() => setReplacement(null)}><p>Save “{project?.name}” before you {replacement.label}?</p><div className="form-actions">
-      <button className="primary" disabled={pending > 0} onClick={() => { void (async () => { const saved = await save(); if (saved && !saved.dirty) { const run = replacement.run; setReplacement(null); await run(false); } })().catch(error => setError(errorMessage(error))); }}>Save</button>
-      <button className="danger" disabled={pending > 0} onClick={() => { const run = replacement.run; setReplacement(null); void run(true).catch(error => setError(errorMessage(error))); }}>Discard</button><button onClick={() => setReplacement(null)}>Keep editing</button>
+      <button className="primary" disabled={pending > 0} onClick={() => { void (async () => { const saved = await save(); if (saved && !saved.dirty) { const run = replacement.run; setReplacement(null); await run(false); } })().catch(error => setError(errorValue(error))); }}>Save</button>
+      <button className="danger" disabled={pending > 0} onClick={() => { const run = replacement.run; setReplacement(null); void run(true).catch(error => setError(errorValue(error))); }}>Discard</button><button onClick={() => setReplacement(null)}>Keep editing</button>
     </div></ModalDialog>}
-    {confirmation && <WorkspaceSurface place="banner" title={confirmation.title} showHeader={false} close={() => setConfirmation(null)}><div className="inline-notice"><span>{confirmation.message}</span><button className={confirmation.confirmLabel ? undefined : 'danger'} disabled={pending > 0} onClick={() => { void confirmation.action().then(() => setConfirmation(null)).catch(error => setError(errorMessage(error))); }}>{confirmation.confirmLabel ?? 'Delete'}</button><button onClick={() => setConfirmation(null)}>Cancel</button></div></WorkspaceSurface>}
+    {confirmation && <WorkspaceSurface place="banner" title={confirmation.title} showHeader={false} close={() => setConfirmation(null)}><div className="inline-notice"><span>{confirmation.message}</span><button className={confirmation.confirmLabel ? undefined : 'danger'} disabled={pending > 0} onClick={() => { void confirmation.action().then(() => setConfirmation(null)).catch(error => setError(errorValue(error))); }}>{confirmation.confirmLabel ?? 'Delete'}</button><button onClick={() => setConfirmation(null)}>Cancel</button></div></WorkspaceSurface>}
     {showAiSettings && <ModalDialog title="AI settings" className="ai-settings-dialog" showClose close={() => setShowAiSettings(false)}><AiSettings current={aiSettings} refresh={refreshAiSettings} update={updateAiSettings} manageUsage={manageChatgptUsage} pollingError={aiPollingError} /></ModalDialog>}
   </div>;
 }

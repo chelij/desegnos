@@ -1,3 +1,4 @@
+import { errorMessage } from './errorMessage.js';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import type { CommandName } from './generated/commands';
 
@@ -18,7 +19,7 @@ function clean(value: string | null | undefined, limit: number) {
 
 // Failure reasons stay literal: their wording and numbers are what makes them traceable.
 function message(error: unknown, limit: number) {
-  const text = (typeof error === 'string' ? error : error instanceof Error ? error.message : error == null ? '' : String(error)).replace(/\s+/g, ' ').trim();
+  const text = errorMessage(error).replace(/\s+/g, ' ').trim();
   return text ? Array.from(text).slice(0, limit).join('') : undefined;
 }
 

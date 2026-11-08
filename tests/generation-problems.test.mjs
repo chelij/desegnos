@@ -51,7 +51,7 @@ try {
   });
 
   await test('stale result uses one plain sentence and stays retryable', () => {
-    const stale = { ...job, message: 'The generated result is stale: Existing page source changed.', candidate: { summary: 'Done', requests: [{ elementId: 'a', status: 'implemented', explanation: '' }] } };
+    const stale = { ...job, problemKind: 'stale', message: 'The result can no longer be applied.', candidate: { summary: 'Done', requests: [{ elementId: 'a', status: 'implemented', explanation: '' }] } };
     const problem = areaProblems(stale, page)[0];
     assert.equal(problem.stale, true);
     assert.equal(problem.message, staleResultMessage);
@@ -91,7 +91,7 @@ try {
     const implemented = { jobId: 'job', status: 'applied', areas: [{ pageId: 'page', elementId: 'a' }], candidate: { summary: 'Done', requests: [{ elementId: 'a', status: 'implemented', explanation: 'Added the chat' }] } };
     assert.deepEqual(jobOutcome(implemented).retryable, []);
     assert.deepEqual(jobOutcome({ ...implemented, status: 'blocked' }).retryable, ['a']);
-    const stale = { ...implemented, status: 'blocked', message: 'The generated result is stale: Existing page source changed.' };
+    const stale = { ...implemented, status: 'blocked', problemKind: 'stale', message: 'The result can no longer be applied.' };
     assert.deepEqual(jobOutcome(stale).retryable, ['a']);
     assert.equal(jobOutcome({ jobId: 'failed', status: 'failed', areas: [], candidate: null }).retryAll, true);
     assert.deepEqual(jobOutcome({ jobId: 'working', status: 'generating', areas: [], candidate: null }), { reason: '', retryable: [], blocked: [], retryAll: false, retryBatches: false });
@@ -119,7 +119,7 @@ try {
     assert.equal(jobOutcome(applied).reason, 'Some image changes were skipped. The rest was applied.');
     assert.equal(jobOutcome(applied).retryAll, false);
     assert.equal(jobOutcome({ ...applied, validationEvents: [{ kind: 'element', disposition: 'repaired', message: 'Fixed' }] }).reason, '');
-    assert.equal(jobOutcome({ ...applied, validationEvents: [], message: 'Applied with warnings: dropped invalid operation' }).reason, 'Some changes were skipped. The rest was applied.');
+    assert.equal(jobOutcome({ ...applied, validationEvents: [], problemKind: 'partial', message: 'Some original wording' }).reason, 'Some changes were skipped. The rest was applied.');
   });
   await test('operation warnings share one partial-success path across job and batch snapshots', () => {
     const dropped = { elementId: null, kind: 'operation', disposition: 'dropped', message: 'Request 1 operation 2 (update) skipped: invalid target' };

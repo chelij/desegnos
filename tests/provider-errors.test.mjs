@@ -20,8 +20,10 @@ try {
       assert.equal(userError({ message, providerError: error, provider: 'deepseek' }), message);
     }
   });
-  await test('untyped connection failures retain the fallback translation', () => {
-    assert.equal(userError('network connection failed'), "Desegnos couldn't connect. Check your internet connection and try again.");
+  await test('untyped wording never decides native actions', () => {
+    assert.equal(userError('network connection failed'), 'network connection failed');
+    assert.equal(needsAiSettings('API key expired'), false);
+    assert.equal(needsAiSettings({ kind: 'aiSettings', message: 'New wording' }), true);
     assert.equal(needsAiSettings('network timeout'), false);
     assert.equal(userError({ providerError: failure() }), 'The AI could not finish this request.');
   });

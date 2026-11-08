@@ -128,7 +128,7 @@ pub fn default_layer_name_base(kind: &ElementKind) -> &'static str {
 }
 
 /// The placeholder text a kind starts with; a layer still showing it reads by its name.
-pub(crate) fn default_element_text(kind: &ElementKind) -> &'static str {
+pub fn default_element_text(kind: &ElementKind) -> &'static str {
     match kind {
         ElementKind::Text => "Text",
         ElementKind::Button => "Button",
@@ -139,6 +139,23 @@ pub(crate) fn default_element_text(kind: &ElementKind) -> &'static str {
         ElementKind::Checkbox => "Checkbox",
         ElementKind::Radio => "Radio",
         _ => "",
+    }
+}
+
+pub fn default_element_size(kind: &ElementKind) -> (u32, u32) {
+    match kind {
+        ElementKind::Ellipse => (160, 120),
+        ElementKind::Line => (160, 0),
+        ElementKind::Button => (160, 44),
+        ElementKind::Link => (120, 28),
+        ElementKind::Input { .. } | ElementKind::Select { .. } => (240, 40),
+        ElementKind::Textarea => (240, 100),
+        ElementKind::Checkbox | ElementKind::Radio => (160, 24),
+        ElementKind::Video | ElementKind::Embed => (320, 180),
+        ElementKind::Audio => (320, 64),
+        ElementKind::Code { .. } => (360, 160),
+        ElementKind::Image => (320, 200),
+        _ => (240, 160),
     }
 }
 
@@ -730,14 +747,20 @@ impl Element {
         // text is its own, text layers and controls show that text, as they always have.
         let line = self.text.trim().split('\n').next().unwrap_or("");
         if !line.is_empty() && line != default_element_text(&self.kind) {
-            return line.chars().take(80).collect();
+            return line
+                .chars()
+                .take(crate::limits::MAX_LAYER_LABEL_CHARS)
+                .collect();
         }
         if let ElementKind::Code { language, .. } = &self.kind {
             return format!("{language} code");
         }
         match name {
             Some(name) => name.to_string(),
-            None if !line.is_empty() => line.chars().take(80).collect(),
+            None if !line.is_empty() => line
+                .chars()
+                .take(crate::limits::MAX_LAYER_LABEL_CHARS)
+                .collect(),
             None => self.kind.label().into(),
         }
     }
