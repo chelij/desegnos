@@ -20,23 +20,16 @@ pub struct CanvasFont {
 }
 
 #[tauri::command]
-pub fn resolve_canvas_font(
-    family: String,
-    weight: u16,
-    italic: bool,
-) -> Result<CanvasFont, crate::native_error::NativeFailure> {
-    (|| -> Result<CanvasFont, String> {
-        let face = resolve_font(&family, weight, italic);
-        let result = CanvasFont {
-            id: face.id.clone(),
-            bundled: face.bundled,
-            fell_back: face.fell_back,
-            italic: face.italic,
-        };
-        faces().locked().entry(face.id.clone()).or_insert(face);
-        Ok(result)
-    })()
-    .map_err(crate::native_error::NativeErrorKind::Command.failure())
+pub fn resolve_canvas_font(family: String, weight: u16, italic: bool) -> CanvasFont {
+    let face = resolve_font(&family, weight, italic);
+    let result = CanvasFont {
+        id: face.id.clone(),
+        bundled: face.bundled,
+        fell_back: face.fell_back,
+        italic: face.italic,
+    };
+    faces().locked().entry(face.id.clone()).or_insert(face);
+    result
 }
 
 #[tauri::command]
@@ -46,7 +39,7 @@ pub fn list_canvas_fonts() -> Vec<String> {
 
 #[tauri::command]
 pub fn load_canvas_font(id: String) -> Result<String, crate::native_error::NativeFailure> {
-    (|| -> Result<String, String> {
+    crate::native_error::NativeErrorKind::Command.run(|| -> Result<String, String> {
         let faces = faces().locked();
         let face = faces
             .get(&id)
@@ -56,6 +49,5 @@ pub fn load_canvas_font(id: String) -> Result<String, crate::native_error::Nativ
             "data:font/ttf;base64,{}",
             base64::engine::general_purpose::STANDARD.encode(bytes)
         ))
-    })()
-    .map_err(crate::native_error::NativeErrorKind::Command.failure())
+    })
 }

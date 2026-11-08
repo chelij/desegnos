@@ -1,5 +1,5 @@
 use crate::{
-    ai_settings::{AiSettingsStore, AiSettingsView, settings_view},
+    ai_settings::{AiSettingsView, SettingsState, settings_view},
     export::ExportService,
     generation::GenerationService,
     identity::IdentityService,
@@ -10,7 +10,6 @@ use std::{collections::BTreeMap, path::PathBuf, sync::Mutex};
 use tauri::State;
 use uuid::Uuid;
 
-type AiState<'a> = State<'a, Mutex<AiSettingsStore>>;
 const USAGE_URL: &str = "https://chatgpt.com/settings/usage";
 
 pub struct ChatgptState {
@@ -77,7 +76,7 @@ impl ChatgptState {
 
 #[tauri::command]
 pub async fn set_ai_authentication(
-    state: AiState<'_>,
+    state: SettingsState<'_>,
     chatgpt: State<'_, ChatgptState>,
     authentication: AuthenticationMethod,
 ) -> Result<AiSettingsView, crate::native_error::NativeFailure> {
@@ -91,7 +90,7 @@ pub async fn set_ai_authentication(
 
 #[tauri::command]
 pub async fn begin_chatgpt_sign_in(
-    state: AiState<'_>,
+    state: SettingsState<'_>,
     chatgpt: State<'_, ChatgptState>,
     storage: CredentialStorage,
     account_id: Option<Uuid>,
@@ -120,7 +119,7 @@ pub async fn begin_chatgpt_sign_in(
 
 #[tauri::command]
 pub async fn cancel_chatgpt_sign_in(
-    state: AiState<'_>,
+    state: SettingsState<'_>,
     chatgpt: State<'_, ChatgptState>,
 ) -> Result<AiSettingsView, crate::native_error::NativeFailure> {
     let result: NativeResult<AiSettingsView> = async {
@@ -133,7 +132,7 @@ pub async fn cancel_chatgpt_sign_in(
 
 #[tauri::command]
 pub async fn select_chatgpt_account(
-    state: AiState<'_>,
+    state: SettingsState<'_>,
     chatgpt: State<'_, ChatgptState>,
     account_id: Uuid,
 ) -> Result<AiSettingsView, crate::native_error::NativeFailure> {
@@ -146,7 +145,7 @@ pub async fn select_chatgpt_account(
         if view
             .accounts
             .iter()
-            .any(|account| account.id == account_id && account.connected && account.plan_enabled)
+            .any(|account| account.id == account_id && account.usable())
         {
             let client = state.locked().client();
             if let Ok(client) = client {
@@ -165,7 +164,7 @@ pub async fn select_chatgpt_account(
 
 #[tauri::command]
 pub async fn retry_chatgpt_secure_storage(
-    state: AiState<'_>,
+    state: SettingsState<'_>,
     chatgpt: State<'_, ChatgptState>,
     account_id: Uuid,
 ) -> Result<AiSettingsView, crate::native_error::NativeFailure> {
@@ -186,7 +185,7 @@ pub async fn sign_out_chatgpt(
     generation: State<'_, Mutex<crate::generation::GenerationService>>,
     identity: State<'_, Mutex<crate::identity::IdentityService>>,
     exports: State<'_, Mutex<crate::export::ExportService>>,
-    state: AiState<'_>,
+    state: SettingsState<'_>,
     chatgpt: State<'_, ChatgptState>,
     account_id: Uuid,
 ) -> Result<AiSettingsView, crate::native_error::NativeFailure> {

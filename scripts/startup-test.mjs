@@ -8,7 +8,7 @@ import { isAbsolute, join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { alive, assertPrivateXdg, checkDesktop, createPrivateXdg, desktopState, exit, groupExists, hashFile, signalGroup, stopGroup, unusedPort } from './native-guard.mjs';
-import { resolveDbusRunSession, resolveXvfbRun, xvfbEnvironment } from './xvfb.mjs';
+import { resolveDbusRunSession, resolveXvfbRun, spawnXvfbSession } from './xvfb.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const script = fileURLToPath(import.meta.url);
@@ -183,8 +183,7 @@ async function main() {
   assert.equal(process.platform, 'linux', 'Normal startup verification requires the guarded Linux Xvfb route');
   assert.ok(args.length === 2 && args[0] === '--binary' && isAbsolute(args[1]), 'Provide --binary with an absolute normal-build executable path');
   const binary = await realpath(args[1]);
-  const xvfbRun = resolveXvfbRun();
-  const dbusRunSession = resolveDbusRunSession();
+  resolveXvfbRun(); resolveDbusRunSession();
   await access(binary); await access(helper);
   const evidence = resolve(root, 'test-results/startup', `${new Date().toISOString().replace(/[:.]/g, '-')}-${process.pid}`);
   await mkdir(evidence, { recursive: true });
@@ -204,7 +203,7 @@ async function main() {
   const interrupted = () => { if (session?.pid) signalGroup(session.pid, 'SIGTERM'); };
   process.once('SIGINT', interrupted); process.once('SIGTERM', interrupted);
   try {
-    session = spawn(xvfbRun, ['-d', '-e', join(evidence, 'xvfb.log'), '-f', join(scratch, 'Xauthority'), '-s', '-screen 0 1600x1100x24', dbusRunSession, '--', process.execPath, script, '--isolated'], { cwd: root, env: xvfbEnvironment(environment), detached: true, stdio: ['ignore', 'inherit', 'inherit'] });
+    session = spawnXvfbSession({ script, evidence, scratch, env: environment, cwd: root });
     let forceTimer;
     const timer = setTimeout(() => { timedOut = true; signalGroup(session.pid, 'SIGTERM'); forceTimer = setTimeout(() => signalGroup(session.pid, 'SIGKILL'), 2000); }, 70_000);
     try { result = await exit(session); } finally { clearTimeout(timer); clearTimeout(forceTimer); }

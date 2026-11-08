@@ -4,13 +4,13 @@
 //! request, sent only after an explicit paid-send decision. Every write goes
 //! through the storage crate's staged, no-replace writer, and the project records the version,
 //! folder and pointer fingerprints the export produced.
-use crate::ai_access::{Connection, active_account, resolve};
+use crate::ai_access::{Connection, bound_account, resolve};
 use crate::ai_job::{signed_out_notice, stopped_notice};
-use crate::ai_settings::AiState;
+use crate::ai_settings::SettingsState;
 use crate::chatgpt::ChatgptState;
 use crate::local_site::LocalSite;
 use crate::native_files::{LockExt, NativeResult, message};
-use crate::workspace::Workspace;
+use crate::workspace::WorkspaceState;
 use desegnos_ai::{
     AuthenticationMethod, CancellationToken, ProviderId, ProviderResponse, TokenUsage,
 };
@@ -31,7 +31,6 @@ use tauri::{AppHandle, Manager, State};
 use tauri_plugin_dialog::DialogExt;
 use uuid::Uuid;
 
-type WorkspaceState<'a> = State<'a, Mutex<Workspace>>;
 type ExportState<'a> = State<'a, Mutex<ExportService>>;
 type SiteState<'a> = State<'a, Mutex<LocalSite>>;
 
@@ -401,7 +400,7 @@ fn page_views(plan: &ExportPlan) -> Vec<ExportPageView> {
 pub async fn prepare_export(
     app: AppHandle,
     workspace: WorkspaceState<'_>,
-    ai: AiState<'_>,
+    ai: SettingsState<'_>,
     chatgpt: State<'_, ChatgptState>,
     service: ExportState<'_>,
     site: SiteState<'_>,
@@ -567,16 +566,17 @@ pub async fn prepare_export(
 }
 
 /// The selected AI connection, bound to the signed-in ChatGPT account when it uses one.
-async fn bound_connection(ai: &AiState<'_>, chatgpt: &ChatgptState) -> NativeResult<Connection> {
+async fn bound_connection(
+    ai: &SettingsState<'_>,
+    chatgpt: &ChatgptState,
+) -> NativeResult<Connection> {
     let mut connection = ai.locked().connection();
-    if connection.authentication == AuthenticationMethod::Chatgpt {
-        connection.account_id = Some(active_account(chatgpt, "exporting").await?);
-    }
+    connection.account_id = bound_account(chatgpt, connection.authentication, "exporting").await?;
     Ok(connection)
 }
 
 fn estimate_export(
-    ai: &AiState<'_>,
+    ai: &SettingsState<'_>,
     plan: &ExportPlan,
     snapshot: &desegnos_core::RequirementsSnapshot,
     mode: GenerationMode,
@@ -695,7 +695,7 @@ fn commit(
 #[allow(clippy::too_many_arguments)]
 pub async fn start_export(
     workspace: WorkspaceState<'_>,
-    ai: AiState<'_>,
+    ai: SettingsState<'_>,
     chatgpt: State<'_, ChatgptState>,
     service: ExportState<'_>,
     site: SiteState<'_>,
@@ -993,7 +993,7 @@ pub fn cancel_export(
     service: ExportState<'_>,
     job_id: Uuid,
 ) -> Result<ExportJobView, crate::native_error::NativeFailure> {
-    (|| -> NativeResult<ExportJobView> {
+    crate::native_error::NativeErrorKind::Command.run(|| -> NativeResult<ExportJobView> {
         let mut service = service.locked();
         let job = service
             .jobs
@@ -1005,8 +1005,7 @@ pub fn cancel_export(
             job.view.message = stopped_notice(job.authentication());
         }
         Ok(job.view.clone())
-    })()
-    .map_err(crate::native_error::NativeErrorKind::Command.failure())
+    })
 }
 
 #[tauri::command]
@@ -1014,11 +1013,10 @@ pub fn get_export_job(
     service: ExportState<'_>,
     project_id: Uuid,
 ) -> Result<Option<ExportJobView>, crate::native_error::NativeFailure> {
-    (|| -> NativeResult<Option<ExportJobView>> {
+    crate::native_error::NativeErrorKind::Command.run(|| -> NativeResult<Option<ExportJobView>> {
         let service = service.locked();
         Ok(service.latest_for(project_id).map(|job| job.view.clone()))
-    })()
-    .map_err(crate::native_error::NativeErrorKind::Command.failure())
+    })
 }
 
 /// Recompute pointer fingerprints from the last export's folder, so code changed outside a
@@ -1036,7 +1034,7 @@ pub fn recheck_export(
     workspace: WorkspaceState<'_>,
     project_id: Uuid,
 ) -> Result<ExportCheck, crate::native_error::NativeFailure> {
-    (|| -> NativeResult<ExportCheck> {
+    crate::native_error::NativeErrorKind::Command.run(|| -> NativeResult<ExportCheck> {
         let project = {
             let workspace = workspace.locked();
             let project = workspace.project()?.clone();
@@ -1065,8 +1063,7 @@ pub fn recheck_export(
                 readable: false,
             }),
         }
-    })()
-    .map_err(crate::native_error::NativeErrorKind::Command.failure())
+    })
 }
 
 /// Rewrite one pointer's comment from the marked code an outside edit left behind. One undo step
@@ -1075,7 +1072,7 @@ pub fn recheck_export(
 #[allow(clippy::too_many_arguments)]
 pub async fn keep_pointer_code(
     workspace: WorkspaceState<'_>,
-    ai: AiState<'_>,
+    ai: SettingsState<'_>,
     chatgpt: State<'_, ChatgptState>,
     service: ExportState<'_>,
     project_id: Uuid,
@@ -1156,12 +1153,11 @@ pub fn close_preview(
     service: ExportState<'_>,
     site: SiteState<'_>,
 ) -> Result<(), crate::native_error::NativeFailure> {
-    (|| -> NativeResult<()> {
+    crate::native_error::NativeErrorKind::Command.run(|| -> NativeResult<()> {
         site.locked().stop();
         service.locked().prune_previews(None);
         Ok(())
-    })()
-    .map_err(crate::native_error::NativeErrorKind::Command.failure())
+    })
 }
 
 /// Open the last export's folder after checking the renderer's path against the record.
@@ -1171,7 +1167,7 @@ pub fn open_export_folder(
     project_id: Uuid,
     path: String,
 ) -> Result<(), crate::native_error::NativeFailure> {
-    (|| -> NativeResult<()> {
+    crate::native_error::NativeErrorKind::Command.run(|| -> NativeResult<()> {
         let record = {
             let workspace = workspace.locked();
             let project = workspace.project()?;
@@ -1194,8 +1190,7 @@ pub fn open_export_folder(
             "Your export is safe, but its folder could not open. Open it in your file manager."
                 .into()
         })
-    })()
-    .map_err(crate::native_error::NativeErrorKind::Command.failure())
+    })
 }
 
 /// Serve the last export in the system browser.
@@ -1206,7 +1201,7 @@ pub fn open_in_browser(
     project_id: Uuid,
 ) -> Result<String, crate::native_error::NativeFailure> {
     use crate::native_error::{NativeErrorKind, NativeFailure};
-    let (url, target) = (|| -> NativeResult<(String, String)> {
+    let (url, target) = NativeErrorKind::Browser.run(|| -> NativeResult<(String, String)> {
         let project = {
             let workspace = workspace.locked();
             let project = workspace.project()?;
@@ -1232,8 +1227,7 @@ pub fn open_in_browser(
             .map_err(message)?;
         let target = entry_url(&path, &url);
         Ok((url, target))
-    })()
-    .map_err(NativeErrorKind::Browser.failure())?;
+    })?;
     // The running address travels as a field so the editor can offer to copy it.
     crate::system_open::open(&target).map_err(|_| {
         NativeFailure::from_serializable(

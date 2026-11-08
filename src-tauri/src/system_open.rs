@@ -1,6 +1,32 @@
 //! OS opening with observable missing-launcher failures and a path/URL fallback.
 use std::{ffi::OsStr, io};
 
+/// A web link the user clicked in a preview, opened in their browser after they confirm it.
+#[tauri::command]
+pub fn open_preview_link(url: String) -> Result<(), crate::native_error::NativeFailure> {
+    crate::native_error::NativeErrorKind::Browser.run(
+        || -> crate::native_files::NativeResult<()> {
+            let parsed = preview_link(&url)?;
+            open(parsed.as_str())
+                .map_err(|_| "Couldn't open a browser. Copy the link and open it manually.".into())
+        },
+    )
+}
+
+fn preview_link(url: &str) -> crate::native_files::NativeResult<desegnos_ai::WebUrl> {
+    let parsed =
+        desegnos_ai::WebUrl::parse(url).map_err(|_| "This link is not a valid web address.")?;
+    if url.len() > 2048
+        || !matches!(parsed.scheme(), "http" | "https")
+        || parsed.host_str().is_none()
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+    {
+        return Err("Only ordinary web links can be opened from the preview.".into());
+    }
+    Ok(parsed)
+}
+
 pub fn open(target: impl AsRef<OsStr>) -> io::Result<()> {
     #[cfg(not(target_os = "linux"))]
     return open::that_detached(target);

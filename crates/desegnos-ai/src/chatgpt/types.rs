@@ -117,6 +117,13 @@ pub struct ChatgptAccount {
     pub storage_repair_required: bool,
 }
 
+impl ChatgptAccount {
+    /// Signed in, plan usage granted, and secure storage healthy.
+    pub fn usable(&self) -> bool {
+        self.connected && self.plan_enabled && !self.storage_repair_required
+    }
+}
+
 #[derive(ts_rs::TS, Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum ChatgptSignInStatus {
@@ -153,12 +160,11 @@ impl ChatgptView {
         &self,
         settings: &crate::ProviderSettings,
     ) -> crate::Result<&ChatgptModel> {
-        if !self.accounts.iter().any(|account| {
-            Some(account.id) == self.active_account_id
-                && account.connected
-                && account.plan_enabled
-                && !account.storage_repair_required
-        }) {
+        if !self
+            .accounts
+            .iter()
+            .any(|account| Some(account.id) == self.active_account_id && account.usable())
+        {
             return Err(
                 crate::ProviderError::before(crate::ErrorKind::MissingCredential)
                     .with_authentication(crate::AuthenticationMethod::Chatgpt),
@@ -210,5 +216,29 @@ impl Drop for ChatgptAuthorization {
 impl std::fmt::Debug for ChatgptAuthorization {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str("ChatgptAuthorization([NATIVE ONLY])")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_account_needing_storage_repair_is_not_usable() {
+        let mut account = ChatgptAccount {
+            id: Uuid::nil(),
+            label: String::new(),
+            email: None,
+            connected: true,
+            plan_enabled: true,
+            storage: CredentialLocation::System,
+            storage_repair_required: false,
+        };
+        assert!(account.usable());
+        account.storage_repair_required = true;
+        assert!(!account.usable());
+        account.storage_repair_required = false;
+        account.plan_enabled = false;
+        assert!(!account.usable());
     }
 }

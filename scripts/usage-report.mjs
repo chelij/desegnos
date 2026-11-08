@@ -3,17 +3,18 @@
 // - usage/*.jsonl: clicks, shortcuts, typing counts and commands (src/usage.ts)
 // - generation/<project>/<job>/: every request sent to the AI and its outcome
 //
-//   node scripts/usage-report.mjs [--data <dir>] [--out <file.md>]
+//   node scripts/usage-report.mjs --data <data folder> [--out <file.md>]
+// The data folder is the one Desegnos shows in its data-location settings; DESEGNOS_DATA_DIR works too.
 import { readFile, readdir, stat, writeFile } from 'node:fs/promises';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 const args = process.argv.slice(2);
 const option = name => { const index = args.indexOf(name); return index === -1 ? undefined : args[index + 1]; };
-const data = option('--data') ?? join(process.env.XDG_DATA_HOME ?? join(homedir(), '.local/share'), 'io.github.chelij.desegnos');
+const data = option('--data') ?? process.env.DESEGNOS_DATA_DIR;
+if (!data) { console.error('Pass --data <data folder> or set DESEGNOS_DATA_DIR.'); process.exit(1); }
 const out = option('--out');
 
-async function list(path) { try { return await readdir(path); } catch { return []; } }
+async function list(path) { try { return await readdir(path); } catch (error) { if (error.code === 'ENOENT') return []; throw error; } }
 const count = (map, key, by = 1) => map.set(key, (map.get(key) ?? 0) + by);
 const top = (map, limit = 15) => [...map].sort((a, b) => b[1] - a[1]).slice(0, limit);
 const table = (rows, head) => rows.length ? [`| ${head.join(' | ')} |`, `| ${head.map(() => '---').join(' | ')} |`, ...rows.map(row => `| ${row.join(' | ')} |`)].join('\n') : '_None yet._';

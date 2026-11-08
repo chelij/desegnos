@@ -1,4 +1,4 @@
-use crate::native_files::{LockExt, read_json};
+use crate::native_files::{LockExt, SMALL_RECORD_BYTES, lock_for_update, read_json};
 use serde::{Deserialize, Serialize};
 use std::{
     path::{Path, PathBuf},
@@ -39,7 +39,7 @@ fn read_settings(directory: &Path) -> Result<Settings, String> {
     if !path.exists() {
         return Ok(Settings::default());
     }
-    read_json(&path, 65_536, "project settings file")
+    read_json(&path, SMALL_RECORD_BYTES, "project settings file")
 }
 
 /// Read, change and write the settings under one lock so two windows cannot drop each
@@ -48,16 +48,7 @@ fn update_settings(
     directory: &Path,
     change: impl FnOnce(&mut Settings),
 ) -> Result<Settings, String> {
-    // A lock prevents concurrent windows from replacing each other's setting.
-    let lock = std::fs::OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .read(true)
-        .write(true)
-        .open(directory.join("project-settings.lock"))
-        .map_err(|e| e.to_string())?;
-    lock.try_lock()
-        .map_err(|_| "Another window is updating project settings. Try again.".to_owned())?;
+    let _lock = lock_for_update(&directory.join("project-settings.lock"), "project settings")?;
     let mut settings = read_settings(directory)?;
     change(&mut settings);
     let json = serde_json::to_string(&settings).map_err(|e| e.to_string())?;
@@ -100,25 +91,23 @@ fn view(state: &crate::workspace::Workspace) -> Result<ProjectLocationView, Stri
 pub fn get_project_location(
     state: State<'_, Mutex<crate::workspace::Workspace>>,
 ) -> Result<ProjectLocationView, crate::native_error::NativeFailure> {
-    (|| -> Result<ProjectLocationView, String> {
+    crate::native_error::NativeErrorKind::Command.run(|| -> Result<ProjectLocationView, String> {
         let state = state.locked();
         view(&state)
-    })()
-    .map_err(crate::native_error::NativeErrorKind::Command.failure())
+    })
 }
 
 #[tauri::command]
 pub fn get_app_settings(
     state: State<'_, Mutex<crate::workspace::Workspace>>,
 ) -> Result<AppSettingsView, crate::native_error::NativeFailure> {
-    (|| -> Result<AppSettingsView, String> {
+    crate::native_error::NativeErrorKind::Command.run(|| -> Result<AppSettingsView, String> {
         let state = state.locked();
         let settings = read_settings(state.directory())?;
         Ok(AppSettingsView {
             show_start_page: settings.show_start_page.unwrap_or(true),
         })
-    })()
-    .map_err(crate::native_error::NativeErrorKind::Command.failure())
+    })
 }
 
 #[tauri::command]
@@ -126,7 +115,7 @@ pub fn set_show_start_page(
     state: State<'_, Mutex<crate::workspace::Workspace>>,
     value: bool,
 ) -> Result<AppSettingsView, crate::native_error::NativeFailure> {
-    (|| -> Result<AppSettingsView, String> {
+    crate::native_error::NativeErrorKind::Command.run(|| -> Result<AppSettingsView, String> {
         let state = state.locked();
         update_settings(state.directory(), |settings| {
             settings.show_start_page = Some(value);
@@ -134,8 +123,7 @@ pub fn set_show_start_page(
         Ok(AppSettingsView {
             show_start_page: value,
         })
-    })()
-    .map_err(crate::native_error::NativeErrorKind::Command.failure())
+    })
 }
 
 #[tauri::command]
@@ -167,20 +155,21 @@ pub fn set_project_location(
     state: State<'_, Mutex<crate::workspace::Workspace>>,
     path: Option<PathBuf>,
 ) -> Result<ProjectLocationView, crate::native_error::NativeFailure> {
-    (|| -> Result<ProjectLocationView, String> {
-        let state = state.locked();
-        if let Some(path) = &path {
-            validate(path)?;
-            if !path.is_dir() {
-                return Err("Choose an existing parent folder.".into());
+    crate::native_error::NativeErrorKind::SaveLocation.run(
+        || -> Result<ProjectLocationView, String> {
+            let state = state.locked();
+            if let Some(path) = &path {
+                validate(path)?;
+                if !path.is_dir() {
+                    return Err("Choose an existing parent folder.".into());
+                }
             }
-        }
-        update_settings(state.directory(), |settings| {
-            settings.default_project_location = path;
-        })?;
-        view(&state)
-    })()
-    .map_err(crate::native_error::NativeErrorKind::SaveLocation.failure())
+            update_settings(state.directory(), |settings| {
+                settings.default_project_location = path;
+            })?;
+            view(&state)
+        },
+    )
 }
 
 #[cfg(test)]

@@ -278,9 +278,7 @@ impl ChatgptManager {
         }
         let active = metadata.active;
         let selected = accounts.iter().find(|account| Some(account.id) == active);
-        let can_use_plan = selected.is_some_and(|account| {
-            account.connected && account.plan_enabled && !account.storage_repair_required
-        });
+        let can_use_plan = selected.is_some_and(ChatgptAccount::usable);
         ChatgptView {
             accounts,
             active_account_id: active,

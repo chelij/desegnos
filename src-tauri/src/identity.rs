@@ -1,7 +1,7 @@
 //! Native identity import owns source snapshots and analysis lifecycle. Imported
 //! files are evidence only: they never execute or gain provider/native authority.
 use crate::{
-    ai_access::{Access, AccessFailure, active_account, resolve},
+    ai_access::{Access, AccessFailure, bound_account, resolve},
     ai_job::{ActiveJobs, Failure, interrupted_notice, stopped_notice},
     ai_settings::AiSettingsStore,
     chatgpt::ChatgptState,
@@ -11,8 +11,8 @@ use crate::{
     },
 };
 use desegnos_ai::{
-    AuthenticationMethod, CancellationToken, ChatgptView, ErrorKind, IdentityImage, ProviderId,
-    ProviderProgress, ProviderResponse, ProviderSettings, TokenUsage,
+    AuthenticationMethod, CancellationToken, ChatgptAccount, ChatgptView, ErrorKind, IdentityImage,
+    ProviderId, ProviderProgress, ProviderResponse, ProviderSettings, TokenUsage,
 };
 use desegnos_core::{
     IdentityAsset, RequirementsSnapshot, digest, fenced_json, parse_structured_reply,
@@ -584,7 +584,7 @@ pub fn prepare_identity_selection(
     source_id: Uuid,
     file_ids: Option<Vec<Uuid>>,
 ) -> Result<IdentitySelection, crate::native_error::NativeFailure> {
-    (|| -> NativeResult<IdentitySelection> {
+    crate::native_error::NativeErrorKind::Command.run(|| -> NativeResult<IdentitySelection> {
         let source = state
             .locked()
             .sources
@@ -600,8 +600,7 @@ pub fn prepare_identity_selection(
         Ok(select_files(&source, file_ids, |ids| {
             check_selection(&source, ids, provider, authentication, &settings)
         }))
-    })()
-    .map_err(crate::native_error::NativeErrorKind::Command.failure())
+    })
 }
 
 fn candidate_schema() -> Value {
@@ -1377,26 +1376,23 @@ impl IdentityService {
 pub fn get_identity_analysis(
     state: IdentityState<'_>,
 ) -> Result<Option<AnalysisView>, crate::native_error::NativeFailure> {
-    (|| -> NativeResult<Option<AnalysisView>> {
+    crate::native_error::NativeErrorKind::Command.run(|| -> NativeResult<Option<AnalysisView>> {
         let service = state.locked();
         if let Some(reason) = &service.startup_error {
             return Err(reason.clone());
         }
         Ok(service.latest.as_ref().map(AnalysisRecord::view))
-    })()
-    .map_err(crate::native_error::NativeErrorKind::Command.failure())
+    })
 }
 #[tauri::command]
 pub fn cancel_identity_analysis(
     state: IdentityState<'_>,
     job_id: Uuid,
 ) -> Result<AnalysisView, crate::native_error::NativeFailure> {
-    (|| -> NativeResult<AnalysisView> { state.locked().cancel(job_id) })().map_err(|error| {
-        crate::native_error::NativeFailure::from_serializable(
-            error,
-            crate::native_error::NativeErrorKind::Command,
-        )
-    })
+    state
+        .locked()
+        .cancel(job_id)
+        .map_err(crate::native_error::NativeErrorKind::Command.failure())
 }
 /// Access for an analysis of the selected connection, confirmed once more after sign-in.
 async fn identity_access(
@@ -1405,9 +1401,8 @@ async fn identity_access(
     cancellation: &CancellationToken,
 ) -> Result<Access, AccessFailure> {
     let mut connection = state.locked().ready_connection()?;
-    if connection.authentication == AuthenticationMethod::Chatgpt {
-        connection.account_id = Some(active_account(chatgpt, "analyzing identity").await?);
-    }
+    connection.account_id =
+        bound_account(chatgpt, connection.authentication, "analyzing identity").await?;
     let access = resolve(state, chatgpt, &connection, cancellation).await?;
     if let Some((account_id, _)) = access.account {
         validate_identity_account(&chatgpt.view().await, account_id, &access.settings.model)?;
@@ -1441,9 +1436,7 @@ fn validate_identity_account(
         .iter()
         .find(|account| account.id == account_id);
     if view.active_account_id != Some(account_id)
-        || !account.is_some_and(|account| {
-            account.connected && account.plan_enabled && !account.storage_repair_required
-        })
+        || !account.is_some_and(ChatgptAccount::usable)
         || !view.models.iter().any(|available| available.id == model)
     {
         return Err("The selected ChatGPT account, its plan permission, secure storage, or model changed while checking access. Review AI settings and explicitly analyze again.".into());
@@ -1466,7 +1459,7 @@ pub fn analyze_identity(
     source_id: Uuid,
     file_ids: Vec<Uuid>,
 ) -> Result<AnalysisView, crate::native_error::NativeFailure> {
-    (|| -> NativeResult<AnalysisView> {
+    crate::native_error::NativeErrorKind::Command.run(|| -> NativeResult<AnalysisView> {
         let (view, cancellation) = state.locked().reserve(source_id, file_ids)?;
         let job_id = view.job_id;
         tauri::async_runtime::spawn(async move {
@@ -1544,8 +1537,7 @@ pub fn analyze_identity(
             }
         });
         Ok(view)
-    })()
-    .map_err(crate::native_error::NativeErrorKind::Command.failure())
+    })
 }
 
 #[cfg(test)]

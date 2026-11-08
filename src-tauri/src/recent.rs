@@ -1,4 +1,4 @@
-use crate::native_files::{LockExt, read_json};
+use crate::native_files::{LockExt, SMALL_RECORD_BYTES, lock_for_update, read_json};
 use desegnos_core::limits::MAX_NAME_CHARS;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -7,7 +7,6 @@ use std::{
 };
 
 const MAX_RECENT: usize = 10;
-const MAX_LIST_BYTES: u64 = 65_536;
 
 #[derive(ts_rs::TS, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -43,7 +42,7 @@ pub fn read(directory: &Path) -> Result<Vec<RecentProject>, String> {
     if !path.exists() {
         return Ok(vec![]);
     }
-    let entries: Vec<RecentProject> = read_json(&path, MAX_LIST_BYTES, "recent-project list")?;
+    let entries: Vec<RecentProject> = read_json(&path, SMALL_RECORD_BYTES, "recent-project list")?;
     if entries.len() > MAX_RECENT
         || entries.iter().any(|entry| {
             !entry.path.is_absolute()
@@ -127,25 +126,7 @@ fn remember_destination(
 }
 
 fn lock(directory: &Path) -> Result<File, String> {
-    let lock = crate::native_files::open_lock_file(&directory.join("recent-projects.lock"))
-        .map_err(|error| error.to_string())?;
-    // A child process forked by another thread can inherit this descriptor for the instant
-    // before exec closes it, so a single try can race. Retry briefly before reporting a real
-    // writer, and stay bounded so the UI is never held for long.
-    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(100);
-    loop {
-        match lock.try_lock() {
-            Ok(()) => return Ok(lock),
-            Err(std::fs::TryLockError::WouldBlock) if std::time::Instant::now() < deadline => {
-                std::thread::sleep(std::time::Duration::from_millis(5));
-            }
-            Err(error) => {
-                return Err(format!(
-                    "Another window is updating recent projects. Try again to update the list. {error}"
-                ));
-            }
-        }
-    }
+    lock_for_update(&directory.join("recent-projects.lock"), "recent projects")
 }
 
 fn write(directory: &Path, entries: &[RecentProject]) -> Result<(), String> {
@@ -187,11 +168,10 @@ pub fn forget_recent_project(
     state: tauri::State<'_, std::sync::Mutex<crate::workspace::Workspace>>,
     path: PathBuf,
 ) -> Result<Vec<RecentProject>, crate::native_error::NativeFailure> {
-    (|| -> Result<Vec<RecentProject>, String> {
+    crate::native_error::NativeErrorKind::Command.run(|| -> Result<Vec<RecentProject>, String> {
         let state = state.locked();
         forget(state.directory(), &path)
-    })()
-    .map_err(crate::native_error::NativeErrorKind::Command.failure())
+    })
 }
 
 #[tauri::command]
@@ -200,11 +180,10 @@ pub fn set_recent_project_pin(
     path: PathBuf,
     pinned: bool,
 ) -> Result<Vec<RecentProject>, crate::native_error::NativeFailure> {
-    (|| -> Result<Vec<RecentProject>, String> {
+    crate::native_error::NativeErrorKind::Command.run(|| -> Result<Vec<RecentProject>, String> {
         let state = state.locked();
         set_pinned(state.directory(), &path, pinned)
-    })()
-    .map_err(crate::native_error::NativeErrorKind::Command.failure())
+    })
 }
 
 #[cfg(test)]
