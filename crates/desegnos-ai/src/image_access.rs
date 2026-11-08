@@ -38,16 +38,12 @@ impl ImageAccess {
         }
     }
     pub fn expired(&self, now: u64) -> bool {
-        // Transient failures are retried later without a polling/request loop.
         let ttl = if self.available == ImageAvailability::Unknown {
             UNKNOWN_ACCESS_TTL_SECONDS
         } else {
             CONFIRMED_ACCESS_TTL_SECONDS
         };
-        now == 0
-            || self.checked_at == 0
-            || now < self.checked_at
-            || now.saturating_sub(self.checked_at) >= ttl
+        self.checked_at == 0 || now < self.checked_at || now.saturating_sub(self.checked_at) >= ttl
     }
 }
 

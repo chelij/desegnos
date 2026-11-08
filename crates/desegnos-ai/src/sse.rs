@@ -1153,7 +1153,13 @@ pub(crate) fn error_code(authentication: AuthenticationMethod, code: Option<&str
         }
     }
     match code {
-        Some("internal_error" | "server_error" | "overloaded" | "overloaded_error" | "service_unavailable") => ErrorKind::Server,
+        Some(
+            "internal_error"
+            | "server_error"
+            | "overloaded"
+            | "overloaded_error"
+            | "service_unavailable",
+        ) => ErrorKind::Server,
         Some("insufficient_quota" | "billing_hard_limit_reached" | "billing_not_active") => {
             ErrorKind::Quota
         }

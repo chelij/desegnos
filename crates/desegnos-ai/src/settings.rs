@@ -8,12 +8,12 @@ use serde_json::{Value, json};
 
 pub const VERIFIED_AT: &str = "2026-10-31";
 pub const MODEL_ID: &str = "gpt-6.1-sol";
-pub const MODEL_MAX_OUTPUT_TOKENS: u32 = 128_000;
-pub const MAX_OUTPUT_TOKENS: u32 = MODEL_MAX_OUTPUT_TOKENS;
+/// Ceiling on a reply's billed output for every provider; discovered models are clamped to it.
+pub const MAX_OUTPUT_TOKENS: u32 = 128_000;
 /// Provider defaults stay at 32,768 so a first estimate stays inside the default budget.
 pub const DEFAULT_MAX_OUTPUT_TOKENS: u32 = 32_768;
 /// ChatGPT plans ignore `max_output_tokens`, so only their reply text keeps this allowance.
-pub const CHATGPT_MAX_OUTPUT_TOKENS: u32 = 32_768;
+pub const CHATGPT_MAX_OUTPUT_TOKENS: u32 = DEFAULT_MAX_OUTPUT_TOKENS;
 pub use desegnos_core::limits::MAX_GENERATION_BYTES as MAX_OUTPUT_BYTES;
 pub use desegnos_core::limits::MAX_REQUIREMENTS_BYTES;
 pub const MAX_REQUEST_BYTES: usize = 16 * 1024 * 1024;
@@ -135,7 +135,7 @@ impl ChatgptModel {
             .min(CONTEXT_WINDOW_TOKENS);
         let output = self
             .max_output_tokens
-            .map_or(0, |limit| limit.min(MODEL_MAX_OUTPUT_TOKENS));
+            .map_or(0, |limit| limit.min(MAX_OUTPUT_TOKENS));
         if input_tokens.saturating_add(u64::from(output)) > context {
             return Err(ProviderError::before(ErrorKind::ContextLimit)
                 .with_authentication(AuthenticationMethod::Chatgpt));
@@ -347,7 +347,7 @@ pub fn chatgpt_model_catalogue(available: &[ChatgptModel]) -> Vec<ModelInfo> {
             name: model.name.clone(),
             reasoning_efforts: model.reasoning_efforts.clone(),
             context_window_tokens: model.context_window_tokens.unwrap_or(CONTEXT_WINDOW_TOKENS),
-            max_output_tokens: model.max_output_tokens.unwrap_or(MODEL_MAX_OUTPUT_TOKENS),
+            max_output_tokens: model.max_output_tokens.unwrap_or(MAX_OUTPUT_TOKENS),
             input_usd_per_million: 0.0,
             output_usd_per_million: 0.0,
             long_context_input_usd_per_million: 0.0,
@@ -451,25 +451,6 @@ pub(crate) fn prepare_body(
     settings: &ProviderSettings,
 ) -> Result<Vec<u8>> {
     generation_body(authentication, snapshot, mode, schema, settings).map(|(body, _)| body)
-}
-
-#[cfg(test)]
-pub(crate) fn request_body(
-    authentication: AuthenticationMethod,
-    snapshot: &RequirementsSnapshot,
-    mode: GenerationMode,
-    schema: &Value,
-    settings: &ProviderSettings,
-) -> Result<Vec<u8>> {
-    settings.validate_for_auth(authentication)?;
-    let mut body = request_content(snapshot, mode, schema)?.responses_body();
-    configure_response_body(&mut body, authentication, settings);
-    let bytes = crate::schema_wire::serialize_body(&body)
-        .map_err(|_| ProviderError::before(ErrorKind::InvalidRequirements))?;
-    if bytes.len() > MAX_REQUEST_BYTES {
-        return Err(ProviderError::before(ErrorKind::InputLimit));
-    }
-    Ok(bytes)
 }
 
 pub(crate) fn request_content<'a>(
@@ -579,7 +560,7 @@ fn estimate_response_value(
             window_bytes_per_token: 1,
             context_window: CONTEXT_WINDOW_TOKENS,
             output_reserve: if authentication == AuthenticationMethod::Chatgpt {
-                MODEL_MAX_OUTPUT_TOKENS
+                MAX_OUTPUT_TOKENS
             } else {
                 settings.max_output_tokens
             },
@@ -665,7 +646,7 @@ mod web_search_tests {
     fn body(format: Option<u8>) -> Value {
         let schema = json!({"type":"object","additionalProperties":false,"properties":{
             "jobId":{"type":"string"},"requirementsSha256":{"type":"string"}},"required":["jobId","requirementsSha256"]});
-        let bytes = request_body(
+        let bytes = prepare_body(
             AuthenticationMethod::ApiKey,
             &snapshot(format),
             GenerationMode::Fuzzy,
@@ -708,7 +689,7 @@ mod web_search_tests {
         let snapshot = snapshot(Some(desegnos_core::CURRENT_REQUIREMENTS_FORMAT));
         let schema = desegnos_core::result_schema();
         for auth in [AuthenticationMethod::ApiKey, AuthenticationMethod::Chatgpt] {
-            let bytes = request_body(
+            let bytes = prepare_body(
                 auth,
                 &snapshot,
                 GenerationMode::Fuzzy,

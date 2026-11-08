@@ -11,7 +11,7 @@ use crate::{
 use desegnos_core::{GenerationCapabilities, GenerationMode, RequirementsSnapshot};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::{collections::BTreeMap, future::Future, pin::Pin, time::Duration};
+use std::{collections::BTreeMap, future::Future, pin::Pin};
 
 pub const DEFAULT_LOCAL_ENDPOINT: &str = "http://127.0.0.1:11434/v1";
 const DEEPSEEK_ENDPOINT: &str = "https://api.deepseek.com";
@@ -67,6 +67,12 @@ pub(crate) struct ProviderSpec {
     web_search: bool,
     local: bool,
     list_probe: bool,
+    /// ChatGPT account sign-in is offered.
+    sign_in: bool,
+    /// The OpenAI Image API is available.
+    image_api: bool,
+    /// The endpoint cannot be overridden in settings.
+    fixed_endpoint: bool,
     reasoning: ReasoningEffort,
     max_output: u32,
     catalogue: fn() -> Vec<ModelInfo>,
@@ -92,6 +98,7 @@ providers! {
         default_model: crate::MODEL_ID, auth: AuthHeader::Bearer,
         discovery: crate::model_discovery::STANDARD_DISCOVERY,
         wire: None, web_search: true, local: false, list_probe: false,
+        sign_in: true, image_api: true, fixed_endpoint: false,
         reasoning: ReasoningEffort::Medium, max_output: crate::DEFAULT_MAX_OUTPUT_TOKENS,
         catalogue: crate::model_catalogue,
     },
@@ -100,6 +107,7 @@ providers! {
         default_model: "claude-sonnet-5-5", auth: AuthHeader::Anthropic,
         discovery: crate::model_discovery::ANTHROPIC_DISCOVERY,
         wire: Some(WireProtocol::Anthropic), web_search: true, local: false, list_probe: false,
+        sign_in: false, image_api: false, fixed_endpoint: false,
         reasoning: ReasoningEffort::Medium, max_output: crate::DEFAULT_MAX_OUTPUT_TOKENS,
         catalogue: anthropic_catalogue,
     },
@@ -108,6 +116,7 @@ providers! {
         default_model: "gemini-3.8-flash", auth: AuthHeader::Google,
         discovery: crate::model_discovery::GOOGLE_DISCOVERY,
         wire: Some(WireProtocol::Google), web_search: true, local: false, list_probe: false,
+        sign_in: false, image_api: false, fixed_endpoint: false,
         reasoning: ReasoningEffort::Medium, max_output: crate::DEFAULT_MAX_OUTPUT_TOKENS,
         catalogue: google_catalogue,
     },
@@ -117,6 +126,7 @@ providers! {
         discovery: crate::model_discovery::OPENROUTER_DISCOVERY,
         wire: Some(WireProtocol::Chat { schema_in_prompt: false, require_parameters: true }),
         web_search: false, local: false, list_probe: true,
+        sign_in: false, image_api: false, fixed_endpoint: false,
         reasoning: ReasoningEffort::Medium, max_output: crate::DEFAULT_MAX_OUTPUT_TOKENS, catalogue: Vec::new,
     },
     Deepseek => ProviderSpec {
@@ -125,6 +135,7 @@ providers! {
         discovery: crate::model_discovery::STANDARD_DISCOVERY,
         wire: Some(WireProtocol::Chat { schema_in_prompt: true, require_parameters: false }),
         web_search: false, local: false, list_probe: true,
+        sign_in: false, image_api: false, fixed_endpoint: true,
         reasoning: ReasoningEffort::High, max_output: crate::MAX_OUTPUT_TOKENS, catalogue: deepseek_catalogue,
     },
     Local => ProviderSpec {
@@ -133,6 +144,7 @@ providers! {
         discovery: crate::model_discovery::LOCAL_DISCOVERY,
         wire: Some(WireProtocol::Chat { schema_in_prompt: false, require_parameters: false }),
         web_search: false, local: true, list_probe: true,
+        sign_in: false, image_api: false, fixed_endpoint: false,
         reasoning: ReasoningEffort::Medium, max_output: crate::DEFAULT_MAX_OUTPUT_TOKENS, catalogue: Vec::new,
     }
 }
@@ -148,7 +160,7 @@ impl ProviderId {
         GenerationCapabilities {
             web_search: self.spec().web_search,
             image_downloads: GenerationCapabilities::default().image_downloads,
-            image_generation: self.spec().wire.is_none().then(Default::default),
+            image_generation: self.spec().image_api.then(Default::default),
         }
     }
     pub fn capabilities_for(
@@ -188,7 +200,7 @@ impl ProviderId {
         if self.spec().local {
             local_endpoint(settings)?;
         }
-        if self == Self::Deepseek && settings.endpoint.is_some() {
+        if self.spec().fixed_endpoint && settings.endpoint.is_some() {
             return Err(ProviderError::before(ErrorKind::InvalidSettings));
         }
         settings.validate_limits(auth)
@@ -293,7 +305,7 @@ pub fn provider_catalogue() -> Vec<ProviderDescriptor> {
         .map(|id| ProviderDescriptor {
             id: *id,
             name: id.spec().name,
-            sign_in_supported: id.spec().wire.is_none(),
+            sign_in_supported: id.spec().sign_in,
             capabilities: id.capabilities(),
         })
         .collect()
@@ -594,7 +606,6 @@ struct KeyAdapter {
     id: ProviderId,
     client: reqwest::Client,
     endpoint: String,
-    deadline: Duration,
 }
 use crate::net::{DEADLINE, ERROR_BODY_LIMIT, IDLE as PROVIDER_IDLE, PROBE_IDLE};
 impl KeyAdapter {
@@ -603,10 +614,8 @@ impl KeyAdapter {
     }
 
     fn build(id: ProviderId, endpoint: &str, https: bool) -> Result<Self> {
-        // Same limits as the OpenAI transport: silence for 90 s or 20 minutes overall.
-        let deadline = DEADLINE;
         let client = crate::net::hardened_client(https)
-            .timeout(deadline)
+            .timeout(DEADLINE)
             .read_timeout(PROVIDER_IDLE)
             .connect_timeout(crate::net::CONNECT_TIMEOUT)
             .build()
@@ -615,7 +624,6 @@ impl KeyAdapter {
             id,
             client,
             endpoint: endpoint.into(),
-            deadline,
         })
     }
     fn authorized(
@@ -689,7 +697,7 @@ impl KeyAdapter {
                 self.endpoint, s.model
             ),
         };
-        let deadline = tokio::time::Instant::now() + self.deadline;
+        let deadline = tokio::time::Instant::now() + DEADLINE;
         let request = self.authorized(
             self.client
                 .post(path)
@@ -1650,6 +1658,7 @@ fn anthropic_usage(v: &Value, counts: &mut [u64; 4]) -> Result<TokenUsage> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
         net::TcpListener,

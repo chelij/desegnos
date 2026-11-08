@@ -53,7 +53,7 @@ export type ChatgptSignInStatus = "idle"
   | "cancelled"
   | "failed";
 
-export type ChatgptView = { accounts: Array<ChatgptAccount>, activeAccountId: string | null, signIn: ChatgptSignIn, models: Array<ChatgptModel>, modelsError: string | null, modelsProviderError: ProviderError | null, storageError: string | null, showWelcome: boolean, message: string | null, };
+export type ChatgptView = { accounts: Array<ChatgptAccount>, activeAccountId: string | null, signIn: ChatgptSignIn, models: Array<ChatgptModel>, modelsError: string | null, modelsProviderError: ProviderError | null, storageError: string | null, message: string | null, };
 
 export type ClassifiedAction = { "kind": "goTo", boundary: string, }
   | { "kind": "show", element: string, }

@@ -18,7 +18,6 @@ const MAX_FILES: usize = 1_500;
 const MAX_FILE_BYTES: u64 = desegnos_core::limits::MAX_WEBSITE_FILE_BYTES as u64;
 const MAX_TOTAL_BYTES: u64 = crate::source_files::MAX_WEBSITE_BYTES as u64;
 
-/// One renderable website snapshot: relative file names and the pages they serve.
 #[derive(Debug, Clone, Default)]
 pub struct WebsiteSnapshot {
     pub name: String,

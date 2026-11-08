@@ -3,7 +3,6 @@ use crate::public_fetch::{FetchRequest, PublicFetcher};
 use reqwest::Url;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
-/// Web address type used by the website fetcher (re-exported so callers need no HTTP dependency).
 pub use reqwest::Url as WebUrl;
 
 pub struct WebsiteFetcher {
@@ -35,7 +34,7 @@ impl WebsiteFetcher {
     }
 }
 
-use desegnos_core::limits::MAX_WEBSITE_FILE_BYTES as MAX_WEBSITE_IMAGE_BYTES;
+use desegnos_core::limits::{MAX_IMPORT_PAGES, MAX_WEBSITE_FILE_BYTES};
 use desegnos_storage::website_snapshot::{decode_html, decode_url_path, page_file, page_title};
 pub use desegnos_storage::{WebsitePage, WebsiteSnapshot};
 
@@ -111,9 +110,7 @@ fn enqueue_pages(
     queue.extend(candidates);
 }
 
-use desegnos_core::limits::MAX_IMPORT_PAGES as MAX_SNAPSHOT_PAGES;
 const MAX_SNAPSHOT_PAGE_BYTES: usize = 1024 * 1024;
-use desegnos_core::limits::MAX_IDENTITY_SOURCE_BYTES as MAX_SNAPSHOT_ASSET_BYTES;
 const MAX_DISCOVERED_PAGES: usize = 256;
 const MAX_SNAPSHOT_ASSETS: usize = 240;
 const MAX_SNAPSHOT_TOTAL_BYTES: usize = 96 * 1024 * 1024;
@@ -178,12 +175,11 @@ fn asset_file(url: &Url) -> Option<String> {
 
 fn localize_same_site(text: &str, origin: &Url) -> String {
     let prefix = origin.as_str().trim_end_matches('/');
-    let host = origin.host_str().unwrap_or_default();
-    let mut text = text.replace(prefix, "");
-    if !host.is_empty() {
-        text = text.replace(&format!("//{host}"), "");
+    let text = text.replace(prefix, "");
+    match origin.host_str() {
+        Some(host) => text.replace(&format!("//{host}"), ""),
+        None => text,
     }
-    text
 }
 
 impl WebsiteFetcher {
@@ -216,7 +212,7 @@ impl WebsiteFetcher {
         let mut total = 0usize;
         let mut assets: VecDeque<Url> = VecDeque::new();
         let mut asset_seen = BTreeSet::new();
-        while requests < MAX_SNAPSHOT_PAGES {
+        while requests < MAX_IMPORT_PAGES {
             let Some(url) = page_queue.pop_front() else {
                 break;
             };
@@ -265,13 +261,13 @@ impl WebsiteFetcher {
                     assets.push_back(asset);
                 }
             }
-            if page_queue.is_empty() || requests >= MAX_SNAPSHOT_PAGES {
+            if page_queue.is_empty() || requests >= MAX_IMPORT_PAGES {
                 break;
             }
         }
         if !page_queue.is_empty() {
             snapshot.skipped.push(format!(
-                "Only the first {MAX_SNAPSHOT_PAGES} same-site pages are imported"
+                "Only the first {MAX_IMPORT_PAGES} same-site pages are imported"
             ));
         }
         let mut downloaded = 0;
@@ -293,7 +289,7 @@ impl WebsiteFetcher {
                 .document(FetchRequest {
                     url: url.as_str(),
                     mimes: ASSET_MIMES,
-                    limit: MAX_SNAPSHOT_ASSET_BYTES,
+                    limit: MAX_WEBSITE_FILE_BYTES,
                     host_lock: None,
                 })
                 .await
@@ -341,8 +337,6 @@ impl WebsiteFetcher {
     }
 }
 
-/// Download one picture referenced by an imported page. Same public-address and size rules as
-/// every other Desegnos download; the bytes are capped before they reach the project store.
 impl WebsiteFetcher {
     pub async fn fetch_website_image(&self, source: &str) -> Result<(Vec<u8>, String), String> {
         let fetcher = &self.fetcher;
@@ -356,7 +350,7 @@ impl WebsiteFetcher {
                     "image/gif",
                     "image/svg+xml",
                 ],
-                limit: MAX_WEBSITE_IMAGE_BYTES,
+                limit: MAX_WEBSITE_FILE_BYTES,
                 host_lock: None,
             })
             .await

@@ -2539,7 +2539,7 @@ async fn chatgpt_accepts_verified_model_output_capacity_without_using_the_api_ca
         spending_limit_usd: 0.0,
         ..ProviderSettings::default()
     };
-    for output in [DEFAULT_MAX_OUTPUT_TOKENS + 1, MODEL_MAX_OUTPUT_TOKENS] {
+    for output in [DEFAULT_MAX_OUTPUT_TOKENS + 1, MAX_OUTPUT_TOKENS] {
         let mut completion = completed(&candidate(&frozen));
         completion["response"]["usage"] = json!({
             "input_tokens":211,"output_tokens":output,"total_tokens":211+u64::from(output)
@@ -2595,9 +2595,7 @@ async fn chatgpt_context_reserves_full_verified_model_output_capacity() {
     assert!(
         api.input_token_upper_bound + u64::from(DEFAULT_MAX_OUTPUT_TOKENS) <= CONTEXT_WINDOW_TOKENS
     );
-    assert!(
-        api.input_token_upper_bound + u64::from(MODEL_MAX_OUTPUT_TOKENS) > CONTEXT_WINDOW_TOKENS
-    );
+    assert!(api.input_token_upper_bound + u64::from(MAX_OUTPUT_TOKENS) > CONTEXT_WINDOW_TOKENS);
     let server = Server::start(Reply::sse(stream(&capacity))).await;
     assert_eq!(
         generate_plan(&server, &capacity, &settings)
@@ -3386,8 +3384,8 @@ async fn chatgpt_candidates_still_require_matching_identity_bounded_usage_and_no
     token_id["response"]["id"] = json!(format!("resp_{KEY}"));
     let mut excess_usage = completed(&candidate(&frozen));
     excess_usage["response"]["usage"] = json!({
-        "input_tokens":1,"output_tokens":MODEL_MAX_OUTPUT_TOKENS+1,
-        "total_tokens":2+u64::from(MODEL_MAX_OUTPUT_TOKENS)
+        "input_tokens":1,"output_tokens":MAX_OUTPUT_TOKENS+1,
+        "total_tokens":2+u64::from(MAX_OUTPUT_TOKENS)
     });
     let mut oversized = Reply::sse(vec![]);
     oversized.declared_length = Some(sse::MAX_STREAM_BYTES + 1);
@@ -3549,7 +3547,7 @@ fn a_picture_attachment_is_frozen_as_a_preview_and_sent_to_the_provider() {
     assert_eq!(frozen.images[0].attachment_id, "logo1");
     frozen.validate_current(&project).unwrap();
     let body: Value = serde_json::from_slice(
-        &crate::settings::request_body(
+        &crate::settings::prepare_body(
             AuthenticationMethod::ApiKey,
             &frozen,
             project.generation_mode,
@@ -3584,7 +3582,7 @@ fn attachment_previews_are_sent_as_low_detail_images_and_estimated_per_image() {
         transparent_percent: None,
     }];
     let body: Value = serde_json::from_slice(
-        &crate::settings::request_body(
+        &crate::settings::prepare_body(
             AuthenticationMethod::ApiKey,
             &frozen,
             GenerationMode::Strict,

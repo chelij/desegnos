@@ -278,12 +278,6 @@ impl ChatgptManager {
         }
         let active = metadata.active;
         let selected = accounts.iter().find(|account| Some(account.id) == active);
-        let show_welcome = selected
-            .is_some_and(|account| account.connected && account.plan_enabled)
-            && metadata
-                .registrations
-                .iter()
-                .any(|registration| Some(registration.id) == active && !registration.welcomed);
         let can_use_plan = selected.is_some_and(|account| {
             account.connected && account.plan_enabled && !account.storage_repair_required
         });
@@ -309,7 +303,6 @@ impl ChatgptManager {
             } else {
                 state.storage_error.clone()
             },
-            show_welcome,
             message: state.message.clone(),
         }
     }
@@ -634,7 +627,6 @@ impl ChatgptManager {
             reconnect_required: true,
             refresh_pending: None,
             last_plan_enabled: None,
-            welcomed: false,
         };
         metadata.registrations.push(registration.clone());
         self.inner.store.write(&metadata)?;
@@ -667,38 +659,6 @@ impl ChatgptManager {
             .cancel("Pending sign-in was cancelled when you selected a saved account.");
         state.metadata = metadata;
         drop(state);
-        drop(_lease);
-        drop(_gate);
-        Ok(self.view().await)
-    }
-    pub async fn acknowledge_welcome(&self) -> ChatgptResult<ChatgptView> {
-        let _gate = self.inner.gate.lock().await;
-        let cancellation = CancellationToken::new();
-        let _lease = self.lease(&cancellation).await?;
-        let mut metadata = self.inner.store.read()?;
-        if let Some(id) = metadata.active {
-            let registration = metadata.registration(id)?;
-            let session = self.inner.state.lock().await.sessions.get(&id).cloned();
-            let tokens = match session {
-                Some(tokens) => tokens,
-                None if registration.system_stored => self
-                    .load_system(&metadata, registration)
-                    .await?
-                    .ok_or(Kind::Reconnect)?,
-                None => return Err(Kind::Reconnect.into()),
-            };
-            if registration.reconnect_required || !tokens.plan_enabled() {
-                return Err(Kind::PlanPermission.into());
-            }
-            let registration = metadata
-                .registrations
-                .iter_mut()
-                .find(|value| value.id == id)
-                .ok_or(Kind::Storage)?;
-            registration.welcomed = true;
-            self.inner.store.write(&metadata)?;
-        }
-        self.inner.state.lock().await.metadata = metadata;
         drop(_lease);
         drop(_gate);
         Ok(self.view().await)
