@@ -1,4 +1,7 @@
-use crate::*;
+use crate::{
+    Error, Result, limits::MAX_POINTERS, model::Pointer, model::PointerKind, model::PointerSource,
+    model::PointerTarget, model::Project, validation::ensure,
+};
 use uuid::Uuid;
 
 impl Project {
@@ -12,7 +15,10 @@ impl Project {
     pub(crate) fn add_pointer(&mut self, pointer: Pointer) -> Result<()> {
         ensure(
             self.pointers.len() < MAX_POINTERS,
-            "A project holds at most 1,000 pointers.",
+            format!(
+                "A project holds at most {} pointers.",
+                crate::limits::MAX_POINTERS
+            ),
         )?;
         ensure(
             !self

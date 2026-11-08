@@ -7,8 +7,8 @@ use crate::{
 use desegnos_core::RequirementsSnapshot;
 use serde_json::{Value, json};
 
-pub use desegnos_core::MAX_IDENTITY_ASSETS as MAX_IDENTITY_IMAGES;
 pub use desegnos_core::limits::{
+    MAX_IDENTITY_ASSETS as MAX_IDENTITY_IMAGES,
     MAX_IDENTITY_LOGO_URI_BYTES as MAX_IDENTITY_IMAGE_URI_BYTES,
     MAX_IDENTITY_LOGO_URI_TOTAL_BYTES as MAX_IDENTITY_IMAGE_URI_TOTAL_BYTES,
     MAX_IDENTITY_PHOTO_URI_BYTES,

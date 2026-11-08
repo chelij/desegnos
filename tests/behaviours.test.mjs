@@ -78,11 +78,10 @@ try {
     for (const clash of ['codeChanged', 'contradicts', 'broken']) assert.equal(behaviourStateLabel(clash), '');
   });
 
-  await test('Play previews a web or app screen that carries behaviours or non-simple changes', () => {
+  await test('Play previews a web page that carries behaviours or non-simple changes', () => {
     assert.equal(playShouldPreview(project([]), 'home'), false);
     assert.equal(playShouldPreview(project([pointer()]), 'home'), true);
     assert.equal(playShouldPreview(project([pointer({ from: boundarySource() })]), 'home'), true);
-    assert.equal(playShouldPreview(project([pointer(), page('home', 'appScreen')]), 'home'), true);
     // A layer on another boundary is not the boundary Play would run.
     assert.equal(playShouldPreview(project([pointer({ from: elementSource('other', 'a'), to: elementSource('other', 'a') })], [page('home'), page('other')]), 'home'), false);
     // Slides and images render without code, so Play keeps its own behaviour.

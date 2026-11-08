@@ -121,7 +121,7 @@ impl GenerationJobStore {
             regular_file(&markdown, RECORD)?;
             let file = File::open(&markdown).map_err(message)?;
             if file.metadata().map_err(message)?.len()
-                > desegnos_core::MAX_REQUIREMENTS_BYTES as u64
+                > desegnos_core::limits::MAX_REQUIREMENTS_BYTES as u64
             {
                 return Err(
                     "The frozen requirements file exceeds its limit. The original was preserved."
@@ -129,7 +129,7 @@ impl GenerationJobStore {
                 );
             }
             let mut existing = vec![];
-            file.take(desegnos_core::MAX_REQUIREMENTS_BYTES as u64 + 1)
+            file.take(desegnos_core::limits::MAX_REQUIREMENTS_BYTES as u64 + 1)
                 .read_to_end(&mut existing)
                 .map_err(message)?;
             if existing != primary.markdown.as_bytes() {
@@ -139,7 +139,7 @@ impl GenerationJobStore {
             write_text(&markdown, &primary.markdown).map_err(message)?;
         }
         if let Some(context) = &record.view.context {
-            if context.markdown.len() > desegnos_core::MAX_REQUIREMENTS_BYTES
+            if context.markdown.len() > desegnos_core::limits::MAX_REQUIREMENTS_BYTES
                 || context.sha256 != digest(context.markdown.as_bytes())
                 || context.job_id != record.view.job_id
                 || !context
@@ -152,7 +152,7 @@ impl GenerationJobStore {
             if path.exists() {
                 regular_file(&path, RECORD)?;
                 if fs::metadata(&path).map_err(message)?.len()
-                    > desegnos_core::MAX_REQUIREMENTS_BYTES as u64
+                    > desegnos_core::limits::MAX_REQUIREMENTS_BYTES as u64
                     || fs::read(&path).map_err(message)? != context.markdown.as_bytes()
                 {
                     return Err(
@@ -214,7 +214,7 @@ impl GenerationJobStore {
             || view.job_id != job_id
             || view.requirements.project_id != project_id
             || view.requirements.job_id != job_id
-            || view.requirements.markdown.len() > desegnos_core::MAX_REQUIREMENTS_BYTES
+            || view.requirements.markdown.len() > desegnos_core::limits::MAX_REQUIREMENTS_BYTES
             || view.requirements.sha256 != digest(view.requirements.markdown.as_bytes())
         {
             return Err("The saved generation record is invalid.".into());

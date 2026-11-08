@@ -3,7 +3,7 @@ use crate::{
     ApiKey, CancellationToken, ErrorKind, OpenAiClient, ProviderError, Result, SubmissionOutcome,
 };
 use base64::{Engine, engine::general_purpose::STANDARD};
-use desegnos_core::MAX_DOWNLOADED_IMAGE_BYTES;
+use desegnos_core::limits::MAX_DOWNLOADED_IMAGE_BYTES;
 use image::{ImageFormat, ImageReader, Limits};
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, io::Cursor};

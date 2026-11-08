@@ -14,8 +14,8 @@ pub const MAX_OUTPUT_TOKENS: u32 = MODEL_MAX_OUTPUT_TOKENS;
 pub const DEFAULT_MAX_OUTPUT_TOKENS: u32 = 32_768;
 /// ChatGPT plans ignore `max_output_tokens`, so only their reply text keeps this allowance.
 pub const CHATGPT_MAX_OUTPUT_TOKENS: u32 = 32_768;
-pub use desegnos_core::MAX_GENERATION_BYTES as MAX_OUTPUT_BYTES;
-pub use desegnos_core::MAX_REQUIREMENTS_BYTES;
+pub use desegnos_core::limits::MAX_GENERATION_BYTES as MAX_OUTPUT_BYTES;
+pub use desegnos_core::limits::MAX_REQUIREMENTS_BYTES;
 pub const MAX_REQUEST_BYTES: usize = 16 * 1024 * 1024;
 pub const CONTEXT_WINDOW_TOKENS: u64 = 1_050_000;
 /// A context window is metered in tokens, and a wire byte is not a token: JSON, schema text and
@@ -414,7 +414,7 @@ fn generation_body(
         .map_err(|_| ProviderError::before(ErrorKind::InvalidRequirements))?
         .into_iter()
         .sum::<usize>();
-    let reserve = snapshot.images.len() as u64 * desegnos_core::AI_PREVIEW_TOKEN_RESERVE;
+    let reserve = snapshot.images.len() as u64 * desegnos_core::limits::AI_PREVIEW_TOKEN_RESERVE;
     let mut estimate = estimate_response_value(
         authentication,
         body.len() - preview_bytes,
@@ -437,7 +437,7 @@ fn generation_body(
 /// Picture previews are billed per image, not per Base64 byte: estimate the request without
 /// them and reserve a fixed number of tokens for each instead.
 pub(crate) fn without_previews(snapshot: &RequirementsSnapshot) -> (RequirementsSnapshot, u64) {
-    let reserve = snapshot.images.len() as u64 * desegnos_core::AI_PREVIEW_TOKEN_RESERVE;
+    let reserve = snapshot.images.len() as u64 * desegnos_core::limits::AI_PREVIEW_TOKEN_RESERVE;
     let mut counted = snapshot.clone();
     counted.images.clear();
     (counted, reserve)

@@ -9,7 +9,7 @@ use crate::source_files::{
 use crate::{io, load_project};
 
 use base64::{Engine, engine::general_purpose::STANDARD};
-use desegnos_core::{Error, MAX_PROJECT_PHOTO_BYTES, ProjectPhoto, Result, digest};
+use desegnos_core::{Error, limits::MAX_PROJECT_PHOTO_BYTES, ProjectPhoto, Result, digest};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -23,7 +23,7 @@ const MAX_ENTRIES: usize = 4096;
 const MAX_FILES: usize = 128;
 const MAX_TEXT_BYTES: usize = 256 * 1024;
 const MAX_TOTAL_TEXT: usize = 2 * 1024 * 1024;
-use desegnos_core::MAX_IDENTITY_ASSETS as MAX_ASSETS;
+use desegnos_core::limits::MAX_IDENTITY_ASSETS as MAX_ASSETS;
 use desegnos_core::limits::MAX_IDENTITY_LOGO_BYTES as MAX_ASSET_BYTES;
 use desegnos_core::limits::MAX_IDENTITY_LOGO_URI_TOTAL_BYTES as MAX_ASSET_URI_BYTES;
 use desegnos_core::limits::MAX_IDENTITY_SOURCE_BYTES as MAX_COLLECTED_BYTES;

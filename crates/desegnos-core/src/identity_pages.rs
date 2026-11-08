@@ -1,5 +1,5 @@
 //! Source routes are evidence; they never grant file or network access.
-use crate::{SourcePage, SourcePageRef};
+use crate::{identity::SourcePage, identity::SourcePageRef};
 use dom_query::Document;
 use url::Url;
 
@@ -277,12 +277,12 @@ pub fn page_references_image(file: &str, text: &str, image: &str) -> bool {
 }
 
 pub fn validate_source_page_ref(page: &SourcePageRef) -> crate::Result<()> {
-    crate::model::validate_text(&page.title, "Source page title", 240, true)?;
-    crate::ensure(
+    crate::validation::validate_text(&page.title, "Source page title", 240, true)?;
+    crate::validation::ensure(
         page.path == source_page_path(&page.path),
         "A source page has an invalid path.",
     )?;
-    crate::ensure(
+    crate::validation::ensure(
         page.url
             .as_ref()
             .is_none_or(|url| crate::limits::valid_http_url(url)),

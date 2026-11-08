@@ -11,18 +11,22 @@ test('Tauri launcher normalizes CI=1 and preserves other CI values', async () =>
   try {
     await mkdir(join(directory, 'scripts'));
     await mkdir(join(directory, 'node_modules/@tauri-apps/cli'), { recursive: true });
-    for (const name of ['tauri.mjs']) {
-      await copyFile(new URL(`../scripts/${name}`, import.meta.url), join(directory, 'scripts', name));
-    }
+    await copyFile(new URL('../scripts/run.mjs', import.meta.url), join(directory, 'scripts/run.mjs'));
     await writeFile(join(directory, 'scripts/toolchain.mjs'), 'export const toolchainEnvironment = () => ({ ...process.env });\n');
     await writeFile(join(directory, 'node_modules/@tauri-apps/cli/tauri.js'), 'console.log(JSON.stringify({ ci: process.env.CI, args: process.argv.slice(2) }));\n');
     for (const [input, expected] of [['1', 'true'], ['true', 'true'], ['false', 'false'], ['0', '0']]) {
-      const result = spawnSync(process.execPath, ['scripts/tauri.mjs', 'build', '--help'], {
+      const result = spawnSync(process.execPath, ['scripts/run.mjs', 'tauri', 'build', '--help'], {
         cwd: directory, env: { ...process.env, CI: input }, encoding: 'utf8',
       });
       assert.ifError(result.error);
       assert.equal(result.status, 0, result.stderr);
       assert.deepEqual(JSON.parse(result.stdout), { ci: expected, args: ['build', '--help'] });
     }
+    const forwarded = spawnSync(process.execPath, ['scripts/run.mjs', process.execPath, '-e',
+      'console.log(JSON.stringify(process.argv.slice(1))); process.exit(17);', 'argument with spaces'],
+      { cwd: directory, encoding: 'utf8' });
+    assert.ifError(forwarded.error);
+    assert.equal(forwarded.status, 17, forwarded.stderr);
+    assert.deepEqual(JSON.parse(forwarded.stdout), ['argument with spaces']);
   } finally { await rm(directory, { recursive: true, force: true }); }
 });

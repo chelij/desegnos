@@ -155,7 +155,7 @@ fn candidate_status(text: &str, record: &mut JobRecord, original: &Project) -> J
                 .view
                 .validation_events
                 .push(desegnos_core::ValidationEvent {
-                    kind: desegnos_core::validation_failure_kind(&error),
+                    kind: error.kind,
                     disposition: "conflicted".into(),
                     element_id,
                     message: error.to_string(),
@@ -170,7 +170,7 @@ fn candidate_status(text: &str, record: &mut JobRecord, original: &Project) -> J
                 .view
                 .validation_events
                 .push(desegnos_core::ValidationEvent {
-                    kind: desegnos_core::validation_failure_kind(&error),
+                    kind: error.kind,
                     disposition: "conflicted".into(),
                     element_id: None,
                     message: error.to_string(),
@@ -578,7 +578,7 @@ impl GenerationService {
             || record.view.requirements.job_id != latest.job_id
             || record.view.requirements.sha256
                 != digest(record.view.requirements.markdown.as_bytes())
-            || record.view.areas.len() > desegnos_core::MAX_GENERATION_REQUESTS
+            || record.view.areas.len() > desegnos_core::limits::MAX_GENERATION_REQUESTS
             // Areas are the distinct layers requested; several requests may share one layer.
             || record.view.requirements.target_ids().map_or(true, |targets| targets.len() != record.view.areas.len())
             || record.view.areas.iter().any(|area| {

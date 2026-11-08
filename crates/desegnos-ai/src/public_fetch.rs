@@ -175,7 +175,7 @@ pub(crate) fn public_address(ip: IpAddr) -> bool {
 mod tests {
     use super::*;
     use base64::{Engine, engine::general_purpose::STANDARD};
-    use desegnos_core::MAX_DOWNLOADED_IMAGE_BYTES;
+    use desegnos_core::limits::MAX_DOWNLOADED_IMAGE_BYTES;
     use image::ImageFormat;
     use std::io::Cursor;
     #[cfg(test)]

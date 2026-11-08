@@ -265,7 +265,6 @@ fn applying_a_generation_reply_is_one_undo_step() {
     session.undo().unwrap();
     let (_, undone) = session.project().element(target).unwrap();
     assert!(undone.children.is_empty());
-    let _ = undone;
     assert!(session.project().element_has_pending_request(target));
     assert!(session.project().pointers[0].play.is_none());
     session.redo().unwrap();
@@ -590,7 +589,7 @@ fn set_behaviour_rejects_boundary_without_a_boundary_request_and_oversized_text(
     let mut reply = candidate(&snapshot, target, page, project.pointers[0].id);
     reply.requests[0].operations = vec![desegnos_core::ElementOperation::SetBehaviour {
         element_id: Some(target),
-        behaviour: "x".repeat(desegnos_core::MAX_PROMPT_CHARS + 1),
+        behaviour: "x".repeat(desegnos_core::limits::MAX_PROMPT_CHARS + 1),
     }];
     assert!(
         reply
@@ -1088,7 +1087,6 @@ fn a_slide_or_image_boundary_still_rejects_a_layer_below_its_height() {
     for output in [
         desegnos_core::OutputType::Slide,
         desegnos_core::OutputType::Image,
-        desegnos_core::OutputType::AppScreen,
     ] {
         let (project, page, request) = blank_page_request(Some(output));
         let snapshot = project.prepare_requirements().unwrap();

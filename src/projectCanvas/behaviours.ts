@@ -74,7 +74,7 @@ export function behaviourStateLabel(state: PointerStateKind): string {
 /** Behaviours and non-simple changes only run as exported code, so Play previews them instead. */
 export function playShouldPreview(project: Project, pageId: string): boolean {
   const page = project.pages.find(item => item.id === pageId);
-  if (!page || (page.output !== 'webpage' && page.output !== 'appScreen')) return false;
+  if (!page || (page.output !== 'webpage')) return false;
   return (project.pointers ?? []).some(pointer => pointer.from.pageId === pageId
     && (isBehaviour(pointer) || (pointer.kind === 'change' && !pointer.play)));
 }

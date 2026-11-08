@@ -1,18 +1,13 @@
-use crate::{Error, Project, Result, digest, ensure, model::validate_text};
-use quick_xml::{Reader, events::Event};
+use crate::limits::{
+    MAX_IDENTITY_ASSET_BYTES, MAX_IDENTITY_ASSETS, MAX_IMPORTED_ITEMS, MAX_PHOTO_DESCRIPTION_CHARS,
+    MAX_PROJECT_PHOTO_BYTES,
+};
+use crate::{
+    Result, model::Project, validation::digest, validation::ensure, validation::validate_text,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use uuid::Uuid;
-
-pub use crate::limits::MAX_IDENTITY_ASSET_BYTES;
-pub use crate::limits::MAX_IDENTITY_ASSETS;
-pub use crate::limits::MAX_PHOTO_DESCRIPTION_CHARS;
-/// The user's own pictures from an imported folder (portfolio photos, products, team).
-pub use crate::limits::MAX_PROJECT_PHOTO_BYTES;
-
-/// Existing work and pages found in imported sources (projects, tutorials, articles), so
-/// generation knows what exists and where to link.
-pub use crate::limits::MAX_IMPORTED_ITEMS;
 
 #[derive(ts_rs::TS, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -77,7 +72,7 @@ impl ImportedItem {
         )?;
         validate_text(&self.title, "Imported item title", 160, true)?;
         for page in &self.source_pages {
-            crate::validate_source_page_ref(page)?;
+            crate::identity_pages::validate_source_page_ref(page)?;
         }
         validate_text(&self.summary, "Imported item summary", 300, false)?;
         validate_text(&self.url, "Imported item link", 2048, false)?;
@@ -113,7 +108,7 @@ impl ProjectPhoto {
             "A project photo needs a valid identifier.",
         )?;
         for page in &self.source_pages {
-            crate::validate_source_page_ref(page)?;
+            crate::identity_pages::validate_source_page_ref(page)?;
         }
         validate_text(&self.name, "Photo name", 240, true)?;
         validate_text(
@@ -130,10 +125,11 @@ impl ProjectPhoto {
             (1..=4096).contains(&self.width) && (1..=4096).contains(&self.height),
             "A project photo has an invalid size.",
         )?;
-        let encoded = self
-            .data_uri
-            .strip_prefix("data:image/jpeg;base64,")
-            .ok_or_else(|| Error("A project photo must be an embedded JPEG.".into()))?;
+        let (mime, encoded) = crate::limits::split_image_data_uri(&self.data_uri)?;
+        ensure(
+            mime == "image/jpeg",
+            "A project photo must be an embedded JPEG.",
+        )?;
         ensure(
             !encoded.is_empty()
                 && encoded.len() <= crate::limits::base64_encoded_len(MAX_PROJECT_PHOTO_BYTES),
@@ -199,10 +195,11 @@ impl IdentityAsset {
             ),
             "Identity images must be PNG, JPEG, WebP, GIF, or SVG.",
         )?;
-        let prefix = format!("data:{};base64,", self.mime);
-        let encoded = self.data_uri.strip_prefix(&prefix).ok_or_else(|| {
-            Error("An identity image must use a matching embedded base64 data URI.".into())
-        })?;
+        let (mime, encoded) = crate::limits::split_image_data_uri(&self.data_uri)?;
+        ensure(
+            mime == self.mime,
+            "An identity image must use a matching media type.",
+        )?;
         ensure(
             !encoded.is_empty()
                 && encoded.len() <= crate::limits::base64_encoded_len(MAX_IDENTITY_ASSET_BYTES),
@@ -255,7 +252,7 @@ impl ImportedIdentity {
         validate_text(
             &self.summary,
             "Imported identity summary",
-            crate::MAX_PROMPT_CHARS,
+            crate::limits::MAX_PROMPT_CHARS,
             true,
         )?;
         ensure(
@@ -283,17 +280,20 @@ impl ImportedIdentity {
         }
         ensure(
             self.content.len() <= MAX_IMPORTED_ITEMS,
-            "A project keeps at most 64 imported content items.",
+            format!(
+                "A project keeps at most {} imported content items.",
+                crate::limits::MAX_IMPORTED_ITEMS
+            ),
         )?;
         for item in &self.content {
             item.validate()?;
         }
         ensure(
-            self.pages.len() <= crate::MAX_PAGES * crate::MAX_PAGES,
+            self.pages.len() <= crate::limits::MAX_PAGES * crate::limits::MAX_PAGES,
             "Too many imported page contexts.",
         )?;
         for page in &self.pages {
-            crate::validate_source_page_ref(&page.source.reference())?;
+            crate::identity_pages::validate_source_page_ref(&page.source.reference())?;
             ensure(
                 page.content.len() <= MAX_IMPORTED_ITEMS,
                 "Too many work items on an imported page.",
@@ -333,8 +333,8 @@ impl Project {
             "Choose at least one finding, logo, photo or content item to import.",
         )?;
         let mut next = self.clone();
-        next.store_inline_images()?;
-        next.revision = crate::limits::next_revision(revision)?;
+        next.prune_picture_store()?;
+        next.revision = crate::session::next_revision(revision)?;
         for (topic, value) in &context.findings {
             let (topic, value) = (topic.trim(), value.trim());
             let normalized = topic.to_lowercase();
@@ -345,7 +345,7 @@ impl Project {
                 next.brief.tone = value.into();
             }
             match next.decisions.iter_mut().find(|decision| {
-                decision.scope == crate::Scope::Project
+                decision.scope == crate::model::Scope::Project
                     && decision.topic.eq_ignore_ascii_case(topic)
             }) {
                 Some(existing) if existing.protected => {}
@@ -353,11 +353,11 @@ impl Project {
                     existing.value = value.into();
                     existing.accepted_at_revision = next.revision;
                 }
-                None => next.decisions.push(crate::Decision {
+                None => next.decisions.push(crate::model::Decision {
                     id: uuid::Uuid::new_v4(),
                     topic: topic.into(),
                     value: value.into(),
-                    scope: crate::Scope::Project,
+                    scope: crate::model::Scope::Project,
                     protected: false,
                     accepted_at_revision: next.revision,
                 }),
@@ -398,7 +398,7 @@ impl Project {
                 existing.summary = summary
                     .chars()
                     .rev()
-                    .take(crate::MAX_PROMPT_CHARS)
+                    .take(crate::limits::MAX_PROMPT_CHARS)
                     .collect::<Vec<_>>()
                     .into_iter()
                     .rev()
@@ -419,121 +419,6 @@ impl Project {
         next.validate()?;
         Ok(next)
     }
-}
-
-// Imported SVGs are portable images, not documents with scripts, external resources,
-// animation, or HTML. Attribute values are XML-decoded before reference checks.
-pub(crate) fn validate_svg(bytes: &[u8]) -> Result<()> {
-    let source = std::str::from_utf8(bytes)
-        .map_err(|_| Error("An SVG identity image must be UTF-8.".into()))?;
-    let mut reader = Reader::from_str(source);
-    let mut depth = 0_usize;
-    let mut elements = 0_usize;
-    let mut root_seen = false;
-    let mut style: Option<(usize, String)> = None;
-    loop {
-        let event = reader
-            .read_event()
-            .map_err(|_| Error("An SVG identity image contains invalid XML.".into()))?;
-        let is_start = matches!(event, Event::Start(_));
-        match event {
-            Event::Start(ref element) | Event::Empty(ref element) => {
-                ensure(style.is_none(), "An SVG style block cannot contain child elements.")?;
-                elements += 1;
-                ensure(elements <= 20_000 && depth < 128, "An SVG identity image is too complex.")?;
-                let name = element.name();
-                let name = name.as_ref();
-                if depth == 0 {
-                    ensure(!root_seen && name == "svg", "An SVG identity image needs one SVG root.")?;
-                    root_seen = true;
-                }
-                ensure(matches!(name,
-                    "svg" | "style" | "g" | "defs" | "symbol" | "use" | "title" | "desc" | "path" | "rect" | "circle" | "ellipse" | "line" | "polyline" | "polygon" | "text" | "tspan" | "textPath" | "clipPath" | "mask" | "linearGradient" | "radialGradient" | "stop" | "pattern" | "marker" | "filter" | "feBlend" | "feColorMatrix" | "feComponentTransfer" | "feComposite" | "feConvolveMatrix" | "feDiffuseLighting" | "feDisplacementMap" | "feDistantLight" | "feDropShadow" | "feFlood" | "feFuncA" | "feFuncB" | "feFuncG" | "feFuncR" | "feGaussianBlur" | "feMerge" | "feMergeNode" | "feMorphology" | "feOffset" | "fePointLight" | "feSpecularLighting" | "feSpotLight" | "feTile" | "feTurbulence" | "view"),
-                    "An SVG identity image contains unsupported active or external content.")?;
-                for attribute in element.attributes() {
-                    let attribute = attribute.map_err(|_| Error("An SVG identity image has invalid attributes.".into()))?;
-                    let name = attribute.key.as_ref().to_ascii_lowercase();
-                    let value = attribute.normalized_value(quick_xml::XmlVersion::Implicit1_0).map_err(|_| Error("An SVG identity image has an invalid attribute value.".into()))?;
-                    ensure(!name.starts_with("on") && name != "xml:base", "An SVG identity image cannot contain event handlers or a base URL.")?;
-                    if name == "xmlns" || name == "xmlns:xlink" {
-                        ensure(value == "http://www.w3.org/2000/svg" || value == "http://www.w3.org/1999/xlink", "An SVG identity image has an unsupported namespace.")?;
-                    } else if name == "href" || name == "xlink:href" {
-                        ensure(value.starts_with('#') && !value.chars().any(char::is_whitespace), "An SVG identity image cannot reference external resources.")?;
-                    } else {
-                        validate_svg_paint(&value)?;
-                    }
-                }
-                if is_start { depth += 1; }
-                if name == "style" && is_start { style = Some((depth, String::new())); }
-            }
-            Event::End(_) => {
-                if style.as_ref().is_some_and(|(style_depth, _)| *style_depth == depth) {
-                    let (_, css) = style.take().ok_or_else(|| Error("Invalid SVG style block.".into()))?;
-                    validate_svg_paint(&css)?;
-                }
-                depth = depth.checked_sub(1).ok_or_else(|| Error("An SVG identity image has an invalid element structure.".into()))?;
-            }
-            Event::Text(text) => {
-                ensure(depth > 0 || text.as_ref().chars().all(char::is_whitespace), "An SVG identity image has content outside its root.")?;
-                if let Some((_, css)) = &mut style { css.push_str(text.as_ref()); }
-            }
-            Event::Decl(declaration) => {
-                ensure(!root_seen && declaration.version().is_ok_and(|value| value == "1.0"), "An SVG declaration must use XML 1.0 and precede the root.")?;
-                if let Some(encoding) = declaration.encoding() {
-                    ensure(encoding.is_ok_and(|value| value.eq_ignore_ascii_case("utf-8")), "An SVG identity image must declare UTF-8 encoding.")?;
-                }
-            },
-            Event::Comment(_) => {},
-            Event::CData(text) => {
-                ensure(depth > 0, "An SVG identity image has text outside its root.")?;
-                if let Some((_, css)) = &mut style { css.push_str(text.as_ref()); }
-            },
-            Event::GeneralRef(reference) => {
-                let value = reference.as_ref();
-                let character = reference.resolve_char_ref().map_err(|_| Error("Invalid SVG character reference.".into()))?;
-                ensure(depth > 0 && (matches!(value, "amp" | "lt" | "gt" | "quot" | "apos") || character.is_some()), "An SVG identity image cannot contain custom entities.")?;
-                if let Some((_, css)) = &mut style {
-                    if let Some(character) = character { css.push(character); }
-                    else if let Some(value) = quick_xml::escape::resolve_predefined_entity(value) { css.push_str(value); }
-                }
-            },
-            Event::Eof => break,
-            _ => return Err(Error("An SVG identity image cannot contain external entities, processing instructions, or document types.".into())),
-        }
-    }
-    ensure(
-        root_seen && depth == 0,
-        "An SVG identity image has an incomplete root.",
-    )
-}
-
-fn validate_svg_paint(value: &str) -> Result<()> {
-    let lower = value.to_ascii_lowercase();
-    // Reject CSS escapes/imports and every non-fragment URL; alternate spellings
-    // must not conceal a resource request. The original image bytes stay intact.
-    ensure(
-        !value.contains('\\')
-            && !lower.contains('@')
-            && !lower.contains("javascript:")
-            && !lower.contains("https:")
-            && !lower.contains("http:")
-            && !lower.contains("data:")
-            && !lower.contains("//"),
-        "An SVG identity image cannot reference external resources.",
-    )?;
-    let mut rest = lower.as_str();
-    while let Some((_, after)) = rest.split_once("url(") {
-        let (reference, tail) = after.split_once(')').ok_or_else(|| {
-            Error("An SVG identity image contains an invalid paint reference.".into())
-        })?;
-        let reference = reference.trim().trim_matches(['\'', '"']);
-        ensure(
-            reference.starts_with('#') && !reference.chars().any(char::is_whitespace),
-            "An SVG identity image cannot reference external resources.",
-        )?;
-        rest = tail;
-    }
-    Ok(())
 }
 
 pub fn raster_dimensions(mime: &str, bytes: &[u8]) -> Option<(u32, u32)> {

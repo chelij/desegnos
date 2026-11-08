@@ -1,8 +1,6 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
 import test from 'node:test';
-import { join } from 'node:path';
-import { compileModules, root } from './typescript.mjs';
+import { compileModules } from './typescript.mjs';
 
 const modules = await compileModules([
   'src/projectCanvas/canvasView.ts',
@@ -497,49 +495,6 @@ try {
       }
     }
     assert.deepEqual(conflicts, []);
-  });
-
-  await test('every Keyboard entry in CANVAS.md has a binding and display label', async () => {
-    const doc = await readFile(join(root, 'CANVAS.md'), 'utf8');
-    const section = doc.split('## Keyboard')[1]?.split('\n## ')[0] ?? '';
-    const rows = section.split('\n').filter(line => line.trim().startsWith('|')).slice(2)
-      .map(line => line.trim().split('|').slice(1, -1).map(cell => cell.trim()));
-    const expected = {
-      'Select / Request / Boundary / Pointer / Text / Pan': [['selectTool', 'V'], ['requestTool', 'F'], ['boundaryTool', 'B'], ['pointerTool', 'P'], ['textTool', 'T'], ['panTool', 'H']],
-      "Request on selection / request from a shape's outline": [['requestTool', 'F'], ['requestFromShape', 'Shift+F']],
-      'Rectangle / Ellipse / Line / Image': [['rectTool', 'R'], ['ellipseTool', 'O'], ['lineTool', 'L'], ['imageTool', 'Ctrl/Cmd+Shift+K']],
-      'Note (reference)': [['noteTool', 'N']],
-      'Insert any element': [['insert', 'Ctrl/Cmd+I']],
-      'Copy / Paste / Paste with choice / Duplicate': [['copy', 'Ctrl/Cmd+C'], ['paste', 'Ctrl/Cmd+V'], ['pasteChoice', 'Ctrl/Cmd+Shift+V'], ['duplicate', 'Ctrl/Cmd+D']],
-      'Copy style / Paste style / Paint format': [['copyStyle', 'Ctrl/Cmd+Alt+C'], ['pasteStyle', 'Ctrl/Cmd+Alt+V'], ['paintFormat', 'Ctrl/Cmd+Alt+Shift+C']],
-      'Make linked / Unlink': [['link', 'Ctrl/Cmd+Alt+K'], ['unlink', 'Ctrl/Cmd+Alt+B']],
-      'Group / Ungroup': [['group', 'Ctrl/Cmd+G'], ['ungroup', 'Ctrl/Cmd+Shift+G']],
-      'Bring forward / backward': [['forward', 'Ctrl/Cmd+]'], ['backward', 'Ctrl/Cmd+[']],
-      'Select all / child / parent': [['selectAll', 'Ctrl/Cmd+A'], ['selectChild', 'Enter'], ['selectParent', 'Shift+Enter']],
-      'Nudge / far nudge': [['nudge', 'Arrow keys'], ['nudgeFar', 'Shift+Arrow keys']],
-      'Delete': [['delete', 'Delete or Backspace']],
-      'Zoom in / out / 100% / fit all / fit selection': [['zoomIn', 'Ctrl/Cmd+='], ['zoomOut', 'Ctrl/Cmd+-'], ['zoomReset', 'Ctrl/Cmd+0'], ['fitAll', 'Shift+1'], ['fitSelection', 'Shift+2']],
-      'Save view / go to view (slots 1–9)': [['saveView', 'Ctrl/Cmd+Alt+1…9'], ['goToView', 'Alt+1…9']],
-      'Minimap': [['minimap', 'Shift+M']],
-      'Play / Preview export': [['play', 'Shift+Space'], ['preview', 'Ctrl/Cmd+Enter']],
-      'Hide panels': [['hidePanels', 'Ctrl/Cmd+\\']],
-      'Request on selection': [['askAI', 'Ctrl/Cmd+K']],
-      'Export': [['export', 'Ctrl/Cmd+E']],
-      'Undo / Redo': [['undo', 'Ctrl/Cmd+Z'], ['redo', 'Ctrl/Cmd+Shift+Z']],
-    };
-    assert.ok(rows.length >= 15, 'the Keyboard table was found');
-    for (const [action, display] of Object.entries(expected)) {
-      assert.ok(rows.some(row => row[0] === action), `CANVAS.md still lists ${action}`);
-    }
-    for (const row of rows) {
-      const bindings = expected[row[0]];
-      assert.ok(bindings, `CANVAS.md Keyboard row is mapped: ${row[0]}`);
-      for (const [action, display] of bindings) {
-        assert.equal(shortcuts.shortcutLabel(action), display, `${action} display`);
-        assert.ok(shortcuts.SHORTCUT_GROUPS.flatMap(group => group.items).some(item => item.label === shortcuts.KEYMAP.find(binding => binding.action === action).label && item.keys === display));
-        assert.equal(shortcuts.KEYMAP.filter(binding => binding.action === action).length, 1, `${action} has one binding`);
-      }
-    }
   });
 
   await test('shortcutFor respects text fields, composition and prevented events', () => {

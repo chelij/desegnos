@@ -1,26 +1,28 @@
+use crate::generation_apply::{
+    OperationImages, apply_operations_with_sources, apply_page_operations,
+    apply_pointer_classifications, apply_request, boundary_coverage_message,
+    normalize_raw_page_patches, operation_kind, pending_for, untouched_boundaries,
+};
+use crate::generation_scope::scope_for;
+use crate::limits::{
+    MAX_DECISION_PROPOSALS, MAX_DESIGN_CRITICISMS, MAX_EXPLANATION_CHARS, MAX_GENERATED_IMAGES,
+    MAX_GENERATION_BYTES, MAX_GENERATION_REQUESTS, MAX_POINTER_CLASSIFICATIONS,
+};
+use crate::schema_conformance::{conform_to_candidate_schema, drop_null_optional_draft_fields};
 use crate::{
-    Element, ElementKind, ElementLayout, ElementPatch, ElementStyle, Error, Page, PlayAction,
-    Project, RequestRecord, RequirementsSnapshot, Result, Scope, digest, ensure,
-    model::validate_text,
+    Error, Result, element_edit::ElementPatch, elements::ElementKind, elements::ElementLayout,
+    elements::ElementStyle, model::PlayAction, model::Project, model::Scope,
+    requirements::RequirementsSnapshot, validation::digest, validation::ensure,
+    validation::validate_text,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
 
-pub const MAX_GENERATION_BYTES: usize = 8 * 1024 * 1024;
-pub use crate::limits::MAX_REQUIREMENTS_BYTES;
-pub const MAX_GENERATION_REQUESTS: usize = 512;
-pub const MAX_GENERATED_IMAGES: usize = 8;
-pub const MAX_POINTER_CLASSIFICATIONS: usize = 1000;
-pub const MAX_DECISION_PROPOSALS: usize = 128;
-pub const MAX_DESIGN_CRITICISMS: usize = 512;
-pub const MAX_APPLIED_JOBS: usize = 10_000;
-pub(crate) const MAX_EXPLANATION_CHARS: usize = 4096;
-
 fn default_style() -> ElementStyle {
-    crate::empty_element(
+    crate::element_edit::empty_element(
         ElementKind::Box,
-        crate::Rect {
+        crate::model::Rect {
             x: 0.0,
             y: 0.0,
             width: 0.0,
@@ -37,7 +39,7 @@ pub struct ElementDraft {
     /// Flat kind and its kind-specific fields, matching the editor's element type.
     #[serde(flatten)]
     pub kind: ElementKind,
-    pub rect: crate::Rect,
+    pub rect: crate::model::Rect,
     #[serde(default)]
     pub name: Option<String>,
     #[serde(default)]
@@ -74,7 +76,7 @@ fn default_true() -> bool {
 pub struct ElementUpdate {
     pub element_id: Uuid,
     #[serde(default)]
-    pub rect: Option<crate::Rect>,
+    pub rect: Option<crate::model::Rect>,
     #[serde(default)]
     pub rotation: Option<f64>,
     #[serde(default)]
@@ -92,7 +94,7 @@ pub struct ElementUpdate {
     #[serde(default)]
     pub name: Option<String>,
     #[serde(default)]
-    pub input_type: Option<crate::InputType>,
+    pub input_type: Option<crate::elements::InputType>,
     #[serde(default)]
     pub options: Option<Vec<String>>,
     #[serde(default)]
@@ -105,7 +107,7 @@ pub struct ElementUpdate {
 }
 
 impl ElementUpdate {
-    fn patch(self) -> ElementPatch {
+    pub(crate) fn patch(self) -> ElementPatch {
         ElementPatch {
             id: self.element_id,
             rect: self.rect,
@@ -180,8 +182,8 @@ pub enum ElementOperation {
 #[derive(ts_rs::TS, Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReferenceDraft {
-    pub rect: crate::Rect,
-    pub kind: crate::ReferenceKind,
+    pub rect: crate::model::Rect,
+    pub kind: crate::model::ReferenceKind,
 }
 
 /// A picture the AI asks for. Generated when the provider supports it; otherwise a Box
@@ -283,7 +285,7 @@ pub struct DecisionProposal {
 #[derive(ts_rs::TS, Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DesignCriticism {
-    #[serde(default, deserialize_with = "crate::required_nullable")]
+    #[serde(default, deserialize_with = "crate::validation::required_nullable")]
     pub element_id: Option<Uuid>,
     pub message: String,
     pub suggestion: String,
@@ -349,11 +351,11 @@ impl GenerationCandidate {
                 MAX_GENERATION_BYTES
             ),
         )?;
-        let mut value: serde_json::Value = crate::parse_provider_json(source)
+        let mut value: serde_json::Value = crate::json_parse::parse_provider_json(source)
             .map_err(|error| Error(format!("The generation result is invalid: {error}")))?;
         let project = expectations.and_then(|expected| expected.project);
         if let Some(expected) = expectations {
-            crate::fill_reply_echoes(&mut value, expected.job_id, expected.sha256)?;
+            crate::json_parse::fill_reply_echoes(&mut value, expected.job_id, expected.sha256)?;
             if let Some(project) = expected.project {
                 normalize_raw_page_patches(&mut value, project, events);
             }
@@ -388,7 +390,7 @@ impl GenerationCandidate {
                         .targets
                         .iter()
                         .filter_map(|target| match target {
-                            crate::RequestTarget::Boundary { page, .. } => Some(*page),
+                            crate::model::RequestTarget::Boundary { page, .. } => Some(*page),
                             _ => None,
                         })
                         .collect()
@@ -430,7 +432,7 @@ impl GenerationCandidate {
         for request in &self.requests {
             validate_operations(&request.operations, &image_keys).map_err(|error| {
                 GenerationValidationError {
-                    kind: ValidationFailureKind::Element,
+                    kind: ValidationEventKind::Element,
                     element_id: request.element_id,
                     message: error.0,
                 }
@@ -439,17 +441,31 @@ impl GenerationCandidate {
         Ok(())
     }
 
-    fn validate_reply_bounds(&self) -> GenerationResult<()> {
+    fn validate_images(&self) -> Result<()> {
+        let mut image_keys = BTreeSet::new();
+        for image in &self.images {
+            ensure(
+                !image.key.trim().is_empty()
+                    && image.key.chars().count() <= 120
+                    && image_keys.insert(image.key.to_lowercase()),
+                "Generated image keys must be short, nonempty and unique.",
+            )?;
+            validate_text(&image.prompt, "Image prompt", 4000, true)?;
+            ensure(
+                (16..=4096).contains(&image.width) && (16..=4096).contains(&image.height),
+                "A generated image size must be between 16 and 4,096 pixels.",
+            )?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn validate_reply_bounds(&self) -> GenerationResult<()> {
         ensure(
             !self.job_id.is_nil(),
             "The generation job identifier is required.",
         )?;
         ensure(
-            self.requirements_sha256.len() == 64
-                && self
-                    .requirements_sha256
-                    .bytes()
-                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)),
+            crate::limits::is_sha256_hex(&self.requirements_sha256),
             "The requirements digest must be a SHA-256 hexadecimal digest.",
         )?;
         validate_text(&self.summary, "Generation summary", 16_384, false)?;
@@ -462,7 +478,7 @@ impl GenerationCandidate {
             "The generation result exceeds the generated image limit.",
         )
         .map_err(|error| GenerationValidationError {
-            kind: ValidationFailureKind::Image,
+            kind: ValidationEventKind::Image,
             element_id: None,
             message: error.0,
         })?;
@@ -471,7 +487,7 @@ impl GenerationCandidate {
             "The generation result exceeds the pointer classification limit.",
         )
         .map_err(|error| GenerationValidationError {
-            kind: ValidationFailureKind::Pointer,
+            kind: ValidationEventKind::Pointer,
             element_id: None,
             message: error.0,
         })?;
@@ -483,28 +499,12 @@ impl GenerationCandidate {
             self.criticism.len() <= MAX_DESIGN_CRITICISMS,
             "The generation result exceeds the design feedback limit.",
         )?;
-        (|| -> Result<()> {
-            let mut image_keys = BTreeSet::new();
-            for image in &self.images {
-                ensure(
-                    !image.key.trim().is_empty()
-                        && image.key.chars().count() <= 120
-                        && image_keys.insert(image.key.to_lowercase()),
-                    "Generated image keys must be short, nonempty and unique.",
-                )?;
-                validate_text(&image.prompt, "Image prompt", 4000, true)?;
-                ensure(
-                    (16..=4096).contains(&image.width) && (16..=4096).contains(&image.height),
-                    "A generated image size must be between 16 and 4,096 pixels.",
-                )?;
-            }
-            Ok(())
-        })()
-        .map_err(|error| GenerationValidationError {
-            kind: ValidationFailureKind::Image,
-            element_id: None,
-            message: error.0,
-        })?;
+        self.validate_images()
+            .map_err(|error| GenerationValidationError {
+                kind: ValidationEventKind::Image,
+                element_id: None,
+                message: error.0,
+            })?;
         for request in &self.requests {
             validate_text(
                 &request.explanation,
@@ -557,7 +557,11 @@ impl GenerationCandidate {
         .map_err(GenerationValidationError::from)
     }
 
-    fn normalize(&mut self, project: &Project, events: &mut Vec<ValidationEvent>) -> Result<()> {
+    pub(crate) fn normalize(
+        &mut self,
+        project: &Project,
+        events: &mut Vec<ValidationEvent>,
+    ) -> Result<()> {
         let mut value = serde_json::to_value(&*self).map_err(|error| Error(error.to_string()))?;
         normalize_raw_page_patches(&mut value, project, events);
         *self = serde_json::from_value(value).map_err(|error| Error(error.to_string()))?;
@@ -725,112 +729,11 @@ impl GenerationCandidate {
         candidate.check(snapshot, project)
     }
 
-    fn check(&self, snapshot: &RequirementsSnapshot, project: &Project) -> GenerationResult<()> {
-        self.validate_bounds()?;
-        snapshot.validate_current(project)?;
-        self.validate_identity(snapshot)?;
-        (|| -> Result<()> {
-            if let Some(capability) = snapshot
-                .capabilities
-                .as_ref()
-                .and_then(|capabilities| capabilities.image_generation.as_ref())
-            {
-                ensure(
-                    self.images.len() <= usize::from(capability.max_images),
-                    "The generation result asks for more pictures than this provider can make.",
-                )?;
-            }
-            Ok(())
-        })()
-        .map_err(|error| GenerationValidationError {
-            kind: ValidationFailureKind::Image,
-            element_id: None,
-            message: error.0,
-        })?;
-        let targets = snapshot.target_ids()?;
-        let target_elements: BTreeSet<_> = targets.iter().map(|(_, element)| *element).collect();
-        let request_ids = snapshot.request_ids()?;
-        let mut answered_requests = BTreeSet::new();
-        let mut answered_elements = BTreeSet::new();
-        for outcome in &self.requests {
-            if let Some(request_id) = outcome.request_id {
-                ensure(
-                    request_ids.contains(&request_id) && answered_requests.insert(request_id),
-                    "The generation result contains a duplicate or unrequested request.",
-                )?;
-                let pending = project
-                    .requests
-                    .iter()
-                    .find(|request| request.id == request_id)
-                    .expect("a requested request exists");
-                if let Some(element_id) = outcome.element_id {
-                    let anchored = pending.targets.iter().any(|target| match target {
-                        crate::RequestTarget::Element { id, .. } => *id == element_id,
-                        _ => false,
-                    });
-                    ensure(
-                        anchored || target_elements.contains(&element_id),
-                        "The generation result answered a request with a layer it does not target.",
-                    )?;
-                }
-            } else {
-                let element_id = outcome.element_id.ok_or_else(|| {
-                    Error("A generation outcome names neither a request nor a layer.".into())
-                })?;
-                ensure(
-                    target_elements.contains(&element_id) && answered_elements.insert(element_id),
-                    "The generation result contains a duplicate or unrequested layer.",
-                )?;
-            }
-        }
-        // An element target is answered either directly or by the request that names it.
-        for element_id in &target_elements {
-            let covered = answered_elements.contains(element_id)
-                || project.requests.iter().any(|request| {
-                    answered_requests.contains(&request.id)
-                        && request.targets.iter().any(|target| match target {
-                            crate::RequestTarget::Element { id, .. } => id == element_id,
-                            _ => false,
-                        })
-                });
-            ensure(covered, "The generation result omitted a requested layer.")?;
-        }
-        ensure(
-            project
-                .requests
-                .iter()
-                .filter(|request| request_ids.contains(&request.id))
-                .all(|request| {
-                    answered_requests.contains(&request.id)
-                        || (request
-                            .targets
-                            .iter()
-                            .any(|target| matches!(target, crate::RequestTarget::Element { .. }))
-                            && request.targets.iter().all(|target| match target {
-                                crate::RequestTarget::Element { id, .. } => {
-                                    answered_elements.contains(id)
-                                }
-                                _ => false,
-                            }))
-                }),
-            "The generation result omitted a requested request.",
-        )?;
-        for proposal in &self.decision_proposals {
-            project.validate_scope(&proposal.scope)?;
-        }
-        for criticism in &self.criticism {
-            ensure(
-                criticism
-                    .element_id
-                    .is_none_or(|id| target_elements.contains(&id)),
-                "Design feedback refers to an unrequested layer.",
-            )?;
-        }
-        (|| -> Result<()> {
+    fn validate_pointer_classifications(&self, project: &Project) -> Result<()> {
         let classifying: BTreeSet<Uuid> = project
             .pointers
             .iter()
-            .filter(|pointer| crate::pointer_needs_classifying(pointer))
+            .filter(|pointer| crate::pointers::pointer_needs_classifying(pointer))
             .map(|pointer| pointer.id)
             .collect();
         let mut classified = BTreeSet::new();
@@ -864,8 +767,111 @@ impl GenerationCandidate {
             classified == classifying,
             "The generation result omitted a pointer comment to classify.",
         )?;
-            Ok(())
-        })().map_err(|error| GenerationValidationError { kind: ValidationFailureKind::Pointer, element_id: None, message: error.0 })?;
+        Ok(())
+    }
+
+    fn check(&self, snapshot: &RequirementsSnapshot, project: &Project) -> GenerationResult<()> {
+        self.validate_bounds()?;
+        snapshot.validate_current(project)?;
+        self.validate_identity(snapshot)?;
+        if let Some(capability) = snapshot
+            .capabilities
+            .as_ref()
+            .and_then(|caps| caps.image_generation.as_ref())
+        {
+            ensure(
+                self.images.len() <= usize::from(capability.max_images),
+                "The generation result asks for more pictures than this provider can make.",
+            )
+            .map_err(|error| GenerationValidationError {
+                kind: ValidationEventKind::Image,
+                element_id: None,
+                message: error.0,
+            })?;
+        }
+        let targets = snapshot.target_ids()?;
+        let target_elements: BTreeSet<_> = targets.iter().map(|(_, element)| *element).collect();
+        let request_ids = snapshot.request_ids()?;
+        let mut answered_requests = BTreeSet::new();
+        let mut answered_elements = BTreeSet::new();
+        for outcome in &self.requests {
+            if let Some(request_id) = outcome.request_id {
+                ensure(
+                    request_ids.contains(&request_id) && answered_requests.insert(request_id),
+                    "The generation result contains a duplicate or unrequested request.",
+                )?;
+                let pending = project
+                    .requests
+                    .iter()
+                    .find(|request| request.id == request_id)
+                    .expect("a requested request exists");
+                if let Some(element_id) = outcome.element_id {
+                    let anchored = pending.targets.iter().any(|target| match target {
+                        crate::model::RequestTarget::Element { id, .. } => *id == element_id,
+                        _ => false,
+                    });
+                    ensure(
+                        anchored || target_elements.contains(&element_id),
+                        "The generation result answered a request with a layer it does not target.",
+                    )?;
+                }
+            } else {
+                let element_id = outcome.element_id.ok_or_else(|| {
+                    Error("A generation outcome names neither a request nor a layer.".into())
+                })?;
+                ensure(
+                    target_elements.contains(&element_id) && answered_elements.insert(element_id),
+                    "The generation result contains a duplicate or unrequested layer.",
+                )?;
+            }
+        }
+        // An element target is answered either directly or by the request that names it.
+        for element_id in &target_elements {
+            let covered = answered_elements.contains(element_id)
+                || project.requests.iter().any(|request| {
+                    answered_requests.contains(&request.id)
+                        && request.targets.iter().any(|target| match target {
+                            crate::model::RequestTarget::Element { id, .. } => id == element_id,
+                            _ => false,
+                        })
+                });
+            ensure(covered, "The generation result omitted a requested layer.")?;
+        }
+        ensure(
+            project
+                .requests
+                .iter()
+                .filter(|request| request_ids.contains(&request.id))
+                .all(|request| {
+                    answered_requests.contains(&request.id)
+                        || (request.targets.iter().any(|target| {
+                            matches!(target, crate::model::RequestTarget::Element { .. })
+                        }) && request.targets.iter().all(|target| match target {
+                            crate::model::RequestTarget::Element { id, .. } => {
+                                answered_elements.contains(id)
+                            }
+                            _ => false,
+                        }))
+                }),
+            "The generation result omitted a requested request.",
+        )?;
+        for proposal in &self.decision_proposals {
+            project.validate_scope(&proposal.scope)?;
+        }
+        for criticism in &self.criticism {
+            ensure(
+                criticism
+                    .element_id
+                    .is_none_or(|id| target_elements.contains(&id)),
+                "Design feedback refers to an unrequested layer.",
+            )?;
+        }
+        self.validate_pointer_classifications(project)
+            .map_err(|error| GenerationValidationError {
+                kind: ValidationEventKind::Pointer,
+                element_id: None,
+                message: error.0,
+            })?;
         // Run the operations on a copy so in-scope edits, ids, images and positions are checked
         // by the same code that later applies them.
         let mut copy = project.clone();
@@ -940,7 +946,7 @@ fn validate_operations(
                 }
                 if let Some(background) = background {
                     ensure(
-                        crate::model::valid_swatch(background),
+                        crate::limits::is_hex_colour(background),
                         "Boundary background must be a hex colour.",
                     )?;
                 }
@@ -958,7 +964,12 @@ fn validate_operations(
                     element_id.is_none_or(|id| !id.is_nil()),
                     "A behaviour needs an existing element id.",
                 )?;
-                crate::validate_text(behaviour, "Pointer comment", crate::MAX_PROMPT_CHARS, false)?;
+                crate::validation::validate_text(
+                    behaviour,
+                    "Pointer comment",
+                    crate::limits::MAX_PROMPT_CHARS,
+                    false,
+                )?;
             }
             ElementOperation::Update { patches } => {
                 ensure(!patches.is_empty(), "An update needs at least one patch.")?;
@@ -987,7 +998,7 @@ fn validate_operations(
             }
             ElementOperation::AddReference { item } => {
                 ensure(
-                    !matches!(item.kind, crate::ReferenceKind::Image { .. }),
+                    !matches!(item.kind, crate::model::ReferenceKind::Image { .. }),
                     "A generated reference item cannot use picture bytes.",
                 )?;
                 let rect = item.rect;
@@ -1074,1772 +1085,12 @@ fn validate_classified_action(project: &Project, action: &ClassifiedAction) -> R
     }
 }
 
-fn build_element(
-    draft: &ElementDraft,
-    generated: &BTreeMap<String, Uuid>,
-    image_prompts: &BTreeMap<String, String>,
-) -> Result<Element> {
-    let requested_picture = draft
-        .image_request
-        .as_ref()
-        .and_then(|key| generated.get(&key.to_lowercase()).copied());
-    let mut placeholder_text = None;
-    let mut kind = draft.kind.clone();
-    if matches!(draft.kind, ElementKind::Image)
-        && requested_picture.is_none()
-        && draft.image.is_none()
-    {
-        // No picture generation available: keep the prompt visible in a Box instead.
-        let prompt = draft
-            .image_request
-            .as_ref()
-            .and_then(|key| image_prompts.get(&key.to_lowercase()))
-            .cloned()
-            .unwrap_or_else(|| "Picture".into());
-        placeholder_text = Some(prompt);
-        kind = ElementKind::Box;
-    }
-    let mut element = Element {
-        name: draft.name.clone(),
-        rotation: draft.rotation,
-        visible: draft.visible,
-        locked: draft.locked,
-        style: draft.style.clone(),
-        text: placeholder_text
-            .clone()
-            .unwrap_or_else(|| draft.text.clone()),
-        image: if matches!(draft.kind, ElementKind::Image) {
-            requested_picture.or(draft.image)
-        } else {
-            None
-        },
-        url: draft.url.clone(),
-        layout: draft.layout.clone(),
-        ..crate::empty_element(kind, draft.rect)
-    };
-    if placeholder_text.is_none() {
-        for child in &draft.children {
-            element
-                .children
-                .push(build_element(child, generated, image_prompts)?);
-        }
-    }
-    Ok(element)
-}
-
-fn element_page_and_parent(
-    project: &Project,
-    id: Uuid,
-) -> Option<(Uuid, Option<Uuid>, crate::Rect)> {
-    for page in &project.pages {
-        let elements = crate::resolve_elements(project, &page.elements);
-        if let Some((parent, rect)) = find_parent_rect(&elements, id, None, page_rect(page)) {
-            return Some((page.id, parent, rect));
-        }
-    }
-    None
-}
-
-fn page_rect(page: &Page) -> crate::Rect {
-    let base = page.base_size();
-    crate::Rect {
-        x: 0.0,
-        y: 0.0,
-        width: base.width as f64,
-        height: base.height as f64,
-    }
-}
-
-fn find_parent_rect(
-    elements: &[Element],
-    id: Uuid,
-    parent: Option<Uuid>,
-    parent_rect: crate::Rect,
-) -> Option<(Option<Uuid>, crate::Rect)> {
-    for element in elements {
-        if element.id == id {
-            return Some((parent, parent_rect));
-        }
-        if let Some(found) = find_parent_rect(&element.children, id, Some(element.id), element.rect)
-        {
-            return Some(found);
-        }
-    }
-    None
-}
-
-const FIT_TOLERANCE: f64 = 0.5;
-
-fn fits(parent: &crate::Rect, child: &crate::Rect) -> bool {
-    child.x >= -FIT_TOLERANCE
-        && child.y >= -FIT_TOLERANCE
-        && child.x + child.width <= parent.width + FIT_TOLERANCE
-        && child.y + child.height <= parent.height + FIT_TOLERANCE
-}
-
-/// How a rejected layer is named in a message: its name when it has one, its kind, and its box.
-fn describe(name: Option<&str>, kind: &ElementKind, rect: &crate::Rect) -> String {
-    let label = match name.map(str::trim).filter(|name| !name.is_empty()) {
-        Some(name) => format!("{name} ({})", kind.label()),
-        None => kind.label().to_string(),
-    };
-    format!(
-        "{label} at {},{} sized {}x{}",
-        rect.x, rect.y, rect.width, rect.height
-    )
-}
-
-fn describe_element(element: &Element) -> String {
-    describe(element.name.as_deref(), &element.kind, &element.rect)
-}
-
-fn reject(element_id: Option<Uuid>, message: String) -> GenerationValidationError {
+pub(crate) fn reject(element_id: Option<Uuid>, message: String) -> GenerationValidationError {
     GenerationValidationError {
-        kind: ValidationFailureKind::Element,
+        kind: ValidationEventKind::Element,
         element_id,
         message,
     }
-}
-
-/// What one reply outcome may change. Element targets grant their subtree plus what their
-/// change pointers grant; a boundary target grants every layer inside it; a change pointer target
-/// grants what that pointer points at. Reference pointers grant reads only.
-struct RequestScope {
-    original_routes: Vec<(Uuid, String, String)>,
-    request_text: String,
-    behaviour_page: Option<Uuid>,
-    allowed: BTreeSet<Uuid>,
-    boundary_pages: BTreeSet<Uuid>,
-    area: Option<crate::RequestArea>,
-}
-
-fn scope_for(
-    project: &Project,
-    request: Option<&crate::PendingRequest>,
-    anchor_page: Option<Uuid>,
-) -> RequestScope {
-    let mut allowed = BTreeSet::new();
-    let mut boundary_pages = BTreeSet::new();
-    if let Some(request) = request {
-        for target in &request.targets {
-            match target {
-                crate::RequestTarget::Element { page, id, .. } => {
-                    let (elements, pages) = project.editable_element_ids(*page, *id);
-                    allowed.extend(elements);
-                    boundary_pages.extend(pages);
-                }
-                crate::RequestTarget::Boundary { page, .. } => {
-                    boundary_pages.insert(*page);
-                    if let Some(page) = project.pages.iter().find(|item| item.id == *page) {
-                        for element in &page.elements {
-                            allowed.extend(project.element_subtree_ids(element.id));
-                            let (_, pages) = project.editable_element_ids(page.id, element.id);
-                            boundary_pages.extend(pages);
-                        }
-                    }
-                }
-                crate::RequestTarget::Pointer { id } => {
-                    if let Some(pointer) = project
-                        .pointers
-                        .iter()
-                        .find(|pointer| pointer.id == *id)
-                        .filter(|pointer| crate::pointer_grants_change(pointer))
-                    {
-                        match &pointer.to {
-                            crate::PointerTarget::Element {
-                                page_id,
-                                element_id,
-                                ..
-                            } => {
-                                allowed.extend(project.element_subtree_ids(*element_id));
-                                let (_, pages) =
-                                    project.editable_element_ids(*page_id, *element_id);
-                                boundary_pages.extend(pages);
-                            }
-                            crate::PointerTarget::Boundary { page_id, .. } => {
-                                boundary_pages.insert(*page_id);
-                            }
-                            crate::PointerTarget::Reference { .. }
-                            | crate::PointerTarget::Url { .. } => {}
-                        }
-                    }
-                }
-                crate::RequestTarget::Reference { .. } => {}
-            }
-        }
-    } else if let Some(page_id) = anchor_page {
-        boundary_pages.insert(page_id);
-    }
-    let mut request_pages = BTreeSet::new();
-    if let Some(request) = request {
-        request_pages.extend(request.targets.iter().filter_map(|target| target.page()));
-        request_pages.extend(request.area.as_ref().and_then(|area| area.page));
-    } else {
-        request_pages.extend(anchor_page);
-    }
-    RequestScope {
-        original_routes: project
-            .pages
-            .iter()
-            .map(|page| (page.id, page.name.clone(), page.path.clone()))
-            .collect(),
-        request_text: request
-            .map(|request| request.text.clone())
-            .unwrap_or_default(),
-        behaviour_page: if request_pages.len() == 1 {
-            request_pages.first().copied()
-        } else {
-            None
-        },
-        allowed,
-        boundary_pages,
-        area: request.and_then(|request| request.area.clone()),
-    }
-}
-
-fn shape_contains(shape: &crate::RequestShape, point: crate::RequestPoint) -> bool {
-    match shape {
-        crate::RequestShape::Rect { rect } => {
-            point.x >= rect.x
-                && point.x <= rect.x + rect.width
-                && point.y >= rect.y
-                && point.y <= rect.y + rect.height
-        }
-        crate::RequestShape::Ellipse { rect } => {
-            let rx = rect.width / 2.0;
-            let ry = rect.height / 2.0;
-            if rx <= 0.0 || ry <= 0.0 {
-                return false;
-            }
-            let dx = (point.x - (rect.x + rx)) / rx;
-            let dy = (point.y - (rect.y + ry)) / ry;
-            dx * dx + dy * dy <= 1.0
-        }
-        crate::RequestShape::Polygon { points } | crate::RequestShape::Freehand { points } => {
-            // Even-odd ray casting, with boundary points counted as inside.
-            let mut inside = false;
-            let mut previous = points.last().expect("a shape has points");
-            for current in points {
-                let on_edge = point_segment_distance(point, previous, current) <= 0.5;
-                if on_edge {
-                    return true;
-                }
-                if (current.y > point.y) != (previous.y > point.y) {
-                    let x = (previous.x - current.x) * (point.y - current.y)
-                        / (previous.y - current.y)
-                        + current.x;
-                    if point.x < x {
-                        inside = !inside;
-                    }
-                }
-                previous = current;
-            }
-            inside
-        }
-    }
-}
-
-fn point_segment_distance(
-    point: crate::RequestPoint,
-    start: &crate::RequestPoint,
-    end: &crate::RequestPoint,
-) -> f64 {
-    let dx = end.x - start.x;
-    let dy = end.y - start.y;
-    let length = dx * dx + dy * dy;
-    if length == 0.0 {
-        return ((point.x - start.x).powi(2) + (point.y - start.y).powi(2)).sqrt();
-    }
-    let t = (((point.x - start.x) * dx + (point.y - start.y) * dy) / length).clamp(0.0, 1.0);
-    ((point.x - (start.x + t * dx)).powi(2) + (point.y - (start.y + t * dy)).powi(2)).sqrt()
-}
-
-/// A requested area is the real outline; new content must sit inside it.
-fn area_allows(area: &crate::RequestArea, rect: &crate::Rect) -> bool {
-    let corners = [
-        (rect.x, rect.y),
-        (rect.x + rect.width, rect.y),
-        (rect.x + rect.width, rect.y + rect.height),
-        (rect.x, rect.y + rect.height),
-        (rect.x + rect.width / 2.0, rect.y + rect.height / 2.0),
-    ];
-    corners
-        .iter()
-        .all(|(x, y)| shape_contains(&area.shape, crate::RequestPoint { x: *x, y: *y }))
-}
-
-fn collect_history_ids(element: &Element, ids: &mut BTreeSet<Uuid>) {
-    ids.insert(element.id);
-    for child in &element.children {
-        collect_history_ids(child, ids);
-    }
-}
-
-fn apply_operations(
-    project: &mut Project,
-    scope: &RequestScope,
-    anchor: Option<Uuid>,
-    operations: &[ElementOperation],
-    candidate: &GenerationCandidate,
-    generated: &BTreeMap<String, Uuid>,
-) -> GenerationResult<BTreeSet<Uuid>> {
-    apply_operations_with_sources(
-        project,
-        scope,
-        anchor,
-        operations,
-        OperationImages {
-            requests: &candidate.images,
-            generated,
-        },
-        &mut Vec::new(),
-    )
-}
-
-struct OperationImages<'a> {
-    requests: &'a [GeneratedImage],
-    generated: &'a BTreeMap<String, Uuid>,
-}
-
-fn apply_operations_with_sources(
-    project: &mut Project,
-    scope: &RequestScope,
-    anchor: Option<Uuid>,
-    operations: &[ElementOperation],
-    image_sources: OperationImages<'_>,
-    behaviour_sources: &mut Vec<crate::PointerSource>,
-) -> GenerationResult<BTreeSet<Uuid>> {
-    let images: BTreeMap<String, String> = image_sources
-        .requests
-        .iter()
-        .map(|image| (image.key.to_lowercase(), image.prompt.clone()))
-        .collect();
-    let mut touched = BTreeSet::new();
-    for operation in operations {
-        let mut operation = operation.clone();
-        resolve_operation_links(&mut operation, project, scope);
-        match &operation {
-            ElementOperation::SetPage {
-                page_id,
-                name,
-                path,
-                background,
-            } => {
-                ensure(
-                    scope.boundary_pages.contains(page_id),
-                    "The generation result changed a boundary outside its request.",
-                )?;
-                let page = project.page(*page_id)?;
-                if let Some(path) = path {
-                    crate::model::validate_path(path)?;
-                    ensure(
-                        !project.pages.iter().any(|page| {
-                            page.id != *page_id && page.path.eq_ignore_ascii_case(path)
-                        }),
-                        "Two pages cannot use the same public path.",
-                    )?;
-                    if *page_id == project.home_page_id && page.path == "/" && path != "/" {
-                        let text = scope.request_text.to_lowercase();
-                        ensure(
-                            text.contains(&path.to_lowercase())
-                                && ["route", "path", "url"]
-                                    .iter()
-                                    .any(|word| text.contains(word)),
-                            "The home page keeps / unless the request explicitly names its new route, path or URL.",
-                        )?;
-                    }
-                }
-                let page = project.page_mut(*page_id)?;
-                if let Some(name) = name {
-                    validate_text(name.trim(), "Page name", 120, true)?;
-                    page.name = name.trim().into();
-                }
-                if let Some(path) = path {
-                    page.path = path.clone();
-                }
-                if let Some(background) = background {
-                    ensure(
-                        crate::model::valid_swatch(background),
-                        "Boundary background must be a hex colour.",
-                    )?;
-                    page.background = crate::model::normalized_swatch(background);
-                }
-            }
-            ElementOperation::ReplaceChildren { children } => {
-                let target = anchor
-                    .filter(|id| scope.allowed.contains(id))
-                    .ok_or_else(|| {
-                        Error("The generation result changed a layer outside its request.".into())
-                    })?;
-                let mut built = Vec::with_capacity(children.len());
-                for child in children {
-                    let element = build_element(child, image_sources.generated, &images)?;
-                    built.push(element);
-                }
-                let parent_rect = project
-                    .element(target)
-                    .map(|(_, element)| element.rect)
-                    .ok_or_else(|| Error("This layer no longer exists.".into()))?;
-                for element in &built {
-                    if !fits(&parent_rect, &element.rect) {
-                        return Err(reject(
-                            Some(target),
-                            format!(
-                                "A generated element must stay inside its frame: {} does not fit its {}x{} frame.",
-                                describe_element(element),
-                                parent_rect.width,
-                                parent_rect.height
-                            ),
-                        ));
-                    }
-                }
-                for element in &built {
-                    collect_history_ids(element, &mut touched);
-                }
-                touched.insert(target);
-                project
-                    .editable_element_mut(target)
-                    .expect("the target exists")
-                    .children = built;
-            }
-            ElementOperation::SetBehaviour {
-                element_id,
-                behaviour,
-            } => {
-                let boundary = match element_id {
-                    Some(id) if scope.boundary_pages.contains(id) => Some(*id),
-                    None => scope.behaviour_page,
-                    _ => None,
-                };
-                let (from, to) = if let Some(page_id) = boundary {
-                    project.page(page_id)?;
-                    (
-                        crate::PointerSource::Boundary {
-                            page_id,
-                            size_id: None,
-                        },
-                        crate::PointerTarget::Boundary {
-                            page_id,
-                            size_id: None,
-                        },
-                    )
-                } else if let Some(id) = element_id {
-                    ensure(
-                        scope.allowed.contains(id),
-                        "The generation result changed a layer outside its request.",
-                    )?;
-                    let (page, _) = project
-                        .element(*id)
-                        .ok_or_else(|| Error("This layer no longer exists.".into()))?;
-                    touched.insert(*id);
-                    (
-                        crate::PointerSource::Element {
-                            page_id: page.id,
-                            element_id: *id,
-                            size_id: None,
-                        },
-                        crate::PointerTarget::Element {
-                            page_id: page.id,
-                            element_id: *id,
-                            size_id: None,
-                        },
-                    )
-                } else {
-                    return Err(Error(
-                        "A boundary behaviour needs a request in one boundary.".into(),
-                    )
-                    .into());
-                };
-                let existing = project
-                    .pointers
-                    .iter()
-                    .position(|p| p.is_behaviour() && p.from == from);
-                let seen = behaviour_sources.contains(&from);
-                if !behaviour.is_empty() && !seen {
-                    behaviour_sources.push(from.clone());
-                }
-                if behaviour.is_empty() {
-                    if let Some(index) = existing {
-                        project.pointers.remove(index);
-                    }
-                } else if let Some(index) = existing {
-                    let comment = &mut project.pointers[index].comment;
-                    if seen {
-                        comment.push_str("\n\n");
-                        comment.push_str(behaviour);
-                    } else {
-                        *comment = behaviour.clone();
-                    }
-                } else {
-                    project.pointers.push(crate::Pointer {
-                        id: Uuid::new_v4(),
-                        from,
-                        to,
-                        comment: behaviour.clone(),
-                        kind: crate::PointerKind::Change,
-                        wiring: None,
-                        play: None,
-                        play_comment: String::new(),
-                    });
-                }
-            }
-            ElementOperation::Update { patches } => {
-                for patch in patches {
-                    ensure(
-                        scope.allowed.contains(&patch.element_id),
-                        "The generation result changed a layer outside its request.",
-                    )?;
-                    let (owner, current) = project
-                        .element(patch.element_id)
-                        .ok_or_else(|| Error("This layer no longer exists.".into()))?;
-                    let owner_page = owner.id;
-                    let sizes: BTreeSet<Uuid> = project
-                        .page(owner_page)?
-                        .sizes
-                        .iter()
-                        .map(|size| size.id)
-                        .collect();
-                    ensure(
-                        patch.size_id.is_none_or(|size_id| sizes.contains(&size_id)),
-                        "The generation result changed a size this boundary does not have.",
-                    )?;
-                    let (_, _, parent_rect) = element_page_and_parent(project, patch.element_id)
-                        .ok_or_else(|| Error("This layer no longer exists.".into()))?;
-                    if let Some(rect) = &patch.rect
-                        && !fits(&parent_rect, rect)
-                    {
-                        return Err(reject(
-                            Some(patch.element_id),
-                            format!(
-                                "A generated element must stay inside its parent: {} does not fit its {}x{} parent.",
-                                describe(current.name.as_deref(), &current.kind, rect),
-                                parent_rect.width,
-                                parent_rect.height
-                            ),
-                        ));
-                    }
-                    let target = crate::elements::size_target_for_patch(
-                        project,
-                        project.page(owner_page)?,
-                        &patch.clone().patch(),
-                    )?;
-                    let element = project
-                        .editable_element_mut(patch.element_id)
-                        .ok_or_else(|| Error("This layer no longer exists.".into()))?;
-                    crate::elements::apply_sized_patch(element, patch.clone().patch(), target)?;
-                    touched.insert(patch.element_id);
-                }
-            }
-            ElementOperation::Insert {
-                parent_id,
-                index,
-                element,
-            } => {
-                ensure(
-                    scope.allowed.contains(parent_id),
-                    "The generation result inserted outside its request.",
-                )?;
-                let parent_rect = project
-                    .element(*parent_id)
-                    .map(|(_, parent)| parent.rect)
-                    .ok_or_else(|| Error("This box no longer exists.".into()))?;
-                let built = build_element(element, image_sources.generated, &images)?;
-                if !fits(&parent_rect, &built.rect) {
-                    return Err(reject(
-                        Some(*parent_id),
-                        format!(
-                            "A generated element must stay inside its parent: {} does not fit its {}x{} parent.",
-                            describe_element(&built),
-                            parent_rect.width,
-                            parent_rect.height
-                        ),
-                    ));
-                }
-                let parent = project
-                    .editable_element_mut(*parent_id)
-                    .ok_or_else(|| Error("This box no longer exists.".into()))?;
-                ensure(
-                    parent.kind.holds_children(),
-                    "Only a box or a group can hold elements.",
-                )?;
-                let at = index
-                    .unwrap_or(parent.children.len())
-                    .min(parent.children.len());
-                collect_history_ids(&built, &mut touched);
-                parent.children.insert(at, built);
-            }
-            ElementOperation::Remove { element_id } => {
-                ensure(
-                    scope.allowed.contains(element_id),
-                    "The generation result removed a layer outside its request.",
-                )?;
-                ensure(
-                    project.remove_editable_element(*element_id),
-                    "This layer no longer exists.",
-                )?;
-            }
-            ElementOperation::InsertInBoundary {
-                page_id,
-                size_id,
-                element,
-            } => {
-                let boundary = scope
-                    .area
-                    .as_ref()
-                    .filter(|area| area.page == Some(*page_id))
-                    .is_some()
-                    || scope.boundary_pages.contains(page_id);
-                ensure(
-                    boundary,
-                    "The generation result inserted into a boundary outside its request.",
-                )?;
-                let page = project.page(*page_id)?;
-                ensure(
-                    size_id.is_none_or(|size| page.sizes.iter().any(|item| item.id == size)),
-                    "The generation result inserted into a size this boundary does not have.",
-                )?;
-                let output = page.output;
-                let size = match size_id {
-                    Some(size) => page.sizes.iter().find(|item| item.id == *size),
-                    None => page.sizes.first(),
-                }
-                .ok_or_else(|| Error("This boundary has no size.".into()))?
-                .clone();
-                let built = build_element(element, image_sources.generated, &images)?;
-                let right = built.rect.x + built.rect.width;
-                let bottom = built.rect.y + built.rect.height;
-                let outside_width =
-                    built.rect.x < 0.0 || right > f64::from(size.width) + FIT_TOLERANCE;
-                let outside_height = bottom > f64::from(size.height) + FIT_TOLERANCE;
-                // A website page scrolls: a layer below the boundary grows it instead of being
-                // rejected. Every other output keeps its fixed height.
-                let grows = outside_height
-                    && !outside_width
-                    && built.rect.y >= 0.0
-                    && output == crate::OutputType::Webpage;
-                if outside_width || built.rect.y < 0.0 || (outside_height && !grows) {
-                    return Err(reject(
-                        None,
-                        format!(
-                            "A generated element must stay inside its boundary: {} does not fit its {}x{} boundary.",
-                            describe_element(&built),
-                            size.width,
-                            size.height
-                        ),
-                    ));
-                }
-                if grows {
-                    // Grow to the lowest edge of the new layer, rounded up, within a size's limit.
-                    let height = bottom.ceil();
-                    ensure(
-                        height <= f64::from(crate::MAX_VIEWPORT_SIDE),
-                        format!(
-                            "A generated element must stay inside its boundary: {} needs a boundary {} pixels high, and a boundary may be at most {} pixels high.",
-                            describe_element(&built),
-                            height,
-                            crate::MAX_VIEWPORT_SIDE
-                        ),
-                    )?;
-                    project
-                        .page_mut(*page_id)?
-                        .sizes
-                        .iter_mut()
-                        .find(|item| item.id == size.id)
-                        .expect("the size exists")
-                        .height = height as u32;
-                }
-                if let Some(area) = &scope.area
-                    && !area_allows(area, &built.rect)
-                {
-                    return Err(reject(
-                        None,
-                        format!(
-                            "A generated element must stay inside the request area: {} is outside it.",
-                            describe_element(&built)
-                        ),
-                    ));
-                }
-                collect_history_ids(&built, &mut touched);
-                project.page_mut(*page_id)?.elements.push(built);
-            }
-            ElementOperation::AddReference { item } => {
-                let area = scope
-                    .area
-                    .as_ref()
-                    .filter(|area| area.page.is_none())
-                    .ok_or_else(|| {
-                        Error("Reference items may only be added through an area outside every boundary.".into())
-                    })?;
-                if !area_allows(area, &item.rect) {
-                    return Err(reject(
-                        None,
-                        format!(
-                            "A generated reference item must stay inside the request area: the item at {},{} sized {}x{} is outside it.",
-                            item.rect.x, item.rect.y, item.rect.width, item.rect.height
-                        ),
-                    ));
-                }
-                ensure(
-                    !matches!(item.kind, crate::ReferenceKind::Image { .. }),
-                    "A generated reference item cannot use picture bytes.",
-                )?;
-                project.add_reference_item(
-                    crate::ReferenceItem {
-                        id: Uuid::new_v4(),
-                        rect: item.rect,
-                        kind: item.kind.clone(),
-                    },
-                    None,
-                )?;
-            }
-        }
-    }
-    Ok(touched)
-}
-
-fn record_request_history(
-    project: &mut Project,
-    ids: &BTreeSet<Uuid>,
-    request: &crate::PendingRequest,
-    outcome: &str,
-    job_id: Uuid,
-) {
-    for id in ids {
-        let Some(element) = project.element_mut(*id) else {
-            continue;
-        };
-        if element.meta.requests.len() >= crate::MAX_ELEMENT_REQUESTS {
-            element.meta.requests.remove(0);
-        }
-        element.meta.requests.push(RequestRecord {
-            id: Uuid::new_v4(),
-            prompt: request.text.clone(),
-            attachments: request.attachments.clone(),
-            created_at: request.requested_at.clone(),
-            outcome: Some(outcome.chars().take(MAX_EXPLANATION_CHARS).collect()),
-            job_id: Some(job_id.to_string()),
-        });
-    }
-}
-
-fn pending_for<'a>(
-    project: &'a Project,
-    outcome: &RequestOutcome,
-) -> Option<&'a crate::PendingRequest> {
-    outcome
-        .request_id
-        .and_then(|id| project.requests.iter().find(|item| item.id == id))
-        .or_else(|| {
-            outcome.element_id.and_then(|id| {
-                project.requests.iter().find(|item| {
-                    item.targets.iter().any(|target| {
-                        matches!(target,
-                crate::RequestTarget::Element { id: target_id, .. } if *target_id == id)
-                    })
-                })
-            })
-        })
-}
-
-fn operation_kind(operation: &ElementOperation) -> &'static str {
-    match operation {
-        ElementOperation::SetPage { .. } => "setPage",
-        ElementOperation::ReplaceChildren { .. } => "replaceChildren",
-        ElementOperation::SetBehaviour { .. } => "setBehaviour",
-        ElementOperation::Update { .. } => "update",
-        ElementOperation::Insert { .. } => "insert",
-        ElementOperation::Remove { .. } => "remove",
-        ElementOperation::InsertInBoundary { .. } => "insertInBoundary",
-        ElementOperation::AddReference { .. } => "addReference",
-    }
-}
-
-fn untouched_boundaries(
-    project: &Project,
-    pending: &crate::PendingRequest,
-    outcome: &RequestOutcome,
-) -> Vec<Uuid> {
-    let scope = scope_for(project, Some(pending), None);
-    let owner = |id| project.element(id).map(|(page, _)| page.id);
-    let mut received = BTreeSet::new();
-    for operation in &outcome.operations {
-        match operation {
-            ElementOperation::SetPage { page_id, .. }
-            | ElementOperation::InsertInBoundary { page_id, .. } => {
-                received.insert(*page_id);
-            }
-            ElementOperation::SetBehaviour { element_id, .. } => {
-                received.extend(
-                    element_id
-                        .and_then(|id| {
-                            if scope.boundary_pages.contains(&id) {
-                                Some(id)
-                            } else {
-                                owner(id)
-                            }
-                        })
-                        .or_else(|| {
-                            element_id
-                                .is_none()
-                                .then_some(scope.behaviour_page)
-                                .flatten()
-                        }),
-                );
-            }
-            ElementOperation::ReplaceChildren { .. } => {
-                received.extend(outcome.element_id.and_then(owner));
-            }
-            ElementOperation::Update { patches } => {
-                received.extend(patches.iter().filter_map(|patch| owner(patch.element_id)));
-            }
-            ElementOperation::Insert { parent_id, .. } => {
-                received.extend(owner(*parent_id));
-            }
-            ElementOperation::Remove { element_id } => {
-                received.extend(owner(*element_id));
-            }
-            ElementOperation::AddReference { .. } => {}
-        }
-    }
-    pending
-        .targets
-        .iter()
-        .filter_map(|target| match target {
-            crate::RequestTarget::Boundary { page, .. }
-                if !received.contains(page)
-                    && project
-                        .page(*page)
-                        .is_ok_and(|page| page.elements.is_empty()) =>
-            {
-                Some(*page)
-            }
-            _ => None,
-        })
-        .collect()
-}
-
-fn boundary_coverage_message(
-    project: &Project,
-    pending: &crate::PendingRequest,
-    untouched: &[Uuid],
-) -> String {
-    let names = untouched
-        .iter()
-        .filter_map(|id| project.page(*id).ok())
-        .map(|page| page.name.as_str())
-        .collect::<Vec<_>>()
-        .join(", ");
-    if pending.boundary_retry_order.is_empty() {
-        format!(
-            "No operations received for {names}. Kept a request for only these boundaries; Generate again to fill them."
-        )
-    } else {
-        format!(
-            "No operations received again for {names}. Stopped retrying these boundaries; the request was not completed."
-        )
-    }
-}
-
-fn normalize_raw_page_patches(
-    value: &mut serde_json::Value,
-    project: &Project,
-    events: &mut Vec<ValidationEvent>,
-) {
-    use serde_json::{Value, json};
-    let Some(outcomes) = value.get_mut("requests").and_then(Value::as_array_mut) else {
-        return;
-    };
-    for outcome in outcomes {
-        let id = |key| {
-            outcome
-                .get(key)
-                .and_then(Value::as_str)
-                .and_then(|value| Uuid::parse_str(value).ok())
-        };
-        let request_id = id("requestId");
-        let anchor = id("elementId");
-        let pending = project.requests.iter().find(|request| Some(request.id) == request_id)
-            .or_else(|| anchor.and_then(|id| project.requests.iter().find(|request| request.targets.iter()
-                .any(|target| matches!(target, crate::RequestTarget::Element { id: target, .. } if *target == id)))));
-        let scope = scope_for(
-            project,
-            pending,
-            anchor.and_then(|id| project.element(id).map(|(page, _)| page.id)),
-        );
-        let Some(operations) = outcome.get_mut("operations").and_then(Value::as_array_mut) else {
-            continue;
-        };
-        let mut repaired = Vec::new();
-        for mut operation in std::mem::take(operations) {
-            if operation.get("kind").and_then(Value::as_str) != Some("update") {
-                repaired.push(operation);
-                continue;
-            }
-            let Some(patches) = operation.get_mut("patches").and_then(Value::as_array_mut) else {
-                repaired.push(operation);
-                continue;
-            };
-            let had_patches = !patches.is_empty();
-            let mut layers = Vec::new();
-            for patch in std::mem::take(patches) {
-                let page_id = patch
-                    .get("elementId")
-                    .and_then(Value::as_str)
-                    .and_then(|id| Uuid::parse_str(id).ok());
-                let Some(page_id) = page_id.filter(|id| project.page(*id).is_ok()) else {
-                    layers.push(patch);
-                    continue;
-                };
-                let background = patch
-                    .get("style")
-                    .and_then(|style| style.get("fill"))
-                    .and_then(Value::as_str)
-                    .filter(|fill| crate::model::valid_swatch(fill));
-                let recovered = background.is_some();
-                repaired.push(json!({"kind":"setPage","pageId":page_id,"name":null,"path":null,"background":background}));
-                if scope.boundary_pages.contains(&page_id) && recovered {
-                    events.push(page_patch_event(project, page_id, true));
-                }
-            }
-            *patches = layers;
-            if !patches.is_empty() || !had_patches {
-                repaired.push(operation);
-            }
-        }
-        *operations = repaired;
-    }
-}
-
-fn page_patch_event(project: &Project, page_id: Uuid, recovered: bool) -> ValidationEvent {
-    ValidationEvent {
-        kind: ValidationEventKind::PagePatch,
-        disposition: if recovered { "warning" } else { "dropped" }.into(),
-        element_id: None,
-        message: format!(
-            "{} {}. Other layer patch fields were ignored; use setPage for boundary properties.",
-            if recovered {
-                "Recovered the page background for"
-            } else {
-                "Skipped a layer patch on boundary"
-            },
-            project
-                .page(page_id)
-                .map(|page| page.name.as_str())
-                .unwrap_or("page")
-        ),
-    }
-}
-
-fn apply_page_operations(
-    project: &mut Project,
-    original: &Project,
-    candidate: &GenerationCandidate,
-) -> GenerationResult<()> {
-    for outcome in &candidate.requests {
-        if outcome.status != RequestStatus::Implemented {
-            continue;
-        }
-        let pending = pending_for(original, outcome);
-        let anchor_page = outcome
-            .element_id
-            .and_then(|id| original.element(id).map(|(page, _)| page.id));
-        let scope = scope_for(original, pending, anchor_page);
-        let operations: Vec<_> = outcome
-            .operations
-            .iter()
-            .filter(|operation| matches!(operation, ElementOperation::SetPage { .. }))
-            .cloned()
-            .collect();
-        apply_operations(
-            project,
-            &scope,
-            outcome.element_id,
-            &operations,
-            candidate,
-            &BTreeMap::new(),
-        )?;
-    }
-    Ok(())
-}
-
-fn resolve_operation_links(
-    operation: &mut ElementOperation,
-    project: &Project,
-    scope: &RequestScope,
-) {
-    fn resolve(url: &mut Option<String>, project: &Project, scope: &RequestScope) {
-        let Some(value) = url.as_deref().map(str::trim) else {
-            return;
-        };
-        if value.is_empty() || value.contains(":") || value.starts_with("//") {
-            return;
-        }
-        let key = value.trim_end_matches('/');
-        let unique = |ids: Vec<Uuid>| {
-            let ids: BTreeSet<_> = ids.into_iter().collect();
-            if ids.len() == 1 {
-                ids.first().copied()
-            } else {
-                None
-            }
-        };
-        let current_path = unique(
-            project
-                .pages
-                .iter()
-                .filter(|page| page.path.trim_end_matches('/').eq_ignore_ascii_case(key))
-                .map(|page| page.id)
-                .collect(),
-        );
-        let names: Vec<_> = project
-            .pages
-            .iter()
-            .filter(|page| page.name.eq_ignore_ascii_case(key.trim_start_matches('/')))
-            .map(|page| page.id)
-            .collect();
-        if current_path.is_none() && names.len() > 1 {
-            return;
-        }
-        let current_name = unique(names);
-        let original = unique(
-            scope
-                .original_routes
-                .iter()
-                .filter(|(_, name, path)| {
-                    path.trim_end_matches('/').eq_ignore_ascii_case(key)
-                        || name.eq_ignore_ascii_case(key.trim_start_matches('/'))
-                })
-                .map(|(id, _, _)| *id)
-                .collect(),
-        );
-        if let Some(page) = current_path
-            .or(current_name)
-            .or(original)
-            .and_then(|id| project.page(id).ok())
-        {
-            *url = Some(page.path.clone());
-        }
-    }
-    fn draft(element: &mut ElementDraft, project: &Project, scope: &RequestScope) {
-        resolve(&mut element.url, project, scope);
-        for child in &mut element.children {
-            draft(child, project, scope);
-        }
-    }
-    match operation {
-        ElementOperation::ReplaceChildren { children } => {
-            for child in children {
-                draft(child, project, scope);
-            }
-        }
-        ElementOperation::Insert { element, .. }
-        | ElementOperation::InsertInBoundary { element, .. } => draft(element, project, scope),
-        ElementOperation::Update { patches } => {
-            for patch in patches {
-                resolve(&mut patch.url, project, scope);
-            }
-        }
-        _ => {}
-    }
-}
-
-fn apply_request(
-    project: &mut Project,
-    original: &Project,
-    page_id: Option<Uuid>,
-    request: &RequestOutcome,
-    candidate: &GenerationCandidate,
-    generated: &BTreeMap<String, Uuid>,
-) -> GenerationResult<()> {
-    if !matches!(request.status, RequestStatus::Implemented) {
-        return Ok(());
-    }
-    // The reply may name the pending request; older replies name one layer. Either way the
-    // request is read before it is changed so its text can become layer history.
-    let pending = pending_for(original, request).cloned();
-    let untouched = pending
-        .as_ref()
-        .map(|pending| untouched_boundaries(original, pending, request))
-        .unwrap_or_default();
-    let anchor_page = page_id.or_else(|| {
-        request
-            .element_id
-            .and_then(|id| project.element(id).map(|(page, _)| page.id))
-    });
-    let scope = scope_for(original, pending.as_ref(), anchor_page);
-    let operations: Vec<_> = request
-        .operations
-        .iter()
-        .filter(|operation| !matches!(operation, ElementOperation::SetPage { .. }))
-        .cloned()
-        .collect();
-    let touched = apply_operations(
-        project,
-        &scope,
-        request.element_id,
-        &operations,
-        candidate,
-        generated,
-    )?;
-    if let Some(pending) = &pending {
-        let outcome = if request.explanation.trim().is_empty() {
-            candidate.summary.clone()
-        } else {
-            request.explanation.clone()
-        };
-        let outcome = if untouched.is_empty() {
-            outcome
-        } else {
-            format!(
-                "{} {outcome}",
-                boundary_coverage_message(project, pending, &untouched)
-            )
-        };
-        record_request_history(project, &touched, pending, &outcome, candidate.job_id);
-        project.requests.retain(|item| item.id != pending.id);
-        if !untouched.is_empty() && pending.boundary_retry_order.is_empty() {
-            let mut remaining = pending.clone();
-            remaining.boundary_retry_order = pending.boundary_order();
-            remaining.targets.retain(|target| {
-                matches!(target,
-                crate::RequestTarget::Boundary { page, .. } if untouched.contains(page))
-            });
-            // The narrowed targets define the follow-up; an old area must not grant more scope.
-            remaining.area = None;
-            project.requests.push(remaining);
-        }
-    }
-    Ok(())
-}
-
-fn apply_pointer_classifications(
-    project: &mut Project,
-    classifications: &[PointerClassification],
-) -> Result<()> {
-    for classification in classifications {
-        let pointer = project
-            .pointers
-            .iter_mut()
-            .find(|pointer| pointer.id == classification.pointer_id)
-            .ok_or_else(|| Error("This pointer no longer exists.".into()))?;
-        if !crate::pointer_needs_classifying(pointer) {
-            continue;
-        }
-        ensure(
-            pointer.comment == classification.comment,
-            "A pointer comment changed before this result was applied.",
-        )?;
-        pointer.play = classification.action.play_action();
-        pointer.play_comment = classification.comment.clone();
-    }
-    Ok(())
-}
-
-/// Apply one validated generation reply as one project state: element operations, pointer
-/// classifications, accepted decisions and the applied job id.
-pub fn apply_generation_output(
-    project: &Project,
-    snapshot: &RequirementsSnapshot,
-    candidate: &GenerationCandidate,
-    accepted_decision_indices: &[usize],
-    generated_pictures: &BTreeMap<String, String>,
-) -> Result<Project> {
-    let mut candidate = candidate.clone();
-    candidate.validate_reply_bounds()?;
-    candidate.normalize(project, &mut Vec::new())?;
-    candidate.validate(snapshot, project)?;
-    let candidate = &candidate;
-    let mut next = project.clone();
-    next.store_request_pictures(&snapshot.request_ids()?)?;
-    next.revision = next
-        .revision
-        .checked_add(1)
-        .ok_or_else(|| Error("Project revision limit reached.".into()))?;
-    ensure(
-        !next.applied_job_ids.contains(&candidate.job_id),
-        "This generation job has already been applied.",
-    )?;
-    let mut generated = BTreeMap::new();
-    for image in &candidate.images {
-        let Some(uri) = generated_pictures.get(&image.key.to_lowercase()) else {
-            continue;
-        };
-        let picture = crate::project_assets::store_picture_uri(uri)?;
-        next.pictures
-            .insert(picture, std::sync::Arc::from(uri.as_str()));
-        generated.insert(image.key.to_lowercase(), picture);
-    }
-    apply_page_operations(&mut next, project, candidate)?;
-    for request in &candidate.requests {
-        if request.status != RequestStatus::Implemented {
-            continue;
-        }
-        let page_id = request
-            .request_id
-            .and_then(|id| next.requests.iter().find(|pending| pending.id == id))
-            .and_then(|pending| pending.targets.iter().find_map(|target| target.page()))
-            .or_else(|| {
-                request
-                    .element_id
-                    .and_then(|id| next.element(id).map(|(page, _)| page.id))
-            });
-        apply_request(&mut next, project, page_id, request, candidate, &generated)?;
-    }
-    apply_pointer_classifications(&mut next, &candidate.pointer_classifications)?;
-    for index in accepted_decision_indices {
-        let proposal = candidate
-            .decision_proposals
-            .get(*index)
-            .ok_or_else(|| Error("An accepted decision is not in this result.".into()))?;
-        if let Some(existing) = next.decisions.iter_mut().find(|decision| {
-            decision.scope == proposal.scope
-                && decision.topic.eq_ignore_ascii_case(proposal.topic.trim())
-        }) {
-            existing.value = proposal.value.trim().into();
-            existing.accepted_at_revision = next.revision;
-        } else {
-            next.decisions.push(crate::Decision {
-                id: Uuid::new_v4(),
-                topic: proposal.topic.trim().into(),
-                value: proposal.value.trim().into(),
-                scope: proposal.scope.clone(),
-                protected: false,
-                accepted_at_revision: next.revision,
-            });
-        }
-    }
-    next.applied_job_ids.push(candidate.job_id);
-    if let Some(dossier) = &mut next.latest_generation
-        && dossier.job_id == candidate.job_id
-    {
-        dossier.application_status = crate::GenerationApplicationStatus::Applied;
-        dossier.applied_at_revision = Some(next.revision);
-        dossier.accepted_decision_indices = accepted_decision_indices.to_vec();
-    }
-    // AI layers arrive without names; give them the same numbered default names as hand edits.
-    let mut used = crate::elements::used_default_names(&next);
-    for page in &mut next.pages {
-        crate::elements::assign_default_names(&mut page.elements, &mut used);
-    }
-    next.validate()?;
-    crate::text_layout::sync_fit_rects(&mut next);
-    crate::adapt::adapt_changed_pages(project, &mut next)?;
-    next.validate()?;
-    Ok(next)
-}
-
-impl Project {
-    pub fn compatible_decision_proposals(
-        &self,
-        snapshot: &RequirementsSnapshot,
-        candidate: &GenerationCandidate,
-    ) -> Result<Vec<usize>> {
-        candidate.validate(snapshot, self)?;
-        let mut selected: Vec<usize> = Vec::new();
-        for (index, proposal) in candidate.decision_proposals.iter().enumerate() {
-            let compatible = |topic: &str, value: &str, scope: &Scope| {
-                !same_topic(topic, &proposal.topic)
-                    || !self.scopes_overlap(scope, &proposal.scope)
-                    || value.trim() == proposal.value.trim()
-            };
-            if self
-                .decisions
-                .iter()
-                .all(|existing| compatible(&existing.topic, &existing.value, &existing.scope))
-                && selected.iter().all(|other| {
-                    let other = &candidate.decision_proposals[*other];
-                    compatible(&other.topic, &other.value, &other.scope)
-                })
-            {
-                selected.push(index);
-            }
-        }
-        Ok(selected)
-    }
-
-    fn scopes_overlap(&self, first: &Scope, second: &Scope) -> bool {
-        match (first, second) {
-            (Scope::Project, _) | (_, Scope::Project) => true,
-            (Scope::Page(first), Scope::Page(second))
-            | (Scope::Element(first), Scope::Element(second)) => first == second,
-            (Scope::Page(page), Scope::Element(element))
-            | (Scope::Element(element), Scope::Page(page)) => self
-                .element(*element)
-                .is_some_and(|(owner, _)| owner.id == *page),
-        }
-    }
-}
-
-fn same_topic(first: &str, second: &str) -> bool {
-    first.trim().to_lowercase() == second.trim().to_lowercase()
-}
-
-fn uuid_schema() -> serde_json::Value {
-    serde_json::json!({"type":"string","pattern":"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"})
-}
-
-fn nullable<T: serde::Serialize>(schema: T) -> serde_json::Value {
-    serde_json::json!({"anyOf":[schema,{"type":"null"}]})
-}
-
-/// Strict structured output requires every draft property, so an omitted optional kind field
-/// arrives as null. The flattened element kind cannot tell a null member from an unknown one,
-/// so remove those nulls before deserialising; every other optional field is an `Option` or has
-/// a default, both of which already read null as absent.
-fn drop_null_optional_draft_fields(value: &mut serde_json::Value) {
-    const NULL_AS_ABSENT: [&str; 4] = ["inputType", "options", "language", "source"];
-    match value {
-        serde_json::Value::Object(object) => {
-            object.retain(|key, member| {
-                !(member.is_null() && NULL_AS_ABSENT.contains(&key.as_str()))
-            });
-            for member in object.values_mut() {
-                drop_null_optional_draft_fields(member);
-            }
-        }
-        serde_json::Value::Array(items) => {
-            for item in items {
-                drop_null_optional_draft_fields(item);
-            }
-        }
-        _ => {}
-    }
-}
-
-fn conform_to_candidate_schema(value: &mut serde_json::Value) {
-    conform_to_schema(value, &candidate_schema());
-}
-
-/// Repair provider drift using the request schema: drop forbidden extra properties, replace
-/// null strings where empty is allowed, and fill missing required properties only with an
-/// allowed empty value. Other values remain for deserialisation and validation to reject.
-pub fn conform_to_schema(value: &mut serde_json::Value, schema: &serde_json::Value) {
-    conform_value(value, schema, schema);
-}
-
-fn conform_value(
-    value: &mut serde_json::Value,
-    schema: &serde_json::Value,
-    root: &serde_json::Value,
-) {
-    let schema = dereference(schema, root);
-    if let Some(branches) = union_branches(schema) {
-        if let Some(branch) = matching_branch(value, branches, root) {
-            conform_value(value, branch, root);
-        }
-        return;
-    }
-    if value.is_null() {
-        if schema_accepts_null(schema) {
-            return;
-        }
-        if matches!(schema.get("type"), Some(serde_json::Value::String(kind)) if kind == "string")
-            && empty_string_is_allowed(schema)
-        {
-            *value = serde_json::Value::String(String::new());
-        }
-        return;
-    }
-    if !value_fits_type(value, schema) {
-        return;
-    }
-    match value {
-        serde_json::Value::Object(object) => {
-            let properties = schema
-                .get("properties")
-                .and_then(serde_json::Value::as_object);
-            if schema
-                .get("additionalProperties")
-                .and_then(serde_json::Value::as_bool)
-                == Some(false)
-                && let Some(properties) = properties
-            {
-                object.retain(|key, _| properties.contains_key(key));
-            }
-            if let Some(required) = schema.get("required").and_then(serde_json::Value::as_array) {
-                for key in required.iter().filter_map(serde_json::Value::as_str) {
-                    if !object.contains_key(key)
-                        && let Some(property) =
-                            properties.and_then(|properties| properties.get(key))
-                        && let Some(empty) = empty_schema_value(property, root)
-                    {
-                        object.insert(key.into(), empty);
-                    }
-                }
-            }
-            for (key, member) in object.iter_mut() {
-                if let Some(property) = properties.and_then(|properties| properties.get(key)) {
-                    conform_value(member, property, root);
-                }
-            }
-        }
-        serde_json::Value::Array(items) => {
-            if let Some(item_schema) = schema.get("items") {
-                for item in items {
-                    conform_value(item, item_schema, root);
-                }
-            }
-        }
-        _ => {}
-    }
-}
-
-/// No objects, numbers, booleans or nonempty enum members can be inferred from omission.
-fn empty_schema_value(
-    schema: &serde_json::Value,
-    root: &serde_json::Value,
-) -> Option<serde_json::Value> {
-    use serde_json::{Value, json};
-    let schema = dereference(schema, root);
-    // Prefer null for nullable properties, including nullable enums and union branches.
-    let null = Value::Null;
-    if schema_allows_empty(&null, schema, root) {
-        return Some(null);
-    }
-    [json!([]), json!("")]
-        .into_iter()
-        .find(|empty| schema_allows_empty(empty, schema, root))
-}
-
-fn schema_allows_empty(
-    value: &serde_json::Value,
-    schema: &serde_json::Value,
-    root: &serde_json::Value,
-) -> bool {
-    let schema = dereference(schema, root);
-    if let Some(branches) = union_branches(schema) {
-        let matches = branches
-            .iter()
-            .filter(|branch| schema_allows_empty(value, branch, root))
-            .count();
-        return if schema.get("oneOf").is_some() {
-            matches == 1
-        } else {
-            matches > 0
-        };
-    }
-    if schema
-        .get("const")
-        .is_some_and(|constant| constant != value)
-        || schema
-            .get("enum")
-            .and_then(serde_json::Value::as_array)
-            .is_some_and(|values| !values.contains(value))
-    {
-        return false;
-    }
-    // An explicit type or literal constraint must establish that the value is safe.
-    if (schema.get("type").is_none()
-        && schema.get("enum").is_none()
-        && schema.get("const").is_none())
-        || !value_fits_type(value, schema)
-    {
-        return false;
-    }
-    if value.is_array() {
-        return schema
-            .get("minItems")
-            .and_then(serde_json::Value::as_u64)
-            .unwrap_or(0)
-            == 0;
-    }
-    value.is_null()
-        || (value.is_string() && empty_string_is_allowed(schema) && schema.get("format").is_none())
-}
-
-fn dereference<'a>(
-    mut schema: &'a serde_json::Value,
-    root: &'a serde_json::Value,
-) -> &'a serde_json::Value {
-    // The candidate schema only uses flat root-relative definitions, and element drafts refer to
-    // themselves through them, so one lookup per level is enough.
-    while let Some(name) = schema
-        .get("$ref")
-        .and_then(serde_json::Value::as_str)
-        .and_then(|reference| reference.strip_prefix("#/$defs/"))
-    {
-        let Some(target) = root.get("$defs").and_then(|defs| defs.get(name)) else {
-            break;
-        };
-        schema = target;
-    }
-    schema
-}
-
-fn union_branches(schema: &serde_json::Value) -> Option<&[serde_json::Value]> {
-    ["anyOf", "oneOf"].iter().find_map(|keyword| {
-        schema
-            .get(*keyword)
-            .and_then(serde_json::Value::as_array)
-            .map(Vec::as_slice)
-    })
-}
-
-/// Choose the union branch a value belongs to, or none when the choice is ambiguous so the value
-/// is left untouched. A null belongs to a null branch, a value that fits exactly one branch type
-/// belongs to that branch, and object branches are told apart by their single-valued enum or const
-/// discriminator, such as `kind`.
-fn matching_branch<'a>(
-    value: &serde_json::Value,
-    branches: &'a [serde_json::Value],
-    root: &serde_json::Value,
-) -> Option<&'a serde_json::Value> {
-    if value.is_null() {
-        if branches
-            .iter()
-            .any(|branch| schema_accepts_null(dereference(branch, root)))
-        {
-            return None;
-        }
-        return single(branches);
-    }
-    let typed: Vec<&serde_json::Value> = branches
-        .iter()
-        .filter(|branch| value_fits_type(value, dereference(branch, root)))
-        .collect();
-    if let [only] = typed.as_slice() {
-        return Some(only);
-    }
-    if value.is_object() {
-        let discriminated: Vec<&serde_json::Value> = typed
-            .iter()
-            .copied()
-            .filter(|branch| discriminator_matches(value, dereference(branch, root)))
-            .collect();
-        if let [only] = discriminated.as_slice() {
-            return Some(only);
-        }
-    }
-    None
-}
-
-fn single(branches: &[serde_json::Value]) -> Option<&serde_json::Value> {
-    match branches {
-        [only] => Some(only),
-        _ => None,
-    }
-}
-
-fn schema_accepts_null(schema: &serde_json::Value) -> bool {
-    match schema.get("type") {
-        None => true,
-        Some(serde_json::Value::String(kind)) => kind == "null",
-        Some(serde_json::Value::Array(kinds)) => {
-            kinds.iter().any(|kind| kind.as_str() == Some("null"))
-        }
-        _ => false,
-    }
-}
-
-fn value_fits_type(value: &serde_json::Value, schema: &serde_json::Value) -> bool {
-    fn fits(value: &serde_json::Value, kind: &str) -> bool {
-        match kind {
-            "object" => value.is_object(),
-            "array" => value.is_array(),
-            "string" => value.is_string(),
-            "number" => value.is_number(),
-            "integer" => value.as_i64().is_some() || value.as_u64().is_some(),
-            "boolean" => value.is_boolean(),
-            "null" => value.is_null(),
-            _ => true,
-        }
-    }
-    match schema.get("type") {
-        None => true,
-        Some(serde_json::Value::String(kind)) => fits(value, kind),
-        Some(serde_json::Value::Array(kinds)) => kinds
-            .iter()
-            .filter_map(serde_json::Value::as_str)
-            .any(|kind| fits(value, kind)),
-        _ => true,
-    }
-}
-
-/// An empty string is only substituted where the schema does not rule it out: a const, an enum
-/// without `""`, a positive minimum length or any pattern can all forbid it.
-fn empty_string_is_allowed(schema: &serde_json::Value) -> bool {
-    if schema
-        .get("const")
-        .is_some_and(|value| value.as_str() != Some(""))
-    {
-        return false;
-    }
-    if let Some(values) = schema.get("enum").and_then(serde_json::Value::as_array)
-        && !values.iter().any(|value| value.as_str() == Some(""))
-    {
-        return false;
-    }
-    if schema.get("minLength").and_then(serde_json::Value::as_u64) > Some(0) {
-        return false;
-    }
-    schema.get("pattern").is_none()
-}
-
-fn discriminator_matches(value: &serde_json::Value, branch: &serde_json::Value) -> bool {
-    let (Some(object), Some(properties)) = (
-        value.as_object(),
-        branch
-            .get("properties")
-            .and_then(serde_json::Value::as_object),
-    ) else {
-        return false;
-    };
-    let mut declared = 0;
-    let mut matched = 0;
-    for (key, property) in properties {
-        let Some(expected) = discriminator_value(property) else {
-            continue;
-        };
-        declared += 1;
-        if object.get(key) == Some(expected) {
-            matched += 1;
-        }
-    }
-    declared > 0 && declared == matched
-}
-
-fn discriminator_value(schema: &serde_json::Value) -> Option<&serde_json::Value> {
-    if let Some(constant) = schema.get("const") {
-        return Some(constant);
-    }
-    match schema
-        .get("enum")
-        .and_then(serde_json::Value::as_array)?
-        .as_slice()
-    {
-        [only] => Some(only),
-        _ => None,
-    }
-}
-
-pub fn candidate_schema() -> serde_json::Value {
-    use serde_json::json;
-    fn object(properties: serde_json::Value) -> serde_json::Value {
-        let required: Vec<_> = properties
-            .as_object()
-            .expect("schema properties are objects")
-            .keys()
-            .cloned()
-            .collect();
-        json!({"type":"object","additionalProperties":false,"required":required,"properties":properties})
-    }
-    fn text(maximum: usize) -> serde_json::Value {
-        json!({"type":"string","description":format!("At most {maximum} Unicode characters, enforced by Desegnos before acceptance.")})
-    }
-    fn array(items: serde_json::Value, maximum: usize) -> serde_json::Value {
-        json!({"type":"array","maxItems":maximum,"items":items})
-    }
-    let uuid = uuid_schema();
-    let colour = json!({"type":"string","description":"#rgb, #rrggbb or #rrggbbaa; transparent is allowed."});
-    let stroke = object(
-        json!({"color":nullable(colour.clone()),"width":{"type":"number","minimum":0,"maximum":256}}),
-    );
-    let shadow = object(
-        json!({"x":{"type":"number"},"y":{"type":"number"},"blur":{"type":"number","minimum":0,"maximum":4096},"color":nullable(colour.clone())}),
-    );
-    let text_style = object(json!({
-        "fontFamily":text(200),"size":{"type":"number","minimum":1,"maximum":512},
-        "weight":{"type":"integer","minimum":1,"maximum":1000},"italic":{"type":"boolean"},
-        "lineHeight":{"type":"number","minimum":0,"maximum":10},
-        "letterSpacing":{"type":"number","minimum":-100,"maximum":100},
-        "color":colour.clone(),"align":{"type":"string","enum":["left","center","right"]}
-    }));
-    let style = object(json!({
-        "fill":nullable(colour),"stroke":stroke,"radius":{"type":"number","minimum":0},
-        "opacity":{"type":"number","minimum":0,"maximum":1},"shadow":shadow,"textStyle":text_style
-    }));
-    let rect = object(
-        json!({"x":{"type":"number"},"y":{"type":"number"},"width":{"type":"number","minimum":0},"height":{"type":"number","minimum":0}}),
-    );
-    let layout = json!({"anyOf":[
-        object(json!({"kind":{"type":"string","enum":["free"]}})),
-        object(json!({"kind":{"type":"string","enum":["stack"]},"direction":{"type":"string","enum":["row","column"]},"gap":{"type":"number"},"padding":{"type":"number"},"align":{"type":"string","enum":["start","center","end","stretch"]},"justify":{"type":"string","enum":["start","center","end","spaceBetween"]},"wrap":{"type":"boolean"}})),
-        object(json!({"kind":{"type":"string","enum":["grid"]},"columns":{"type":"integer","minimum":1,"maximum":64},"gap":{"type":"number"},"padding":{"type":"number"}}))
-    ]});
-    let kind = json!({"type":"string","enum":["box","group","text","ellipse","line","image","button","link","input","textarea","select","checkbox","radio","video","audio","embed","code"]});
-    let input_type = json!({"type":"string","enum":["text","email","password","number","search","tel","url","date","time","color","range","file"]});
-    // Strict structured output requires every property of every object, so a field the reply may
-    // omit is required and reads null as omitted. The element kind fields stay nullable because
-    // the flattened kind decides which of them applies.
-    let draft = object(json!({
-        "kind":kind,"rect":rect,"name":nullable(text(120)),
-        "rotation":{"type":"number"},"visible":{"type":"boolean"},"locked":{"type":"boolean"},
-        "style":style,"text":text(16_384),"image":nullable(uuid.clone()),
-        "imageRequest":nullable(text(120)),"url":nullable(text(2048)),"layout":layout,
-        "inputType":nullable(input_type.clone()),
-        "options":nullable(json!({"type":"array","minItems":1,"maxItems":100,"items":text(120)})),
-        "language":nullable(text(40)),"source":nullable(text(200_000)),
-        "children":{"type":"array","maxItems":512,"items":{"$ref":"#/$defs/element"}}
-    }));
-    let update = object(json!({
-        "elementId":uuid.clone(),"rect":nullable(rect.clone()),"rotation":nullable(json!({"type":"number"})),
-        "style":nullable(style),"text":nullable(text(16_384)),"url":nullable(text(2048)),
-        "layout":nullable(layout),"visible":nullable(json!({"type":"boolean"})),
-        "locked":nullable(json!({"type":"boolean"})),"name":nullable(text(120)),
-        "inputType":nullable(input_type),
-        "options":nullable(json!({"type":"array","maxItems":100,"items":text(120)})),
-        "language":nullable(text(40)),"source":nullable(text(200_000)),
-        "sizeId":{"anyOf":[uuid.clone(),{"type":"null"}],"description":"Change only this linked size of the boundary; null keeps the base values every size inherits."}
-    }));
-    let reference_kind = json!({"anyOf":[
-        object(json!({"kind":{"type":"string","enum":["note"]},"text":text(16_384)})),
-        object(json!({"kind":{"type":"string","enum":["link"]},"url":text(2048),"title":text(120)})),
-        object(json!({"kind":{"type":"string","enum":["swatch"]},"color":text(32)}))
-    ]});
-    let operation = json!({"anyOf":[
-        object(json!({"kind":{"type":"string","enum":["replaceChildren"]},"children":{"type":"array","maxItems":512,"items":{"$ref":"#/$defs/element"}}})),
-        object(json!({"kind":{"type":"string","enum":["update"]},"patches":{"type":"array","minItems":1,"maxItems":2048,"items":update}})),
-        object(json!({"kind":{"type":"string","enum":["insert"]},"parentId":uuid.clone(),"index":nullable(json!({"type":"integer","minimum":0})),"element":{"$ref":"#/$defs/element"}})),
-        object(json!({"kind":{"type":"string","enum":["remove"]},"elementId":uuid.clone()})),
-        object(json!({"kind":{"type":"string","enum":["setBehaviour"]},"elementId":nullable(uuid.clone()),"behaviour":text(crate::MAX_PROMPT_CHARS)})),
-        object(json!({"kind":{"type":"string","enum":["insertInBoundary"]},"pageId":uuid.clone(),"sizeId":nullable(uuid.clone()),"element":{"$ref":"#/$defs/element"}})),
-        object(json!({"kind":{"type":"string","enum":["setPage"]},"pageId":uuid.clone(),"name":nullable(json!({"type":"string","minLength":1,"maxLength":120})),"path":nullable(json!({"type":"string","minLength":1,"maxLength":1024})),"background":nullable(json!({"type":"string","pattern":"^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$"}))})),
-        object(json!({"kind":{"type":"string","enum":["addReference"]},"item":object(json!({"rect":rect,"kind":reference_kind}))}))
-    ]});
-    let action = json!({"anyOf":[
-        object(json!({"kind":{"type":"string","enum":["goTo"]},"boundary":uuid.clone()})),
-        object(json!({"kind":{"type":"string","enum":["show"]},"element":uuid.clone()})),
-        object(json!({"kind":{"type":"string","enum":["hide"]},"element":uuid.clone()})),
-        object(json!({"kind":{"type":"string","enum":["toggle"]},"element":uuid.clone()})),
-        object(json!({"kind":{"type":"string","enum":["swap"]},"element":uuid.clone(),"withElement":uuid.clone()})),
-        object(json!({"kind":{"type":"string","enum":["exportOnly"]}}))
-    ]});
-    let scope = json!({"anyOf":[
-        object(json!({"kind":{"type":"string","enum":["project"]}})),
-        object(json!({"kind":{"type":"string","enum":["page"]},"id":uuid.clone()})),
-        object(json!({"kind":{"type":"string","enum":["element"]},"id":uuid.clone()}))
-    ]});
-    let schema = object(json!({
-        "jobId":uuid,
-        "requirementsSha256":{"type":"string","pattern":"^[0-9a-f]{64}$"},
-        "summary":text(16_384),
-        "requests":array(object(json!({
-            "requestId":nullable(uuid.clone()),
-            "elementId":nullable(uuid.clone()),
-            "status":{"type":"string","enum":["implemented","conflict"]},
-            "explanation":text(MAX_EXPLANATION_CHARS),
-            "operations":array(operation,2048)
-        })),MAX_GENERATION_REQUESTS),
-        "images":array(object(json!({
-            "key":text(120),"prompt":text(4000),
-            "width":{"type":"integer","minimum":16,"maximum":4096},
-            "height":{"type":"integer","minimum":16,"maximum":4096}
-        })),MAX_GENERATED_IMAGES),
-        "pointerClassifications":array(object(json!({
-            "pointerId":uuid.clone(),"comment":text(16_384),"action":action
-        })),MAX_POINTER_CLASSIFICATIONS),
-        "decisionProposals":array(object(json!({
-            "topic":text(120),"value":text(16_384),"scope":scope,"rationale":text(MAX_EXPLANATION_CHARS)
-        })),MAX_DECISION_PROPOSALS),
-        "criticism":array(object(json!({
-            "elementId":nullable(uuid.clone()),
-            "message":text(MAX_EXPLANATION_CHARS),
-            "suggestion":text(MAX_EXPLANATION_CHARS)
-        })),MAX_DESIGN_CRITICISMS)
-    }));
-    let mut schema = schema;
-    schema["$defs"] = json!({"element": draft});
-    schema
 }
 
 #[derive(ts_rs::TS, Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -2890,16 +1141,9 @@ pub struct ValidationEvent {
     pub message: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ValidationFailureKind {
-    ReplyStructure,
-    Image,
-    Pointer,
-    Element,
-}
 #[derive(Debug, Clone)]
 pub struct GenerationValidationError {
-    pub kind: ValidationFailureKind,
+    pub kind: ValidationEventKind,
     pub element_id: Option<Uuid>,
     pub message: String,
 }
@@ -2912,7 +1156,7 @@ impl std::error::Error for GenerationValidationError {}
 impl From<Error> for GenerationValidationError {
     fn from(error: Error) -> Self {
         Self {
-            kind: ValidationFailureKind::ReplyStructure,
+            kind: ValidationEventKind::ReplyStructure,
             element_id: None,
             message: error.0,
         }
@@ -2923,169 +1167,4 @@ impl From<GenerationValidationError> for Error {
         Self(error.message)
     }
 }
-pub fn validation_failure_kind(error: &GenerationValidationError) -> ValidationEventKind {
-    match error.kind {
-        ValidationFailureKind::ReplyStructure => ValidationEventKind::ReplyStructure,
-        ValidationFailureKind::Image => ValidationEventKind::Image,
-        ValidationFailureKind::Pointer => ValidationEventKind::Pointer,
-        ValidationFailureKind::Element => ValidationEventKind::Element,
-    }
-}
-type GenerationResult<T> = std::result::Result<T, GenerationValidationError>;
-
-pub fn result_schema() -> serde_json::Value {
-    let mut schema = candidate_schema();
-    schema["properties"]["requests"]["description"] = serde_json::json!(
-        "Deliver every requested layer exactly once. A conflict must not withhold other ready layers."
-    );
-    schema["properties"]["pointerClassifications"]["description"] = serde_json::json!(
-        "Classify every pointer listed under pointer comments to classify, and no other. Copy its current comment exactly. Leave empty when none are listed."
-    );
-    schema
-}
-
-#[cfg(test)]
-mod conformance_tests {
-    use super::*;
-    use serde_json::{Value, json};
-
-    const JOB: &str = "3d1f9c56-0000-4000-8000-000000000000";
-    const SHA: &str = "0000000000000000000000000000000000000000000000000000000000000000";
-    const PAGE: &str = "3d1f9c56-0000-4000-8000-000000000001";
-
-    fn candidate(operations: Value) -> Value {
-        json!({
-            "jobId": JOB,
-            "requirementsSha256": SHA,
-            "summary": "Built the page",
-            "requests": [{
-                "requestId": null,
-                "elementId": null,
-                "status": "implemented",
-                "explanation": "Built the page",
-                "operations": operations
-            }],
-            "images": [],
-            "pointerClassifications": [],
-            "decisionProposals": [],
-            "criticism": []
-        })
-    }
-
-    fn conformed(mut value: Value) -> Value {
-        conform_to_candidate_schema(&mut value);
-        value
-    }
-
-    fn element() -> Value {
-        json!({
-            "kind": "text",
-            "rect": {"x": 0.0, "y": 0.0, "width": 400.0, "height": 40.0},
-            "text": "Hero"
-        })
-    }
-
-    #[test]
-    fn missing_properties_only_receive_schema_allowed_empty_values() {
-        let schema = json!({
-            "type":"object", "required":["array","nullable","text","number","id","choice","nonempty"],
-            "properties":{
-                "array":{"type":"array"},
-                "nullable":{"enum":["known",null]},
-                "text":{"type":"string"},
-                "number":{"type":"number"},
-                "id":uuid_schema(),
-                "choice":{"type":"string","enum":["known"]},
-                "nonempty":{"type":"array","minItems":1}
-            }
-        });
-        let mut value = json!({});
-        conform_to_schema(&mut value, &schema);
-        assert_eq!(value, json!({"array":[],"nullable":null,"text":""}));
-    }
-
-    #[test]
-    fn unknown_keys_are_dropped_at_depth() {
-        let mut operation = json!({
-            "kind": "insert",
-            "parentId": PAGE,
-            "index": null,
-            "element": element()
-        });
-        operation["element"]["style"] = json!({"opacity": 1.0, "borderWidth": 2});
-        operation["position"] = json!(3);
-        let value = conformed(candidate(json!([operation])));
-        let operation = &value["requests"][0]["operations"][0];
-        assert_eq!(operation["kind"], json!("insert"), "{operation}");
-        assert!(operation.get("position").is_none(), "{operation}");
-        assert!(
-            operation["element"]["style"].get("borderWidth").is_none(),
-            "{operation}"
-        );
-        assert_eq!(operation["element"]["style"]["opacity"], json!(1.0));
-        assert_eq!(operation["element"]["text"], json!("Hero"));
-    }
-
-    #[test]
-    fn a_boundary_insert_with_a_stray_index_loses_it() {
-        let value = conformed(candidate(json!([{
-            "kind": "insertInBoundary",
-            "pageId": PAGE,
-            "sizeId": null,
-            "index": 0,
-            "element": element()
-        }])));
-        let operation = &value["requests"][0]["operations"][0];
-        assert!(operation.get("index").is_none(), "{operation}");
-        assert_eq!(operation["element"]["text"], json!("Hero"));
-    }
-
-    #[test]
-    fn a_null_string_becomes_empty_where_the_schema_allows_it() {
-        let mut value = candidate(json!([]));
-        value["summary"] = Value::Null;
-        value["requests"][0]["explanation"] = Value::Null;
-        let value = conformed(value);
-        assert_eq!(value["summary"], json!(""));
-        assert_eq!(value["requests"][0]["explanation"], json!(""));
-    }
-
-    #[test]
-    fn a_null_enum_member_is_left_for_validation() {
-        let mut value = candidate(json!([]));
-        value["requests"][0]["status"] = Value::Null;
-        let value = conformed(value);
-        assert_eq!(value["requests"][0]["status"], Value::Null);
-        let error = serde_json::from_value::<GenerationCandidate>(value)
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains("invalid type: null"), "{error}");
-    }
-
-    #[test]
-    fn schema_repair_is_idempotent() {
-        let mut drafted = element();
-        drafted["style"] = json!({"opacity": 1.0, "textStyle": {"size": 32.0, "align": "center"}});
-        drafted["children"] = json!([]);
-        let value = candidate(json!([
-            {"kind": "insertInBoundary", "pageId": PAGE, "sizeId": null, "element": drafted},
-            {"kind": "remove", "elementId": PAGE}
-        ]));
-        let value = conformed(value);
-        let before = serde_json::to_string(&value).unwrap();
-        let after = conformed(value);
-        assert_eq!(serde_json::to_string(&after).unwrap(), before);
-    }
-
-    #[test]
-    fn a_type_mismatch_other_than_null_still_fails() {
-        let mut value = candidate(json!([]));
-        value["summary"] = json!(42);
-        let value = conformed(value);
-        assert_eq!(value["summary"], json!(42));
-        let error = serde_json::from_value::<GenerationCandidate>(value)
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains("invalid type: integer"), "{error}");
-    }
-}
+pub(crate) type GenerationResult<T> = std::result::Result<T, GenerationValidationError>;

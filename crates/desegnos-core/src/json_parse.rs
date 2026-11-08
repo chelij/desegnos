@@ -76,7 +76,7 @@ pub fn fill_reply_echoes(
         ("requirementsSha256", sha256.into()),
     ] {
         if let Some(actual) = object.get(key) {
-            crate::ensure(
+            crate::validation::ensure(
                 actual.as_str() == Some(expected.as_str()),
                 format!("The AI reply has a different {key} from this frozen request."),
             )?;
@@ -96,7 +96,7 @@ pub fn parse_structured_reply<T: DeserializeOwned>(
 ) -> crate::Result<T> {
     let mut value = parse_provider_json(source).map_err(|error| crate::Error(error.to_string()))?;
     fill_reply_echoes(&mut value, job_id, sha256)?;
-    crate::conform_to_schema(&mut value, schema);
+    crate::schema_conformance::conform_to_schema(&mut value, schema);
     serde_json::from_value(value).map_err(|error| crate::Error(error.to_string()))
 }
 
@@ -144,7 +144,12 @@ pub fn complete_truncated_operations(text: &str) -> Option<String> {
                 } else {
                     None
                 };
-                stack.push(Open { array: character == '[', key, last_child_end: None, start: index + 1 });
+                stack.push(Open {
+                    array: character == '[',
+                    key,
+                    last_child_end: None,
+                    start: index + 1,
+                });
             }
             '}' | ']' => {
                 stack.pop()?;
@@ -166,7 +171,9 @@ pub fn complete_truncated_operations(text: &str) -> Option<String> {
     let operations = stack
         .iter()
         .rposition(|open| open.array && open.key.as_deref() == Some("operations"))?;
-    let cut = stack[operations].last_child_end.unwrap_or(stack[operations].start);
+    let cut = stack[operations]
+        .last_child_end
+        .unwrap_or(stack[operations].start);
     let mut repaired = text[..cut].trim_end().to_owned();
     for open in stack[..=operations].iter().rev() {
         repaired.push(if open.array { ']' } else { '}' });
@@ -244,22 +251,49 @@ mod tests {
     #[test]
     fn truncated_operations_handle_cuts_in_strings_and_between_items() {
         for (cut, kept) in [
-            (r#"{"requests":[{"requestId":"r","operations":[{"kind":"setPage","pageId":"a","name":"Ho"#, 0),
-            (r#"{"requests":[{"requestId":"r","operations":[{"kind":"setPage","pageId":"a"},"#, 1),
-            (r#"{"requests":[{"requestId":"r","operations":[{"kind":"setPage","pageId":"a","name":"A \"quoted\" {brace"},{"#, 1),
+            (
+                r#"{"requests":[{"requestId":"r","operations":[{"kind":"setPage","pageId":"a","name":"Ho"#,
+                0,
+            ),
+            (
+                r#"{"requests":[{"requestId":"r","operations":[{"kind":"setPage","pageId":"a"},"#,
+                1,
+            ),
+            (
+                r#"{"requests":[{"requestId":"r","operations":[{"kind":"setPage","pageId":"a","name":"A \"quoted\" {brace"},{"#,
+                1,
+            ),
         ] {
             let repaired = super::complete_truncated_operations(cut).unwrap();
             let value: serde_json::Value = serde_json::from_str(&repaired).unwrap();
-            assert_eq!(value["requests"][0]["operations"].as_array().unwrap().len(), kept, "{cut}");
+            assert_eq!(
+                value["requests"][0]["operations"].as_array().unwrap().len(),
+                kept,
+                "{cut}"
+            );
         }
     }
 
     #[test]
     fn complete_or_operation_free_text_is_not_repaired() {
-        assert_eq!(super::complete_truncated_operations(r#"{"requests":[]}"#), None);
-        assert_eq!(super::complete_truncated_operations(r#"{"summary":"cut"#), None);
-        let empty = super::complete_truncated_operations(r#"{"requests":[{"requestId":"r","operations":[{"kind":"ins"#).unwrap();
+        assert_eq!(
+            super::complete_truncated_operations(r#"{"requests":[]}"#),
+            None
+        );
+        assert_eq!(
+            super::complete_truncated_operations(r#"{"summary":"cut"#),
+            None
+        );
+        let empty = super::complete_truncated_operations(
+            r#"{"requests":[{"requestId":"r","operations":[{"kind":"ins"#,
+        )
+        .unwrap();
         let value: serde_json::Value = serde_json::from_str(&empty).unwrap();
-        assert!(value["requests"][0]["operations"].as_array().unwrap().is_empty());
+        assert!(
+            value["requests"][0]["operations"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
     }
 }

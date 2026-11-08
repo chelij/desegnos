@@ -4,9 +4,12 @@
 //! behaviours travel as frozen AI requests. Replies contain marked JavaScript; HTML and CSS
 //! always come from the model. Pointer fingerprints are SHA-256
 //! digests over each pointer's marked fragments, so later code changes can be spotted.
+use crate::limits::{MAX_EXPORT_BYTES, MAX_EXPORT_FILE_BYTES, MAX_EXPORT_FILES};
 use crate::{
-    Element, ElementKind, Error, ExportRecord, ExportedPage, ExportedPointer, GenerationMode, Page,
-    Pointer, PointerSource, PointerTarget, Project, Result, digest, element_subtree, ensure,
+    Error, Result, element_edit::element_subtree, elements::Element, elements::ElementKind,
+    model::ExportRecord, model::ExportedPage, model::ExportedPointer, model::GenerationMode,
+    model::Page, model::Pointer, model::PointerSource, model::PointerTarget, model::Project,
+    validation::digest, validation::ensure,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -14,9 +17,6 @@ use uuid::Uuid;
 
 use crate::web_codegen;
 
-pub const MAX_EXPORT_FILE_BYTES: usize = 4 * 1024 * 1024;
-pub const MAX_EXPORT_BYTES: usize = 64 * 1024 * 1024;
-pub const MAX_EXPORT_FILES: usize = 2_000;
 /// The schema version of the exported manifest.
 pub(crate) const SLIDES_FILE: &str = "slides.pdf";
 pub(crate) const BEHAVIOURS_FILE: &str = "behaviours.js";
@@ -43,18 +43,13 @@ pub struct ExportBehaviour {
 
 pub fn validate_behaviours(behaviours: &BTreeMap<Uuid, ExportBehaviour>) -> Result<()> {
     ensure(
-        behaviours.len() <= crate::MAX_POINTERS,
+        behaviours.len() <= crate::limits::MAX_POINTERS,
         "Too many cached behaviours.",
     )?;
     let mut total = 0;
     for (id, behaviour) in behaviours {
         ensure(
-            !id.is_nil()
-                && behaviour.fingerprint.len() == 64
-                && behaviour
-                    .fingerprint
-                    .bytes()
-                    .all(|byte| byte.is_ascii_hexdigit()),
+            !id.is_nil() && crate::limits::is_sha256_hex(&behaviour.fingerprint),
             "Invalid behaviour fingerprint.",
         )?;
         ensure(
@@ -77,7 +72,7 @@ pub fn behaviour_fingerprint(project: &Project, pointer: &Pointer) -> String {
         .chain(target.filter(|endpoint| *endpoint != source))
         .map(|(id, element_id)| {
             project.pages.iter().find(|page| page.id == id).map(|page| {
-                let elements = crate::resolve_for_size(project, page, page.base_size_id());
+                let elements = crate::elements::resolve_for_size(project, page, page.base_size_id());
                 let elements = if let Some(id) = element_id.filter(|_| !pointer.is_behaviour()) {
                     crate::elements::find_element(&elements, id)
                         .map(std::slice::from_ref)
@@ -94,7 +89,9 @@ pub fn behaviour_fingerprint(project: &Project, pointer: &Pointer) -> String {
 
 fn cached_behaviour<'a>(project: &'a Project, pointer: &Pointer) -> Option<&'a ExportBehaviour> {
     // Keep-comment explicitly forgets the pointer record and must also invalidate reuse.
-    if pointer.kind != crate::PointerKind::Change || crate::pointer_is_broken(project, pointer) {
+    if pointer.kind != crate::model::PointerKind::Change
+        || crate::pointers::pointer_is_broken(project, pointer)
+    {
         return None;
     }
     let record = project.last_export.as_ref()?;
@@ -114,7 +111,7 @@ pub struct ExportPagePlan {
     pub page_id: Uuid,
     pub name: String,
     pub path: String,
-    pub output: crate::OutputType,
+    pub output: crate::model::OutputType,
     /// The planned primary output: HTML, PNG, or the shared slide deck.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub file: String,
@@ -260,7 +257,7 @@ pub fn preview_page_ids(project: &Project, chosen: Uuid) -> Vec<Uuid> {
 pub fn slide_order(project: &Project) -> Vec<&Page> {
     let slides: Vec<&Page> = included_pages(project)
         .into_iter()
-        .filter(|page| page.output == crate::OutputType::Slide)
+        .filter(|page| page.output == crate::model::OutputType::Slide)
         .collect();
     if slides.len() < 2 {
         return slides;
@@ -269,10 +266,10 @@ pub fn slide_order(project: &Project) -> Vec<&Page> {
     let mut next: BTreeMap<Uuid, Uuid> = BTreeMap::new();
     let mut targets: BTreeSet<Uuid> = BTreeSet::new();
     for pointer in &project.pointers {
-        if !matches!(pointer.play, Some(crate::PlayAction::GoTo { .. })) {
+        if !matches!(pointer.play, Some(crate::model::PlayAction::GoTo { .. })) {
             continue;
         }
-        let Some(crate::PlayAction::GoTo { boundary }) = pointer.play else {
+        let Some(crate::model::PlayAction::GoTo { boundary }) = pointer.play else {
             continue;
         };
         if !ids.contains(&boundary) {
@@ -327,7 +324,7 @@ pub fn page_file(page: &Page) -> String {
     if page.path == "/" {
         "index.html".into()
     } else {
-        format!("{}.html", crate::file_stem(&page.path))
+        format!("{}.html", crate::export::file_stem(&page.path))
     }
 }
 
@@ -391,7 +388,7 @@ pub fn plan_export(project: &Project, page_ids: &[Uuid], job_id: Uuid) -> Result
     for page in &ai_pages {
         let mut sizes = Vec::new();
         for size in &page.sizes {
-            let elements = crate::resolve_for_size(project, page, size.id);
+            let elements = crate::elements::resolve_for_size(project, page, size.id);
             collect_links(&elements, &mut linked_ids);
             collect_pictures(project, &elements, &mut assets);
             collect_attachments(&elements, &mut references_json, &mut allowed_urls);
@@ -413,9 +410,9 @@ pub fn plan_export(project: &Project, page_ids: &[Uuid], job_id: Uuid) -> Result
         let mut pointer_json = Vec::new();
         for pointer in &touching {
             collect_pointer_reference(project, pointer, &mut references_json, &mut allowed_urls);
-            if pointer.kind != crate::PointerKind::Change
+            if pointer.kind != crate::model::PointerKind::Change
                 || pointer.comment.trim().is_empty()
-                || crate::pointer_is_broken(project, pointer)
+                || crate::pointers::pointer_is_broken(project, pointer)
                 || cached_behaviour(project, pointer).is_some()
             {
                 continue;
@@ -437,8 +434,8 @@ pub fn plan_export(project: &Project, page_ids: &[Uuid], job_id: Uuid) -> Result
                 "from": pointer.from,
                 "to": pointer.to,
                 "kind": pointer.kind,
-                "target": crate::pointer_target_value(project, &pointer.to, pointer.kind),
-                "permission": crate::pointer_target_description(project, &pointer.to, pointer.kind),
+                "target": crate::pointers::pointer_target_value(project, &pointer.to, pointer.kind),
+                "permission": crate::pointers::pointer_target_description(project, &pointer.to, pointer.kind),
             }));
         }
         pages_json.push(serde_json::json!({
@@ -483,19 +480,17 @@ pub fn plan_export(project: &Project, page_ids: &[Uuid], job_id: Uuid) -> Result
         .iter()
         .map(|page| {
             let file = match page.output {
-                crate::OutputType::Webpage | crate::OutputType::AppScreen => {
-                    unique_file(&mut used_files, page_file(page))
-                }
-                crate::OutputType::Image => {
+                crate::model::OutputType::Webpage => unique_file(&mut used_files, page_file(page)),
+                crate::model::OutputType::Image => {
                     let png = unique_file(
                         &mut used_files,
-                        format!("{}.png", crate::file_stem(&page.name)),
+                        format!("{}.png", crate::export::file_stem(&page.name)),
                     );
                     let svg_stem = png.trim_end_matches(".png").to_owned();
                     used_files.insert(format!("{svg_stem}.svg"));
                     png
                 }
-                crate::OutputType::Slide => SLIDES_FILE.into(),
+                crate::model::OutputType::Slide => SLIDES_FILE.into(),
             };
             ExportPagePlan {
                 page_id: page.id,
@@ -503,14 +498,14 @@ pub fn plan_export(project: &Project, page_ids: &[Uuid], job_id: Uuid) -> Result
                 path: page.path.clone(),
                 output: page.output,
                 companion_file: match page.output {
-                    crate::OutputType::Webpage | crate::OutputType::AppScreen => Some(unique_file(
+                    crate::model::OutputType::Webpage => Some(unique_file(
                         &mut used_files,
                         format!("{}.css", file.trim_end_matches(".html")),
                     )),
-                    crate::OutputType::Image => {
+                    crate::model::OutputType::Image => {
                         Some(format!("{}.svg", file.trim_end_matches(".png")))
                     }
-                    crate::OutputType::Slide => None,
+                    crate::model::OutputType::Slide => None,
                 },
                 file,
                 size_ids: page.sizes.iter().map(|size| size.id).collect(),
@@ -587,8 +582,8 @@ pub fn plan_comment(
         !job_id.is_nil(),
         "An export job needs a nonempty identifier.",
     )?;
-    let source = crate::source_description(project, &pointer.from);
-    let target = crate::pointer_target_description(project, &pointer.to, pointer.kind);
+    let source = crate::pointers::source_description(project, &pointer.from);
+    let target = crate::pointers::pointer_target_description(project, &pointer.to, pointer.kind);
     let design = serde_json::json!({
         "pointer": {
             "pointerId": pointer.id,
@@ -604,7 +599,7 @@ comment. Do not ask for behaviour the code does not have, and do not add markup,
 around it or a trailing period when the old comment has none.";
     let markdown = format!(
         "{heading}## Generation setting\n```json\n{{\"generationMode\":\"{mode}\"}}\n```\n\n## Export task\n{instructions}\n\n## Marked code\n```json\n{design}\n```\n",
-        heading = crate::current_requirements_heading(),
+        heading = crate::requirements::current_requirements_heading(),
         mode = mode_name(project.generation_mode),
         design = serde_json::to_string(&design).map_err(|error| Error(error.to_string()))?,
     );
@@ -653,7 +648,7 @@ Answer only with the JSON object specified by the schema.";
     // triple a request that is already megabytes; compact JSON carries the same context.
     format!(
         "{heading}## Generation setting\n```json\n{{\"generationMode\":\"{mode}\"}}\n```\n\n## Export task\n{instructions}\n\n## Design\n```json\n{design}\n```\n",
-        heading = crate::current_requirements_heading(),
+        heading = crate::requirements::current_requirements_heading(),
         mode = mode_name(mode),
         design = serde_json::to_string(design).unwrap_or_else(|_| "{}".into()),
     )
@@ -719,13 +714,16 @@ fn comment_schema(job_id: Uuid, sha256: &str) -> serde_json::Value {
 }
 
 /// The frozen provider request for a plan.
-pub fn plan_snapshot(project: &Project, plan: &ExportPlan) -> crate::RequirementsSnapshot {
+pub fn plan_snapshot(
+    project: &Project,
+    plan: &ExportPlan,
+) -> crate::requirements::RequirementsSnapshot {
     let mut dependencies = BTreeMap::new();
     dependencies.insert(
         "export".into(),
         format!("{}:{}", project.id, project.revision),
     );
-    crate::RequirementsSnapshot {
+    crate::requirements::RequirementsSnapshot {
         job_id: plan.job_id,
         project_id: plan.project_id,
         base_revision: plan.base_revision,
@@ -736,7 +734,7 @@ pub fn plan_snapshot(project: &Project, plan: &ExportPlan) -> crate::Requirement
         dependencies,
         dossier_context: None,
         request_history: String::new(),
-        capabilities: Some(crate::GenerationCapabilities {
+        capabilities: Some(crate::requirements::GenerationCapabilities {
             web_search: false,
             image_downloads: 0,
             image_generation: None,
@@ -767,13 +765,17 @@ fn reply_json(text: &str) -> Result<&str> {
 }
 
 pub fn parse_export_reply(plan: &ExportPlan, text: &str) -> Result<ExportReply> {
-    let value: ExportReply =
-        crate::parse_structured_reply(reply_json(text)?, &plan.schema, plan.job_id, &plan.sha256)
-            .map_err(|error| {
-            Error(format!(
-                "The AI export reply did not match the expected files. {error}"
-            ))
-        })?;
+    let value: ExportReply = crate::json_parse::parse_structured_reply(
+        reply_json(text)?,
+        &plan.schema,
+        plan.job_id,
+        &plan.sha256,
+    )
+    .map_err(|error| {
+        Error(format!(
+            "The AI export reply did not match the expected files. {error}"
+        ))
+    })?;
     validate_export_reply(plan, &value)?;
     Ok(value)
 }
@@ -788,7 +790,7 @@ pub struct CommentReply {
 }
 
 pub fn parse_comment_reply(plan: &ExportPlan, text: &str) -> Result<String> {
-    let value: CommentReply = crate::parse_structured_reply(
+    let value: CommentReply = crate::json_parse::parse_structured_reply(
         reply_json(text)?,
         &comment_schema(plan.job_id, &plan.sha256),
         plan.job_id,
@@ -1160,22 +1162,26 @@ fn add_direct_outputs(
     if !slides.is_empty() {
         let mut render = Vec::new();
         for page in &slides {
-            render.push(crate::RenderPage::new(project, page, page.base_size_id())?);
+            render.push(crate::render::RenderPage::new(
+                project,
+                page,
+                page.base_size_id(),
+            )?);
         }
         files.insert(
             plan.pages
                 .iter()
-                .find(|page| page.output == crate::OutputType::Slide)
+                .find(|page| page.output == crate::model::OutputType::Slide)
                 .expect("planned slides")
                 .file
                 .clone(),
-            crate::slide_pdf(project, &render)?,
+            crate::render::slide_pdf(project, &render)?,
         );
     }
     for page in plan
         .pages
         .iter()
-        .filter(|page| page.output == crate::OutputType::Image)
+        .filter(|page| page.output == crate::model::OutputType::Image)
     {
         let source = project
             .pages
@@ -1187,16 +1193,16 @@ fn add_direct_outputs(
             .companion_file
             .as_ref()
             .ok_or_else(|| Error("The image export plan has no SVG file.".into()))?;
-        let elements = crate::resolve_for_size(project, source, source.base_size_id());
-        if crate::is_vector_representable(&elements) {
+        let elements = crate::elements::resolve_for_size(project, source, source.base_size_id());
+        if crate::export::is_vector_representable(&elements) {
             files.insert(
                 svg.clone(),
-                crate::boundary_svg(project, source, source.base_size_id())?.into_bytes(),
+                crate::render::boundary_svg(project, source, source.base_size_id())?.into_bytes(),
             );
         }
         files.insert(
             png,
-            crate::boundary_png(project, source, source.base_size_id())?,
+            crate::render::boundary_png(project, source, source.base_size_id())?,
         );
     }
     Ok(())
@@ -1544,12 +1550,12 @@ fn collect_pointer_reference(
         PointerTarget::Reference { item_id } => {
             if let Some(item) = project.reference.iter().find(|item| item.id == *item_id) {
                 match &item.kind {
-                    crate::ReferenceKind::Element { element, .. } => references.push(serde_json::json!({"kind":"element", "element": crate::requirements::reference_element_value(element)})),
-                    crate::ReferenceKind::Note { text } => references.push(serde_json::json!({
+                    crate::model::ReferenceKind::Element { element, .. } => references.push(serde_json::json!({"kind":"element", "element": crate::requirements::reference_element_value(element)})),
+                    crate::model::ReferenceKind::Note { text } => references.push(serde_json::json!({
                         "kind": "note",
                         "text": text.chars().take(4000).collect::<String>(),
                     })),
-                    crate::ReferenceKind::Link { url, title } => {
+                    crate::model::ReferenceKind::Link { url, title } => {
                         urls.insert(url.clone());
                         references.push(serde_json::json!({
                             "kind": "link",
@@ -1557,10 +1563,10 @@ fn collect_pointer_reference(
                             "url": url,
                         }));
                     }
-                    crate::ReferenceKind::Swatch { color } => {
+                    crate::model::ReferenceKind::Swatch { color } => {
                         references.push(serde_json::json!({"kind": "swatch", "colour": color}))
                     }
-                    crate::ReferenceKind::Image { name, .. } => {
+                    crate::model::ReferenceKind::Image { name, .. } => {
                         references.push(serde_json::json!({"kind": "picture", "name": name}))
                     }
                 }

@@ -1,14 +1,16 @@
 //! Text-only project-local history, derived from frozen job requests and outcomes.
-use crate::{Project, Rect, RequestOutcome, RequestStatus, RequirementsSnapshot, Result, ensure};
+use crate::limits::{MAX_RECORDS_PER_LAYER, REQUEST_HISTORY_CHARS};
+use crate::{
+    Result, generation::RequestOutcome, generation::RequestStatus, model::Project, model::Rect,
+    requirements::RequirementsSnapshot, validation::ensure,
+};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 pub(crate) const HEADING: &str = "\n## Earlier requests for these layers (context only — the current requests are the authority)\n\n```jsonl\n";
-pub const REQUEST_HISTORY_CHARS: usize = 3000;
 pub(crate) const RETRY_HEADING: &str = "\n## Previous validation rejections for retried layers\n\nThese are app checks, not user rejections. Correct each listed layer while preserving the current scope.\n\n```jsonl\n";
 const REJECTION_CHARS: usize = 600;
-const MAX_RECORDS_PER_LAYER: usize = 5;
-pub(crate) const RETRY_HISTORY_CHARS: usize = crate::MAX_GENERATION_REQUESTS * 4500;
+pub(crate) const RETRY_HISTORY_CHARS: usize = crate::limits::MAX_GENERATION_REQUESTS * 4500;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EarlierRequest {

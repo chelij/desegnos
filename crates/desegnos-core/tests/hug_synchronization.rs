@@ -1,14 +1,12 @@
-//! Small timing probe; run only this test with --release -- --nocapture.
 use desegnos_core::{
     Appearance, BoundaryKind, Command, ElementKind, ElementMove, ElementOverride, Project, Rect,
     SizingMode, Viewport, empty_element,
 };
-use std::time::Instant;
 
 #[test]
-fn benchmark_canvas_edits() {
+fn canvas_edits_preserve_fixed_geometry_and_synchronize_hug() {
     let mut project = Project::new(
-        "Benchmark".into(),
+        "Canvas edits".into(),
         Viewport {
             width: 1080,
             height: 1080,
@@ -51,8 +49,7 @@ fn benchmark_canvas_edits() {
                 all_sizes: false,
             })
             .collect();
-        let start = Instant::now();
-        for _ in 0..10 {
+        for _ in 0..2 {
             let changed = project
                 .apply(
                     project.revision,
@@ -64,17 +61,12 @@ fn benchmark_canvas_edits() {
             assert_eq!(changed.pages[0].elements.len(), 640);
             assert_eq!(changed.pages[0].elements[0].rect.x, 8.0);
         }
-        println!(
-            "move {count}/640: {:.3} ms",
-            start.elapsed().as_secs_f64() * 100.0
-        );
     }
     let mut copies = project.pages[0].elements[..320].to_vec();
     for element in &mut copies {
         element.id = uuid::Uuid::new_v4();
     }
-    let start = Instant::now();
-    for _ in 0..10 {
+    for _ in 0..2 {
         let changed = project
             .apply(
                 project.revision,
@@ -90,21 +82,6 @@ fn benchmark_canvas_edits() {
             .unwrap();
         assert_eq!(changed.pages[0].elements.len(), 960);
     }
-    println!(
-        "insert 320 into 640: {:.3} ms",
-        start.elapsed().as_secs_f64() * 100.0
-    );
-    let start = Instant::now();
-    for _ in 0..10 {
-        std::hint::black_box(serde_json::to_vec(&project).unwrap());
-    }
-    println!(
-        "serialize 640: {:.3} ms ({} bytes)",
-        start.elapsed().as_secs_f64() * 100.0,
-        serde_json::to_vec(&project).unwrap().len()
-    );
-
-    // Guard the fast path: Hug in a descendant or only in a size override still synchronizes.
     let mut child = empty_element(
         ElementKind::Box,
         Rect {
