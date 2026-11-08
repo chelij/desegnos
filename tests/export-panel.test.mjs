@@ -4,9 +4,9 @@ import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { compileModules } from './typescript.mjs';
 
-const modules = await compileModules(['src/projectCanvas/exportPanel.tsx']);
+const modules = await compileModules(['src/dock/exportPanel.tsx']);
 try {
-  const { ExportPanel } = await modules.load('projectCanvas/exportPanel.js');
+  const { ExportPanel } = await modules.load('dock/exportPanel.js');
   const noop = () => {};
   const action = async () => {};
   const render = (patch) => renderToStaticMarkup(React.createElement(ExportPanel, {

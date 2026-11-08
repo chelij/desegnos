@@ -1,6 +1,7 @@
 import { type BoundaryToolKind, boundaryDefaults } from './boundaryDefaults';
 import { type PointerEvent as ReactPointerEvent } from 'react';
-import type { Boundary, Point } from '../projectCanvasGeometry';
+import type { Boundary } from './boundaryLayout';
+import type { Point } from './camera';
 import type { Element, ElementKind, Project, Rect } from '../types';
 import { hasManySizes } from './sizes';
 import { elementLocalRect, findPageElement, snapPoint } from './elementGeometry';

@@ -2,9 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { compileModules } from './typescript.mjs';
 
-const modules = await compileModules(['src/projectCanvas/elementLayers.tsx']);
+const modules = await compileModules(['src/dock/elementLayers.tsx']);
 try {
-  const { layerDropPosition, layerDropTarget, resolveLayerDrop } = await modules.load('projectCanvas/elementLayers.js');
+  const { layerDropPosition, layerDropTarget, resolveLayerDrop } = await modules.load('dock/elementLayers.js');
   const layer = (id, kind, children = []) => ({ id, kind, name: id, text: '', language: '', visible: true, locked: false, children });
   const source = (parentId, index, id = 'x') => ({ pageId: 'page', sizeId: 'size', id, parentId, index });
   const target = (parentId, index) => ({ pageId: 'page', sizeId: 'size', parentId, index });

@@ -1,10 +1,9 @@
 import type { CSSProperties } from 'react';
 import { Icon } from '../icons';
 import { withShortcut } from '../shortcuts';
-import type { SelectionDistribution } from './arrange';
+import type { SelectionAlign, SelectionDistribution } from './arrange';
 import type { ScreenRect } from './surface';
 
-export type SelectionAlign = 'left' | 'centre' | 'right' | 'top' | 'middle' | 'bottom';
 
 /** Whether an edit lands in this linked size only, or all sizes together. */
 export type EditScope = 'this' | 'all';

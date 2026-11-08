@@ -2,11 +2,14 @@ import { boundaryName, boundaryIcon, pageKind, projectKind } from '../projectCan
 import { useMemo, useRef, useState, type ReactNode } from 'react';
 import { Icon, type IconName } from '../icons';
 import { CompactNumberField, CompactTextField } from '../CompactField';
-import { boundariesByPosition, canvasTargetKey, pointerBroken, pointerLabel, type Boundary, type CanvasTarget } from '../projectCanvasGeometry';
+import { boundariesByPosition, type Boundary } from '../projectCanvas/boundaryLayout';
+import { canvasTargetKey, type CanvasTarget } from '../projectCanvas/canvasTargets';
+import { pointerBroken } from '../projectCanvas/pointerGeometry';
+import { pointerLabel } from '../projectCanvas/pointerNames';
 import type { ElementPatch, NamedView, Project, ReferenceItem } from '../types';
 import { ColourField } from '../projectCanvas/ColourField';
 import { nestedLayerIds } from '../projectCanvas/links';
-import { ElementLayers, matchingLayerIds } from '../projectCanvas/elementLayers';
+import { ElementLayers, matchingLayerIds } from './elementLayers';
 import { resolveForSize } from '../projectCanvas/sizes';
 import { SectionHeader, useSectionOpen, PropsSection, useCollapsedSections, setSectionCollapsed } from './sections';
 import { MAX_NAMED_VIEW_NAME_CHARS } from '../generated/limits';
@@ -87,7 +90,6 @@ export function CanvasLayers({ project, boundaries, selection, focused, selectBo
   views: NamedView[]; addView: () => void; jumpToView: (view: NamedView) => void;
   renameView: (view: NamedView, name: string) => void; removeView: (view: NamedView) => void;
 }) {
-  // Boundary trees share the dock's remembered section state with every other section.
   const collapsed = useCollapsedSections();
   const toggleSection = (key: string) => setSectionCollapsed(key, !collapsed.has(key));
   const [query, setQuery] = useState('');

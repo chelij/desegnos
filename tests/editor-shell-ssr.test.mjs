@@ -41,7 +41,7 @@ try {
   await rewrite(modules.out);
   const { default: App } = await modules.load('App.js');
 
-  const { ExportPanel } = await modules.load('projectCanvas/exportPanel.js');
+  const { ExportPanel } = await modules.load('dock/exportPanel.js');
   const { BoundaryProperties } = await modules.load('dock/properties.js');
   const noop = () => {};
   const { pageKind, projectKind, boundaryDefaults, layoutKind, outputKind } = await modules.load('projectCanvas/boundaryDefaults.js');

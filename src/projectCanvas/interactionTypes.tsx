@@ -1,10 +1,9 @@
 import { type BoundaryToolKind } from './boundaryDefaults';
 import type { ProjectEdits } from '../session/projectEdits';
-import {
-  GRID_SPACING, drawnBoundaryRect, MIN_SIZE, snapValue, type Boundary,
-  type CanvasCamera, type CanvasTarget, type ElementTarget, type FrameCorner, type Point,
-  type RequestBox,
-} from '../projectCanvasGeometry';
+import { GRID_SPACING, MIN_SIZE, snapValue, type CanvasCamera, type Point } from './camera';
+import { drawnBoundaryRect } from './boundaryLayout';
+import { type CanvasTarget, type ElementTarget, type RequestBox } from './canvasTargets';
+import { type FrameCorner } from './referenceGeometry';
 import type { Command, WorkspaceView, Element, ElementKind, NamedView, PointerSource, PointerStateView, PointerTarget, Project, Rect } from '../types';
 import type { ProjectTool, RequestToolShape } from '../EditorTools';
 import { type ScreenRect } from './surface';
@@ -14,25 +13,25 @@ import { TOOL_ACTIONS, type ShortcutAction } from '../shortcuts';
 import { type PlayState } from './play';
 import { elementPath, elementParents, findPageElement, axisLockedDelta, type ElementCorner } from './elementGeometry';
 
-export type PanDrag = { kind: 'pan'; pointerId: number; start: Point; camera: CanvasCamera; moved: boolean; pageId: string | null };
+type PanDrag = { kind: 'pan'; pointerId: number; start: Point; camera: CanvasCamera; moved: boolean; pageId: string | null };
 
 export type MoveBoundaryDrag = { kind: 'move-boundary'; pointerId: number; start: Point; pageId: string; sizeId: string; origin: Rect; rect: Rect; moved: boolean };
 
-export type DrawBoundaryDrag = { kind: 'draw-boundary'; pointerId: number; start: Point; rect: Rect; moved: boolean };
+type DrawBoundaryDrag = { kind: 'draw-boundary'; pointerId: number; start: Point; rect: Rect; moved: boolean };
 
-export type DrawRequestAreaDrag = { kind: 'draw-request-area'; pointerId: number; start: Point; current: Point; shape: 'rect' | 'ellipse' | 'freehand'; points: Point[]; keys?: { square: boolean; fromCentre: boolean }; moved: boolean };
+type DrawRequestAreaDrag = { kind: 'draw-request-area'; pointerId: number; start: Point; current: Point; shape: 'rect' | 'ellipse' | 'freehand'; points: Point[]; keys?: { square: boolean; fromCentre: boolean }; moved: boolean };
 
-export type DrawNoteDrag = { kind: 'draw-note'; pointerId: number; start: Point; rect: Rect; moved: boolean };
+type DrawNoteDrag = { kind: 'draw-note'; pointerId: number; start: Point; rect: Rect; moved: boolean };
 
-export type DrawPointerDrag = { kind: 'draw-pointer'; pointerId: number; start: Point; source: PointerSource; sourceRect: Rect; current: Point; moved: boolean };
+type DrawPointerDrag = { kind: 'draw-pointer'; pointerId: number; start: Point; source: PointerSource; sourceRect: Rect; current: Point; moved: boolean };
 
-export type ReattachPointerDrag = { kind: 'reattach-pointer'; pointerId: number; start: Point; pointer: string; end: 'from' | 'to'; original: PointerSource | PointerTarget; fixed: Point; current: Point; moved: boolean };
+type ReattachPointerDrag = { kind: 'reattach-pointer'; pointerId: number; start: Point; pointer: string; end: 'from' | 'to'; original: PointerSource | PointerTarget; fixed: Point; current: Point; moved: boolean };
 
 export type MoveTarget = { kind: 'reference'; itemId: string; origin: Rect };
 
 export type MoveSelectionDrag = { kind: 'move-selection'; pointerId: number; start: Point; targets: MoveTarget[]; rects: Record<string, Rect>; moved: boolean; axisLocked: boolean };
 
-export type ResizeReferenceDrag = { kind: 'resize-reference'; pointerId: number; start: Point; corner: FrameCorner; itemId: string; origin: Rect; rect: Rect; moved: boolean };
+type ResizeReferenceDrag = { kind: 'resize-reference'; pointerId: number; start: Point; corner: FrameCorner; itemId: string; origin: Rect; rect: Rect; moved: boolean };
 
 export type ElementEntry = { id: string; pageId: string; sizeId: string; allSizes: boolean; parentId: string | null; index: number; element: Element; rect: Rect; parentOrigin: Point; boundaryOrigin: Point; world: Rect };
 
@@ -46,15 +45,15 @@ export type LinkDecision = { copies: LinkCopy[]; error: string | null; screen: S
 
 export type MoveElementsDrag = { kind: 'move-elements'; pointerId: number; start: Point; entries: ElementEntry[]; rects: Record<string, Rect>; moved: boolean; duplicate: boolean; axisLocked: boolean };
 
-export type ResizeElementDrag = { kind: 'resize-element'; pointerId: number; start: Point; corner: ElementCorner; entry: ElementEntry; rect: Rect; moved: boolean };
+type ResizeElementDrag = { kind: 'resize-element'; pointerId: number; start: Point; corner: ElementCorner; entry: ElementEntry; rect: Rect; moved: boolean };
 
 export type DrawElementDrag = { kind: 'draw-element'; pointerId: number; start: Point; pointerStart: Point; pageId: string; sizeId: string; parentId: string | null; parentOrigin: Point; boundary: Rect; rect: Rect; elementKind: ElementKind; line: boolean; rotation: number; moved: boolean };
 
-export type MarqueeDrag = { kind: 'marquee'; pointerId: number; start: Point; current: Point; pageId: string | null; additive: boolean; moved: boolean };
+type MarqueeDrag = { kind: 'marquee'; pointerId: number; start: Point; current: Point; pageId: string | null; additive: boolean; moved: boolean };
 
-export type ZoomDrag = { kind: 'zoom-rect'; pointerId: number; start: Point; current: Point; zoomOut: boolean; moved: boolean };
+type ZoomDrag = { kind: 'zoom-rect'; pointerId: number; start: Point; current: Point; zoomOut: boolean; moved: boolean };
 
-export type PolygonDrag = { kind: 'polygon-request'; pointerId: number; points: Point[] };
+type PolygonDrag = { kind: 'polygon-request'; pointerId: number; points: Point[] };
 
 export type Drag = PolygonDrag | PanDrag | MoveBoundaryDrag | DrawBoundaryDrag | DrawRequestAreaDrag | DrawNoteDrag | DrawPointerDrag | ReattachPointerDrag | MoveSelectionDrag | ResizeReferenceDrag | MoveElementsDrag | ResizeElementDrag | DrawElementDrag | MarqueeDrag | ZoomDrag;
 
@@ -110,7 +109,7 @@ export type ProjectCanvasProps = {
   tool: ProjectTool; insertKind: ElementKind | null; onTool: (tool: ProjectTool) => void;
   boundaryKind: BoundaryToolKind; requestShape: RequestToolShape; focusedSize: string | null;
   widthPreview?: { sizeId: string; width: number } | null;
-  onZoom: (zoom: number) => void; onLayout: (boundaries: Boundary[]) => void;
+  onZoom: (zoom: number) => void;
   onPlayBoundary: (id: string) => void;
   play: PlayState; onPlayElement: (pageId: string, elementId: string) => void; onPlayExit: () => void;
   preview: PreviewState | null; previewClose: () => void; previewRefresh: () => void;
@@ -141,7 +140,7 @@ export function chainPage(nodes: HTMLElement[]): string | null {
   return nodes[0]?.closest<HTMLElement>('[data-boundary]')?.dataset.boundary ?? null;
 }
 
-export function enteredGroup(project: Project, selection: CanvasTarget[], groupId: string): boolean {
+function enteredGroup(project: Project, selection: CanvasTarget[], groupId: string): boolean {
   return selection.some(target => target.kind === 'element' && (target.elementId === groupId || elementParents(project, target.pageId, target.elementId).includes(groupId)));
 }
 

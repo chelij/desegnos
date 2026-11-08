@@ -41,8 +41,8 @@ try {
     assert.match(html, />Recover</);
   });
 
-  await test('App keeps the choice in the recovery surface, never in the global top bar', async () => {
-    const source = await readFile(join(root, 'src/App.tsx'), 'utf8');
+  await test('The panel surfaces keep the choice in the recovery surface, never in the global top bar', async () => {
+    const source = await readFile(join(root, 'src/PanelSurfaces.tsx'), 'utf8');
     assert.doesNotMatch(source, /<RecoveryBanner/);
     assert.equal((source.match(/<RecoveryChoice \{\.\.\.recovery\} \/>/g) ?? []).length, 1);
   });

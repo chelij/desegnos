@@ -1,13 +1,11 @@
-import { useEditor } from './session/useEditor';
-
-
-import { isNestedLayer } from './projectCanvas/links';
-import { ElementProperties } from './projectCanvas/elementProperties';
-import { BoundaryProperties, PointerProperties, ProjectProperties, ReferenceProperties, RequestProperties } from './dock/properties';
-import type { Pointer, PointerSource, PointerStateView } from './types';
-import { behaviourCommand, behaviourFor, behaviourSourceKey } from './projectCanvas/behaviours';
-import { propertySelection } from './dock/selection';
-type PropertiesEditor = Pick<ReturnType<typeof useEditor>, 'project' | 'canvasSelection' | 'canvasFocus' | 'pointerStateMap' | 'exports' | 'keepPointerComment' | 'keepPointerThis' | 'mergePointerClash' | 'run' | 'canvasRef' | 'removeCanvasSelection' | 'mutate' | 'behaviourFocus' | 'pending' | 'aiConnected' | 'edits' | 'attachReferenceContext' | 'renameCanvasElement' | 'setCanvasElementRequest' | 'setError' | 'canvasFocusSize' | 'widthPreview' | 'setWidthPreview' | 'selectCanvasBoundary' | 'updateCanvasPage' | 'updateCanvasPageSize' | 'addCanvasPageSize' | 'deleteBoundary' | 'renameProject' | 'showDotGrid' | 'changeGridFlags' | 'view' | 'save' | 'removedWithUndo'>;
+import type { Editor } from '../session/useEditor';
+import { isNestedLayer } from '../projectCanvas/links';
+import { ElementProperties } from './elementProperties';
+import { BoundaryProperties, PointerProperties, ProjectProperties, ReferenceProperties, RequestProperties } from './properties';
+import type { Pointer, PointerSource, PointerStateView } from '../types';
+import { behaviourCommand, behaviourFor, behaviourSourceKey } from '../projectCanvas/behaviours';
+import { propertySelection } from './selection';
+type PropertiesEditor = Pick<Editor, 'project' | 'canvasSelection' | 'canvasFocus' | 'pointerStateMap' | 'exports' | 'keepPointerComment' | 'keepPointerThis' | 'mergePointerClash' | 'run' | 'canvasRef' | 'removeCanvasSelection' | 'mutate' | 'behaviourFocus' | 'pending' | 'aiConnected' | 'edits' | 'attachReferenceContext' | 'renameCanvasElement' | 'setCanvasElementRequest' | 'setError' | 'canvasFocusSize' | 'widthPreview' | 'setWidthPreview' | 'selectCanvasBoundary' | 'updateCanvasPage' | 'updateCanvasPageSize' | 'addCanvasPageSize' | 'deleteBoundary' | 'renameProject' | 'showDotGrid' | 'changeGridFlags' | 'view' | 'save' | 'removedWithUndo'>;
 
 export function PropertiesPanel({ editor }: { editor: PropertiesEditor }) {
   const { project, canvasSelection, canvasFocus, pointerStateMap, exports, keepPointerComment, keepPointerThis, mergePointerClash, run, canvasRef, removeCanvasSelection, mutate, behaviourFocus, pending, aiConnected, edits, attachReferenceContext, renameCanvasElement, setCanvasElementRequest, setError, canvasFocusSize, widthPreview, setWidthPreview, selectCanvasBoundary, updateCanvasPage, updateCanvasPageSize, addCanvasPageSize, deleteBoundary, renameProject, showDotGrid, changeGridFlags, view, save, removedWithUndo } = editor;

@@ -147,39 +147,48 @@ test-results/                Local evidence from smoke, startup and vault runs (
 
 | File | Owns |
 | --- | --- |
-| [App.tsx](../src/App.tsx) | Root screen composition: project tabs, menus, canvas, start page, recovery and notices; editor state/actions are assembled by `session/useEditor.tsx`. |
+| [App.tsx](../src/App.tsx), [AppBar.tsx](../src/AppBar.tsx), [CanvasWorkspace.tsx](../src/CanvasWorkspace.tsx), [StatusBar.tsx](../src/StatusBar.tsx), [ShellNotices.tsx](../src/ShellNotices.tsx), [PanelSurfaces.tsx](../src/PanelSurfaces.tsx), [EditorDialogs.tsx](../src/EditorDialogs.tsx) | Root screen. `App` mounts `useEditor` and the start page; the other files each render one part of the editor (app bar and tabs, tool strip + canvas + dock, status bar, notices, side panels, dialogs) and take only the fields they need from the `Editor` result. |
 | [main.tsx](../src/main.tsx) | Mounts `App`, installs the usage log and history-step listener, and loads global CSS. |
 | [api.ts](../src/api.ts) | `native` invocation (command names typed by `CommandName`) plus usage recording; `edit(revision, command)` for revision-checked edits. |
-| [types.ts](../src/types.ts) | Re-exports `src/generated/types.ts` and holds the few frontend-only types (`Viewport`, `ElementKind`, `Placements`, `kindFields`). |
+| [types.ts](../src/types.ts) | Re-exports `src/generated/types.ts` and holds the few frontend-only types (`Viewport`, `ElementKind`, `kindFields`). |
 | [generated/](../src/generated) | Written from Rust by `npm run generate:contract`; never edit: `types.ts` (every payload, view, `Command`, error kind), `limits.ts` (limits, size presets, grid default) and `commands.ts` (`CommandName`, `IMAGE_DRAG_EVENT`). |
 | [ProjectCanvas.tsx](../src/ProjectCanvas.tsx) | Canvas rendering and overlays; `useProjectCanvas.tsx` assembles camera, gestures, Request tools, selection, inline editing and drops. |
-| [projectCanvasGeometry.ts](../src/projectCanvasGeometry.ts) | Canvas geometry and shared zoom/grid math: boundary layout/push/snap, element/request/reference boxes and reference rects, pointer routes, selection targets, camera fit/zoom, dot grid. Its `FrameCorner`, `frameBox`, `drawnFrameRect` and `referenceFrameRect` names predate the Frame → Request rename. |
+| [projectCanvas/camera.ts](../src/projectCanvas/camera.ts) | Zoom levels, grid snap, camera fit/pan/zoom, dot grid and rect helpers shared by everything on the canvas. |
+| [projectCanvas/boundaryLayout.ts](../src/projectCanvas/boundaryLayout.ts) | Boundary layout from pages and sizes, drawing, push-apart and moves, boundary hit tests. |
+| [projectCanvas/referenceGeometry.ts](../src/projectCanvas/referenceGeometry.ts) | Reference-item rects: notes, attachments, resize, push-apart and moves. Its `FrameCorner`, `frameBox`, `drawnFrameRect` and `referenceFrameRect` names predate the Frame → Request rename. |
+| [projectCanvas/canvasTargets.ts](../src/projectCanvas/canvasTargets.ts) | Selection target types (`CanvasTarget`, `RequestBox`) and the helpers that filter, toggle and key them. |
+| [projectCanvas/pointerGeometry.ts](../src/projectCanvas/pointerGeometry.ts), [pointerNames.ts](../src/projectCanvas/pointerNames.ts), [autoLinks.ts](../src/projectCanvas/autoLinks.ts), [pointerLayout.ts](../src/projectCanvas/pointerLayout.ts) | Pointer routes and hit tests, endpoint names and labels, automatic link lines between boundaries, and the layout (element boxes, moving boundaries) a pointer is drawn against. |
 | [EditorDock.tsx](../src/EditorDock.tsx) | Dock host, panel weights, splitters and resize behavior. |
 | [dock/panelState.tsx](../src/dock/panelState.tsx), [dock/sections.tsx](../src/dock/sections.tsx) | Persisted dock width/visibility and shared section collapse state. |
 | [dock/controls.tsx](../src/dock/controls.tsx), [dock/properties.tsx](../src/dock/properties.tsx) | Reusable property fields and boundary/reference/request/project/pointer editors. |
 | [dock/layers.tsx](../src/dock/layers.tsx) | Layers, requests, pointers, styles and named-view tree. |
-| [PropertiesPanel.tsx](../src/PropertiesPanel.tsx), [dock/selection.ts](../src/dock/selection.ts) | Selection derivation and property-editor/behaviour wiring. |
+| [dock/propertiesPanel.tsx](../src/dock/propertiesPanel.tsx), [dock/selection.ts](../src/dock/selection.ts) | Selection derivation and property-editor/behaviour wiring. |
 | [projectCanvas/elementFacts.ts](../src/projectCanvas/elementFacts.ts) | Shared frontend element kind labels, placeholder text, layer names and tree lookup for canvas and pointer UI. |
 | [EditorTools.tsx](../src/EditorTools.tsx) | Left tool strip, Request area-shape flyout (Pick, Rectangle, Ellipse, Polygon, Freehand), insert flyout, zoom control, labels and shortcut tooltips. |
 | [shortcuts.ts](../src/shortcuts.ts) | Action metadata, tool mapping, keys, derived display labels, matching and keyboard help. F starts a Request on the selection or picks the Request tool, Shift+F takes a selected shape's outline, and Delete/Backspace removes the selection. |
 | [CommandPalette.tsx](../src/CommandPalette.tsx), [palette.css](../src/palette.css) | Searchable quick actions, ranking, recent commands and keyboard navigation. |
 | [CompactField.tsx](../src/CompactField.tsx), [numberExpression.ts](../src/numberExpression.ts) | Compact draft fields, commit/cancel, number expressions, rounding and clamping. |
 | [ModalDialog.tsx](../src/ModalDialog.tsx) | Shared modal focus, Escape and focus-return handling for consequential choices such as unsaved work. |
-| [editorShared.tsx](../src/editorShared.tsx), [editorShortcuts.ts](../src/editorShortcuts.ts) | Shared editor types/helpers, selection geometry, menu-to-palette commands and the action registry used by menus, palette, toolbar and shortcuts. |
+| [editorActions.ts](../src/editorActions.ts) | The action registry: every command (keymap actions and menu-only ones) has one entry with `enabled` and `run`; the canvas supplies its own entries and wins when it has one. Menus, palette, buttons and shortcuts all call `can` and `perform`. |
+| [escape.ts](../src/escape.ts), [textField.ts](../src/textField.ts) | Escape: overlays (side panels, banners, layer drags) register and the editor's key handler closes the newest first, then asks the canvas. `isTextField` tells typing from shortcuts. |
+| [editorShared.tsx](../src/editorShared.tsx) | Shared editor types/helpers, selection geometry, menu-to-palette commands and the small panel forms. |
 | [requestAttachments.ts](../src/requestAttachments.ts) | Shared attachment reading and UI limits for pictures, text and links; native validation remains authoritative. |
 | [session/useProjectSession.ts](../src/session/useProjectSession.ts) | Serialized mutation queue, current authoritative view, revision-based edits and settlement; edit failures are reported once and resolve to null. |
-| [session/useEditor.tsx](../src/session/useEditor.tsx), [session/projectCommands.ts](../src/session/projectCommands.ts) | Shell orchestration with one window key dispatcher (canvas first), plus project open/new/save/close, recovery, replacement and confirmation flows. |
+| [session/useEditor.tsx](../src/session/useEditor.tsx), [session/projectCommands.ts](../src/session/projectCommands.ts) | `useEditor` connects the feature hooks below and owns the one window key handler (Escape, then the canvas, then shortcuts); `projectCommands` has project open/new/save/close, recovery, replacement and confirmation flows. |
+| [session/editorPanel.ts](../src/session/editorPanel.ts), [session/editorMenu.ts](../src/session/editorMenu.ts) | The one open side panel (`EditorPanel`) and the menu and palette built from the action registry. |
+| [session/useNotices.ts](../src/session/useNotices.ts), [session/useUpdateCheck.ts](../src/session/useUpdateCheck.ts), [session/useWindowClose.ts](../src/session/useWindowClose.ts), [session/useStartPageData.ts](../src/session/useStartPageData.ts) | Toasts with Undo, the manual update check, the close-window confirmation, and recent projects, launch preference and default project folder. |
+| [session/useCanvasTool.ts](../src/session/useCanvasTool.ts), [session/useCanvasSelection.ts](../src/session/useCanvasSelection.ts), [session/useCanvasEdits.ts](../src/session/useCanvasEdits.ts), [session/useRequestEdits.ts](../src/session/useRequestEdits.ts), [session/useGenerationFlow.ts](../src/session/useGenerationFlow.ts) | Armed tool and flyout choices, selection and focus, canvas edits that move the selection or announce Undo, per-layer requests, and preparing/applying generations. |
 | [session/useAiSettings.ts](../src/session/useAiSettings.ts), [session/useEditorTheme.ts](../src/session/useEditorTheme.ts) | Serialized AI settings access, sign-in polling and persisted editor appearance. |
 | [session/useBoundaryCommands.ts](../src/session/useBoundaryCommands.ts), [session/useNamedViews.ts](../src/session/useNamedViews.ts) | Boundary creation/resizing/layout and named camera-view edits. |
 | [session/projectEdits.ts](../src/session/projectEdits.ts) | Feature editing API shared by canvas and property controls. |
 | [preferences.ts](../src/preferences.ts), [usePoll.ts](../src/usePoll.ts) | Optional browser preference storage and cancellable, non-overlapping native progress polling. |
 | [exportJobs/useExportJobs.ts](../src/exportJobs/useExportJobs.ts) | Export jobs, preview, Play coordination and debounced pointer-clash rechecks. |
 | [Menus.tsx](../src/Menus.tsx) | Accessible menu button, popover positioning and keyboard navigation. |
-| [WorkspaceSurface.tsx](../src/WorkspaceSurface.tsx) | Panel/banner/start/canvas surface host, stacking, focus return and `isTextField`. |
-| [ProblemBanner.tsx](../src/ProblemBanner.tsx), [noticeSummary.ts](../src/noticeSummary.ts) | Notice queue/host, problem banners and outside-change summaries. `noticeSummary.ts` is exercised by tests but has no current editor import. |
+| [WorkspaceSurface.tsx](../src/WorkspaceSurface.tsx) | Panel/banner/start/canvas surface host, stacking and focus return; each open surface registers with `escape.ts`. |
+| [ProblemBanner.tsx](../src/ProblemBanner.tsx), [noticeSummary.ts](../src/noticeSummary.ts) | Notice queue/host, problem banners and the changed-pages summary for generation results. |
 | [Disclosure.tsx](../src/Disclosure.tsx), [StatusChip.tsx](../src/StatusChip.tsx), [icons.tsx](../src/icons.tsx) | Shared disclosure row, status badge and inline icon set. |
 | [DraftText.tsx](../src/DraftText.tsx) | `useDraftText`: batched text commits that never overwrite newer typing. |
-| [HistoryPanel.tsx](../src/HistoryPanel.tsx), [historySteps.ts](../src/historySteps.ts) | Versions/alternatives in the dock, derived history labels, and ending the native history step when a text field loses focus. |
+| [dock/historyPanel.tsx](../src/dock/historyPanel.tsx), [historySteps.ts](../src/historySteps.ts) | Versions/alternatives in the dock, derived history labels, and ending the native history step when a text field loses focus. |
 | [Generation.tsx](../src/Generation.tsx), [GenerationLog.tsx](../src/GenerationLog.tsx) | Generation status and AI conversation: usage, retries, proposals, criticism and raw reply. |
 | [useGeneration.ts](../src/useGeneration.ts), [generationSession.ts](../src/generationSession.ts) | Job lifecycle/polling/submit/cancel/retry, owned-session notices and restored-job silence. |
 | [generationProblems.ts](../src/generationProblems.ts), [userErrors.ts](../src/userErrors.ts) | Per-area problem callouts/outcomes, fallback translation for untyped errors, and kind-based provider actions that retain native wording. |
@@ -200,7 +209,7 @@ test-results/                Local evidence from smoke, startup and vault runs (
 
 | Module | Owns |
 | --- | --- |
-| [useProjectCanvas.tsx](../src/projectCanvas/useProjectCanvas.tsx) | Canvas state and composition of drawing, moving, picking, paste/drop, pointer and keyboard actions. |
+| [useProjectCanvas.tsx](../src/projectCanvas/useProjectCanvas.tsx), [useNativeDrop.ts](../src/projectCanvas/useNativeDrop.ts) | Canvas state and composition of drawing, moving, picking, paste/drop, pointer and keyboard actions; files dropped from the operating system. |
 | [interactionTypes.tsx](../src/projectCanvas/interactionTypes.tsx) | Canvas props/handle, drag/clipboard/selection types and shared hit-testing helpers. |
 | [interaction.ts](../src/projectCanvas/interaction.ts) | Pointer sessions, gesture dispatch, drag updates/completion and cancellation. |
 | [drawing.ts](../src/projectCanvas/drawing.ts), [moving.ts](../src/projectCanvas/moving.ts) | Element/boundary drawing; selection movement, resize, reparenting and duplicate-drag operations. |
@@ -214,11 +223,11 @@ test-results/                Local evidence from smoke, startup and vault runs (
 | [boundaries.tsx](../src/projectCanvas/boundaries.tsx) | Boundary content per linked size: element trees, hidden-size placeholders and Play rendering. |
 | [boundaryLabels.tsx](../src/projectCanvas/boundaryLabels.tsx) | Boundary names above each corner in screen pixels; labels double as drag handles. |
 | [elementGeometry.ts](../src/projectCanvas/elementGeometry.ts) | Element paths, text measurement, picture URLs, labels, insert groups, origins and parent-relative rects. |
-| [elementLayers.tsx](../src/projectCanvas/elementLayers.tsx) | Layers tree rows for one size, collapse state, visibility/lock/delete buttons, drag reordering and drop targets. |
-| [elementProperties.tsx](../src/projectCanvas/elementProperties.tsx) | A layer's Properties: geometry, style, text, image, layout, code, request box, history and context attachments. |
+| [dock/elementLayers.tsx](../src/dock/elementLayers.tsx) | Layers tree rows for one size, collapse state, visibility/lock/delete buttons, drag reordering and drop targets. |
+| [dock/elementProperties.tsx](../src/dock/elementProperties.tsx) | A layer's Properties: geometry, style, text, image, layout, code, request box, history and context attachments. |
 | [elements.tsx](../src/projectCanvas/elements.tsx) | Element drawing, selection overlay, resize handles and inline text editing. |
-| [exportPanel.tsx](../src/projectCanvas/exportPanel.tsx) | Export dock panel: boundary/output rows, status, warnings, estimate and result actions. |
-| [requests.tsx](../src/projectCanvas/requests.tsx) | Requests on the canvas: pending request markers, area outlines and target highlights, covered-target collection, target labels, the request box editor and boundary shifts. |
+| [dock/exportPanel.tsx](../src/dock/exportPanel.tsx) | Export dock panel: boundary/output rows, status, warnings, estimate and result actions. |
+| [requests.tsx](../src/projectCanvas/requests.tsx) | Requests on the canvas: pending request markers, area outlines and target highlights, covered-target collection, target labels and the request box editor. |
 | [requestGeometry.ts](../src/projectCanvas/requestGeometry.ts) | Request area outlines: shape bounds, point-in-outline coverage for rect/ellipse/polygon/freehand and SVG path data. |
 | [linkedChoices.tsx](../src/projectCanvas/linkedChoices.tsx) | Inline paste Linked/Unlinked, link-copy and size-placeholder choices. |
 | [links.ts](../src/projectCanvas/links.ts) | Linked-definition resolution, shared path/id hashing with the core, copy inspection and structure comparison. |
@@ -252,7 +261,7 @@ test-results/                Local evidence from smoke, startup and vault runs (
 1. **Pick** is the Request tool's default mode. With a layer, reference item, pointer or boundary selected, F starts a request on the selection; with nothing selected it selects the tool. A click starts the request on the target under the cursor, or removes it when it is already the target; Shift-click adds or removes one target of a multi-target request.
 2. **Areas** come from the tool's flyout: Rectangle, Ellipse, Polygon and Freehand. [requestGeometry.ts](../src/projectCanvas/requestGeometry.ts) tests the real outline (`requestAreaContains`), not its bounding box, and [requests.tsx](../src/projectCanvas/requests.tsx) collects `coveredTargets`: layers mostly inside, boundaries wholly inside, reference items inside and pointers whose line crosses. An empty area inside a boundary targets that boundary, so new layers can fill the area.
 3. **Shift+F** uses the selected shape's own outline (its rectangle, or its ellipse for an ellipse layer) as the area and keeps the shape as a target. Polygon points close with Enter or a click near the first point; Escape cancels a draft.
-4. The box is `RequestBoxEditor` in screen pixels beside the targets. Enter queues a `PendingRequest` (`text`, `attachments`, `targets`, `area`, `requestedAt`) through `add_request`; Escape cancels. `RequestLayer` draws each pending request's marker, area outline and, when selected, its target highlights. The dock's Requests group and [RequestProperties](../src/EditorDock.tsx) edit text, show targets and the area label, attach reference items and delete the request.
+4. The box is `RequestBoxEditor` in screen pixels beside the targets. Enter queues a `PendingRequest` (`text`, `attachments`, `targets`, `area`, `requestedAt`) through `add_request`; Escape cancels. `RequestLayer` draws each pending request's marker, area outline and, when selected, its target highlights. The dock's Requests group and [RequestProperties](../src/dock/properties.tsx) edit text, show targets and the area label, attach reference items and delete the request.
 
 ### Deleting selections
 
@@ -307,7 +316,7 @@ Brand import is separate: `prepare_website_import_url` and `pick_website_import_
 | --- | --- | --- |
 | **Boundary** | `Page`, `PageSize`, `Page.sizes`, `BoundaryKind::{Page, Screen}` | One `Page` draws one boundary per linked size. "Page" here is a canvas output, not an HTML page or a website home page. |
 | **Layer** | `Element`, `ElementKind::Group` | A layer is one element or a group; `ElementMeta` carries its request history and context. |
-| **Request** | `PendingRequest`, `Project.requests`, `RequestLayer`, `RequestBoxEditor`, [RequestProperties](../src/EditorDock.tsx), `request_history.rs` | Requests belong to the project, not to one layer, so one request can target a mix of layers, boundaries, reference items and pointers. The old **Frame** word survives in geometry helpers (`FrameCorner`, `frameBox`, `drawnFrameRect`, `referenceFrameRect` in [projectCanvasGeometry.ts](../src/projectCanvasGeometry.ts)); read all of them as Request. The session label `"AI filled frames"` is historical wording for a generation step. |
+| **Request** | `PendingRequest`, `Project.requests`, `RequestLayer`, `RequestBoxEditor`, [RequestProperties](../src/EditorDock.tsx), `request_history.rs` | Requests belong to the project, not to one layer, so one request can target a mix of layers, boundaries, reference items and pointers. The old **Frame** word survives in geometry helpers (`FrameCorner`, `frameBox`, `drawnFrameRect`, `referenceFrameRect` in [referenceGeometry.ts](../src/projectCanvas/referenceGeometry.ts)); read all of them as Request. The session label `"AI filled frames"` is historical wording for a generation step. |
 | **Reference** | `Project.reference`, `ReferenceItem`, `ReferenceKind`, [reference.tsx](../src/projectCanvas/reference.tsx) | The spec renamed **Moodboard** to Reference. No `moodboard` identifier remains in `src/`, `crates/` or `src-tauri/`; only the glossary's Gone table still records the old word. |
 | **Pointer / comment / wired** | `Pointer`, `Pointer.comment`, `PointerWiring`, `PointerState` | `Pointer.play` holds a classified simple action. |
 | **Clash** | `PointerState::{CodeChanged, Contradicts, Broken}`, `ExportRecord.pointers`, `pointer_fingerprints` | Resolved by `ResolvePointerClash`, `SetPointerWiring`/Keep code and `ForgetExportPointer`/Keep comment. |
@@ -320,7 +329,7 @@ Brand import is separate: `prepare_website_import_url` and `pick_website_import_
 | **Targets** | `RequestTarget` (`element`, `boundary`, `reference`, `pointer`), `coveredTargets`, `requestTargetKey`, `scope_for` | What a request may change. Pick targets what you click, an area targets what its outline covers, and F/Shift+F target the selection. Core validates targets on every edit and prunes those that disappear. |
 | **Request shape** | `RequestShape` (`rect`, `ellipse`, `polygon`, `freehand`), `RequestArea`, [requestGeometry.ts](../src/projectCanvas/requestGeometry.ts) | Coverage uses the real outline: `requestAreaContains`, `requestShapePath` and `requestShapeBounds` in the renderer, `RequestShape` validation in core. Rectangle, ellipse, polygon and freehand are implemented; Shift+F takes a selected shape's outline. |
 
-Named views persist in `Project.views`; commands and validation live in [model.rs](../crates/desegnos-core/src/model.rs), the Layers UI in [EditorDock.tsx](../src/EditorDock.tsx), and camera/shortcut handling in [useProjectCanvas.tsx](../src/projectCanvas/useProjectCanvas.tsx) and [keyboardActions.ts](../src/projectCanvas/keyboardActions.ts). [views.rs](../crates/desegnos-core/tests/views.rs) covers the model contract.
+Named views persist in `Project.views`; commands and validation live in [model.rs](../crates/desegnos-core/src/model.rs), the Layers UI in [layers.tsx](../src/dock/layers.tsx), and camera/shortcut handling in [useProjectCanvas.tsx](../src/projectCanvas/useProjectCanvas.tsx) and [keyboardActions.ts](../src/projectCanvas/keyboardActions.ts). [views.rs](../crates/desegnos-core/tests/views.rs) covers the model contract.
 
 ## Tests, builds and evidence
 

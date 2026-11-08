@@ -2,9 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { compileModules } from './typescript.mjs';
 
-const modules = await compileModules(['src/projectCanvasGeometry.ts']);
+const modules = await compileModules(['src/projectCanvas/camera.ts', 'src/projectCanvas/boundaryLayout.ts', 'src/projectCanvas/referenceGeometry.ts', 'src/projectCanvas/canvasTargets.ts', 'src/projectCanvas/pointerGeometry.ts', 'src/projectCanvas/pointerNames.ts', 'src/projectCanvas/autoLinks.ts']);
 try {
-  const geometry = await modules.load('projectCanvasGeometry.js');
+  const geometry = Object.assign({}, ...await Promise.all(['camera', 'boundaryLayout', 'referenceGeometry', 'canvasTargets', 'pointerGeometry', 'pointerNames', 'autoLinks'].map(name => modules.load(`projectCanvas/${name}.js`))));
   const {
     boundaryHeight, layoutBoundaries, drawnBoundaryRect, snapValue, canvasRectFromPage, pageRectFromCanvas,
     pushApartBoundaries, boundaryMoves, boundariesByPosition, dotGrid, unionBounds, sameBoundaries,
@@ -17,7 +17,7 @@ try {
     BOUNDARY_GAP, BOUNDARY_PUSH_GAP, GRID_SPACING, MIN_SIZE, MAX_BOUNDARY_HEIGHT, FIT_PADDING, CANVAS_DOT_MIN_SCREEN, REFERENCE_ATTACHMENT_WIDTH, REFERENCE_ATTACHMENT_HEIGHT, REFERENCE_ATTACHMENT_GAP,
     POINTER_HIT_PX,
   } = geometry;
-  const { MIN_ZOOM, ZOOM_LEVELS } = await modules.load('projectCanvasGeometry.js');
+  const { MIN_ZOOM, ZOOM_LEVELS } = geometry;
 
   const size = (id, x, y, width, height, kind = 'page') => ({ id, label: id, x, y, width, height, kind });
   const box = (x, y, width = 400, height = 300) => ({ x, y, width, height });

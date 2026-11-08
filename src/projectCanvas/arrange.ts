@@ -1,8 +1,7 @@
-import { sizeTarget } from '../projectCanvasGeometry';
+import { sizeTarget } from './canvasTargets';
 import type { ElementMove, Rect } from '../types';
 import type { ElementEntry } from './interactionTypes';
-import type { SelectionAlign } from './selectionBar';
-import { unionRects } from './elementGeometry';
+import { unionBounds as unionBounds } from './camera';
 
 export type ArrangeOperation = 'forward' | 'backward' | 'front' | 'back';
 
@@ -24,6 +23,7 @@ export function arrangeSiblingOrder(ids: readonly string[], selected: readonly s
   return order;
 }
 
+export type SelectionAlign = 'left' | 'centre' | 'right' | 'top' | 'middle' | 'bottom';
 export type SelectionDistribution = 'horizontal' | 'vertical';
 
 const positionOrder = (a: ElementMove, b: ElementMove) => a.to_page_id.localeCompare(b.to_page_id)
@@ -47,7 +47,7 @@ function selectionGroups(entries: ElementEntry[]): ElementEntry[][] {
 
 export function alignSelectionMoves(entries: ElementEntry[], edge: SelectionAlign, container: (entry: ElementEntry) => Rect): ElementMove[] {
   return selectionGroups(entries).flatMap(group => {
-    const box = group.length === 1 ? container(group[0]) : unionRects(group.map(entry => entry.world));
+    const box = group.length === 1 ? container(group[0]) : unionBounds(group.map(entry => entry.world));
     return group.flatMap(entry => {
       let dx = 0; let dy = 0;
       if (edge === 'left') dx = box.x - entry.world.x;

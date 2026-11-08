@@ -1,5 +1,6 @@
 import type { Project, Rect } from '../types';
-import { layoutBoundaries, type Boundary, type RequestBox } from '../projectCanvasGeometry';
+import { layoutBoundaries, type Boundary } from './boundaryLayout';
+import { type RequestBox } from './canvasTargets';
 import { elementBoundsHeight, elementIndex } from './elementGeometry';
 import { resolveForSize, reuseResolvedTrees } from './sizes';
 

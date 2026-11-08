@@ -1,5 +1,4 @@
 .floating-bar {
-  --floating-control: var(--control-md);
   --floating-height: calc(var(--control-md) + var(--space-1) * 2 + 2px);
   box-sizing: border-box;
   display: flex;
@@ -42,8 +41,6 @@
 .floating-bar-divider { width: 1px; height: 18px; margin-inline: var(--space-2); background: var(--border-soft); flex: none; }
 .floating-bar .segmented { flex: none; }
 .floating-bar .segmented button { height: calc(var(--control-md) - 4px); min-height: calc(var(--control-md) - 4px); padding-inline: var(--space-3); }
-.floating-bar .request-pages { flex: 0 1 auto; max-width: min(220px, 100%); min-width: 0; }
-.element-toolbar { max-width: min(560px, calc(100% - 24px)); flex-wrap: wrap; row-gap: var(--space-1); }
 .close-button { border: 0; background: transparent; color: var(--muted); }
 .close-button:hover:not(:disabled), .close-button:focus-visible { background: var(--surface-muted); color: var(--text); }
 .status-chip {
@@ -72,9 +69,8 @@ button.status-chip { height: 20px; min-height: 20px; padding: 0 var(--space-4); 
 .disclosure-body > :first-child { margin-top: 0; }
 .disclosure-body > :last-child { margin-bottom: 0; }
 .disclosure .advanced-settings { margin: 0; padding: 0; border: 0; }
-.surface-title, .layers-popover h2 { font-family: var(--font-ui); font-size: var(--text-md); font-weight: var(--weight-semibold); letter-spacing: normal; text-transform: none; color: var(--text); }
-.layers-popover h2 { margin: 0; }
-.layers-popover h3, .log-who, .style-guide h4, .notes-section > h3, .notes-entry > h3, .identity-section-heading h3, .dossier-overview > section > h3 {
+.surface-title { font-family: var(--font-ui); font-size: var(--text-md); font-weight: var(--weight-semibold); letter-spacing: normal; text-transform: none; color: var(--text); }
+.log-who, .style-guide h4, .notes-section > h3, .notes-entry > h3, .identity-section-heading h3, .dossier-overview > section > h3 {
   font-size: var(--text-xs); font-weight: var(--weight-semibold); letter-spacing: .02em; text-transform: none; color: var(--muted);
 }
 .ai-settings .ai-inline-field, .ai-settings .ai-provider, .ai-settings .ai-model-row .ai-inline-field, .ai-settings .ai-budget, .workspace-surface .ai-settings .ai-inline-field, .workspace-surface .ai-settings .ai-provider, .workspace-surface .ai-settings .ai-model-row .ai-inline-field, .workspace-surface .ai-settings .ai-budget {
@@ -89,6 +85,3 @@ button.status-chip { height: 20px; min-height: 20px; padding: 0 var(--space-4); 
 .editor-shell .theme-toggle { border-color: var(--border); background: var(--surface-raised); color: var(--muted); }
 .editor-shell .theme-toggle:hover:not(:disabled) { background: var(--surface-muted); color: var(--text); }
 
-@media (max-width: 820px) {
-  .element-toolbar { max-width: calc(100% - 24px); }
-}

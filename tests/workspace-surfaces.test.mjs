@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import test from 'node:test';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
@@ -14,8 +14,11 @@ try {
   const source = (await readFile(join(temporary, 'WorkspaceSurface.js'), 'utf8'))
     .replace(/^import .*;$/gm, '')
     .replace(/^export /gm, '');
-  function setup() {
-    const effects = [], listeners = new Map();
+  let setups = 0;
+  async function setup() {
+    // Each setup gets its own escape stack, so surfaces left open by one test cannot answer the next.
+    const { onEscape, dismissNewestOverlay } = await import(`${pathToFileURL(join(temporary, 'escape.js')).href}?${++setups}`);
+    const effects = [];
     const state = { context: null, active: null, menu: false };
     class Element {
       isConnected = true;
@@ -33,16 +36,12 @@ try {
       useState: initial => [initial, () => {}], useLayoutEffect: callback => effects.push(callback),
     };
     const document = { get activeElement() { return state.active; }, querySelector: () => state.menu ? {} : null };
-    const window = { addEventListener: (name, callback) => listeners.set(name, callback), removeEventListener: name => listeners.delete(name) };
     const jsx = (type, props) => ({ type, props });
-    const components = new Function('hooks', 'document', 'window', 'HTMLElement', 'Icon', '_jsx', '_jsxs', 'createPortal', `const { createContext, useContext, useRef, useState, useLayoutEffect, useCallback } = hooks;\n${source}\nreturn { WorkspaceSurfaces, WorkspaceSurface };`)(hooks, document, window, Element, 'icon', jsx, jsx, (node, target) => ({ node, target }));
+    const components = new Function('hooks', 'document', 'onEscape', 'HTMLElement', 'Icon', '_jsx', '_jsxs', 'createPortal', `const { createContext, useContext, useRef, useState, useLayoutEffect, useCallback } = hooks;\n${source}\nreturn { WorkspaceSurfaces, WorkspaceSurface };`)(hooks, document, onEscape, Element, 'icon', jsx, jsx, (node, target) => ({ node, target }));
     state.context = components.WorkspaceSurfaces({ children: null }).props.value;
-    const stop = effects.shift()();
-    const escape = () => {
-      const event = { key: 'Escape', defaultPrevented: false, stopped: false, preventDefault() { this.defaultPrevented = true; }, stopImmediatePropagation() { this.stopped = true; } };
-      listeners.get('keydown')(event); return event;
-    };
-    return { ...components, state, effects, Element, escape, stop };
+    // The editor's key handler: an open menu answers Escape itself, otherwise the newest surface closes.
+    const escape = () => ({ stopped: !state.menu && dismissNewestOverlay() });
+    return { ...components, state, effects, Element, escape };
   }
   await test('editor components do not create modal dialogs or popup windows', async () => {
     // ModalDialog is the one exception: unsaved-work warnings block on purpose.
@@ -52,7 +51,7 @@ try {
     }
   });
   await test('switching side-panel views closes the previous view and restores its persistent trigger', async () => {
-    const { state, Element } = setup();
+    const { state, Element } = await setup();
     const trigger = new Element(), internal = new Element(); internal.insideSurface = true;
     let firstClosed = 0, secondClosed = 0;
     let leaveFirst;
@@ -63,7 +62,7 @@ try {
     assert.equal(state.active, trigger);
   });
   await test('save-conflict banners retain the pending save choice and Escape closes only the newest surface', async () => {
-    const { state, escape, Element } = setup();
+    const { state, escape, Element } = await setup();
     const closed = [], trigger = new Element();
     let panel, replacement, conflict;
     panel = state.context.enter({ place: 'panel', opener: trigger, close: () => { closed.push('panel'); panel(); } });
@@ -77,14 +76,14 @@ try {
     await Promise.resolve(); assert.equal(state.active, trigger);
   });
   await test('dismissing a save conflict returns focus to the retained save banner', async () => {
-    const { state, Element } = setup();
+    const { state, Element } = await setup();
     const saveButton = new Element(); saveButton.insideSurface = true;
     state.context.enter({ place: 'banner', opener: new Element(), close: () => {} });
     const leave = state.context.enter({ place: 'banner', opener: saveButton, close: () => {} });
     leave(); await Promise.resolve(); assert.equal(state.active, saveButton);
   });
   await test('draft preview and side panel are independent; replaced previews cannot restore focus over the new preview', async () => {
-    const { state, Element } = setup();
+    const { state, Element } = await setup();
     const oldTrigger = new Element(), newTrigger = new Element();
     let panelClosed = false, preview;
     state.context.enter({ place: 'panel', opener: oldTrigger, close: () => { panelClosed = true; } });
@@ -94,7 +93,7 @@ try {
     leave(); await Promise.resolve(); assert.equal(state.active, newTrigger);
   });
   await test('views render as non-modal sections in their designated host, without focus traps or canvas disabling', async () => {
-    const { state, WorkspaceSurface, effects, Element } = setup();
+    const { state, WorkspaceSurface, effects, Element } = await setup();
     const trigger = new Element(), field = new Element(), host = new Element();
     state.active = trigger; state.context.hosts.panel = host;
     const result = WorkspaceSurface({ title: 'Grid and rulers', close: () => {}, children: 'form' });

@@ -1,14 +1,13 @@
 import { TOOL_ACTIONS } from '../shortcuts';
-import { sizeTarget } from '../projectCanvasGeometry';
+import { sizeTarget } from './canvasTargets';
 import type { ProjectCanvasProps } from './interactionTypes';
 import { type PointerEvent as ReactPointerEvent } from 'react';
-import {
-  canvasTargetKey, fitCamera, MAX_ZOOM, boundaryAt, referenceNoteRect, movedReferenceRect, panCamera,
-  resizedReferenceRect, samePointerEndpoint, zoomCameraAt, type Boundary, type CanvasCamera, type CanvasTarget,
-  type ElementTarget, type Point,
-  CLICK_NOTE_SIZE,
-} from '../projectCanvasGeometry';
-import { steppedZoom } from '../projectCanvasGeometry';
+import { canvasTargetKey, type CanvasTarget, type ElementTarget } from './canvasTargets';
+import { fitCamera, MAX_ZOOM, panCamera, zoomCameraAt, type CanvasCamera, type Point } from './camera';
+import { boundaryAt, type Boundary } from './boundaryLayout';
+import { referenceNoteRect, movedReferenceRect, resizedReferenceRect, CLICK_NOTE_SIZE } from './referenceGeometry';
+import { samePointerEndpoint } from './pointerGeometry';
+import { steppedZoom } from './camera';
 import type { Element, ElementKind, ElementPatch, Page, Pointer, PointerSource, PointerTarget, Project, Rect, ReferenceItem, RequestArea, RequestTarget } from '../types';
 import type { ProjectTool, RequestToolShape } from '../EditorTools';
 import { dedupeTargets, requestTargetKey } from './requests';
@@ -17,10 +16,8 @@ import { type ScreenRect } from './surface';
 import { elementLocalRect, isTextKind } from './elementGeometry';
 import { playIsActive } from './play';
 import { behaviourFor, behaviourPointer } from './behaviours';
-import {
-  elementTree, findElementIn, axisLockedDelta, drawRectWithKeys, rectFromPoints, resizedRectWithKeys,
-  snappedLineEnd, snapPoint,
-} from './elementGeometry';
+import { elementTree, axisLockedDelta, drawRectWithKeys, rectFromPoints, resizedRectWithKeys, snappedLineEnd, snapPoint } from './elementGeometry';
+import { findElementIn } from './elementFacts';
 import {
   MoveTarget, MoveSelectionDrag, ElementEntry, PasteChoice, LinkDecision, MoveElementsDrag, DrawElementDrag,
   Drag, DRAW_TOOLS, DragInput, elementChain, chainPage, elementTargetAt, elementMoveDelta,

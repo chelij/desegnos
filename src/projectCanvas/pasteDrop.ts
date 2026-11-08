@@ -1,9 +1,11 @@
 import type { ProjectCanvasProps } from './interactionTypes';
 import { type DragEvent as ReactDragEvent } from 'react';
-import { isTextField } from '../WorkspaceSurface';
-import { boundaryAt, type Boundary, type CanvasCamera, type CanvasTarget, type Point } from '../projectCanvasGeometry';
+import { isTextField } from '../textField';
+import { boundaryAt, type Boundary } from './boundaryLayout';
+import { type CanvasCamera, type Point } from './camera';
+import { type CanvasTarget } from './canvasTargets';
 import type { Element, ElementKind, LinkedPasteInstance, Project, Rect, ReferenceItem } from '../types';
-import { elementBoxesNow } from './requests';
+import { elementBoxesNow } from './pointerLayout';
 import { type ScreenRect } from './surface';
 import { nestedLayerIds } from './links';
 import { pasteDefault, setPasteDefault, type PasteMode } from '../pastePreference';

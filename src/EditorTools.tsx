@@ -1,10 +1,11 @@
 import { type BoundaryToolKind, boundaryKindLabel, boundaryIcon } from './projectCanvas/boundaryDefaults';
 import { useEffect, useState } from 'react';
 import { MenuButton } from './Menus';
-import { zoomLabel, ZOOM_LEVELS, MIN_ZOOM, MAX_ZOOM } from './projectCanvasGeometry';
+import { zoomLabel, ZOOM_LEVELS, MIN_ZOOM, MAX_ZOOM } from './projectCanvas/camera';
 import { Icon } from './icons';
-import { INSERT_GROUPS, ELEMENT_KIND_LABELS } from './projectCanvas/elementGeometry';
-import { shortcutLabel, withShortcut, TOOL_ACTIONS } from './shortcuts';
+import { INSERT_GROUPS } from './projectCanvas/elementGeometry';
+import { ELEMENT_KIND_LABELS } from './projectCanvas/elementFacts';
+import { shortcutLabel, withShortcut, TOOL_ACTIONS, type ShortcutAction } from './shortcuts';
 import type { ElementKind } from './types';
 
 export type EditorTool = 'select' | 'request' | 'boundary' | 'pointer' | 'text' | 'pan' | 'rect' | 'ellipse' | 'line' | 'image' | 'note' | 'insert';
@@ -45,9 +46,9 @@ const REQUEST_SHAPES: { id: RequestToolShape; label: string; icon: string }[] = 
   { id: 'freehand', label: 'Freehand', icon: 'M2.5 10.5C3.5 4 6.5 13 9 7.5S13 3.5 13.5 6' },
 ];
 
-export function ToolStrip({ tool, onTool, zoom, onZoomStep, onZoom, onFit, boundaryKind, onBoundaryKind, requestShape, onRequestShape, onInsert, insertSignal }: {
+export function ToolStrip({ tool, onTool, zoom, perform, onZoom, boundaryKind, onBoundaryKind, requestShape, onRequestShape, onInsert, insertSignal }: {
   tool: EditorTool; onTool: (tool: EditorTool) => void;
-  zoom: number; onZoomStep: (direction: number) => void; onZoom: (zoom: number) => void; onFit: () => void;
+  zoom: number; perform: (action: ShortcutAction) => void; onZoom: (zoom: number) => void;
   boundaryKind?: BoundaryToolKind; onBoundaryKind?: (kind: BoundaryToolKind) => void;
   requestShape?: RequestToolShape; onRequestShape?: (shape: RequestToolShape) => void;
   onInsert?: (kind: ElementKind) => void; insertSignal?: number;
@@ -94,11 +95,11 @@ export function ToolStrip({ tool, onTool, zoom, onZoomStep, onZoom, onFit, bound
       </div>)}
     </div>
     <div className="tool-strip-foot">
-      <button type="button" className="tool-strip-button" aria-label="Zoom out" title={withShortcut('Zoom out', 'zoomOut')} disabled={zoom <= MIN_ZOOM} onClick={() => onZoomStep(-1)}><Icon name="minus" /></button>
+      <button type="button" className="tool-strip-button" aria-label="Zoom out" title={withShortcut('Zoom out', 'zoomOut')} disabled={zoom <= MIN_ZOOM} onClick={() => perform('zoomOut')}><Icon name="minus" /></button>
       <MenuButton className="tool-zoom" showChevron={false} label={zoomLabel(zoom)} ariaLabel="Zoom level" title="Zoom level"
         items={ZOOM_LEVELS.map(value => ({ id: `zoom-${value}`, label: zoomLabel(value), checked: Math.abs(zoom - value) < 1e-6, action: () => onZoom(value) }))} />
-      <button type="button" className="tool-strip-button" aria-label="Zoom in" title={withShortcut('Zoom in', 'zoomIn')} disabled={zoom >= MAX_ZOOM} onClick={() => onZoomStep(1)}><Icon name="plus" /></button>
-      <button type="button" className="tool-strip-fit" title={withShortcut('Fit all', 'fitAll')} onClick={onFit}>Fit</button>
+      <button type="button" className="tool-strip-button" aria-label="Zoom in" title={withShortcut('Zoom in', 'zoomIn')} disabled={zoom >= MAX_ZOOM} onClick={() => perform('zoomIn')}><Icon name="plus" /></button>
+      <button type="button" className="tool-strip-fit" title={withShortcut('Fit all', 'fitAll')} onClick={() => perform('fitAll')}>Fit</button>
     </div>
   </div>;
 }

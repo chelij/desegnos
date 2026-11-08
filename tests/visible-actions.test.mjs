@@ -7,7 +7,7 @@ import { compileModules, root } from './typescript.mjs';
 // A control is left out of a surface when, in the current state, it cannot change what the
 // user sees. These checks cover the rule itself and each surface that applies it.
 const read = async name => name === 'App.tsx'
-  ? (await Promise.all(['App.tsx', 'session/useEditor.tsx', 'session/projectCommands.ts', 'editorShortcuts.ts'].map(file => readFile(join(root, 'src', file), 'utf8')))).join('\n')
+  ? (await Promise.all(['App.tsx', 'AppBar.tsx', 'CanvasWorkspace.tsx', 'StatusBar.tsx', 'session/useEditor.tsx', 'session/editorMenu.ts', 'session/projectCommands.ts', 'editorActions.ts', 'shortcuts.ts'].map(file => readFile(join(root, 'src', file), 'utf8')))).join('\n')
   : readFile(join(root, 'src', name), 'utf8');
 const modules = await compileModules(['src/visibleActions.ts']);
 try {
@@ -45,8 +45,9 @@ try {
 
   await test('Undo and Redo keep their place and disable when they would change nothing', async () => {
     const app = await read('App.tsx');
-    assert.match(app, /aria-label="Undo last change" type="button" className="icon-button" disabled=\{!view\?\.canUndo\}/);
-    assert.match(app, /aria-label="Redo last change" type="button" className="icon-button" disabled=\{!view\?\.canRedo\}/);
+    assert.match(app, /aria-label="Undo last change" type="button" className="icon-button" disabled=\{!actions\.can\('undo'\)\}/);
+    assert.match(app, /aria-label="Redo last change" type="button" className="icon-button" disabled=\{!actions\.can\('redo'\)\}/);
+    assert.match(app, /undo: \{ enabled: \(\) => !!context\(\)\.current\.current\?\.canUndo/);
     assert.match(app, /command === 'undo_project' \? workspace\?\.canUndo : workspace\?\.canRedo/);
   });
 
@@ -83,23 +84,23 @@ try {
   await test('no first-run tip tour covers the canvas and the website import keeps its single entry', async () => {
     const app = await read('App.tsx');
     assert.doesNotMatch(app, /FirstRunTips|Onboarding/);
-    assert.equal((app.match(/label: 'Import…'/g) ?? []).length, 1);
+    assert.equal((app.match(/importContext: 'Import…'/g) ?? []).length, 1);
     assert.doesNotMatch(app, /label: 'Import website…'/);
   });
 
   await test('the editor opens untitled and New opens another tab', async () => {
     const app = await read('App.tsx');
     assert.doesNotMatch(app, /NewProject|showNew/);
-    assert.match(await read('editorShortcuts.ts'), /new: \(\) => context\(\)\.newUntitled\(\)/);
+    assert.match(await read('editorActions.ts'), /new: \{ run: \(\) => context\(\)\.newUntitled\(\) \}/);
     assert.match(app, /id: 'open-recent', label: 'Open recent'/);
     assert.match(app, /save_untitled_project/);
-    assert.match(app, /id: 'import', label: 'Import…'/);
+    assert.match(app, /menuItem\('importContext', 'import'\)/);
   });
 
   await test('Home is a page and project controls leave the bar while it is shown', async () => {
     const app = await read('App.tsx');
     assert.match(app, /const onStartPage = !project \|\| showStartPage;/);
-    assert.match(app, /id: 'home', label: 'Home'/);
+    assert.match(app, /home: 'Home'/);
     // The project name lives in its tab; the bar never repeats it beside the tabs.
     assert.doesNotMatch(app, /className="project-title"/);
     assert.match(app, /aria-label="Open projects"/);
@@ -109,13 +110,13 @@ try {
 
   await test('the editor menu hides what does not apply and keeps panel actions out of it', async () => {
     const app = await read('App.tsx');
-    assert.match(app, /\.\.\.\(!onStartPage \? \[\{ id: 'home', label: 'Home'/);
-    assert.match(app, /\.\.\.\(onStartPage && project \? \[\{ id: 'back-to-canvas'/);
+    assert.match(app, /\.\.\.\(!onStartPage \? \[menuItem\('home'\)\]/);
+    assert.match(app, /\.\.\.\(onStartPage && project \? \[menuItem\('backToCanvas', 'back-to-canvas'\)\]/);
     assert.match(app, /\.\.\.\(recentProjects\.length \? \[\{ id: 'open-recent'/);
-    assert.match(app, /\.\.\.\(canEditProject && project\.lastExport \? \[\{ id: 'open-browser'/);
+    assert.match(app, /\.\.\.\(canEditProject && project\.lastExport \? \[menuItem\('openInBrowser', 'open-browser'\)\]/);
     assert.doesNotMatch(app, /Publish online/);
     assert.doesNotMatch(app, /id: 'compact-history'/);
-    assert.match(await read('HistoryPanel.tsx'), /disabled=\{busy \|\| !data\} onClick=\{\(\) => compact\(\)\}>Compact history<\/button>/);
+    assert.match(await read('dock/historyPanel.tsx'), /disabled=\{busy \|\| !data\} onClick=\{\(\) => compact\(\)\}>Compact history<\/button>/);
   });
 
   await test('Play names the boundary it runs and the bar reads Stop while it plays', async () => {
@@ -123,8 +124,8 @@ try {
     assert.match(app, /className="play-pill" role="status"/);
     assert.match(app, /Playing \{playingLabel\}/);
     assert.match(app, /<button type="button" onClick=\{\(\) => setPlay\(idlePlay\)\}>Stop<\/button>/);
-    assert.match(app, /playIsActive\(play\) \? 'stop' : 'play'/);
-    assert.match(app, /playIsActive\(play\) \? 'Stop' : 'Play'/);
+    assert.match(app, /playing \? 'stop' : 'play'/);
+    assert.match(app, /playing \? 'Stop' : 'Play'/);
     assert.doesNotMatch(app, /Playing · Esc to stop/);
   });
 
@@ -141,10 +142,10 @@ try {
 
   await test('hidden controls keep their menu entries and keyboard shortcuts', async () => {
     const app = await read('App.tsx');
-    assert.match(app, /\{ id: 'settings', label: 'AI settings'/);
-    assert.match(app, /\{ id: 'import', label: 'Import…'/);
+    assert.match(app, /menuItem\('aiSettings', 'settings'\)/);
+    assert.match(app, /menuItem\('importContext', 'import'\)/);
     assert.doesNotMatch(app, /id: 'import-website'/);
-    assert.match(app, /\{ id: 'dossier', label: 'Project brief'/);
+    assert.match(app, /menuItem\('projectBrief', 'dossier'\)/);
     const shortcuts = await read('shortcuts.ts');
     for (const action of ['insert', 'play', 'preview', 'export', 'link', 'unlink', 'group', 'ungroup']) {
       assert.match(shortcuts, new RegExp(`action: '${action}'`));

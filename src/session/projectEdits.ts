@@ -1,4 +1,5 @@
-import type { BoundaryMove, ReferenceMove } from '../projectCanvasGeometry';
+import type { BoundaryMove } from '../projectCanvas/boundaryLayout';
+import type { ReferenceMove } from '../projectCanvas/referenceGeometry';
 import type { Command, Element, ElementMove, ElementPatch, LinkedPasteInstance, PendingRequest, Pointer, PointerSource, PointerTarget, Rect, ReferenceItem, WorkspaceView } from '../types';
 
 type Mutate = (command: Command) => Promise<WorkspaceView | null>;

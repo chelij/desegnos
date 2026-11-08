@@ -16,7 +16,6 @@
 :root[data-theme="dark"] .project-canvas { --canvas-dot: color-mix(in srgb, var(--border-soft) 45%, transparent); }
 /* The bed is chrome; boundaries keep their own page colours. */
 .project-canvas.tool-select { cursor: default; }
-.project-canvas.tool-request.request-shape-pick { cursor: default; }
 .project-canvas.tool-request { cursor: crosshair; }
 .project-canvas.tool-boundary { cursor: crosshair; }
 .project-canvas.tool-pan { cursor: grab; }
