@@ -2,7 +2,7 @@ use crate::{
     ai_access::{Access, Connection, credential_key},
     chatgpt::ChatgptState,
     native_files::LockExt,
-    native_files::{self, NativeResult, message, private_directory},
+    native_files::{self, NativeResult, SMALL_RECORD_BYTES, message, private_directory},
 };
 use desegnos_ai::{
     ApiKey, AuthenticationMethod, CancellationToken, ChatgptView, CredentialInfo,
@@ -20,15 +20,14 @@ use std::{
 use tauri::State;
 use uuid::Uuid;
 
-pub(crate) type AiState<'a> = State<'a, Mutex<AiSettingsStore>>;
+pub(crate) type SettingsState<'a> = State<'a, Mutex<AiSettingsStore>>;
 const RECORD: &str = "AI settings";
-const MAX_SETTINGS_BYTES: u64 = 1024 * 1024;
 fn read_json<T: for<'de> Deserialize<'de>>(path: &Path, limit: u64) -> NativeResult<T> {
     native_files::read_json(path, limit, RECORD)
 }
 
 fn write_json(path: &Path, value: &impl Serialize) -> NativeResult<()> {
-    native_files::write_json(path, value, MAX_SETTINGS_BYTES, RECORD)
+    native_files::write_json(path, value, SMALL_RECORD_BYTES, RECORD)
 }
 
 #[derive(Serialize, Deserialize)]
@@ -303,7 +302,7 @@ impl AiSettingsStore {
         let loaded = if let Some(error) = directory_error {
             Err(error)
         } else if path.exists() {
-            read_json::<ProviderSettings>(&path, 65_536).and_then(|settings| {
+            read_json::<ProviderSettings>(&path, SMALL_RECORD_BYTES).and_then(|settings| {
                 settings
                     .validate_for_auth(AuthenticationMethod::Chatgpt)
                     .map_err(message)?;
@@ -412,7 +411,7 @@ impl AiSettingsStore {
         let mut settings = if self.provider == ProviderId::Local {
             self.settings.clone()
         } else if path.exists() {
-            read_json(&path, 65_536)?
+            read_json(&path, SMALL_RECORD_BYTES)?
         } else {
             ProviderId::Local.defaults()
         };
@@ -451,7 +450,7 @@ impl AiSettingsStore {
         };
         let path = self.settings_path(provider);
         let settings = if path.exists() {
-            read_json::<ProviderSettings>(&path, 65_536)?
+            read_json::<ProviderSettings>(&path, SMALL_RECORD_BYTES)?
         } else {
             provider.defaults()
         };
@@ -686,7 +685,7 @@ async fn refresh_main_image_access(
 }
 
 pub(super) async fn settings_view(
-    state: &AiState<'_>,
+    state: &SettingsState<'_>,
     chatgpt_state: &ChatgptState,
 ) -> NativeResult<AiSettingsView> {
     refresh_image_access(state, chatgpt_state, false).await?;
@@ -823,9 +822,7 @@ pub(super) async fn settings_view(
     let accounts: BTreeMap<_, _> = chatgpt
         .accounts
         .iter()
-        .map(|account| {
-            (account.id, account.usable())
-        })
+        .map(|account| (account.id, account.usable()))
         .collect();
     let connection_ready = if authentication == AuthenticationMethod::Chatgpt {
         chatgpt
@@ -890,7 +887,7 @@ pub(super) async fn settings_view(
 
 #[tauri::command]
 pub async fn get_ai_settings(
-    state: AiState<'_>,
+    state: SettingsState<'_>,
     chatgpt: State<'_, ChatgptState>,
     refresh_models: Option<bool>,
 ) -> Result<AiSettingsView, crate::native_error::NativeFailure> {
@@ -905,9 +902,10 @@ pub async fn get_ai_settings(
                 refresh_api_models(&state).await?;
             }
             if authentication == AuthenticationMethod::Chatgpt
-                && let Some(account) = view.accounts.iter().find(|account| {
-                    Some(account.id) == view.active_account_id && account.usable()
-                })
+                && let Some(account) = view
+                    .accounts
+                    .iter()
+                    .find(|account| Some(account.id) == view.active_account_id && account.usable())
                 && let Ok(client) = client
             {
                 // Discovery errors remain visible in models_error; retain the settings view.
@@ -925,7 +923,7 @@ pub async fn get_ai_settings(
 
 #[tauri::command]
 pub async fn set_ai_provider(
-    state: AiState<'_>,
+    state: SettingsState<'_>,
     chatgpt: State<'_, ChatgptState>,
     provider: ProviderId,
 ) -> Result<AiSettingsView, crate::native_error::NativeFailure> {
@@ -940,7 +938,7 @@ pub async fn set_ai_provider(
 
 #[tauri::command]
 pub async fn save_ai_settings(
-    state: AiState<'_>,
+    state: SettingsState<'_>,
     chatgpt: State<'_, ChatgptState>,
     settings: ProviderSettings,
     connection_only: Option<bool>,
@@ -1009,7 +1007,7 @@ pub async fn save_ai_settings(
 
 #[tauri::command]
 pub async fn set_ai_key(
-    state: AiState<'_>,
+    state: SettingsState<'_>,
     chatgpt: State<'_, ChatgptState>,
     image: Option<bool>,
     key: String,
@@ -1043,7 +1041,7 @@ pub async fn set_ai_key(
 
 #[tauri::command]
 pub async fn remove_ai_key(
-    state: AiState<'_>,
+    state: SettingsState<'_>,
     chatgpt: State<'_, ChatgptState>,
     image: Option<bool>,
 ) -> Result<AiSettingsView, crate::native_error::NativeFailure> {
@@ -1079,7 +1077,7 @@ pub struct AccessResult {
 
 #[tauri::command]
 pub async fn test_ai_access(
-    state: AiState<'_>,
+    state: SettingsState<'_>,
     chatgpt: State<'_, ChatgptState>,
 ) -> Result<AccessResult, crate::native_error::NativeFailure> {
     let result: NativeResult<AccessResult> = async {

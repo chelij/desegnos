@@ -16,6 +16,14 @@ impl NativeErrorKind {
     pub fn failure<E: Serialize>(self) -> impl Fn(E) -> NativeFailure {
         move |error| NativeFailure::from_serializable(error, self)
     }
+
+    /// Run a command's body, typing its error as a `NativeFailure`.
+    pub fn run<T, E: Serialize>(
+        self,
+        body: impl FnOnce() -> Result<T, E>,
+    ) -> Result<T, NativeFailure> {
+        body().map_err(self.failure())
+    }
 }
 
 #[derive(ts_rs::TS, Serialize)]

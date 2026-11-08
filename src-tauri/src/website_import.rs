@@ -6,7 +6,7 @@
 //! rendered inside a script-disabled nested frame, and only our extraction wrapper runs.
 use crate::local_site::{LocalSite, decode_path as decode_site_path};
 use crate::native_files::{LockExt, NativeResult, message};
-use crate::workspace::Workspace;
+use crate::workspace::WorkspaceState;
 use base64::{Engine, engine::general_purpose::STANDARD};
 use desegnos_ai::WebUrl as Url;
 use desegnos_core::WebCapture;
@@ -23,7 +23,6 @@ use tauri_plugin_dialog::DialogExt;
 use uuid::Uuid;
 
 type ImportState<'a> = State<'a, Mutex<WebsiteImportState>>;
-type WorkspaceState<'a> = State<'a, Mutex<Workspace>>;
 
 use desegnos_core::limits::{
     DEFAULT_PICTURE_WIDTH, MAX_IMPORT_CAPTURES, MAX_IMPORT_PAGES, MAX_WEBSITE_FILE_BYTES,
@@ -292,11 +291,10 @@ pub async fn pick_website_import_source(
 pub fn cancel_website_import(
     state: ImportState<'_>,
 ) -> Result<(), crate::native_error::NativeFailure> {
-    (|| -> NativeResult<()> {
+    crate::native_error::NativeErrorKind::Command.run(|| -> NativeResult<()> {
         state.locked().clear();
         Ok(())
-    })()
-    .map_err(crate::native_error::NativeErrorKind::Command.failure())
+    })
 }
 
 fn image_mime(name: &str) -> Option<&'static str> {

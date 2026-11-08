@@ -8,8 +8,9 @@ use crate::{
     native_files::{LockExt, NativeResult, message},
 };
 use desegnos_ai::{
-    ApiKey, AuthenticationMethod, CancellationToken, ChatgptAccount, ChatgptModel, CostEstimate, ErrorKind,
-    ModelInfo, ProviderClient, ProviderError, ProviderId, ProviderSettings, SubmissionOutcome,
+    ApiKey, AuthenticationMethod, CancellationToken, ChatgptAccount, ChatgptModel, CostEstimate,
+    ErrorKind, ModelInfo, ProviderClient, ProviderError, ProviderId, ProviderSettings,
+    SubmissionOutcome,
 };
 use desegnos_core::{GenerationMode, RequirementsSnapshot};
 use serde_json::Value;
@@ -80,8 +81,21 @@ impl AccessFailure {
     }
 }
 
-/// The signed-in ChatGPT account a new job binds to. `action` completes "before ...".
-pub async fn active_account(chatgpt: &ChatgptState, action: &str) -> NativeResult<Uuid> {
+/// The ChatGPT account a new job binds to, or none when it does not use ChatGPT. `action`
+/// completes "before ...".
+pub async fn bound_account(
+    chatgpt: &ChatgptState,
+    authentication: AuthenticationMethod,
+    action: &str,
+) -> NativeResult<Option<Uuid>> {
+    if authentication == AuthenticationMethod::Chatgpt {
+        Ok(Some(active_account(chatgpt, action).await?))
+    } else {
+        Ok(None)
+    }
+}
+
+async fn active_account(chatgpt: &ChatgptState, action: &str) -> NativeResult<Uuid> {
     let view = chatgpt.view().await;
     let account = view
         .accounts

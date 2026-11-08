@@ -11,7 +11,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { alive, checkDesktop, desktopState, exit as childExit, hashFile, signalGroup, stopGroup, unusedPort as freePort } from '../../scripts/native-guard.mjs';
 import { toolchainEnvironment } from '../../scripts/toolchain.mjs';
-import { resolveDbusRunSession, resolveXvfbRun, xvfbEnvironment } from '../../scripts/xvfb.mjs';
+import { spawnXvfbSession } from '../../scripts/xvfb.mjs';
 import { waitFor, WebDriver, xpathString } from './webdriver.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
@@ -716,13 +716,12 @@ async function main() {
   const before = await desktopState();
   let result = 1;
   try {
-    const isolated = spawn(resolveXvfbRun(), ['-d', '-e', join(evidence, 'xvfb.log'), '-f', join(scratch, 'Xauthority'), '-s', '-screen 0 1600x1100x24',
-      resolveDbusRunSession(), '--', process.execPath, script, '--isolated'], {
-      cwd: root, detached: true, stdio: 'inherit', env: xvfbEnvironment({ ...process.env,
+    const isolated = spawnXvfbSession({
+      script, evidence, scratch, cwd: root, env: { ...process.env,
         XDG_DATA_HOME: profile.data, XDG_CONFIG_HOME: profile.config, XDG_CACHE_HOME: profile.cache, XDG_RUNTIME_DIR: profile.runtime,
         GDK_SCALE: '1', GDK_DPI_SCALE: '1', DESEGNOS_DATA_DIR: join(scratch, 'app-data'),
         DESEGNOS_DESKTOP_DISPLAY: process.env.DISPLAY ?? '', DESEGNOS_SMOKE_BINARY: binary,
-        DESEGNOS_SMOKE_EVIDENCE: evidence, DESEGNOS_SMOKE_SCRATCH: scratch }),
+        DESEGNOS_SMOKE_EVIDENCE: evidence, DESEGNOS_SMOKE_SCRATCH: scratch },
     });
     const interrupt = () => signalGroup(isolated.pid, 'SIGTERM');
     process.once('SIGINT', interrupt); process.once('SIGTERM', interrupt);

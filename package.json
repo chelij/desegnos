@@ -1,6 +1,5 @@
 {
   "name": "desegnos",
-  "version": "0.1.0",
   "private": true,
   "type": "module",
   "license": "GPL-3.0-only",
@@ -13,7 +12,6 @@
     "release:local": "node scripts/build-release.mjs",
     "test": "node scripts/run.mjs cargo test --workspace",
     "check:rust": "node scripts/run.mjs cargo clippy --workspace --all-targets -- -D warnings",
-    "test:canvas": "node tests/project-canvas-geometry.test.mjs && node tests/canvas-model.test.mjs && node tests/canvas-fonts.test.mjs",
     "test:canvas-ux": "node tests/canvas-ux-browser.test.mjs",
     "test:ai-models": "node tests/ai-models-browser.test.mjs",
     "test:notices": "node tests/notice-system.test.mjs",

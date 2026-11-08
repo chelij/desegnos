@@ -10,6 +10,9 @@ use std::{
 
 pub type NativeResult<T> = Result<T, String>;
 
+/// The size limit of a small settings or list record, for reading and writing alike.
+pub const SMALL_RECORD_BYTES: u64 = 1024 * 1024;
+
 /// Lock shared state even if another thread panicked while holding it. Refusing to lock would
 /// leave a running job with no recorded outcome and every command on that service failing.
 pub trait LockExt<T> {
@@ -130,4 +133,25 @@ pub fn open_lock_file(path: &Path) -> std::io::Result<File> {
         options.mode(0o600);
     }
     options.open(path)
+}
+
+/// Take the exclusive lock that serializes two windows updating one record. A child process
+/// forked by another thread can inherit the descriptor for the instant before exec closes it,
+/// so one try can race; retry briefly and stay bounded so the UI is never held for long.
+pub fn lock_for_update(path: &Path, noun: &str) -> NativeResult<File> {
+    let lock = open_lock_file(path).map_err(message)?;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(100);
+    loop {
+        match lock.try_lock() {
+            Ok(()) => return Ok(lock),
+            Err(fs::TryLockError::WouldBlock) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            Err(error) => {
+                return Err(format!(
+                    "Another window is updating {noun}. Try again to update. {error}"
+                ));
+            }
+        }
+    }
 }

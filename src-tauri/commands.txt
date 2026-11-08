@@ -55,7 +55,7 @@ website_import::prepare_website_import_url
 website_import::pick_website_import_source
 website_import::cancel_website_import
 website_import::import_website_pages
-workspace::open_preview_link
+system_open::open_preview_link
 workspace::close_project
 workspace::switch_project
 workspace::import_context

@@ -74,14 +74,6 @@ impl DataDirectory {
     }
 }
 
-/// The data folder of the running editor. Commands only run after [`start`] succeeded, so the
-/// managed choice is the answer; the platform default is a last resort before startup finishes.
-pub fn directory<R: Runtime>(app: &AppHandle<R>) -> PathBuf {
-    app.try_state::<DataDirectory>()
-        .map(|state| state.0.clone())
-        .unwrap_or_else(|| app.path().app_local_data_dir().unwrap_or_default())
-}
-
 /// Resolves the configured folder and checks it, asking for another one when it is unusable.
 pub fn start<R: Runtime>(app: &AppHandle<R>) -> Result<DataDirectory, Problem> {
     let config = app.path().app_config_dir().ok();

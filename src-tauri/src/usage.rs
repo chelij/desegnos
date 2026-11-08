@@ -107,10 +107,10 @@ fn append(directory: &Path, today: i64, events: &[UsageEvent]) -> Result<(), Str
 
 #[tauri::command]
 pub fn record_usage(
-    app: tauri::AppHandle,
+    data: tauri::State<'_, crate::data_location::DataDirectory>,
     events: Vec<UsageEvent>,
 ) -> Result<(), crate::native_error::NativeFailure> {
-    (|| -> Result<(), String> {
+    crate::native_error::NativeErrorKind::Command.run(|| -> Result<(), String> {
         if events.len() > MAX_EVENTS || !events.iter().all(UsageEvent::valid) {
             return Err("The usage record was not in the expected form.".into());
         }
@@ -119,10 +119,9 @@ pub fn record_usage(
             .map_err(|error| error.to_string())?
             .as_secs() as i64
             / 86_400;
-        let directory = crate::data_location::directory(&app).join("usage");
+        let directory = data.path().join("usage");
         append(&directory, today, &events)
-    })()
-    .map_err(crate::native_error::NativeErrorKind::Command.failure())
+    })
 }
 
 #[cfg(test)]

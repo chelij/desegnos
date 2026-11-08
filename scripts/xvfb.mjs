@@ -1,4 +1,5 @@
 // Resolves the Linux virtual-display tooling (xvfb-run, dbus-run-session) from PATH or an env override.
+import { spawn } from 'node:child_process';
 import { accessSync, constants, statSync } from 'node:fs';
 import { delimiter, join } from 'node:path';
 
@@ -41,4 +42,11 @@ export function xvfbEnvironment(environment = process.env) {
   delete result.WAYLAND_DISPLAY;
   delete result.WAYLAND_SOCKET;
   return Object.assign(result, { XDG_SESSION_TYPE: 'x11', GDK_BACKEND: 'x11', QT_QPA_PLATFORM: 'xcb' });
+}
+
+// Runs `node <script> --isolated` on a private Xvfb display and session bus, in its own process
+// group so the caller can stop everything the check started.
+export function spawnXvfbSession({ script, evidence, scratch, env, cwd }) {
+  return spawn(resolveXvfbRun(), ['-d', '-e', join(evidence, 'xvfb.log'), '-f', join(scratch, 'Xauthority'), '-s', '-screen 0 1600x1100x24',
+    resolveDbusRunSession(), '--', process.execPath, script, '--isolated'], { cwd, env: xvfbEnvironment(env), detached: true, stdio: ['ignore', 'inherit', 'inherit'] });
 }
