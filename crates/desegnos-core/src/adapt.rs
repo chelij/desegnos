@@ -1,18 +1,19 @@
 //! Deterministic linked-size layout. Base geometry remains the source of truth.
 use crate::{
-    Element, ElementKind, ElementLayout, ElementOverride, Page, Rect, Result, StackDirection,
+    Result, elements::Element, elements::ElementKind, elements::ElementLayout,
+    elements::ElementOverride, elements::StackDirection, model::Page, model::Rect,
 };
 use uuid::Uuid;
 
 /// Rebuild automatic overrides, retaining every manually authored override.
 pub fn adapt_size(page: &mut Page, size_id: Uuid) -> Result<()> {
-    adapt_with_styles(page, size_id, &crate::ProjectStyles::default())
+    adapt_with_styles(page, size_id, &crate::model::ProjectStyles::default())
 }
 
 pub(crate) fn adapt_with_styles(
     page: &mut Page,
     size_id: Uuid,
-    styles: &crate::ProjectStyles,
+    styles: &crate::model::ProjectStyles,
 ) -> Result<()> {
     let base = page.base_size().clone();
     let size = page
@@ -36,14 +37,14 @@ pub(crate) fn adapt_with_styles(
     page.size_mut(size_id).unwrap().height = height
         .ceil()
         .max(minimum_height)
-        .min(f64::from(crate::MAX_VIEWPORT_SIDE))
+        .min(f64::from(crate::limits::MAX_VIEWPORT_SIDE))
         as u32;
     Ok(())
 }
 
 pub(crate) fn adapt_changed_pages(
-    before: &crate::Project,
-    after: &mut crate::Project,
+    before: &crate::model::Project,
+    after: &mut crate::model::Project,
 ) -> Result<()> {
     for page in &mut after.pages {
         let old = before.pages.iter().find(|p| p.id == page.id);
@@ -121,7 +122,10 @@ fn has_text(e: &Element) -> bool {
 }
 
 fn intersects(a: &Rect, b: &Rect) -> bool {
-    a.x + 2.0 < b.x + b.width && b.x + 2.0 < a.x + a.width && a.y + 2.0 < b.y + b.height && b.y + 2.0 < a.y + a.height
+    a.x + 2.0 < b.x + b.width
+        && b.x + 2.0 < a.x + a.width
+        && a.y + 2.0 < b.y + b.height
+        && b.y + 2.0 < a.y + a.height
 }
 
 fn effective(e: &Element, id: Uuid) -> Rect {
@@ -156,8 +160,8 @@ fn place(
     let ratio = (rect.width / e.rect.width.max(1.0)).min(1.0);
     let mut style = measure.resolve_style(&e.style);
     style.references.text = None;
-    style.sizing.width = crate::SizingMode::Fixed;
-    style.sizing.height = crate::SizingMode::Fixed;
+    style.sizing.width = crate::elements::SizingMode::Fixed;
+    style.sizing.height = crate::elements::SizingMode::Fixed;
     style.sizing.min_width = style.sizing.min_width.map(|v| v.min(rect.width));
     if !e.text.is_empty() {
         let original = style.text_style.size;
@@ -171,7 +175,11 @@ fn place(
         let display_cap = (measure.viewport() * 0.16).max(minimum);
         style.text_style.size = (original * ratio).max(minimum).min(display_cap.max(14.0));
         // Shrink only as far as the longest word needs to fit the box; never below 14 px.
-        let longest = e.text.split_whitespace().max_by_key(|word| word.chars().count()).unwrap_or("");
+        let longest = e
+            .text
+            .split_whitespace()
+            .max_by_key(|word| word.chars().count())
+            .unwrap_or("");
         if !longest.is_empty() {
             let mut word = e.clone();
             word.text = longest.to_owned();
@@ -529,22 +537,33 @@ fn children(
                 // the width its words need, so a wide desktop text box does not push its
                 // neighbour across the line.
                 let short = |e: &Element| {
-                    matches!(e.kind, ElementKind::Text) && e.children.is_empty() && e.text.chars().count() <= 24
+                    matches!(e.kind, ElementKind::Text)
+                        && e.children.is_empty()
+                        && e.text.chars().count() <= 24
                 };
                 // Only text that sits together at the base size packs together: touching or
                 // overlapping boxes. A label and an icon pushed to the far edge stay apart.
                 let paired = row.len() >= 2
                     && row.iter().all(|&i| short(&elements[i]))
                     && row.windows(2).all(|pair| {
-                        elements[pair[1]].rect.x - (elements[pair[0]].rect.x + elements[pair[0]].rect.width) <= 24.0
+                        elements[pair[1]].rect.x
+                            - (elements[pair[0]].rect.x + elements[pair[0]].rect.width)
+                            <= 24.0
                     });
                 if paired {
                     let mut style = measure.resolve_style(&e.style);
                     let original = style.text_style.size;
-                    let minimum = if original >= 28.0 { (original * 0.6).clamp(22.0, 40.0) } else { 14.0 };
+                    let minimum = if original >= 28.0 {
+                        (original * 0.6).clamp(22.0, 40.0)
+                    } else {
+                        14.0
+                    };
                     let display_cap = (measure.viewport() * 0.16).max(minimum).max(14.0);
                     style.text_style.size = (original * ratio).max(minimum).min(display_cap);
-                    w = w.max(1.0).min(available).min(measure.natural_width(e, &style).max(1.0));
+                    w = w
+                        .max(1.0)
+                        .min(available)
+                        .min(measure.natural_width(e, &style).max(1.0));
                 }
                 if let Some(&next) = row.get(column + 1) {
                     let distance = elements[next].rect.x - e.rect.x;
@@ -562,9 +581,10 @@ fn children(
         let plain_link = |e: &Element| {
             matches!(e.kind, ElementKind::Link)
                 && e.text.chars().count() <= 16
-                && e.style.fill.as_deref().is_none_or(|fill| {
-                    fill == "transparent" || (fill.len() == 9 && fill.ends_with("00"))
-                })
+                && e.style
+                    .fill
+                    .as_deref()
+                    .is_none_or(|fill| crate::element_style::visible_colour(fill).is_none())
         };
         let mut links_from = usize::MAX;
         let link_count = row.iter().filter(|&&i| plain_link(&elements[i])).count();
@@ -573,15 +593,25 @@ fn children(
             order.sort_by_key(|&k| plain_link(&elements[row[k]]));
             row = order.iter().map(|&k| row[k]).collect();
             widths = order.iter().map(|&k| widths[k]).collect();
-            links_from = row.iter().position(|&i| plain_link(&elements[i])).unwrap_or(usize::MAX);
+            links_from = row
+                .iter()
+                .position(|&i| plain_link(&elements[i]))
+                .unwrap_or(usize::MAX);
             // Header text (logo, links) packs at the width its words need at its final size.
             for (column, &i) in row.iter().enumerate() {
                 let e = &elements[i];
                 // Filled links are buttons: they keep their designed padding.
-                if (matches!(e.kind, ElementKind::Text) || plain_link(e)) && e.children.is_empty() && !e.text.is_empty() {
+                if (matches!(e.kind, ElementKind::Text) || plain_link(e))
+                    && e.children.is_empty()
+                    && !e.text.is_empty()
+                {
                     let mut style = measure.resolve_style(&e.style);
                     let original = style.text_style.size;
-                    let minimum = if original >= 28.0 { (original * 0.6).clamp(22.0, 40.0) } else { 14.0 };
+                    let minimum = if original >= 28.0 {
+                        (original * 0.6).clamp(22.0, 40.0)
+                    } else {
+                        14.0
+                    };
                     style.text_style.size = (original * ratio).max(minimum);
                     widths[column] = widths[column].min(measure.natural_width(e, &style).max(1.0));
                 }
@@ -616,7 +646,10 @@ fn children(
             } else {
                 widths[column]
             };
-            if !similar && next_x > gutter && (column == links_from || next_x + w > width - right_gutter + 0.5) {
+            if !similar
+                && next_x > gutter
+                && (column == links_from || next_x + w > width - right_gutter + 0.5)
+            {
                 line_y = line_bottom + gap;
                 line_top = e.rect.y;
                 next_x = gutter;
@@ -628,7 +661,8 @@ fn children(
             let centred = row.len() == 1
                 && left_margin > 1.0
                 && (left_margin - right_margin).abs() <= (base_width * 0.02).max(4.0)
-                && (e.text.is_empty() || e.style.text_style.align == crate::TextAlign::Center);
+                && (e.text.is_empty()
+                    || e.style.text_style.align == crate::elements::TextAlign::Center);
             let placed = (e.rect.x * ratio).clamp(gutter, (width - right_gutter - w).max(gutter));
             let x = if full_bleed {
                 0.0
@@ -735,14 +769,29 @@ fn children(
             }
             let art_width = (e.rect.width * ratio).min((width - x).max(1.0));
             let scaled_height = e.rect.height * art_width / e.rect.width.max(1.0);
-            let art = Rect { x, y, width: art_width, height: if e.children.is_empty() && !matches!(e.kind, ElementKind::Ellipse) { height } else { scaled_height } };
+            let art = Rect {
+                x,
+                y,
+                width: art_width,
+                height: if e.children.is_empty() && !matches!(e.kind, ElementKind::Ellipse) {
+                    height
+                } else {
+                    scaled_height
+                },
+            };
             let covers_new_text = !(e.rect.x.abs() < 1.0 && e.rect.width >= base_width - 1.0)
-                && readable.iter().any(|(base, adapted)| !intersects(&e.rect, base) && intersects(&art, adapted));
+                && readable
+                    .iter()
+                    .any(|(base, adapted)| !intersects(&e.rect, base) && intersects(&art, adapted));
             if covers_new_text || art_width < e.rect.width * ratio * 0.35 {
                 // No clear room left beside the text at this size: drop the ornament here.
                 e.overrides.insert(
                     id,
-                    ElementOverride { automatic: true, hidden: true, ..Default::default() },
+                    ElementOverride {
+                        automatic: true,
+                        hidden: true,
+                        ..Default::default()
+                    },
                 );
                 continue;
             }

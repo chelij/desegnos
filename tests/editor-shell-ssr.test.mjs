@@ -61,9 +61,9 @@ try {
     }
     assert.equal(outputKind('page'), 'webpage');
   });
-  await test('legacy screens appear as Pages with fixed height and the same export choice', () => {
+  await test('app screens appear as Pages with fixed height and web export', () => {
     const { project } = templates.find(item => item.template === 'appScreen');
-    const page = { ...project.pages[0], name: 'Existing screen', output: 'appScreen' };
+    const page = { ...project.pages[0], name: 'Existing screen' };
     assert.equal(pageKind(page), 'page');
     const properties = renderToStaticMarkup(React.createElement(BoundaryProperties, {
       page, busy: false, commit: noop, updateSize: noop, addSize: noop, removeSize: noop, remove: noop,
@@ -80,7 +80,7 @@ try {
     assert.match(html, /<option value="webpage" selected="">Page<\/option>/);
     assert.doesNotMatch(html, /<option value="appScreen"/);
     assert.match(html, />Preview<\/button>/);
-    assert.equal(page.output, 'appScreen', 'rendering must not rewrite saved projects');
+    assert.equal(page.output, 'webpage');
   });
   await test('Export lists included and excluded boundaries with accessible controls above the folder', () => {
     const { project } = templates.find(item => item.template === 'website');

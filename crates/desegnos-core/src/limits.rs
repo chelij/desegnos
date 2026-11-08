@@ -1,4 +1,4 @@
-use crate::{Error, Result, ensure};
+use crate::{Error, Result, validation::ensure};
 use base64::{Engine, engine::general_purpose::STANDARD};
 
 pub const MAX_NAME_CHARS: usize = 120;
@@ -57,7 +57,7 @@ pub fn is_sha256_hex(value: &str) -> bool {
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
-pub fn decode_image_data_uri(value: &str) -> Result<(&str, Vec<u8>)> {
+pub fn split_image_data_uri(value: &str) -> Result<(&str, &str)> {
     let (mime, encoded) = value
         .strip_prefix("data:")
         .and_then(|value| value.split_once(";base64,"))
@@ -66,6 +66,11 @@ pub fn decode_image_data_uri(value: &str) -> Result<(&str, Vec<u8>)> {
         IMAGE_MIME_TYPES.contains(&mime) || mime == "image/svg+xml",
         "Use a PNG, JPEG, WebP, GIF or SVG image.",
     )?;
+    Ok((mime, encoded))
+}
+
+pub fn decode_image_data_uri(value: &str) -> Result<(&str, Vec<u8>)> {
+    let (mime, encoded) = split_image_data_uri(value)?;
     let bytes = STANDARD
         .decode(encoded)
         .map_err(|_| Error("An image contains invalid base64 data.".into()))?;
@@ -94,19 +99,13 @@ pub fn decode_image_data_uri(value: &str) -> Result<(&str, Vec<u8>)> {
                 && bytes.ends_with(b";")
         }
         "image/svg+xml" => {
-            crate::identity::validate_svg(&bytes)?;
+            crate::svg_validation::validate_svg(&bytes)?;
             true
         }
         _ => false,
     };
     ensure(matches, "An image's contents do not match its media type.")?;
     Ok((mime, bytes))
-}
-
-pub(crate) fn next_revision(revision: u64) -> Result<u64> {
-    revision
-        .checked_add(1)
-        .ok_or_else(|| Error("Project revision limit reached.".into()))
 }
 
 pub const MAX_EXPORT_DESTINATION: usize = 4_096;
@@ -158,7 +157,9 @@ pub const MAX_PHOTO_DESCRIPTION_CHARS: usize = 200;
 pub const MAX_IMPORTED_ITEMS: usize = 64;
 
 pub const AI_PREVIEW_BYTES: usize = 48 * 1024;
+/// Upper bound reserved per preview when estimating a request.
 pub const AI_PREVIEW_TOKEN_RESERVE: u64 = 512;
+/// One provider image tile (~85–350 tokens).
 pub const AI_PREVIEW_EDGE: u32 = 512;
 pub const MAX_REQUEST_IMAGES: usize = 8;
 
@@ -177,3 +178,57 @@ pub const MAX_LOCAL_PREVIEW_BYTES: u64 = 64 * 1024 * 1024;
 pub const MAX_IDENTITY_RECORD_BYTES: u64 = 8 * 1024 * 1024;
 pub const MAX_CLIPBOARD_BYTES: usize = 8 * 1024 * 1024;
 pub const MAX_EXPORT_CHECK_BYTES: usize = 8 * 1024 * 1024;
+
+pub const MAX_EMBED_DEPTH: usize = 3;
+
+pub const MAX_EXPORT_FILE_BYTES: usize = 4 * 1024 * 1024;
+
+pub const MAX_EXPORT_BYTES: usize = 64 * 1024 * 1024;
+
+pub const MAX_EXPORT_FILES: usize = 2_000;
+
+pub const MAX_GENERATION_BYTES: usize = 8 * 1024 * 1024;
+
+pub const MAX_GENERATION_REQUESTS: usize = 512;
+
+pub const MAX_GENERATED_IMAGES: usize = 8;
+
+pub const MAX_POINTER_CLASSIFICATIONS: usize = 1000;
+
+pub const MAX_DECISION_PROPOSALS: usize = 128;
+
+pub const MAX_DESIGN_CRITICISMS: usize = 512;
+
+pub const MAX_APPLIED_JOBS: usize = 10_000;
+
+pub const MAX_EXPLANATION_CHARS: usize = 4096;
+
+pub const MAX_DOWNLOADED_IMAGE_BYTES: usize = 256 * 1024;
+
+pub const REQUEST_HISTORY_CHARS: usize = 3000;
+
+pub const MAX_RECORDS_PER_LAYER: usize = 5;
+
+pub const MAX_UNDO_STEPS: usize = 200;
+
+pub const MAX_STYLESHEETS: usize = 4;
+
+pub const MAX_LOGOS: usize = 6;
+
+pub const MAX_PHOTOS: usize = 32;
+
+pub const MAX_WEBSITE_LINKS: usize = 128;
+
+pub const MAX_REQUEST_ATTACHMENTS: usize = 32;
+pub const MAX_IMPORTED_PAGE_CONTEXTS: usize = 10_000;
+
+pub fn image_data_uri(mime: &str, bytes: &[u8]) -> String {
+    format!("data:{mime};base64,{}", STANDARD.encode(bytes))
+}
+
+pub const IMAGE_GENERATION_SIZE: &str = "1024x1024";
+
+pub const MAX_PROJECT_STYLES: usize = 1000;
+
+/// Bounds allocation and embedded image size for PDF shadow masks.
+pub const MAX_PDF_SHADOW_PIXELS: u32 = 4_000_000;

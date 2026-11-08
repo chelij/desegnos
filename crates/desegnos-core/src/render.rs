@@ -4,16 +4,18 @@
 mod pdf;
 use crate::element_style::{padding as effective_padding, text_of, wraps};
 
-pub use crate::geometry::Rgba;
+use crate::geometry::Rgba;
 use crate::geometry::*;
+#[cfg(test)]
+use crate::text_layout::resolve_font;
 use crate::text_layout::*;
-pub use crate::text_layout::{ResolvedFont, font_families, resolve_font, standalone_face};
 use crate::{
-    Element, ElementKind, ElementLayout, ElementStyle, ElementTextStyle, Error, Page, Project,
-    Rect, Result, StackAlign, StackJustify, TextAlign,
+    Error, Result, elements::Element, elements::ElementKind, elements::ElementLayout,
+    elements::ElementStyle, elements::ElementTextStyle, elements::StackAlign,
+    elements::StackJustify, elements::TextAlign, model::Page, model::Project, model::Rect,
 };
 
-pub use crate::limits::{MAX_RENDER_EDGE, MAX_RENDER_PIXELS};
+use crate::limits::{MAX_RENDER_EDGE, MAX_RENDER_PIXELS};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Shape {
@@ -125,7 +127,7 @@ impl<'a> RenderPage<'a> {
             page,
             width: f64::from(size.width),
             height: f64::from(size.height),
-            elements: crate::resolve_for_size(project, page, size_id),
+            elements: crate::elements::resolve_for_size(project, page, size_id),
         })
     }
 }
@@ -264,8 +266,7 @@ fn paint_element(
             if let Some(fill) = style
                 .fill
                 .as_deref()
-                .and_then(Rgba::parse)
-                .filter(|colour| colour.a > 0.0)
+                .and_then(crate::element_style::visible_colour)
             {
                 own.push(Item::Shape(Shape {
                     path_ref: scene.push_path(Path::rect(at, radius)),
@@ -365,7 +366,7 @@ fn paint_embedded_page(
     else {
         return;
     };
-    if stack.len() >= crate::element_style::MAX_EMBED_DEPTH || stack.contains(&page.id) {
+    if stack.len() >= crate::limits::MAX_EMBED_DEPTH || stack.contains(&page.id) {
         return;
     }
     let size = page
@@ -386,9 +387,7 @@ fn paint_embedded_page(
         height: f64::from(size.height),
     };
     let mut items: Vec<Item> = Vec::new();
-    if let Some(background) = Rgba::parse(&page.background)
-        && background.a > 0.0
-    {
+    if let Some(background) = crate::element_style::visible_colour(&page.background) {
         let path_ref = scene.push_path(Path::rect(page_rect, 0.0));
         items.push(Item::Shape(Shape {
             path_ref,
@@ -398,7 +397,7 @@ fn paint_embedded_page(
     }
     let mut next = stack.to_vec();
     next.push(page.id);
-    for child in crate::resolve_for_size(project, page, size.id) {
+    for child in crate::elements::resolve_for_size(project, page, size.id) {
         let rect = sized_in(fonts, &child, page_rect);
         paint_element(project, scene, fonts, &child, rect, &mut items, &next);
     }
@@ -493,8 +492,8 @@ pub(crate) fn stroke_of(style: &ElementStyle) -> Option<(Rgba, f64)> {
         .stroke
         .color
         .as_deref()
-        .and_then(Rgba::parse)
-        .filter(|colour| colour.a > 0.0 && style.stroke.width > 0.0)
+        .and_then(crate::element_style::visible_colour)
+        .filter(|_| style.stroke.width > 0.0)
         .map(|colour| (colour, style.stroke.width))
 }
 
@@ -505,9 +504,12 @@ fn paint_surface(
     radius: f64,
     out: &mut Vec<Item>,
 ) {
-    let fill = style.fill.as_deref().and_then(Rgba::parse);
+    let fill = style
+        .fill
+        .as_deref()
+        .and_then(crate::element_style::visible_colour);
     let stroke = stroke_of(style);
-    if fill.is_some_and(|colour| colour.a > 0.0) || stroke.is_some() {
+    if fill.is_some() || stroke.is_some() {
         let path_ref = scene.push_path(Path::rect(at, radius));
         out.push(Item::Shape(Shape {
             path_ref,
@@ -518,9 +520,12 @@ fn paint_surface(
 }
 
 fn paint_ellipse(scene: &mut Scene, style: &ElementStyle, at: Rect, out: &mut Vec<Item>) {
-    let fill = style.fill.as_deref().and_then(Rgba::parse);
+    let fill = style
+        .fill
+        .as_deref()
+        .and_then(crate::element_style::visible_colour);
     let stroke = stroke_of(style);
-    if fill.is_some_and(|colour| colour.a > 0.0) || stroke.is_some() {
+    if fill.is_some() || stroke.is_some() {
         let path_ref = scene.push_path(Path::ellipse(at));
         out.push(Item::Shape(Shape {
             path_ref,
@@ -570,7 +575,7 @@ fn paint_children(
             justify,
             wrap,
         } => {
-            let row = matches!(direction, crate::StackDirection::Row);
+            let row = matches!(direction, crate::elements::StackDirection::Row);
             let inner = inset_sides(content, effective_padding(element));
             let extent = if row { inner.width } else { inner.height };
             let cross_extent = if row { inner.height } else { inner.width };
@@ -578,7 +583,7 @@ fn paint_children(
                 .iter()
                 .map(|child| resolve_auto_size(fonts, child, child.rect, inner.width))
                 .collect();
-            let fill = |index: usize| if row { children[index].style.sizing.width } else { children[index].style.sizing.height } == crate::SizingMode::Fill;
+            let fill = |index: usize| if row { children[index].style.sizing.width } else { children[index].style.sizing.height } == crate::elements::SizingMode::Fill;
             let main = |rect: Rect| if row { rect.width } else { rect.height };
             let mut lines = vec![vec![]];
             let mut used = 0.0;
@@ -661,7 +666,7 @@ fn paint_children(
                         child.style.sizing.height
                     } else {
                         child.style.sizing.width
-                    } == crate::SizingMode::Fill;
+                    } == crate::elements::SizingMode::Fill;
                     if cross_fill {
                         if row {
                             rect.height = line_cross;
@@ -697,7 +702,9 @@ fn paint_children(
                 .chunks(columns)
                 .map(|row| {
                     row.iter()
-                        .filter(|child| child.style.sizing.height != crate::SizingMode::Fill)
+                        .filter(|child| {
+                            child.style.sizing.height != crate::elements::SizingMode::Fill
+                        })
                         .map(|child| resolve_auto_size(fonts, child, child.rect, width).height)
                         .fold(0.0_f64, f64::max)
                 })
@@ -715,10 +722,10 @@ fn paint_children(
                     .collect();
                 let height = natural[row_index] + extra;
                 for (column, (child, mut rect)) in row.iter().zip(rects).enumerate() {
-                    if child.style.sizing.width == crate::SizingMode::Fill {
+                    if child.style.sizing.width == crate::elements::SizingMode::Fill {
                         rect.width = width;
                     }
-                    if child.style.sizing.height == crate::SizingMode::Fill {
+                    if child.style.sizing.height == crate::elements::SizingMode::Fill {
                         rect.height = height;
                     }
                     (rect.width, rect.height) =
@@ -771,8 +778,8 @@ fn paint_text(
         };
         let baseline = boxed.y + baseline_offset + index as f64 * height;
         let decoration_y = match style.decoration {
-            Some(crate::TextDecoration::Underline) => Some(baseline + style.size * 0.1),
-            Some(crate::TextDecoration::LineThrough) => Some(baseline - style.size * 0.3),
+            Some(crate::elements::TextDecoration::Underline) => Some(baseline + style.size * 0.1),
+            Some(crate::elements::TextDecoration::LineThrough) => Some(baseline - style.size * 0.3),
             _ => None,
         };
         if let Some(y) = decoration_y {
@@ -955,15 +962,13 @@ fn write_items(svg: &mut String, scene: &Scene, items: &[Item], ids: &mut SvgIds
                 svg.push_str(&format!("<path d=\"{data}\"{attributes}/>"));
             }
             Item::Picture(picture) => {
-                use base64::{Engine, engine::general_purpose::STANDARD};
                 svg.push_str(&format!(
-                    "<image x=\"{:.3}\" y=\"{:.3}\" width=\"{:.3}\" height=\"{:.3}\" preserveAspectRatio=\"xMidYMid slice\" href=\"data:{};base64,{}\"/>",
+                    "<image x=\"{:.3}\" y=\"{:.3}\" width=\"{:.3}\" height=\"{:.3}\" preserveAspectRatio=\"xMidYMid slice\" href=\"{}\"/>",
                     picture.x,
                     picture.y,
                     picture.width,
                     picture.height,
-                    picture.mime,
-                    STANDARD.encode(&picture.bytes)
+                    crate::limits::image_data_uri(&picture.mime, &picture.bytes)
                 ));
             }
             Item::Shadow(shadow) => {
@@ -1026,11 +1031,11 @@ mod tests {
     fn boundary_background_is_painted_in_svg_png_and_pdf() {
         let mut project = Project::new(
             "Background".into(),
-            crate::Viewport {
+            crate::model::Viewport {
                 width: 16,
                 height: 16,
             },
-            crate::Appearance::Dark,
+            crate::model::Appearance::Dark,
         )
         .unwrap();
         assert_eq!(project.pages[0].background, "#ffffff");
@@ -1051,25 +1056,25 @@ mod tests {
     fn an_embed_draws_the_framed_page_and_never_the_page_it_sits_on() {
         let project = Project::new(
             "Frames".into(),
-            crate::Viewport {
+            crate::model::Viewport {
                 width: 400,
                 height: 300,
             },
-            crate::Appearance::Light,
+            crate::model::Appearance::Light,
         )
         .unwrap();
         let mut project = project
             .apply(
                 project.revision,
-                crate::Command::AddCanvasPage {
+                crate::commands::Command::AddCanvasPage {
                     name: "About".into(),
                     path: "/about".into(),
-                    size: crate::PageSize {
+                    size: crate::model::PageSize {
                         id: uuid::Uuid::new_v4(),
                         label: "Desktop".into(),
                         width: 800,
                         height: 600,
-                        kind: crate::BoundaryKind::Page,
+                        kind: crate::model::BoundaryKind::Page,
                         x: 0.0,
                         y: 1000.0,
                     },
@@ -1078,10 +1083,12 @@ mod tests {
                 },
             )
             .unwrap();
-        let mut framed = crate::empty_element(ElementKind::Text, rect(20.0, 20.0, 200.0, 40.0));
+        let mut framed =
+            crate::element_edit::empty_element(ElementKind::Text, rect(20.0, 20.0, 200.0, 40.0));
         framed.text = "Framed".into();
         project.pages[1].elements = vec![framed];
-        let mut embed = crate::empty_element(ElementKind::Embed, rect(10.0, 10.0, 200.0, 100.0));
+        let mut embed =
+            crate::element_edit::empty_element(ElementKind::Embed, rect(10.0, 10.0, 200.0, 100.0));
         embed.url = Some("/about".into());
         project.pages[0].elements = vec![embed.clone()];
         let page = &project.pages[0];
@@ -1101,14 +1108,15 @@ mod tests {
     fn boundary_png_zero_height_line_preserves_six_pixel_stroke() {
         let mut project = Project::new(
             "Line".into(),
-            crate::Viewport {
+            crate::model::Viewport {
                 width: 40,
                 height: 40,
             },
-            crate::Appearance::Light,
+            crate::model::Appearance::Light,
         )
         .unwrap();
-        let mut line = crate::empty_element(ElementKind::Line, rect(5.0, 20.0, 30.0, 0.0));
+        let mut line =
+            crate::element_edit::empty_element(ElementKind::Line, rect(5.0, 20.0, 30.0, 0.0));
         line.style.stroke.width = 6.0;
         line.style.stroke.color = Some("#000000".into());
         project.pages[0].elements.push(line);
@@ -1412,7 +1420,8 @@ mod tests {
     }
 
     fn text_element(family: &str) -> Element {
-        let mut element = crate::empty_element(ElementKind::Text, rect(0.0, 0.0, 120.0, 40.0));
+        let mut element =
+            crate::element_edit::empty_element(ElementKind::Text, rect(0.0, 0.0, 120.0, 40.0));
         element.text = "Handgloves 123".into();
         element.style.text_style.font_family = family.into();
         element
@@ -1425,7 +1434,7 @@ mod tests {
             ElementKind::Button,
             ElementKind::Link,
             ElementKind::Input {
-                input_type: crate::InputType::Text,
+                input_type: crate::elements::InputType::Text,
             },
             ElementKind::Textarea,
             ElementKind::Select { options: vec![] },
@@ -1443,8 +1452,8 @@ mod tests {
             let mut plain = Vec::new();
             paint_text(&mut target, &mut fonts, &element, element.rect, &mut plain);
             for decoration in [
-                crate::TextDecoration::Underline,
-                crate::TextDecoration::LineThrough,
+                crate::elements::TextDecoration::Underline,
+                crate::elements::TextDecoration::LineThrough,
             ] {
                 element.style.text_style.decoration = Some(decoration);
                 let mut decorated = Vec::new();
@@ -1515,19 +1524,19 @@ mod tests {
     fn fit_text_wraps_at_boundary_and_syncs_the_painted_size() {
         let mut project = Project::new(
             "Phone".into(),
-            crate::Viewport {
+            crate::model::Viewport {
                 width: 390,
                 height: 844,
             },
-            crate::Appearance::Dark,
+            crate::model::Appearance::Dark,
         )
         .unwrap();
         let mut heading = text_element("Archivo");
         heading.rect = rect(104.0, 0.0, 800.0, 60.0);
         heading.text = "A heading that wraps inside the phone boundary".into();
         heading.style.text_style.size = 48.0;
-        heading.style.sizing.width = crate::SizingMode::Fit;
-        heading.style.sizing.height = crate::SizingMode::Fit;
+        heading.style.sizing.width = crate::elements::SizingMode::Fit;
+        heading.style.sizing.height = crate::elements::SizingMode::Fit;
         project.pages[0].elements = vec![heading];
         assert!(sync_fit_rects(&mut project));
         let heading = &project.pages[0].elements[0];
@@ -1555,8 +1564,8 @@ mod tests {
         let page = &project.pages[0];
         let svg = boundary_svg(&project, page, page.base_size_id()).unwrap();
         let mut fixed_project = project.clone();
-        fixed_project.pages[0].elements[0].style.sizing.width = crate::SizingMode::Fixed;
-        fixed_project.pages[0].elements[0].style.sizing.height = crate::SizingMode::Fixed;
+        fixed_project.pages[0].elements[0].style.sizing.width = crate::elements::SizingMode::Fixed;
+        fixed_project.pages[0].elements[0].style.sizing.height = crate::elements::SizingMode::Fixed;
         let page = &fixed_project.pages[0];
         assert_eq!(
             svg,
@@ -1567,13 +1576,14 @@ mod tests {
         assert_eq!(project.pages[0].elements[0].rect, before);
 
         // Free boxes subtract the child offset; stacks use their padded content width.
-        let mut parent = crate::empty_element(ElementKind::Box, rect(0.0, 0.0, 240.0, 600.0));
+        let mut parent =
+            crate::element_edit::empty_element(ElementKind::Box, rect(0.0, 0.0, 240.0, 600.0));
         parent.children = project.pages[0].elements.clone();
         project.pages[0].elements = vec![parent];
         sync_fit_rects(&mut project);
         assert_eq!(project.pages[0].elements[0].children[0].rect.width, 136.0);
         project.pages[0].elements[0].layout = ElementLayout::Stack {
-            direction: crate::StackDirection::Column,
+            direction: crate::elements::StackDirection::Column,
             gap: 0.0,
             padding: 20.0,
             align: StackAlign::Start,
@@ -1583,8 +1593,8 @@ mod tests {
         sync_fit_rects(&mut project);
         assert_eq!(project.pages[0].elements[0].children[0].rect.width, 200.0);
 
-        project.pages[0].elements[0].style.sizing.width = crate::SizingMode::Fit;
-        project.pages[0].elements[0].style.sizing.height = crate::SizingMode::Fit;
+        project.pages[0].elements[0].style.sizing.width = crate::elements::SizingMode::Fit;
+        project.pages[0].elements[0].style.sizing.height = crate::elements::SizingMode::Fit;
         project.pages[0].elements[0].style.sizing.max_width = Some(160.0);
         sync_fit_rects(&mut project);
         let parent = &project.pages[0].elements[0];
@@ -1596,7 +1606,7 @@ mod tests {
             ElementKind::Button,
             ElementKind::Link,
             ElementKind::Input {
-                input_type: crate::InputType::Text,
+                input_type: crate::elements::InputType::Text,
             },
         ] {
             let mut control = project.pages[0].elements[0].children[0].clone();
@@ -1609,7 +1619,7 @@ mod tests {
             );
         }
         let mut fixed = project.pages[0].elements[0].children[0].clone();
-        fixed.style.sizing.width = crate::SizingMode::Fixed;
+        fixed.style.sizing.width = crate::elements::SizingMode::Fixed;
         fixed.rect.width = 800.0;
         assert_eq!(
             sized_in(&mut fonts, &fixed, rect(0.0, 0.0, 390.0, 844.0)).width,
@@ -1620,20 +1630,22 @@ mod tests {
     #[test]
     fn fill_reaches_parent_edge_and_hug_uses_child_bounds_with_limits() {
         let mut fonts = FontSet::new();
-        let mut child = crate::empty_element(ElementKind::Box, rect(20.0, 10.0, 40.0, 30.0));
-        child.style.sizing.width = crate::SizingMode::Fill;
-        child.style.sizing.height = crate::SizingMode::Fill;
+        let mut child =
+            crate::element_edit::empty_element(ElementKind::Box, rect(20.0, 10.0, 40.0, 30.0));
+        child.style.sizing.width = crate::elements::SizingMode::Fill;
+        child.style.sizing.height = crate::elements::SizingMode::Fill;
         child.style.sizing.max_width = Some(70.0);
         let filled = sized_in(&mut fonts, &child, rect(0.0, 0.0, 100.0, 90.0));
         assert_eq!((filled.width, filled.height), (70.0, 80.0));
-        let mut parent = crate::empty_element(ElementKind::Box, rect(0.0, 0.0, 200.0, 200.0));
-        parent.style.sizing.width = crate::SizingMode::Fit;
-        parent.style.sizing.height = crate::SizingMode::Fit;
+        let mut parent =
+            crate::element_edit::empty_element(ElementKind::Box, rect(0.0, 0.0, 200.0, 200.0));
+        parent.style.sizing.width = crate::elements::SizingMode::Fit;
+        parent.style.sizing.height = crate::elements::SizingMode::Fit;
         parent.children.push(child);
         let hugged = resolve_auto_size(&mut fonts, &parent, parent.rect, f64::INFINITY);
         assert_eq!((hugged.width, hugged.height), (60.0, 40.0));
         parent.layout = ElementLayout::Stack {
-            direction: crate::StackDirection::Row,
+            direction: crate::elements::StackDirection::Row,
             gap: 8.0,
             padding: 4.0,
             align: StackAlign::Start,
@@ -1672,25 +1684,28 @@ mod tests {
     #[test]
     fn uneven_padding_insets_children_and_hug_on_each_named_side() {
         let mut fonts = FontSet::new();
-        let mut parent = crate::empty_element(ElementKind::Box, rect(0.0, 0.0, 200.0, 200.0));
-        parent.style.sizing.width = crate::SizingMode::Fit;
-        parent.style.sizing.height = crate::SizingMode::Fit;
-        parent.style.padding = Some(crate::ElementPadding {
+        let mut parent =
+            crate::element_edit::empty_element(ElementKind::Box, rect(0.0, 0.0, 200.0, 200.0));
+        parent.style.sizing.width = crate::elements::SizingMode::Fit;
+        parent.style.sizing.height = crate::elements::SizingMode::Fit;
+        parent.style.padding = Some(crate::elements::ElementPadding {
             top: 8.0,
             right: 16.0,
             bottom: 4.0,
             left: 24.0,
         });
         parent.layout = ElementLayout::Stack {
-            direction: crate::StackDirection::Column,
+            direction: crate::elements::StackDirection::Column,
             gap: 6.0,
             padding: 2.0,
             align: StackAlign::Start,
             justify: StackJustify::Start,
             wrap: false,
         };
-        let mut first = crate::empty_element(ElementKind::Box, rect(0.0, 0.0, 40.0, 20.0));
-        let mut second = crate::empty_element(ElementKind::Box, rect(0.0, 0.0, 30.0, 10.0));
+        let mut first =
+            crate::element_edit::empty_element(ElementKind::Box, rect(0.0, 0.0, 40.0, 20.0));
+        let mut second =
+            crate::element_edit::empty_element(ElementKind::Box, rect(0.0, 0.0, 30.0, 10.0));
         for child in [&mut first, &mut second] {
             child.style.fill = Some("#000000".into());
         }
@@ -1704,11 +1719,11 @@ mod tests {
 
         let project = Project::new(
             "Padding".into(),
-            crate::Viewport {
+            crate::model::Viewport {
                 width: 200,
                 height: 200,
             },
-            crate::Appearance::Dark,
+            crate::model::Appearance::Dark,
         )
         .unwrap();
         let mut target = scene();

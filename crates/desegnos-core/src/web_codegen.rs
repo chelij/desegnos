@@ -3,10 +3,11 @@ use crate::element_style::generic_fallback;
 use crate::export::{
     BEHAVIOURS_FILE, ExportBehaviour, ExportPagePlan, ExportPlan, ExportReplyPage,
 };
-use crate::{Element, Error, Project, Result};
+use crate::{Error, Result, elements::Element, model::Project};
 use crate::{
-    ElementKind, ElementLayout, StackAlign, StackDirection, StackJustify, TextAlign, resolve_font,
-    standalone_face,
+    elements::ElementKind, elements::ElementLayout, elements::StackAlign, elements::StackDirection,
+    elements::StackJustify, elements::TextAlign, text_layout::resolve_font,
+    text_layout::standalone_face,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
@@ -18,11 +19,11 @@ pub(crate) fn behaviour_structure(elements: &[Element]) -> serde_json::Value {
                 .map(|e| {
                     let mut hook = serde_json::json!({
                         "id": e.id, "kind": e.kind.label(),
-                        "inputType": match &e.kind { crate::ElementKind::Input { input_type } => Some(crate::element_style::input_type_name(input_type)), _ => None },
-                        "optionCount": match &e.kind { crate::ElementKind::Select { options } => Some(options.len()), _ => None },
+                        "inputType": match &e.kind { crate::elements::ElementKind::Input { input_type } => Some(crate::element_style::input_type_name(input_type)), _ => None },
+                        "optionCount": match &e.kind { crate::elements::ElementKind::Select { options } => Some(options.len()), _ => None },
                         "children": behaviour_structure(&e.children),
                     });
-                                    if matches!(e.kind, crate::ElementKind::Checkbox | crate::ElementKind::Radio) {
+                                    if matches!(e.kind, crate::elements::ElementKind::Checkbox | crate::elements::ElementKind::Radio) {
                         hook["controlHook"] = serde_json::json!("label");
                     }
                     hook
@@ -31,7 +32,7 @@ pub(crate) fn behaviour_structure(elements: &[Element]) -> serde_json::Value {
         )
 }
 
-pub(crate) fn initially_hidden_ids(elements: &[crate::Element]) -> Vec<Uuid> {
+pub(crate) fn initially_hidden_ids(elements: &[crate::elements::Element]) -> Vec<Uuid> {
     let mut ids = Vec::new();
     for element in elements {
         if !element.visible {
@@ -99,7 +100,7 @@ fn ends_with_generic(list: &str) -> bool {
 /// The CSS family name an embedded face publishes. It never matches an installed family, so the
 /// browser shows the same bytes the canvas and PNG renderer draw.
 fn embedded_family(id: &str) -> String {
-    if id == "archivo" {
+    if id == crate::text_layout::BUNDLED_FONT_ID {
         "Desegnos Archivo".into()
     } else {
         let short: String = id.chars().take(16).collect();
@@ -392,7 +393,7 @@ struct Declarations {
 }
 
 fn common_declarations(fonts: &mut Fonts) -> BTreeMap<String, String> {
-    let text = crate::ElementTextStyle::default();
+    let text = crate::elements::ElementTextStyle::default();
     let mut defaults: BTreeMap<String, String> = [
         ("box-sizing", "border-box"),
         ("display", "block"),
@@ -505,8 +506,8 @@ impl Declarations {
 
 fn paints(colour: Option<&str>) -> bool {
     colour
-        .and_then(crate::Rgba::parse)
-        .is_some_and(|colour| colour.a > 0.0)
+        .and_then(crate::element_style::visible_colour)
+        .is_some()
 }
 
 fn renders_text(element: &Element) -> bool {
@@ -515,7 +516,7 @@ fn renders_text(element: &Element) -> bool {
 
 /// Everything one layer sets, including the values the common rule shares.
 fn declarations(element: &Element, parent: &ElementLayout, fonts: &mut Fonts) -> Declarations {
-    let defaults = crate::ElementTextStyle::default();
+    let defaults = crate::elements::ElementTextStyle::default();
     let free = parent.is_free();
     let rect = element.rect;
     let style = &element.style;
@@ -580,8 +581,8 @@ fn declarations(element: &Element, parent: &ElementLayout, fonts: &mut Fonts) ->
         ElementLayout::Stack {
             direction: StackDirection::Row,
             ..
-        } => sizing.width == crate::SizingMode::Fill,
-        ElementLayout::Stack { .. } => sizing.height == crate::SizingMode::Fill,
+        } => sizing.width == crate::elements::SizingMode::Fill,
+        ElementLayout::Stack { .. } => sizing.height == crate::elements::SizingMode::Fill,
         _ => false,
     };
     for (axis, mode, offset, min, max) in [
@@ -601,8 +602,8 @@ fn declarations(element: &Element, parent: &ElementLayout, fonts: &mut Fonts) ->
         ),
     ] {
         match mode {
-            crate::SizingMode::Fixed => {}
-            crate::SizingMode::Fit => css.set(
+            crate::elements::SizingMode::Fixed => {}
+            crate::elements::SizingMode::Fit => css.set(
                 axis,
                 if axis == "width" {
                     "max-content"
@@ -610,7 +611,7 @@ fn declarations(element: &Element, parent: &ElementLayout, fonts: &mut Fonts) ->
                     "auto"
                 },
             ),
-            crate::SizingMode::Fill => {
+            crate::elements::SizingMode::Fill => {
                 let main_axis = matches!(
                     parent,
                     ElementLayout::Stack {
@@ -636,7 +637,7 @@ fn declarations(element: &Element, parent: &ElementLayout, fonts: &mut Fonts) ->
             css.set(format!("max-{axis}"), length(value));
         }
     }
-    if sizing.width == crate::SizingMode::Fit
+    if sizing.width == crate::elements::SizingMode::Fit
         && matches!(
             element.kind,
             ElementKind::Text
@@ -787,8 +788,8 @@ fn declarations(element: &Element, parent: &ElementLayout, fonts: &mut Fonts) ->
         css.set(
             "text-decoration",
             match text.decoration {
-                Some(crate::TextDecoration::Underline) => "underline",
-                Some(crate::TextDecoration::LineThrough) => "line-through",
+                Some(crate::elements::TextDecoration::Underline) => "underline",
+                Some(crate::elements::TextDecoration::LineThrough) => "line-through",
                 _ => "none",
             },
         );
@@ -944,11 +945,11 @@ fn rules(
 
 /// The page shell's declarations for one size.
 fn page_declarations(
-    size: &crate::PageSize,
+    size: &crate::model::PageSize,
     elements: &[Element],
-    page: &crate::Page,
+    page: &crate::model::Page,
 ) -> Declarations {
-    let height = if matches!(size.kind, crate::BoundaryKind::Page) {
+    let height = if matches!(size.kind, crate::model::BoundaryKind::Page) {
         elements
             .iter()
             .filter(|element| element.visible)
@@ -961,7 +962,7 @@ fn page_declarations(
     let mut css = Declarations::new();
     css.set("--desegnos-unit", format!("calc(100cqw / {})", size.width));
     css.set("height", length(height));
-    if matches!(size.kind, crate::BoundaryKind::Screen) {
+    if matches!(size.kind, crate::model::BoundaryKind::Screen) {
         css.set("overflow", "auto");
     } else {
         css.reset("overflow", "visible");
@@ -993,7 +994,7 @@ fn pointer_attribute(id: Uuid, markers: &BTreeMap<Uuid, Vec<Uuid>>) -> String {
         .unwrap_or_default()
 }
 
-fn color_scheme<'a>(page: &crate::Page, ai: Option<&'a str>) -> &'a str {
+fn color_scheme<'a>(page: &crate::model::Page, ai: Option<&'a str>) -> &'a str {
     match ai {
         Some(scheme @ ("light" | "dark")) => scheme,
         _ => page.color_scheme(),
@@ -1043,7 +1044,7 @@ pub(super) fn render(
         sizes.sort_by_key(|size| (size.width, size.id));
         let mut fonts = Fonts::default();
         for size in &sizes {
-            for element in crate::resolve_for_size(project, page, size.id) {
+            for element in crate::elements::resolve_for_size(project, page, size.id) {
                 collect_fonts(&element, &mut fonts);
             }
         }
@@ -1052,10 +1053,12 @@ pub(super) fn render(
         }
         let initially_hidden: BTreeSet<_> = sizes
             .iter()
-            .flat_map(|size| initially_hidden_ids(&crate::resolve_for_size(project, page, size.id)))
+            .flat_map(|size| {
+                initially_hidden_ids(&crate::elements::resolve_for_size(project, page, size.id))
+            })
             .collect();
         let mut html = String::new();
-        for element in crate::resolve_for_size(project, page, page.base_size_id()) {
+        for element in crate::elements::resolve_for_size(project, page, page.base_size_id()) {
             markup(
                 &element,
                 plan,
@@ -1091,7 +1094,7 @@ pub(super) fn render(
             if index > 0 {
                 css.push_str(&format!("@media (min-width:{}px){{\n", size.width));
             }
-            let elements = crate::resolve_for_size(project, page, size.id);
+            let elements = crate::elements::resolve_for_size(project, page, size.id);
             css.push_str(&format!("/* size:{} */\n", size.id));
             let page_css = page_declarations(size, &elements, page);
             let mut sorted = BTreeMap::new();
@@ -1147,7 +1150,7 @@ pub(super) fn render(
         } else {
             format!(
                 r#"<script>(()=>{{const chain=(new URLSearchParams(location.search).get('__desegnosEmbed')||'').split(',').filter(Boolean);if(chain.length>={depth})return;chain.push('{page}');for(const frame of document.querySelectorAll('[data-desegnos-embed-src]')){{if(chain.includes(frame.dataset.desegnosEmbedPage))continue;const url=new URL(frame.dataset.desegnosEmbedSrc,location.href);url.searchParams.set('__desegnosEmbed',chain.join(','));frame.src=url.href;}}}})();</script>"#,
-                depth = crate::element_style::MAX_EMBED_DEPTH - 1,
+                depth = crate::limits::MAX_EMBED_DEPTH - 1,
                 page = page.id
             )
         };
@@ -1171,10 +1174,11 @@ mod tests {
     use super::*;
     use crate::export::*;
     use crate::{
-        Appearance, BoundaryKind, ElementOverride, ElementStroke, InputType, PageSize, PointerKind,
-        Rect, Viewport, empty_element,
+        element_edit::empty_element, elements::ElementOverride, elements::ElementStroke,
+        elements::InputType, model::Appearance, model::BoundaryKind, model::PageSize,
+        model::PointerKind, model::Rect, model::Viewport,
     };
-    use crate::{ExportRecord, Pointer, PointerSource, PointerTarget};
+    use crate::{model::ExportRecord, model::Pointer, model::PointerSource, model::PointerTarget};
 
     fn project() -> Project {
         Project::new(
@@ -1304,7 +1308,7 @@ mod tests {
         let definition_id = Uuid::new_v4();
         project.linked.insert(
             definition_id,
-            crate::LinkedDefinition {
+            crate::elements::LinkedDefinition {
                 id: definition_id,
                 name: "Linked group".into(),
                 master,
@@ -1313,8 +1317,11 @@ mod tests {
         let mut instance = element(ElementKind::Group);
         instance.link = Some(definition_id);
         project.pages[0].elements.push(instance);
-        let resolved =
-            crate::resolve_for_size(&project, &project.pages[0], project.pages[0].base_size_id());
+        let resolved = crate::elements::resolve_for_size(
+            &project,
+            &project.pages[0],
+            project.pages[0].base_size_id(),
+        );
         let child_id = resolved[0].children[0].id;
         assert_ne!(child_id, master_child_id);
         let bundle = direct_export_bundle(&project, &[]).unwrap();
@@ -1669,7 +1676,7 @@ mod tests {
     #[test]
     fn project_text_styles_publish_the_embedded_face_too() {
         let mut project = project();
-        let style = crate::TextStyle {
+        let style = crate::model::TextStyle {
             id: Uuid::new_v4(),
             name: "Display".into(),
             font_family: "Desegnos nonexistent font 987654".into(),
@@ -1700,8 +1707,14 @@ mod tests {
             ] {
                 for (decoration, css_decoration) in [
                     (None, "none"),
-                    (Some(crate::TextDecoration::Underline), "underline"),
-                    (Some(crate::TextDecoration::LineThrough), "line-through"),
+                    (
+                        Some(crate::elements::TextDecoration::Underline),
+                        "underline",
+                    ),
+                    (
+                        Some(crate::elements::TextDecoration::LineThrough),
+                        "line-through",
+                    ),
                 ] {
                     let mut project = project();
                     let mut control = element(kind.clone());
@@ -1746,7 +1759,7 @@ mod tests {
     fn standalone_face_passes_plain_fonts_through_and_rewrites_a_collection() {
         let font = resolve_font("Archivo", 400, false);
         assert_eq!(
-            crate::standalone_face(&font.bytes, font.index).unwrap(),
+            crate::text_layout::standalone_face(&font.bytes, font.index).unwrap(),
             font.bytes.as_slice()
         );
         let mut collection = Vec::new();
@@ -1762,7 +1775,7 @@ mod tests {
         collection.extend_from_slice(&28u32.to_be_bytes());
         collection.extend_from_slice(&4u32.to_be_bytes());
         collection.extend_from_slice(b"data");
-        let face = crate::standalone_face(&collection, 0).unwrap();
+        let face = crate::text_layout::standalone_face(&collection, 0).unwrap();
         assert_eq!(&face[..4], &0x0001_0000u32.to_be_bytes());
         // The one table now starts after the rewritten directory it was copied into.
         assert_eq!(&face[20..24], &56u32.to_be_bytes());
@@ -1770,7 +1783,7 @@ mod tests {
             &face[face.len() - collection.len()..],
             collection.as_slice()
         );
-        assert!(crate::standalone_face(&collection[..12], 0).is_none());
+        assert!(crate::text_layout::standalone_face(&collection[..12], 0).is_none());
     }
 
     #[test]
@@ -1827,8 +1840,8 @@ mod tests {
     #[test]
     fn sizing_rules_emit_fill_flex_limits_and_style_variables() {
         let mut child = element(ElementKind::Box);
-        child.style.sizing.width = crate::SizingMode::Fill;
-        child.style.sizing.height = crate::SizingMode::Fit;
+        child.style.sizing.width = crate::elements::SizingMode::Fill;
+        child.style.sizing.height = crate::elements::SizingMode::Fit;
         child.style.sizing.min_width = Some(20.0);
         let colour = Uuid::new_v4();
         child.style.references.fill = Some(colour);
@@ -1869,7 +1882,7 @@ mod tests {
             justify: StackJustify::Start,
             wrap: false,
         };
-        child.style.padding = Some(crate::ElementPadding {
+        child.style.padding = Some(crate::elements::ElementPadding {
             top: 4.0,
             right: 8.0,
             bottom: 12.0,
@@ -1914,7 +1927,7 @@ mod tests {
 
     #[test]
     fn fit_text_css_caps_width_at_the_container_edge() {
-        let mut element = crate::empty_element(
+        let mut element = crate::element_edit::empty_element(
             ElementKind::Text,
             Rect {
                 x: 104.0,
@@ -1923,8 +1936,8 @@ mod tests {
                 height: 60.0,
             },
         );
-        element.style.sizing.width = crate::SizingMode::Fit;
-        element.style.sizing.height = crate::SizingMode::Fit;
+        element.style.sizing.width = crate::elements::SizingMode::Fit;
+        element.style.sizing.height = crate::elements::SizingMode::Fit;
         let mut fonts = Fonts::default();
         let css = declarations(&element, &ElementLayout::Free, &mut fonts).block();
         assert!(css.contains("width:max-content;"));
@@ -1950,8 +1963,8 @@ mod tests {
             direction: StackDirection::Column,
             gap: 0.0,
             padding: 20.0,
-            align: crate::StackAlign::Start,
-            justify: crate::StackJustify::Start,
+            align: crate::elements::StackAlign::Start,
+            justify: crate::elements::StackJustify::Start,
             wrap: false,
         };
         let css = declarations(&element, &parent, &mut fonts).block();
@@ -1959,7 +1972,7 @@ mod tests {
             css.contains(&format!("max-width:min({}, 100%);", length(200.0))),
             "{css}"
         );
-        element.style.sizing.width = crate::SizingMode::Fixed;
+        element.style.sizing.width = crate::elements::SizingMode::Fixed;
         let css = declarations(&element, &ElementLayout::Free, &mut fonts).block();
         assert!(css.contains(&format!("width:{};", length(800.0))));
         assert!(css.contains(&format!("max-width:{};", length(200.0))));
@@ -2279,7 +2292,7 @@ mod tests {
         let mut project = project
             .apply(
                 project.revision,
-                crate::Command::AddCanvasPage {
+                crate::commands::Command::AddCanvasPage {
                     name: "About".into(),
                     path: "/about".into(),
                     size: PageSize {

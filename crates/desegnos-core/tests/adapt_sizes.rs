@@ -38,10 +38,7 @@ fn overflowing_row_stacks_and_grows_parent_and_page() {
     let (mut p, id) = project();
     p.pages[0].size_mut(id).unwrap().height = 20;
     let mut parent = empty_element(ElementKind::Group, rect(0.0, 0.0, 1440.0, 40.0));
-    parent.children = vec![
-        text(20.0, 0.0, 600.0, 40.0),
-        text(700.0, 0.0, 600.0, 40.0),
-    ];
+    parent.children = vec![text(20.0, 0.0, 600.0, 40.0), text(700.0, 0.0, 600.0, 40.0)];
     p.pages[0].elements = vec![parent];
     adapt_size(&mut p.pages[0], id).unwrap();
     let e = resolve_for_size(&p, &p.pages[0], id);

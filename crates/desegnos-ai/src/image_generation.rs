@@ -3,7 +3,7 @@ use crate::{
     ApiKey, CancellationToken, ErrorKind, OpenAiClient, ProviderError, Result, SubmissionOutcome,
 };
 use base64::{Engine, engine::general_purpose::STANDARD};
-use desegnos_core::{ImageGenerationRequest, MAX_DOWNLOADED_IMAGE_BYTES};
+use desegnos_core::{ImageGenerationRequest, limits::MAX_DOWNLOADED_IMAGE_BYTES};
 use image::{ImageFormat, ImageReader, Limits};
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, io::Cursor, time::Duration};
@@ -80,7 +80,7 @@ impl OpenAiClient {
                 prompt: prompt.clone(),
                 source: None,
                 mask: None,
-                size: "1024x1024".into(),
+                size: desegnos_core::limits::IMAGE_GENERATION_SIZE.into(),
                 transparent: false,
             };
             let result = async {
@@ -162,12 +162,12 @@ mod tests {
             prompt: "Cut out this picture".into(),
             source: Some("attachment1".into()),
             mask: Some("mask1".into()),
-            size: "1024x1024".into(),
+            size: desegnos_core::limits::IMAGE_GENERATION_SIZE.into(),
             transparent: true,
         };
         let body = image_body(&request, false);
         assert_eq!(body["model"], IMAGE_MODELS[0]);
-        assert_eq!(body["size"], "1024x1024");
+        assert_eq!(body["size"], desegnos_core::limits::IMAGE_GENERATION_SIZE);
         assert_eq!(body["quality"], "low");
         assert_eq!(body["n"], 1);
         assert_eq!(body["background"], "transparent");

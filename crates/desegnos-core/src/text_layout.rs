@@ -1,17 +1,21 @@
+pub(crate) const BUNDLED_FONT_ID: &str = "archivo";
 use crate::element_style::border_width;
 use crate::element_style::{control_padding, padding as effective_padding, text_of, wraps};
 use crate::geometry::{Path, Point};
-use crate::{Element, ElementKind, ElementLayout, ElementTextStyle, Project, Rect, TextAlign};
+use crate::{
+    elements::Element, elements::ElementKind, elements::ElementLayout, elements::ElementTextStyle,
+    elements::TextAlign, model::Project, model::Rect,
+};
 use fontdb::{Database, Family, Query, Stretch, Style, Weight};
 use std::collections::BTreeMap;
 use ttf_parser::{Face, OutlineBuilder};
 const ARCHIVO: &[u8] = include_bytes!("../assets/Archivo-variable.ttf");
 pub(crate) fn sized_in(fonts: &mut FontSet, element: &Element, parent: Rect) -> Rect {
     let mut rect = element.rect;
-    if element.style.sizing.width == crate::SizingMode::Fill {
+    if element.style.sizing.width == crate::elements::SizingMode::Fill {
         rect.width = (parent.width - rect.x).max(0.0);
     }
-    if element.style.sizing.height == crate::SizingMode::Fill {
+    if element.style.sizing.height == crate::elements::SizingMode::Fill {
         rect.height = (parent.height - rect.y).max(0.0);
     }
     resolve_auto_size(fonts, element, rect, (parent.width - rect.x).max(0.0))
@@ -44,7 +48,7 @@ pub(crate) fn child_content_rect(element: &Element, at: Rect) -> Rect {
     }
 }
 
-pub(crate) fn inset_sides(rect: Rect, padding: crate::ElementPadding) -> Rect {
+pub(crate) fn inset_sides(rect: Rect, padding: crate::elements::ElementPadding) -> Rect {
     let left = padding.left.max(0.0);
     let right = padding.right.max(0.0);
     let top = padding.top.max(0.0);
@@ -60,7 +64,7 @@ pub(crate) fn inset_sides(rect: Rect, padding: crate::ElementPadding) -> Rect {
 pub(crate) fn inset(rect: Rect, amount: f64) -> Rect {
     inset_sides(
         rect,
-        crate::ElementPadding {
+        crate::elements::ElementPadding {
             top: amount,
             right: amount,
             bottom: amount,
@@ -134,8 +138,8 @@ pub(crate) fn resolve_auto_size(
     available_width: f64,
 ) -> Rect {
     let sizing = &element.style.sizing;
-    let fit_width = sizing.width == crate::SizingMode::Fit;
-    let fit_height = sizing.height == crate::SizingMode::Fit;
+    let fit_width = sizing.width == crate::elements::SizingMode::Fit;
+    let fit_height = sizing.height == crate::elements::SizingMode::Fit;
     if text_of(element).is_some() {
         if at.width <= 0.0 || fit_width {
             at.width = natural_text_width(fonts, element);
@@ -189,7 +193,7 @@ pub(crate) fn resolve_auto_size(
                 let sides = padding.left + padding.right;
                 let ends = padding.top + padding.bottom;
                 let gaps = gap * children.len().saturating_sub(1) as f64;
-                if *direction == crate::StackDirection::Row {
+                if *direction == crate::elements::StackDirection::Row {
                     (
                         children.iter().map(|r| r.width).sum::<f64>() + gaps + sides,
                         children.iter().map(|r| r.height).fold(0.0, f64::max) + ends,
@@ -250,9 +254,9 @@ pub(crate) fn resolve_auto_size(
 pub(crate) fn sync_fit_rects(project: &mut Project) -> bool {
     fn has_fit(elements: &[Element]) -> bool {
         elements.iter().any(|element| {
-            let fits = |style: &crate::ElementStyle| {
-                style.sizing.width == crate::SizingMode::Fit
-                    || style.sizing.height == crate::SizingMode::Fit
+            let fits = |style: &crate::elements::ElementStyle| {
+                style.sizing.width == crate::elements::SizingMode::Fit
+                    || style.sizing.height == crate::elements::SizingMode::Fit
             };
             fits(&element.style)
                 || element
@@ -290,10 +294,10 @@ pub(crate) fn sync_fit_rects(project: &mut Project) -> bool {
             );
             // Children may have grown taller after wrapping; remeasure Hug parents afterwards.
             rect = resolve_auto_size(fonts, element, rect, available);
-            if element.style.sizing.width == crate::SizingMode::Fit {
+            if element.style.sizing.width == crate::elements::SizingMode::Fit {
                 element.rect.width = rect.width;
             }
-            if element.style.sizing.height == crate::SizingMode::Fit {
+            if element.style.sizing.height == crate::elements::SizingMode::Fit {
                 element.rect.height = rect.height;
             }
         }
@@ -301,8 +305,8 @@ pub(crate) fn sync_fit_rects(project: &mut Project) -> bool {
 
     fn write_tree(stored: &mut [Element], measured: &[Element], size_id: Option<uuid::Uuid>) {
         for (element, measured) in stored.iter_mut().zip(measured) {
-            let fit_width = measured.style.sizing.width == crate::SizingMode::Fit;
-            let fit_height = measured.style.sizing.height == crate::SizingMode::Fit;
+            let fit_width = measured.style.sizing.width == crate::elements::SizingMode::Fit;
+            let fit_height = measured.style.sizing.height == crate::elements::SizingMode::Fit;
             if fit_width || fit_height {
                 let mut rect = size_id
                     .and_then(|id| element.overrides.get(&id).and_then(|over| over.rect))
@@ -686,7 +690,7 @@ pub(crate) fn system_fonts() -> Database {
 
 fn bundled_font(fell_back: bool) -> ResolvedFont {
     ResolvedFont {
-        id: "archivo".into(),
+        id: BUNDLED_FONT_ID.into(),
         bytes: std::sync::Arc::new(ARCHIVO.to_vec()),
         index: 0,
         bundled: true,
@@ -785,7 +789,7 @@ impl FontSet {
             }],
             database: None,
             families: BTreeMap::new(),
-            resolved: BTreeMap::from([("archivo".into(), 0)]),
+            resolved: BTreeMap::from([(BUNDLED_FONT_ID.into(), 0)]),
             fallbacks: BTreeMap::new(),
         }
     }
@@ -998,9 +1002,9 @@ impl OutlineBuilder for PathBuilder {
 
 /// A shadow filter's region and its Gaussian standard deviation.
 /// Uses exactly the same font advances and word wrapping as canvas fit-text.
-pub(crate) struct ResponsiveTextMeasure(FontSet, crate::ProjectStyles, f64);
+pub(crate) struct ResponsiveTextMeasure(FontSet, crate::model::ProjectStyles, f64);
 impl ResponsiveTextMeasure {
-    pub(crate) fn new(styles: crate::ProjectStyles) -> Self {
+    pub(crate) fn new(styles: crate::model::ProjectStyles) -> Self {
         Self(FontSet::new(), styles, f64::INFINITY)
     }
     /// The width of the size being adapted; display text never grows past a share of it.
@@ -1010,7 +1014,10 @@ impl ResponsiveTextMeasure {
     pub(crate) fn viewport(&self) -> f64 {
         self.2
     }
-    pub(crate) fn resolve_style(&self, base: &crate::ElementStyle) -> crate::ElementStyle {
+    pub(crate) fn resolve_style(
+        &self,
+        base: &crate::elements::ElementStyle,
+    ) -> crate::elements::ElementStyle {
         let mut style = base.clone();
         self.1.resolve(&mut style);
         style
@@ -1018,7 +1025,7 @@ impl ResponsiveTextMeasure {
     pub(crate) fn height(
         &mut self,
         element: &Element,
-        style: &crate::ElementStyle,
+        style: &crate::elements::ElementStyle,
         width: f64,
     ) -> f64 {
         let mut measured = element.clone();
@@ -1026,7 +1033,11 @@ impl ResponsiveTextMeasure {
         text_height(&mut self.0, &measured, width)
     }
     /// The width the text needs on one line at this style, padding included.
-    pub(crate) fn natural_width(&mut self, element: &Element, style: &crate::ElementStyle) -> f64 {
+    pub(crate) fn natural_width(
+        &mut self,
+        element: &Element,
+        style: &crate::elements::ElementStyle,
+    ) -> f64 {
         let mut measured = element.clone();
         measured.style = style.clone();
         natural_text_width(&mut self.0, &measured)

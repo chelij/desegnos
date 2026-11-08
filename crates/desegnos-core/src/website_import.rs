@@ -4,17 +4,20 @@
 //! is a pure conversion from that compact tree in the browser to the project's element model.
 //! It never fetches, writes or runs page code. Images arrive as picture ids resolved by the
 //! native layer through the ordinary project picture store.
-use crate::limits::{DEFAULT_PICTURE_WIDTH, MAX_IMPORT_CAPTURES, MAX_IMPORT_PAGES};
 use crate::limits::{
-    LINE_HEIGHT_MAX, MAX_FONT_FAMILY_CHARS, MAX_FONT_WEIGHT, MAX_GRID_COLUMNS, MAX_LAYOUT_SPACING,
+    DEFAULT_PICTURE_WIDTH, LINE_HEIGHT_MAX, MAX_FONT_FAMILY_CHARS, MAX_FONT_WEIGHT,
+    MAX_GRID_COLUMNS, MAX_IMPORT_CAPTURES, MAX_IMPORT_PAGES, MAX_LAYOUT_SPACING,
     MAX_LETTER_SPACING, MAX_RADIUS, MAX_SHADOW_BLUR, MAX_SHADOW_OFFSET, MAX_STROKE_WIDTH,
     TEXT_SIZE_RANGE,
 };
 use crate::{
-    BoundaryKind, Element, ElementKind, ElementLayout, ElementOverride, ElementShadow,
-    ElementStroke, ElementStyle, ElementTextStyle, InputType, OutputType, Page, PageSize, Pointer,
-    PointerSource, PointerTarget, Project, Rect, ReferenceItem, ReferenceKind, Result, SizingMode,
-    StackAlign, StackDirection, StackJustify, TextAlign, ensure,
+    Result, elements::Element, elements::ElementKind, elements::ElementLayout,
+    elements::ElementOverride, elements::ElementShadow, elements::ElementStroke,
+    elements::ElementStyle, elements::ElementTextStyle, elements::InputType, elements::SizingMode,
+    elements::StackAlign, elements::StackDirection, elements::StackJustify, elements::TextAlign,
+    model::BoundaryKind, model::OutputType, model::Page, model::PageSize, model::Pointer,
+    model::PointerSource, model::PointerTarget, model::Project, model::Rect, model::ReferenceItem,
+    model::ReferenceKind, validation::ensure,
 };
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use uuid::Uuid;
@@ -218,7 +221,7 @@ struct PagePlan<'a> {
 /// A stable identifier from a string. Importing the same page twice therefore gives the same
 /// layer ids, which lets the phone pass target the desktop pass's layers.
 fn stable_uuid(seed: &str) -> Uuid {
-    let hash = crate::digest(seed.as_bytes());
+    let hash = crate::validation::digest(seed.as_bytes());
     let mut bytes = [0_u8; 16];
     for (index, byte) in bytes.iter_mut().enumerate() {
         *byte = u8::from_str_radix(&hash[index * 2..index * 2 + 2], 16).unwrap_or(0);
@@ -355,15 +358,7 @@ fn served_path(url: &str) -> Option<String> {
 
 fn remote_href(href: &str) -> Option<String> {
     let href = href.trim();
-    if href.len() > 2048 {
-        return None;
-    }
-    let parsed = url::Url::parse(href).ok()?;
-    (matches!(parsed.scheme(), "http" | "https")
-        && parsed.host_str().is_some()
-        && parsed.username().is_empty()
-        && parsed.password().is_none())
-    .then(|| href.to_owned())
+    crate::limits::valid_http_url(href).then(|| href.to_owned())
 }
 
 fn parse_colour(value: &str) -> Option<String> {
@@ -372,8 +367,7 @@ fn parse_colour(value: &str) -> Option<String> {
         return None;
     }
     if let Some(hex) = value.strip_prefix('#') {
-        let valid =
-            matches!(hex.len(), 3 | 6 | 8) && hex.bytes().all(|byte| byte.is_ascii_hexdigit());
+        let valid = crate::limits::is_hex_colour(&value);
         return valid.then(|| format!("#{hex}"));
     }
     let start = value.find('(')?;
@@ -628,7 +622,7 @@ fn clip_text(value: &str) -> String {
         .next()
         .unwrap_or_default()
         .chars()
-        .take(crate::MAX_PROMPT_CHARS)
+        .take(crate::limits::MAX_PROMPT_CHARS)
         .collect()
 }
 
@@ -711,8 +705,8 @@ impl Converter<'_> {
         depth: usize,
     ) -> Vec<Element> {
         // Conversion can add wrappers around a captured DOM node.
-        if depth > crate::MAX_ELEMENT_DEPTH.saturating_sub(4)
-            || self.element_count >= crate::MAX_ELEMENTS
+        if depth > crate::limits::MAX_ELEMENT_DEPTH.saturating_sub(4)
+            || self.element_count >= crate::limits::MAX_ELEMENTS
         {
             return vec![];
         }
@@ -745,7 +739,7 @@ impl Converter<'_> {
                 style: self.node_style(node, false),
                 text: clip_text(node.alt.as_deref().unwrap_or_default()),
                 image: Some(image),
-                ..crate::empty_element(ElementKind::Image, local)
+                ..crate::element_edit::empty_element(ElementKind::Image, local)
             }]
             .into();
         }
@@ -1061,7 +1055,7 @@ impl Converter<'_> {
             layout,
 
             children,
-            ..crate::empty_element(kind, rect)
+            ..crate::element_edit::empty_element(kind, rect)
         }
     }
 
@@ -1089,7 +1083,7 @@ impl Converter<'_> {
                 style
             },
             text: clip_text(text),
-            ..crate::empty_element(ElementKind::Text, rect)
+            ..crate::element_edit::empty_element(ElementKind::Text, rect)
         }
     }
 }
@@ -1115,7 +1109,7 @@ fn page_plans<'a>(captures: &'a [WebCapture], project: &Project) -> Result<Vec<P
             entry.1 = Some(capture);
         }
     }
-    let remaining = crate::MAX_PAGES.saturating_sub(project.pages.len());
+    let remaining = crate::limits::MAX_PAGES.saturating_sub(project.pages.len());
     ensure(
         remaining > 0,
         "This project already holds the maximum number of boundaries.",
@@ -1329,9 +1323,10 @@ pub fn import_website(
         .iter()
         .map(|page| count_elements(&page.elements))
         .sum::<usize>();
-    let pointer_room = crate::MAX_POINTERS.saturating_sub(project.pointers.len());
+    let pointer_room = crate::limits::MAX_POINTERS.saturating_sub(project.pointers.len());
     let mut pointer_total = 0usize;
-    let mut reference_room = crate::MAX_REFERENCE_ITEMS.saturating_sub(project.reference.len());
+    let mut reference_room =
+        crate::limits::MAX_REFERENCE_ITEMS.saturating_sub(project.reference.len());
     let mut script_ranges = Vec::new();
     for plan in &plans {
         let page_x = right;
@@ -1445,7 +1440,7 @@ pub fn import_website(
         right = page_x + width + 160.0;
 
         let page_elements = count_elements(&base_elements);
-        if element_total + page_elements > crate::MAX_ELEMENTS {
+        if element_total + page_elements > crate::limits::MAX_ELEMENTS {
             imported.warnings.push(
                 "The remaining pages were left out to stay inside the project element limit."
                     .into(),
@@ -1655,7 +1650,7 @@ fn layout_sitemap(
                 }
                 if labelled
                     && project.reference.len() + imported.reference.len()
-                        < crate::MAX_REFERENCE_ITEMS
+                        < crate::limits::MAX_REFERENCE_ITEMS
                 {
                     let label = if section.is_empty() {
                         "Top level".to_owned()
@@ -1826,7 +1821,7 @@ fn walk_behaviours(
                     size_id: Some(plan.size_id),
                 },
                 comment: comment.into(),
-                kind: crate::PointerKind::Reference,
+                kind: crate::model::PointerKind::Reference,
                 wiring: None,
                 play: None,
                 play_comment: String::new(),

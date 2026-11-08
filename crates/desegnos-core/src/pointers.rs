@@ -4,7 +4,10 @@
 //! edit its target layer; a reference pointer only lets the request read it as context. Simple
 //! comments are classified into a Play action by generation.
 //! Clashes are derived from the project alone, so the canvas and the AI conversation agree.
-use crate::{Pointer, PointerSource, PointerTarget, Project, ReferenceKind};
+use crate::{
+    model::Pointer, model::PointerSource, model::PointerTarget, model::Project,
+    model::ReferenceKind,
+};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
@@ -13,18 +16,13 @@ use uuid::Uuid;
 #[ts(rename = "PointerStateKind")]
 #[serde(rename_all = "camelCase")]
 pub enum PointerState {
-    /// A line with no comment: it only shows its target.
     Unwired,
-    /// Its comment has no classification or generated code yet, or changed since either.
     NeedsGenerating,
-    /// Its comment is new or changed since the last export, so the next export rebuilds it.
     NeedsExporting,
-    /// The code the last export made for it changed outside the pointer.
     CodeChanged,
     /// Its generated code still matches the fingerprint recorded with it, or it has been
     /// classified as a simple Play action.
     Wired,
-    /// Two pointers from the same source mark the same element with different comments.
     Contradicts,
     Broken,
 }
@@ -39,7 +37,6 @@ pub struct PointerStateView {
     pub clash_with: Vec<Uuid>,
 }
 
-/// A pointer's comment still needs an AI classification.
 pub fn pointer_needs_classifying(pointer: &Pointer) -> bool {
     !pointer.is_behaviour()
         && !pointer.comment.trim().is_empty()
@@ -61,18 +58,18 @@ pub fn pointer_context_value(project: &Project, pointer: &Pointer) -> serde_json
 }
 
 pub fn pointer_grants_change(pointer: &Pointer) -> bool {
-    pointer.kind == crate::PointerKind::Change
+    pointer.kind == crate::model::PointerKind::Change
 }
 
 /// A precise, human-readable description of what a pointer may read or change.
 pub fn pointer_target_description(
     project: &Project,
     target: &PointerTarget,
-    kind: crate::PointerKind,
+    kind: crate::model::PointerKind,
 ) -> String {
     let permission = match kind {
-        crate::PointerKind::Change => "may be changed within this project",
-        crate::PointerKind::Reference => "may be read as context, not changed",
+        crate::model::PointerKind::Change => "may be changed within this project",
+        crate::model::PointerKind::Reference => "may be read as context, not changed",
     };
     match target {
         PointerTarget::Element {
@@ -122,9 +119,9 @@ pub fn pointer_target_description(
 pub fn pointer_target_value(
     project: &Project,
     target: &PointerTarget,
-    kind: crate::PointerKind,
+    kind: crate::model::PointerKind,
 ) -> serde_json::Value {
-    let editable = kind == crate::PointerKind::Change;
+    let editable = kind == crate::model::PointerKind::Change;
     match target {
         PointerTarget::Element {
             page_id,
@@ -173,23 +170,23 @@ pub fn pointer_target_value(
     }
 }
 
-pub fn reference_text(kind: &crate::ReferenceKind) -> String {
+pub fn reference_text(kind: &crate::model::ReferenceKind) -> String {
     match kind {
-        crate::ReferenceKind::Element { element, .. } => {
+        crate::model::ReferenceKind::Element { element, .. } => {
             format!("reference layer \"{}\"", element.label())
         }
-        crate::ReferenceKind::Note { text } => format!("note \"{}\"", short(text, 400)),
-        crate::ReferenceKind::Link { url, title } => {
+        crate::model::ReferenceKind::Note { text } => format!("note \"{}\"", short(text, 400)),
+        crate::model::ReferenceKind::Link { url, title } => {
             if title.trim().is_empty() {
                 format!("link {url}")
             } else {
                 format!("link \"{}\" ({url})", short(title, 200))
             }
         }
-        crate::ReferenceKind::Image { name, .. } => {
+        crate::model::ReferenceKind::Image { name, .. } => {
             format!("picture \"{}\"", short(name, 200))
         }
-        crate::ReferenceKind::Swatch { color } => format!("colour {color}"),
+        crate::model::ReferenceKind::Swatch { color } => format!("colour {color}"),
     }
 }
 
@@ -214,7 +211,7 @@ pub fn pointed_reference_ids(project: &Project, pointer: &Pointer) -> Vec<Uuid> 
     ids
 }
 
-fn collect_ids(elements: &[crate::Element], ids: &mut BTreeSet<Uuid>) {
+fn collect_ids(elements: &[crate::elements::Element], ids: &mut BTreeSet<Uuid>) {
     for element in elements {
         ids.insert(element.id);
         collect_ids(&element.children, ids);
@@ -469,7 +466,6 @@ pub fn pointer_is_broken(project: &Project, pointer: &Pointer) -> bool {
     pointer_source_missing(project, &pointer.from) || pointer_target_missing(project, &pointer.to)
 }
 
-/// Every pointer whose source or target is missing, in project order.
 pub fn broken_pointers(project: &Project) -> Vec<Uuid> {
     project
         .pointers
@@ -478,22 +474,33 @@ pub fn broken_pointers(project: &Project) -> Vec<Uuid> {
         .map(|pointer| pointer.id)
         .collect()
 }
-impl crate::Pointer {
+impl crate::model::Pointer {
     pub(crate) fn source_endpoint(&self) -> (Uuid, Option<Uuid>) {
         match self.from {
-            crate::PointerSource::Element { page_id, element_id, .. } => (page_id, Some(element_id)),
-            crate::PointerSource::Boundary { page_id, .. } => (page_id, None),
+            crate::model::PointerSource::Element {
+                page_id,
+                element_id,
+                ..
+            } => (page_id, Some(element_id)),
+            crate::model::PointerSource::Boundary { page_id, .. } => (page_id, None),
         }
     }
     pub(crate) fn target_endpoint(&self) -> Option<(Uuid, Option<Uuid>)> {
         match self.to {
-            crate::PointerTarget::Element { page_id, element_id, .. } => Some((page_id, Some(element_id))),
-            crate::PointerTarget::Boundary { page_id, .. } => Some((page_id, None)),
+            crate::model::PointerTarget::Element {
+                page_id,
+                element_id,
+                ..
+            } => Some((page_id, Some(element_id))),
+            crate::model::PointerTarget::Boundary { page_id, .. } => Some((page_id, None)),
             _ => None,
         }
     }
     pub(crate) fn hook_endpoints(&self) -> impl Iterator<Item = Uuid> {
         let (page, element) = self.source_endpoint();
-        std::iter::once(element.unwrap_or(page)).chain(self.target_endpoint().map(|(page, element)| element.unwrap_or(page)))
+        std::iter::once(element.unwrap_or(page)).chain(
+            self.target_endpoint()
+                .map(|(page, element)| element.unwrap_or(page)),
+        )
     }
 }

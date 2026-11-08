@@ -1,6 +1,10 @@
 use crate::model::normalized_swatch;
 use crate::model::{attachment_id, reference_picture_name};
-use crate::*;
+use crate::{
+    Error, Result, limits::MAX_REFERENCE_ITEMS, model::PageSize, model::PendingRequest,
+    model::Project, model::Rect, model::ReferenceItem, model::ReferenceKind,
+    model::ReferencePlacement, model::RequestTarget, validation::ensure,
+};
 use std::collections::BTreeSet;
 use uuid::Uuid;
 
@@ -43,7 +47,10 @@ impl Project {
         }
         ensure(
             self.reference.len() < MAX_REFERENCE_ITEMS,
-            "A reference holds at most 1,000 items.",
+            format!(
+                "A reference holds at most {} items.",
+                crate::limits::MAX_REFERENCE_ITEMS
+            ),
         )?;
         ensure(
             !self.reference.iter().any(|existing| existing.id == item.id),
@@ -158,7 +165,7 @@ impl Project {
         let element = crate::elements::remove_element(&mut page.elements, element_id)
             .ok_or_else(|| Error("This layer no longer exists.".into()))?;
         let item_id = Uuid::new_v4();
-        fn contains(element: &crate::Element, id: Uuid) -> bool {
+        fn contains(element: &crate::elements::Element, id: Uuid) -> bool {
             element.id == id || element.children.iter().any(|child| contains(child, id))
         }
         for request in &mut self.requests {
@@ -184,7 +191,6 @@ impl Project {
         Ok(())
     }
 
-    /// Selected reference items become request attachments on these pending requests.
     pub(crate) fn attach_reference_context(
         &mut self,
         request_ids: &[Uuid],
@@ -193,7 +199,7 @@ impl Project {
         ensure(!request_ids.is_empty(), "Write a request first.")?;
         let contexts: Vec<(
             String,
-            crate::AttachmentKind,
+            crate::attachments::AttachmentKind,
             Option<String>,
             Option<String>,
         )> = item_ids
@@ -207,13 +213,13 @@ impl Project {
                 Ok(match &item.kind {
                     ReferenceKind::Element { element, .. } => (
                         element.label(),
-                        crate::AttachmentKind::Text,
+                        crate::attachments::AttachmentKind::Text,
                         Some(crate::requirements::reference_element_value(element).to_string()),
                         None,
                     ),
                     ReferenceKind::Note { text } => (
                         "Reference note".to_string(),
-                        crate::AttachmentKind::Text,
+                        crate::attachments::AttachmentKind::Text,
                         Some(text.clone()),
                         None,
                     ),
@@ -223,20 +229,20 @@ impl Project {
                         } else {
                             title.clone()
                         },
-                        crate::AttachmentKind::Link,
+                        crate::attachments::AttachmentKind::Link,
                         None,
                         Some(url.clone()),
                     ),
                     // Reference pictures travel by name only; their bytes never leave the project.
                     ReferenceKind::Image { picture, name } => (
                         reference_picture_name(*picture, name),
-                        crate::AttachmentKind::Text,
+                        crate::attachments::AttachmentKind::Text,
                         Some(reference_picture_name(*picture, name)),
                         None,
                     ),
                     ReferenceKind::Swatch { color } => (
                         "Reference colour".to_string(),
-                        crate::AttachmentKind::Text,
+                        crate::attachments::AttachmentKind::Text,
                         Some(color.clone()),
                         None,
                     ),
@@ -256,8 +262,8 @@ impl Project {
                 .collect();
             let mut additions = Vec::new();
             for (name, kind, text, url) in &contexts {
-                // An empty note carries no reference.
-                if *kind == crate::AttachmentKind::Text && text.as_deref().is_none_or(str::is_empty)
+                if *kind == crate::attachments::AttachmentKind::Text
+                    && text.as_deref().is_none_or(str::is_empty)
                 {
                     continue;
                 }
@@ -277,7 +283,7 @@ impl Project {
                     .find(|id| !used.contains(id))
                     .expect("an unused identifier");
                 used.insert(id.clone());
-                additions.push(crate::RequestAttachment {
+                additions.push(crate::attachments::RequestAttachment {
                     id,
                     name: name.chars().take(crate::limits::MAX_NAME_CHARS).collect(),
                     kind: *kind,
@@ -287,8 +293,12 @@ impl Project {
                 });
             }
             ensure(
-                request.attachments.len() + additions.len() <= 16,
-                "A request supports at most 16 attachments.",
+                request.attachments.len() + additions.len()
+                    <= crate::limits::MAX_REQUEST_ATTACHMENTS,
+                format!(
+                    "A request supports at most {} attachments.",
+                    crate::limits::MAX_REQUEST_ATTACHMENTS
+                ),
             )?;
             request.attachments.extend(additions);
         }
@@ -310,19 +320,20 @@ impl Project {
             .position(|item| item.id == item_id)
             .map(|index| self.reference.remove(index))
             .ok_or_else(|| Error("This reference item no longer exists.".into()))?;
-        let attachment = |id: String,
-                          name: String,
-                          kind: crate::AttachmentKind,
-                          data_uri: Option<std::sync::Arc<str>>,
-                          url: Option<String>| crate::RequestAttachment {
-            id,
-            name,
-            kind,
-            data_uri,
-            text: None,
-            url,
-        };
-        let mut request: Option<(String, Vec<crate::RequestAttachment>)> = None;
+        let attachment =
+            |id: String,
+             name: String,
+             kind: crate::attachments::AttachmentKind,
+             data_uri: Option<std::sync::Arc<str>>,
+             url: Option<String>| crate::attachments::RequestAttachment {
+                id,
+                name,
+                kind,
+                data_uri,
+                text: None,
+                url,
+            };
+        let mut request: Option<(String, Vec<crate::attachments::RequestAttachment>)> = None;
         let restored = matches!(&item.kind, ReferenceKind::Element { .. });
         let mut element = match item.kind {
             ReferenceKind::Element { element, size } => {
@@ -330,7 +341,11 @@ impl Project {
                 let page = self.page(page_id)?;
                 // On a different page, carry the visible design into the destination rather
                 // than leaving overrides tied to sizes that page does not own.
-                fn rebase(element: &mut crate::Element, sizes: &[PageSize], source: Option<Uuid>) {
+                fn rebase(
+                    element: &mut crate::elements::Element,
+                    sizes: &[PageSize],
+                    source: Option<Uuid>,
+                ) {
                     if element
                         .overrides
                         .keys()
@@ -359,12 +374,14 @@ impl Project {
                 element
             }
             ReferenceKind::Image { picture, .. } => {
-                let mut element = crate::empty_element(crate::ElementKind::Image, rect);
+                let mut element =
+                    crate::element_edit::empty_element(crate::elements::ElementKind::Image, rect);
                 element.image = Some(picture);
                 element
             }
             ReferenceKind::Note { text } => {
-                let element = crate::empty_element(crate::ElementKind::Box, rect);
+                let element =
+                    crate::element_edit::empty_element(crate::elements::ElementKind::Box, rect);
                 if !text.trim().is_empty() {
                     request = Some((text, vec![]));
                 }
@@ -379,13 +396,14 @@ impl Project {
                 .chars()
                 .take(crate::limits::MAX_NAME_CHARS)
                 .collect();
-                let element = crate::empty_element(crate::ElementKind::Box, rect);
+                let element =
+                    crate::element_edit::empty_element(crate::elements::ElementKind::Box, rect);
                 request = Some((
                     String::new(),
                     vec![attachment(
                         attachment_id(),
                         name,
-                        crate::AttachmentKind::Link,
+                        crate::attachments::AttachmentKind::Link,
                         None,
                         Some(url),
                     )],
@@ -393,7 +411,8 @@ impl Project {
                 element
             }
             ReferenceKind::Swatch { color } => {
-                let element = crate::empty_element(crate::ElementKind::Box, rect);
+                let element =
+                    crate::element_edit::empty_element(crate::elements::ElementKind::Box, rect);
                 request = Some((format!("Use {color}"), vec![]));
                 element
             }
