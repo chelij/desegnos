@@ -675,7 +675,7 @@ fn strip_site_root(files: &mut Vec<(String, Vec<u8>)>) -> String {
 pub fn write_website_snapshot(folder: &Path, snapshot: &WebsiteSnapshot) -> Result<()> {
     let root = folder
         .canonicalize()
-        .unwrap_or_else(|_| folder.to_path_buf());
+        .map_err(|error| Error(format!("The import folder could not be opened: {error}")))?;
     for (name, bytes) in &snapshot.files {
         let Some(name) = safe_archive_name(name) else {
             return Err(Error("An imported file has an unsafe name.".into()));

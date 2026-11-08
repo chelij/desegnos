@@ -413,7 +413,7 @@ mod tests {
                         .unwrap_or("/")
                         .to_owned();
                     let (kind, body): (&str, Vec<u8>) = match path.as_str() {
-                        "/" => ("text/html", br#"<link rel="stylesheet" href="/site.css"><link rel="icon" href="/favicon.ico"><img src="/brand/acme-logo.png" alt="Acme">"#.to_vec()),
+                        "/" => ("text/html", br#"<link rel="stylesheet" href="/site.css"><img src="/missing.png" alt=""><img src="/brand/acme-logo.png" alt="Acme">"#.to_vec()),
                         "/site.css" => ("text/css", b":root{--brand:#c0392b}body{font-family:Georgia,serif}".to_vec()),
                         "/brand/acme-logo.png" => ("image/png", png),
                         _ => ("text/plain", b"missing".to_vec()),
@@ -442,7 +442,7 @@ mod tests {
         assert!(
             site.skipped
                 .iter()
-                .any(|reason| reason.contains("favicon.ico"))
+                .any(|reason| reason.contains("missing.png"))
         );
         assert_eq!(
             site.pages,
