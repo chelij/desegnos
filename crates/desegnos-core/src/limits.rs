@@ -157,6 +157,9 @@ pub const MAX_ELEMENT_REQUESTS: usize = 100;
 
 pub const MAX_ELEMENT_CONTEXT: usize = 32;
 
+/// Unsaved edits reach the autosave branch at most this often while the project is dirty.
+pub const AUTOSAVE_INTERVAL_MS: u64 = 3000;
+
 pub const MAX_ELEMENT_OPTIONS: usize = 100;
 
 pub const MAX_ELEMENT_NAME_CHARS: usize = MAX_NAME_CHARS;

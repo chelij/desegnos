@@ -10,7 +10,7 @@ import { Disclosure } from './Disclosure';
 import { StatusChip } from './StatusChip';
 import './dialogs.css';
 import type { AccessResult, AiSettingsView, ProviderSettings, ProviderError, ProviderId } from './types';
-import { MAX_HTTP_URL_BYTES } from './generated/limits';
+import { DEFAULT_LOCAL_ENDPOINT, MAX_HTTP_URL_BYTES } from './generated/limits';
 
 // A model that offers only some levels keeps the request as strong as the user asked for,
 // rather than dropping to its weakest one.
@@ -110,7 +110,7 @@ export function AiSettings({ current, refresh, update, manageUsage, pollingError
   }
   async function connectServer(event: FormEvent) {
     event.preventDefault(); if (!view) return;
-    const value = await action('save_ai_settings', { settings: { ...view.settings, endpoint: endpoint ?? view.settings.endpoint ?? 'http://127.0.0.1:11434/v1' }, connectionOnly: true });
+    const value = await action('save_ai_settings', { settings: { ...view.settings, endpoint: endpoint ?? view.settings.endpoint ?? DEFAULT_LOCAL_ENDPOINT }, connectionOnly: true });
     if (value) { receive(value, true); setEndpoint(null); }
   }
   function setPrice(field: 'inputUsdPerMillion' | 'outputUsdPerMillion' | 'requestUsd' | 'imageUsd', text: string) {
@@ -208,7 +208,7 @@ export function AiSettings({ current, refresh, update, manageUsage, pollingError
         ] : [<option key={item.id} value={item.id}>{item.name}</option>])}
       </select></label>
       {usesLocal && <form className="ai-key-form" onSubmit={connectServer}>
-        <label>Server URL<input type="url" aria-label="Local server URL" required maxLength={MAX_HTTP_URL_BYTES} disabled={busy} value={endpoint ?? view.settings.endpoint ?? 'http://127.0.0.1:11434/v1'} onChange={event => setEndpoint(event.target.value)} /></label>
+        <label>Server URL<input type="url" aria-label="Local server URL" required maxLength={MAX_HTTP_URL_BYTES} disabled={busy} value={endpoint ?? view.settings.endpoint ?? DEFAULT_LOCAL_ENDPOINT} onChange={event => setEndpoint(event.target.value)} /></label>
         <button type="submit" disabled={busy}>Connect</button>
       </form>}
       {view.configurationError && <ProblemBanner message={userError(view.configurationError)} />}

@@ -222,12 +222,7 @@ pub async fn check_for_updates() -> Result<UpdateCheck, crate::native_error::Nat
         })
     }
     .await;
-    result.map_err(|error| {
-        crate::native_error::NativeFailure::from_serializable(
-            error,
-            crate::native_error::NativeErrorKind::Command,
-        )
-    })
+    result.map_err(crate::native_error::NativeErrorKind::Command.failure())
 }
 
 #[cfg(test)]

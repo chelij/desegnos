@@ -4,6 +4,8 @@
 use std::{any::TypeId, collections::BTreeMap, collections::HashSet, fs, path::PathBuf};
 use ts_rs::{Config, TS, TypeVisitor};
 
+const HEADER: &str = "// Generated from Rust by `npm run generate:contract`. Do not edit.\n\n";
+
 struct Collect<'a> {
     config: &'a Config,
     seen: HashSet<TypeId>,
@@ -55,6 +57,7 @@ fn types() -> String {
         crate::website_import::WebsiteImportView,
         crate::website_import::WebsiteImportResultView,
         crate::updates::UpdateCheck,
+        crate::usage::UsageEvent,
         crate::crash_report::CrashReportView,
         crate::crash_report::OpenFailure,
         crate::fonts::CanvasFont,
@@ -62,11 +65,9 @@ fn types() -> String {
         crate::project_history::ProjectHistoryView,
         crate::project_history::CompactReport,
     ];
-    let mut text =
-        String::from("// Generated from Rust by `npm run generate:contract`. Do not edit.\n\n");
-    let comments = strip_comments;
+    let mut text = String::from(HEADER);
     for declaration in collect.declarations.values() {
-        text.push_str(&comments(declaration));
+        text.push_str(&strip_comments(declaration));
         text.push_str("\n\n");
     }
     text.truncate(text.trim_end().len());
@@ -76,46 +77,49 @@ fn types() -> String {
 
 fn limits() -> String {
     use desegnos_core::{GridSettings, SizePreset, limits::*};
-    let mut text =
-        String::from("// Generated from Rust by `npm run generate:contract`. Do not edit.\n\n");
-    let numbers = [
-        ("GRID_PIXEL_MIN", GRID_PIXEL_MIN as f64),
-        ("GRID_PIXEL_MAX", GRID_PIXEL_MAX as f64),
-        ("GRID_PERCENT_MIN", GRID_PERCENT_MIN as f64),
-        ("GRID_PERCENT_MAX", GRID_PERCENT_MAX as f64),
-        ("MAX_LAYER_LABEL_CHARS", MAX_LAYER_LABEL_CHARS as f64),
-        ("MAX_FONT_WEIGHT", MAX_FONT_WEIGHT as f64),
-        ("MAX_GRID_COLUMNS", MAX_GRID_COLUMNS as f64),
-        (
-            "MAX_ATTACHMENT_TEXT_CHARS",
-            MAX_ATTACHMENT_TEXT_CHARS as f64,
-        ),
-        ("MAX_EDITOR_COORDINATE", MAX_EDITOR_COORDINATE as f64),
-        ("MAX_PASTED_IMAGE_WIDTH", MAX_PASTED_IMAGE_WIDTH as f64),
-        ("PASTED_NOTE_WIDTH", PASTED_NOTE_WIDTH as f64),
-        ("PASTED_NOTE_HEIGHT", PASTED_NOTE_HEIGHT as f64),
-        ("SWATCH_SIZE", SWATCH_SIZE as f64),
-        ("MAX_IMPORT_PAGES", MAX_IMPORT_PAGES as f64),
-        ("MAX_REQUEST_FILE_BYTES", MAX_REQUEST_FILE_BYTES as f64),
-        ("MAX_PROMPT_CHARS", MAX_PROMPT_CHARS as f64),
-        ("MAX_NAME_CHARS", MAX_NAME_CHARS as f64),
-        (
-            "MAX_BRANCH_CHARS",
-            desegnos_storage::project_db::MAX_BRANCH_CHARS as f64,
-        ),
-        (
-            "MAX_NAMED_VIEW_NAME_CHARS",
-            MAX_NAMED_VIEW_NAME_CHARS as f64,
-        ),
-        ("MAX_HTTP_URL_BYTES", MAX_HTTP_URL_BYTES as f64),
-        ("MAX_ATTACHMENTS", MAX_ELEMENT_CONTEXT as f64),
-        ("MAX_VIEWPORT_SIDE", MAX_VIEWPORT_SIDE as f64),
-        ("DEFAULT_GRID_SPACING", GridSettings::default().spacing),
-        ("TEMPLATE_GAP", desegnos_core::TEMPLATE_GAP as f64),
+    let mut text = String::from(HEADER);
+    macro_rules! numbers {
+        ($($limit:path),* $(,)?) => {
+            [$((stringify!($limit).rsplit(':').next().unwrap(), $limit as f64)),*]
+        };
+    }
+    let numbers = numbers![
+        GRID_PIXEL_MIN,
+        GRID_PIXEL_MAX,
+        GRID_PERCENT_MIN,
+        GRID_PERCENT_MAX,
+        MAX_LAYER_LABEL_CHARS,
+        MAX_FONT_WEIGHT,
+        MAX_GRID_COLUMNS,
+        MAX_ATTACHMENT_TEXT_CHARS,
+        MAX_EDITOR_COORDINATE,
+        MAX_PASTED_IMAGE_WIDTH,
+        PASTED_NOTE_WIDTH,
+        PASTED_NOTE_HEIGHT,
+        SWATCH_SIZE,
+        MAX_IMPORT_PAGES,
+        MAX_REQUEST_FILE_BYTES,
+        MAX_PROMPT_CHARS,
+        MAX_NAME_CHARS,
+        desegnos_storage::project_db::MAX_BRANCH_CHARS,
+        MAX_NAMED_VIEW_NAME_CHARS,
+        MAX_HTTP_URL_BYTES,
+        MAX_ELEMENT_CONTEXT,
+        AUTOSAVE_INTERVAL_MS,
+        MAX_VIEWPORT_SIDE,
+        desegnos_core::TEMPLATE_GAP,
     ];
     for (name, value) in numbers {
         text.push_str(&format!("export const {name} = {value};\n"));
     }
+    text.push_str(&format!(
+        "export const DEFAULT_GRID_SPACING = {};\n",
+        GridSettings::default().spacing
+    ));
+    text.push_str(&format!(
+        "export const DEFAULT_LOCAL_ENDPOINT = {:?};\n",
+        desegnos_ai::DEFAULT_LOCAL_ENDPOINT
+    ));
     text.push_str(&format!(
         "export const TEXT_SIZE_RANGE = {:?} as const;\n",
         [TEXT_SIZE_RANGE.0, TEXT_SIZE_RANGE.1]
@@ -195,17 +199,9 @@ fn limits() -> String {
 }
 
 fn commands() -> String {
-    let mut text = String::from(
-        "// Generated from Rust by `npm run generate:contract`. Do not edit.\n\nexport type CommandName =\n",
-    );
-    for line in include_str!("../commands.txt")
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-    {
-        text.push_str(&format!(
-            "  | '{}'\n",
-            line.trim().rsplit("::").next().unwrap()
-        ));
+    let mut text = format!("{HEADER}export type CommandName =\n");
+    for name in crate::COMMAND_NAMES {
+        text.push_str(&format!("  | '{name}'\n"));
     }
     text.truncate(text.trim_end().len());
     text.push_str(";\n\n");

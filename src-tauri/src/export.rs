@@ -9,7 +9,7 @@ use crate::ai_job::{signed_out_notice, stopped_notice};
 use crate::ai_settings::AiState;
 use crate::chatgpt::ChatgptState;
 use crate::local_site::LocalSite;
-use crate::native_files::{NativeResult, message};
+use crate::native_files::{LockExt, NativeResult, message};
 use crate::workspace::Workspace;
 use desegnos_ai::{
     AuthenticationMethod, CancellationToken, ProviderId, ProviderResponse, TokenUsage,
@@ -180,21 +180,17 @@ fn read_accepted(directory: &Path) -> BTreeMap<Uuid, ExportRecord> {
 
 /// Export jobs and the one preview folder a session keeps.
 pub struct ExportService {
-    switch_guard: crate::ai_job::SwitchGuard,
+    active: crate::ai_job::ActiveJobs,
     directory: PathBuf,
     jobs: BTreeMap<Uuid, ExportJob>,
     accepted: BTreeMap<Uuid, ExportRecord>,
 }
 
 impl ExportService {
-    pub(crate) fn bind_switch_guard(&mut self, guard: crate::ai_job::SwitchGuard) {
-        self.switch_guard = guard;
-    }
-
-    pub fn initialize(data: &Path) -> Self {
+    pub fn initialize(data: &Path, switch_guard: crate::ai_job::SwitchGuard) -> Self {
         let directory = data.join("exports");
         Self {
-            switch_guard: crate::ai_job::SwitchGuard::default(),
+            active: crate::ai_job::ActiveJobs::new(switch_guard),
             accepted: read_accepted(&directory),
             directory,
             jobs: BTreeMap::new(),
@@ -382,12 +378,7 @@ pub async fn pick_export_destination(
         }))
     }
     .await;
-    result.map_err(|error| {
-        crate::native_error::NativeFailure::from_serializable(
-            error,
-            crate::native_error::NativeErrorKind::Command,
-        )
-    })
+    result.map_err(crate::native_error::NativeErrorKind::Command.failure())
 }
 
 fn page_views(plan: &ExportPlan) -> Vec<ExportPageView> {
@@ -423,7 +414,7 @@ pub async fn prepare_export(
 ) -> Result<ExportJobView, crate::native_error::NativeFailure> {
     let result: NativeResult<ExportJobView> = async {
         let project = {
-            let workspace = workspace.lock().map_err(message)?;
+            let workspace = workspace.locked();
             let project = workspace.project()?.clone();
             if project.id != project_id || project.revision != revision {
                 return Err("The design changed. Export the current version again.".into());
@@ -458,10 +449,10 @@ pub async fn prepare_export(
         };
         if !preview {
             // A full export records the version it came from, so the project needs a file first.
-            workspace.lock().map_err(message)?.head_version()?;
+            workspace.locked().head_version()?;
         }
         let job_id = Uuid::new_v4();
-        let project = service.lock().map_err(message)?.with_accepted(project);
+        let project = service.locked().with_accepted(project);
         let plan =
             desegnos_core::plan_export(&project, &export_page_ids, job_id).map_err(message)?;
         let preview_page = preview_page_id
@@ -469,11 +460,11 @@ pub async fn prepare_export(
             .map(|page| page.file.clone());
         let (destination_path, preview_folder) = if preview {
             let folder = {
-                let service = service.lock().map_err(message)?;
+                let service = service.locked();
                 service.prune_previews(None);
                 service.new_preview_folder()?
             };
-            site.lock().map_err(message)?.stop();
+            site.locked().stop();
             (folder.clone(), Some(folder))
         } else {
             let parent = destination.ok_or("Choose a destination folder before exporting.")?;
@@ -520,10 +511,7 @@ pub async fn prepare_export(
                 preview,
                 preview_page.as_deref(),
             )?;
-            service
-                .lock()
-                .map_err(message)?
-                .remember(&project, &bundle)?;
+            service.locked().remember(&project, &bundle)?;
             view.status = JobStatus::Ready;
             view.pointer_count = bundle.behaviours.len();
             view.reused_behaviour_count = bundle.behaviours.len();
@@ -539,7 +527,7 @@ pub async fn prepare_export(
                 view.warnings.push("Connect AI to build behaviours.".into());
             }
             view.result = Some(written);
-            let mut service = service.lock().map_err(message)?;
+            let mut service = service.locked();
             service.jobs.insert(
                 job_id,
                 ExportJob {
@@ -558,7 +546,7 @@ pub async fn prepare_export(
         let connection = bound_connection(&ai, &chatgpt).await?;
         let snapshot = desegnos_core::plan_snapshot(&project, &plan);
         view.estimate_usd = estimate_export(&ai, &plan, &snapshot, project.generation_mode)?;
-        let mut service = service.lock().map_err(message)?;
+        let mut service = service.locked();
         service.jobs.insert(
             job_id,
             ExportJob {
@@ -575,17 +563,12 @@ pub async fn prepare_export(
         Ok(view)
     }
     .await;
-    result.map_err(|error| {
-        crate::native_error::NativeFailure::from_serializable(
-            error,
-            crate::native_error::NativeErrorKind::Command,
-        )
-    })
+    result.map_err(crate::native_error::NativeErrorKind::Command.failure())
 }
 
 /// The selected AI connection, bound to the signed-in ChatGPT account when it uses one.
 async fn bound_connection(ai: &AiState<'_>, chatgpt: &ChatgptState) -> NativeResult<Connection> {
-    let mut connection = ai.lock().map_err(message)?.connection();
+    let mut connection = ai.locked().connection();
     if connection.authentication == AuthenticationMethod::Chatgpt {
         connection.account_id = Some(active_account(chatgpt, "exporting").await?);
     }
@@ -598,8 +581,7 @@ fn estimate_export(
     snapshot: &desegnos_core::RequirementsSnapshot,
     mode: GenerationMode,
 ) -> NativeResult<f64> {
-    ai.lock()
-        .map_err(message)?
+    ai.locked()
         .export_estimate(plan, snapshot, mode)
         .map_err(message)
 }
@@ -644,7 +626,7 @@ fn commit(
         (folder.to_path_buf(), export.files.len())
     } else {
         let version = {
-            let mut workspace = workspace.lock().map_err(message)?;
+            let mut workspace = workspace.locked();
             workspace.head_version()?
         };
         let mut record = ExportRecord {
@@ -668,15 +650,14 @@ fn commit(
         })
         .map_err(message)?;
         {
-            let mut workspace = workspace.lock().map_err(message)?;
+            let mut workspace = workspace.locked();
             workspace.record_export(record)?;
         }
         (written.path, written.file_count)
     };
     let preview_url = if preview {
         Some(
-            site.lock()
-                .map_err(message)?
+            site.locked()
                 .serve(
                     &path,
                     desegnos_core::limits::MAX_LOCAL_PREVIEW_BYTES as usize,
@@ -722,7 +703,8 @@ pub async fn start_export(
 ) -> Result<ExportJobView, crate::native_error::NativeFailure> {
     let result: NativeResult<ExportJobView> = async {
         let (plan, connection, mode, cancellation) = {
-            let mut service = service.lock().map_err(message)?;
+            let mut service = service.locked();
+            let service = &mut *service;
             let job = service
                 .jobs
                 .get_mut(&job_id)
@@ -742,7 +724,7 @@ pub async fn start_export(
             job.view.provider_error = None;
             job.view.provider = Some(connection.provider);
             job.view.message = "Exporting…".into();
-            job.cancellation = CancellationToken::new();
+            job.cancellation = service.active.start(job_id, 0);
             (
                 job.plan.clone(),
                 connection,
@@ -750,11 +732,6 @@ pub async fn start_export(
                 job.cancellation.clone(),
             )
         };
-        let _running = service
-            .lock()
-            .map_err(message)?
-            .switch_guard
-            .track(cancellation.clone());
         let mut provider_error = None;
         let result = async {
             let access = resolve(&ai, &chatgpt, &connection, &cancellation)
@@ -764,7 +741,7 @@ pub async fn start_export(
                     failure.message
                 })?;
             let snapshot = {
-                let workspace = workspace.lock().map_err(message)?;
+                let workspace = workspace.locked();
                 let project = workspace.project()?;
                 if project.id != plan.project_id || project.revision != plan.base_revision {
                     return Err("The design changed. Prepare the export again.".into());
@@ -796,19 +773,16 @@ pub async fn start_export(
         }
         .await;
         if let Some(error) = provider_error
-            && let Some(job) = service.lock().map_err(message)?.jobs.get_mut(&job_id)
+            && let Some(job) = service.locked().jobs.get_mut(&job_id)
         {
             job.view.provider_error = Some(error);
         }
-        finish(&workspace, &service, &site, job_id, plan, result)
+        let finished = finish(&workspace, &service, &site, job_id, plan, result);
+        service.locked().active.remove(job_id);
+        finished
     }
     .await;
-    result.map_err(|error| {
-        crate::native_error::NativeFailure::from_serializable(
-            error,
-            crate::native_error::NativeErrorKind::Command,
-        )
-    })
+    result.map_err(crate::native_error::NativeErrorKind::Command.failure())
 }
 
 fn finish(
@@ -820,7 +794,7 @@ fn finish(
     result: Result<ProviderResponse, String>,
 ) -> NativeResult<ExportJobView> {
     let (destination, preview, preview_folder, cancelled) = {
-        let guard = service.lock().map_err(message)?;
+        let guard = service.locked();
         let job = guard
             .jobs
             .get(&job_id)
@@ -834,7 +808,7 @@ fn finish(
     };
     if cancelled {
         // A cancel arrived before the reply did: never write files after the user stopped.
-        let mut guard = service.lock().map_err(message)?;
+        let mut guard = service.locked();
         let Some(job) = guard.jobs.get_mut(&job_id) else {
             return Err("This export is no longer available.".into());
         };
@@ -844,10 +818,10 @@ fn finish(
     }
     // Take the project without holding the export lock, so cancel and status reads stay live.
     let project = {
-        let workspace = workspace.lock().map_err(message)?;
+        let workspace = workspace.locked();
         workspace.project()?.clone()
     };
-    let project = service.lock().map_err(message)?.with_accepted(project);
+    let project = service.locked().with_accepted(project);
     match result {
         Ok(response) => {
             let stale = project.id != plan.project_id || project.revision != plan.base_revision;
@@ -889,11 +863,8 @@ fn finish(
                                     None,
                                 ) {
                                     Ok(written) => {
-                                        service
-                                            .lock()
-                                            .map_err(message)?
-                                            .remember(&project, &bundle)?;
-                                        let mut guard = service.lock().map_err(message)?;
+                                        service.locked().remember(&project, &bundle)?;
+                                        let mut guard = service.locked();
                                         let Some(job) = guard.jobs.get_mut(&job_id) else {
                                             return Err(
                                                 "This export is no longer available.".into()
@@ -916,7 +887,7 @@ fn finish(
                     }
                 }
             };
-            let mut guard = service.lock().map_err(message)?;
+            let mut guard = service.locked();
             let Some(job) = guard.jobs.get_mut(&job_id) else {
                 return Err("This export is no longer available.".into());
             };
@@ -937,7 +908,7 @@ fn finish(
             }
         }
         Err(error) => {
-            let mut guard = service.lock().map_err(message)?;
+            let mut guard = service.locked();
             let Some(job) = guard.jobs.get_mut(&job_id) else {
                 return Err("This export is no longer available.".into());
             };
@@ -961,7 +932,7 @@ fn finish(
             }
         }
     }
-    let guard = service.lock().map_err(message)?;
+    let guard = service.locked();
     guard
         .jobs
         .get(&job_id)
@@ -975,7 +946,7 @@ fn record_failure(
     response: ProviderResponse,
     error: String,
 ) -> NativeResult<ExportJobView> {
-    let mut guard = service.lock().map_err(message)?;
+    let mut guard = service.locked();
     let Some(job) = guard.jobs.get_mut(&job_id) else {
         return Err("This export is no longer available.".into());
     };
@@ -1010,7 +981,7 @@ fn apply_comment(
                 .map(|pointer| pointer.fingerprint.clone())
         })
         .ok_or("This pointer's code is no longer in the export folder.")?;
-    let mut workspace = workspace.lock().map_err(message)?;
+    let mut workspace = workspace.locked();
     workspace
         .rewrite_pointer_comment(pointer_id, &comment, &fingerprint)
         .map_err(message)?;
@@ -1023,7 +994,7 @@ pub fn cancel_export(
     job_id: Uuid,
 ) -> Result<ExportJobView, crate::native_error::NativeFailure> {
     (|| -> NativeResult<ExportJobView> {
-        let mut service = service.lock().map_err(message)?;
+        let mut service = service.locked();
         let job = service
             .jobs
             .get_mut(&job_id)
@@ -1035,12 +1006,7 @@ pub fn cancel_export(
         }
         Ok(job.view.clone())
     })()
-    .map_err(|error| {
-        crate::native_error::NativeFailure::from_serializable(
-            error,
-            crate::native_error::NativeErrorKind::Command,
-        )
-    })
+    .map_err(crate::native_error::NativeErrorKind::Command.failure())
 }
 
 #[tauri::command]
@@ -1049,15 +1015,10 @@ pub fn get_export_job(
     project_id: Uuid,
 ) -> Result<Option<ExportJobView>, crate::native_error::NativeFailure> {
     (|| -> NativeResult<Option<ExportJobView>> {
-        let service = service.lock().map_err(message)?;
+        let service = service.locked();
         Ok(service.latest_for(project_id).map(|job| job.view.clone()))
     })()
-    .map_err(|error| {
-        crate::native_error::NativeFailure::from_serializable(
-            error,
-            crate::native_error::NativeErrorKind::Command,
-        )
-    })
+    .map_err(crate::native_error::NativeErrorKind::Command.failure())
 }
 
 /// Recompute pointer fingerprints from the last export's folder, so code changed outside a
@@ -1077,7 +1038,7 @@ pub fn recheck_export(
 ) -> Result<ExportCheck, crate::native_error::NativeFailure> {
     (|| -> NativeResult<ExportCheck> {
         let project = {
-            let workspace = workspace.lock().map_err(message)?;
+            let workspace = workspace.locked();
             let project = workspace.project()?.clone();
             if project.id != project_id {
                 return Err("The active project changed.".into());
@@ -1105,12 +1066,7 @@ pub fn recheck_export(
             }),
         }
     })()
-    .map_err(|error| {
-        crate::native_error::NativeFailure::from_serializable(
-            error,
-            crate::native_error::NativeErrorKind::Command,
-        )
-    })
+    .map_err(crate::native_error::NativeErrorKind::Command.failure())
 }
 
 /// Rewrite one pointer's comment from the marked code an outside edit left behind. One undo step
@@ -1127,7 +1083,7 @@ pub async fn keep_pointer_code(
 ) -> Result<ExportJobView, crate::native_error::NativeFailure> {
     let result: NativeResult<ExportJobView> = async {
         let project = {
-            let workspace = workspace.lock().map_err(message)?;
+            let workspace = workspace.locked();
             let project = workspace.project()?.clone();
             if project.id != project_id {
                 return Err("The active project changed.".into());
@@ -1175,7 +1131,7 @@ pub async fn keep_pointer_code(
             provider_error: None,
             provider: None,
         };
-        let mut service = service.lock().map_err(message)?;
+        let mut service = service.locked();
         service.jobs.insert(
             job_id,
             ExportJob {
@@ -1192,12 +1148,7 @@ pub async fn keep_pointer_code(
         Ok(view)
     }
     .await;
-    result.map_err(|error| {
-        crate::native_error::NativeFailure::from_serializable(
-            error,
-            crate::native_error::NativeErrorKind::Command,
-        )
-    })
+    result.map_err(crate::native_error::NativeErrorKind::Command.failure())
 }
 
 #[tauri::command]
@@ -1206,16 +1157,11 @@ pub fn close_preview(
     site: SiteState<'_>,
 ) -> Result<(), crate::native_error::NativeFailure> {
     (|| -> NativeResult<()> {
-        site.lock().map_err(message)?.stop();
-        service.lock().map_err(message)?.prune_previews(None);
+        site.locked().stop();
+        service.locked().prune_previews(None);
         Ok(())
     })()
-    .map_err(|error| {
-        crate::native_error::NativeFailure::from_serializable(
-            error,
-            crate::native_error::NativeErrorKind::Command,
-        )
-    })
+    .map_err(crate::native_error::NativeErrorKind::Command.failure())
 }
 
 /// Open the last export's folder after checking the renderer's path against the record.
@@ -1227,7 +1173,7 @@ pub fn open_export_folder(
 ) -> Result<(), crate::native_error::NativeFailure> {
     (|| -> NativeResult<()> {
         let record = {
-            let workspace = workspace.lock().map_err(message)?;
+            let workspace = workspace.locked();
             let project = workspace.project()?;
             if project.id != project_id {
                 return Err("The active project changed.".into());
@@ -1249,12 +1195,7 @@ pub fn open_export_folder(
                 .into()
         })
     })()
-    .map_err(|error| {
-        crate::native_error::NativeFailure::from_serializable(
-            error,
-            crate::native_error::NativeErrorKind::Command,
-        )
-    })
+    .map_err(crate::native_error::NativeErrorKind::Command.failure())
 }
 
 /// Serve the last export in the system browser.
@@ -1266,7 +1207,7 @@ pub fn open_in_browser(
 ) -> Result<String, crate::native_error::NativeFailure> {
     (|| -> NativeResult<String> {
         let project = {
-            let workspace = workspace.lock().map_err(message)?;
+            let workspace = workspace.locked();
             let project = workspace.project()?;
             if project.id != project_id {
                 return Err("The active project changed.".into());
@@ -1282,8 +1223,7 @@ pub fn open_in_browser(
             return Err("The last export folder is no longer there. Export again.".into());
         }
         let url = site
-            .lock()
-            .map_err(message)?
+            .locked()
             .serve(
                 &path,
                 desegnos_core::limits::MAX_LOCAL_PREVIEW_BYTES as usize,
@@ -1294,12 +1234,7 @@ pub fn open_in_browser(
             .map_err(|_| format!("The site is running at {url}, but no browser could open it."))?;
         Ok(target)
     })()
-    .map_err(|error| {
-        crate::native_error::NativeFailure::from_serializable(
-            error,
-            crate::native_error::NativeErrorKind::Browser,
-        )
-    })
+    .map_err(crate::native_error::NativeErrorKind::Browser.failure())
 }
 
 /// The page a browser should open: the home page, else a single-page export's own file.
@@ -1389,7 +1324,7 @@ mod tests {
             )]),
         };
         let mut service = ExportService {
-            switch_guard: crate::ai_job::SwitchGuard::default(),
+            active: crate::ai_job::ActiveJobs::new(Default::default()),
             directory: PathBuf::new(),
             jobs: BTreeMap::new(),
             accepted: BTreeMap::from([(project.id, record.clone())]),

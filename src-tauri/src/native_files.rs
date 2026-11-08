@@ -1,13 +1,26 @@
-//! Small helpers shared by the services that keep JSON records and lock files in the app data
-//! folder: private directories, regular-file checks, size-limited reads and writes.
+//! Small helpers shared by the native services: private directories, regular-file checks,
+//! size-limited JSON reads and writes, and poison-tolerant locking.
 use serde::{Deserialize, Serialize};
 use std::{
     fs::{self, File, OpenOptions},
     io::Read,
     path::Path,
+    sync::{Mutex, MutexGuard, PoisonError},
 };
 
 pub type NativeResult<T> = Result<T, String>;
+
+/// Lock shared state even if another thread panicked while holding it. Refusing to lock would
+/// leave a running job with no recorded outcome and every command on that service failing.
+pub trait LockExt<T> {
+    fn locked(&self) -> MutexGuard<'_, T>;
+}
+
+impl<T> LockExt<T> for Mutex<T> {
+    fn locked(&self) -> MutexGuard<'_, T> {
+        self.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
 
 pub fn message(error: impl std::fmt::Display) -> String {
     error.to_string()

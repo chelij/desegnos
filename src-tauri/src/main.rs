@@ -31,6 +31,7 @@ mod recent;
 mod release;
 mod shutdown;
 mod system_open;
+mod testing;
 mod updates;
 mod usage;
 mod website_import;
@@ -38,9 +39,7 @@ mod workspace;
 
 include!(concat!(env!("OUT_DIR"), "/registered_commands.rs"));
 
-use generation::*;
 use tauri::Manager;
-use workspace::*;
 
 fn main() {
     crash_report::install_hook();
@@ -65,8 +64,8 @@ fn main() {
                 Err(problem) => quit(&problem),
             };
             crash_report::start(data.path());
-            let (workspace, settings, generation, identity) = loop {
-                match initialize(app.handle(), data.path()) {
+            let services = loop {
+                match Services::initialize(app.handle(), data.path()) {
                     Ok(services) => break services,
                     Err(problem) => match data_location::recover(app.handle(), problem) {
                         Ok(next) => data = next,
@@ -74,21 +73,19 @@ fn main() {
                     },
                 }
             };
-            let mut exports = export::ExportService::initialize(data.path());
-            exports.bind_switch_guard(workspace.switch_guard.clone());
             app.manage(data);
-            app.manage(std::sync::Mutex::new(workspace));
-            app.manage(std::sync::Mutex::new(exports));
+            app.manage(std::sync::Mutex::new(services.workspace));
+            app.manage(std::sync::Mutex::new(services.exports));
             app.manage(std::sync::Mutex::new(local_site::LocalSite::default()));
             app.manage(std::sync::Mutex::new(
                 website_import::WebsiteImportState::default(),
             ));
             app.manage(chatgpt::ChatgptState::initialize(
-                settings.chatgpt_directory(),
+                services.settings.chatgpt_directory(),
             ));
-            app.manage(std::sync::Mutex::new(settings));
-            app.manage(std::sync::Mutex::new(generation));
-            app.manage(std::sync::Mutex::new(identity));
+            app.manage(std::sync::Mutex::new(services.settings));
+            app.manage(std::sync::Mutex::new(services.generation));
+            app.manage(std::sync::Mutex::new(services.identity));
             shutdown::install(app.handle().clone())?;
             // The editor window is created only now, so its commands work from the first render.
             let config = app
@@ -114,30 +111,35 @@ fn main() {
         });
 }
 
-/// Every service that keeps Desegnos's own files, built before anything is managed.
-type Services = (
-    Workspace,
-    ai_settings::AiSettingsStore,
-    GenerationService,
-    identity::IdentityService,
-);
+/// Every service that keeps Desegnos's own files, built before anything is managed. They share
+/// one `SwitchGuard`, so a running AI job in any of them blocks switching projects.
+struct Services {
+    workspace: workspace::Workspace,
+    settings: ai_settings::AiSettingsStore,
+    generation: generation::GenerationService,
+    identity: identity::IdentityService,
+    exports: export::ExportService,
+}
 
-/// Builds the services on the chosen data folder. A storage failure can then be retried with
-/// another folder without leaving half-managed state behind.
-fn initialize(
-    app: &tauri::AppHandle,
-    data: &std::path::Path,
-) -> Result<Services, data_location::Problem> {
-    let workspace = Workspace::initialize(app, data.to_owned())
-        .map_err(|error| data_location::Problem::error(data, error.as_ref()))?;
-    let mut settings = ai_settings::AiSettingsStore::initialize(data)
-        .map_err(|_| data_location::Problem::unusable(data))?;
-    settings.switch_guard = workspace.switch_guard.clone();
-    let mut generation = GenerationService::initialize(data);
-    generation.bind_switch_guard(workspace.switch_guard.clone());
-    let mut identity = identity::IdentityService::initialize(data);
-    identity.bind_switch_guard(workspace.switch_guard.clone());
-    Ok((workspace, settings, generation, identity))
+impl Services {
+    /// Builds the services on the chosen data folder. A storage failure can then be retried with
+    /// another folder without leaving half-managed state behind.
+    fn initialize(
+        app: &tauri::AppHandle,
+        data: &std::path::Path,
+    ) -> Result<Self, data_location::Problem> {
+        let workspace = workspace::Workspace::initialize(app, data.to_owned())
+            .map_err(|error| data_location::Problem::error(data, error.as_ref()))?;
+        let guard = workspace.switch_guard.clone();
+        Ok(Self {
+            settings: ai_settings::AiSettingsStore::initialize(data, guard.clone())
+                .map_err(|_| data_location::Problem::unusable(data))?,
+            generation: generation::GenerationService::initialize(data, guard.clone()),
+            identity: identity::IdentityService::initialize(data, guard.clone()),
+            exports: export::ExportService::initialize(data, guard),
+            workspace,
+        })
+    }
 }
 
 /// Reports the startup failure on stderr and stops, as the error dialog's Quit offers.

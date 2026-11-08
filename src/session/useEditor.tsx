@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { native } from '../api';
+import { AUTOSAVE_INTERVAL_MS } from '../generated/limits';
 import { createEditorActions } from '../editorActions';
 import { Confirmation, Replacement, selectionBounds } from '../editorShared';
 import { errorValue, nativeErrorKind, type ErrorValue } from '../errorMessage.js';
@@ -114,7 +115,7 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
   useEffect(() => { void load(); }, [load]);
   useEffect(() => {
     if (!view?.dirty || !view.project) return;
-    const timer = window.setInterval(() => { void native('autosave_project').catch(error => setError(errorValue(error))); }, 3000);
+    const timer = window.setInterval(() => { void native('autosave_project').catch(error => setError(errorValue(error))); }, AUTOSAVE_INTERVAL_MS);
     return () => window.clearInterval(timer);
   }, [view?.dirty, view?.project?.id]);
   useEffect(() => { if (showStartPage) closePanel('export'); }, [showStartPage]);

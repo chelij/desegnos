@@ -5,7 +5,7 @@
 //! rendered-tree captures into project elements. Page code never runs: the served page is
 //! rendered inside a script-disabled nested frame, and only our extraction wrapper runs.
 use crate::local_site::{LocalSite, decode_path as decode_site_path};
-use crate::native_files::{NativeResult, message};
+use crate::native_files::{LockExt, NativeResult, message};
 use crate::workspace::Workspace;
 use base64::{Engine, engine::general_purpose::STANDARD};
 use desegnos_ai::WebUrl as Url;
@@ -26,8 +26,7 @@ type ImportState<'a> = State<'a, Mutex<WebsiteImportState>>;
 type WorkspaceState<'a> = State<'a, Mutex<Workspace>>;
 
 use desegnos_core::limits::{
-    DEFAULT_PICTURE_WIDTH, MAX_IMPORT_CAPTURES, MAX_IMPORT_PAGES,
-    MAX_WEBSITE_FILE_BYTES as MAX_CAPTURE_IMAGE_BYTES,
+    DEFAULT_PICTURE_WIDTH, MAX_IMPORT_CAPTURES, MAX_IMPORT_PAGES, MAX_WEBSITE_FILE_BYTES,
 };
 const MAX_IMPORTED_PICTURES: usize = 160;
 const MAX_IMPORTED_PICTURE_TOTAL: usize = 64 * 1024 * 1024;
@@ -128,7 +127,7 @@ fn page_url(base_url: &str, file: &str) -> String {
 }
 
 fn begin_read(state: &Mutex<WebsiteImportState>) -> NativeResult<u64> {
-    let mut state = state.lock().map_err(message)?;
+    let mut state = state.locked();
     state.revision = state.revision.wrapping_add(1);
     Ok(state.revision)
 }
@@ -141,18 +140,15 @@ fn install(
     project: Option<desegnos_storage::IdentitySource>,
     extractor: &str,
 ) -> NativeResult<WebsiteImportView> {
-    let mut state = state.lock().map_err(message)?;
+    let mut state = state.locked();
     if state.revision != revision {
         return Err("The import was stopped.".into());
     }
-    let (identity_source, identity_error) = match identity
-        .lock()
-        .map_err(message)?
-        .retain_import_snapshot(&snapshot, project)
-    {
-        Ok(source) => (Some(source), None),
-        Err(reason) => (None, Some(reason)),
-    };
+    let (identity_source, identity_error) =
+        match identity.locked().retain_import_snapshot(&snapshot, project) {
+            Ok(source) => (Some(source), None),
+            Err(reason) => (None, Some(reason)),
+        };
     let folder = new_import_folder().map_err(message)?;
     write_website_snapshot(&folder, &snapshot).map_err(message)?;
     fs::write(
@@ -218,25 +214,12 @@ pub async fn prepare_website_import_url(
 ) -> Result<WebsiteImportView, crate::native_error::NativeFailure> {
     let result: NativeResult<WebsiteImportView> = async {
         let revision = begin_read(&state)?;
-        let fetcher = desegnos_ai::WebsiteFetcher::new();
-        #[cfg(feature = "native-tests")]
-        let fetcher = match std::env::var("DESEGNOS_NATIVE_TEST_WEBSITE_ORIGIN") {
-            Ok(origin) => desegnos_ai::WebsiteFetcher::for_fixture(
-                &desegnos_ai::WebUrl::parse(&origin).map_err(message)?,
-            )?,
-            Err(std::env::VarError::NotPresent) => fetcher,
-            Err(error) => return Err(message(error)),
-        };
+        let fetcher = crate::testing::website_fetcher()?;
         let snapshot = fetcher.fetch_website_snapshot(&url).await?;
         install(&state, revision, snapshot, &identity, None, &extractor)
     }
     .await;
-    result.map_err(|error| {
-        crate::native_error::NativeFailure::from_serializable(
-            error,
-            crate::native_error::NativeErrorKind::Command,
-        )
-    })
+    result.map_err(crate::native_error::NativeErrorKind::Command.failure())
 }
 
 #[tauri::command]
@@ -302,12 +285,7 @@ pub async fn pick_website_import_source(
             .transpose()
     }
     .await;
-    result.map_err(|error| {
-        crate::native_error::NativeFailure::from_serializable(
-            error,
-            crate::native_error::NativeErrorKind::Command,
-        )
-    })
+    result.map_err(crate::native_error::NativeErrorKind::Command.failure())
 }
 
 #[tauri::command]
@@ -315,15 +293,10 @@ pub fn cancel_website_import(
     state: ImportState<'_>,
 ) -> Result<(), crate::native_error::NativeFailure> {
     (|| -> NativeResult<()> {
-        state.lock().map_err(message)?.clear();
+        state.locked().clear();
         Ok(())
     })()
-    .map_err(|error| {
-        crate::native_error::NativeFailure::from_serializable(
-            error,
-            crate::native_error::NativeErrorKind::Command,
-        )
-    })
+    .map_err(crate::native_error::NativeErrorKind::Command.failure())
 }
 
 fn image_mime(name: &str) -> Option<&'static str> {
@@ -361,7 +334,7 @@ fn local_image(folder: &Path, base_url: &str, source: &str) -> Option<Vec<u8>> {
         return None;
     }
     let metadata = fs::metadata(&canonical).ok()?;
-    if !metadata.is_file() || metadata.len() > MAX_CAPTURE_IMAGE_BYTES as u64 {
+    if !metadata.is_file() || metadata.len() > MAX_WEBSITE_FILE_BYTES as u64 {
         return None;
     }
     fs::read(canonical).ok()
@@ -397,7 +370,7 @@ pub async fn import_website_pages(
         ));
     }
     let (folder, base_url, pages) = {
-        let state = state.lock().map_err(message)?;
+        let state = state.locked();
         let source = state
             .source
             .as_ref()
@@ -424,15 +397,7 @@ pub async fn import_website_pages(
             sources.len()
         ));
     }
-    let fetcher = desegnos_ai::WebsiteFetcher::new();
-    #[cfg(feature = "native-tests")]
-    let fetcher = match std::env::var("DESEGNOS_NATIVE_TEST_WEBSITE_ORIGIN") {
-        Ok(origin) => desegnos_ai::WebsiteFetcher::for_fixture(
-            &desegnos_ai::WebUrl::parse(&origin).map_err(message)?,
-        )?,
-        Err(std::env::VarError::NotPresent) => fetcher,
-        Err(error) => return Err(message(error)),
-    };
+    let fetcher = crate::testing::website_fetcher()?;
     let mut picture_ids = BTreeMap::new();
     let mut pictures = BTreeMap::new();
     let mut total = 0usize;
@@ -458,10 +423,10 @@ pub async fn import_website_pages(
         let Some((mime, bytes)) = resolved else {
             continue;
         };
-        if bytes.is_empty() || bytes.len() > MAX_CAPTURE_IMAGE_BYTES {
+        if bytes.is_empty() || bytes.len() > MAX_WEBSITE_FILE_BYTES {
             warnings.push(format!(
                 "A picture over {} MiB was left out: {source}",
-                MAX_CAPTURE_IMAGE_BYTES / 1024 / 1024
+                MAX_WEBSITE_FILE_BYTES / 1024 / 1024
             ));
             continue;
         }
@@ -478,8 +443,7 @@ pub async fn import_website_pages(
         pictures.insert(picture, stored);
     }
     let project = workspace
-        .lock()
-        .map_err(message)?
+        .locked()
         .project()
         .map_err(message)?
         .clone();
@@ -490,10 +454,9 @@ pub async fn import_website_pages(
     warnings.extend(imported.warnings.iter().cloned());
     let picture_count = pictures.len();
     let view = workspace
-        .lock()
-        .map_err(message)?
+        .locked()
         .import_website(imported, pictures)?;
-    state.lock().map_err(message)?.clear();
+    state.locked().clear();
     Ok(WebsiteImportResultView {
         workspace: view,
         pages: page_count,
@@ -503,12 +466,7 @@ pub async fn import_website_pages(
     })
 
     }.await;
-    result.map_err(|error| {
-        crate::native_error::NativeFailure::from_serializable(
-            error,
-            crate::native_error::NativeErrorKind::Command,
-        )
-    })
+    result.map_err(crate::native_error::NativeErrorKind::Command.failure())
 }
 
 fn parse_data_uri(uri: &str) -> Option<(String, Vec<u8>)> {

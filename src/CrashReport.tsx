@@ -12,7 +12,7 @@ function recordEditorCrash(error: unknown, componentStack = '') {
   reported = true;
   const message = errorMessage(error) || 'The editor failed to render.';
   const stack = [error instanceof Error ? error.stack ?? '' : '', componentStack].filter(Boolean).join('\n');
-  void native('record_frontend_crash', { message: message.slice(0, 2000), stack: stack.slice(0, 8000) }).catch(error => console.warn('Could not record editor crash', error));
+  void native('record_frontend_crash', { message, stack }).catch(error => console.warn('Could not record editor crash', error));
 }
 
 // Render failures are the only frontend crashes worth a report. Ordinary unhandled

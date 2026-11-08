@@ -1,6 +1,6 @@
 use super::{GenerationHistory, GenerationJobSummary, GenerationJobView, JobRecord, JobStatus};
 use crate::{
-    ai_job::ActiveJobs,
+    ai_job::{ActiveJobs, SwitchGuard},
     native_files::{
         self, NativeResult, message, private_directory, read_bytes, regular_directory, regular_file,
     },
@@ -92,12 +92,12 @@ pub(super) struct GenerationJobStore {
 }
 
 impl GenerationJobStore {
-    pub(super) fn new(directory: PathBuf) -> Self {
+    pub(super) fn new(directory: PathBuf, switch_guard: SwitchGuard) -> Self {
         Self {
             directory,
             jobs: BTreeMap::new(),
             unsaved_jobs: BTreeSet::new(),
-            active: ActiveJobs::default(),
+            active: ActiveJobs::new(switch_guard),
         }
     }
     pub(super) fn job_directory(&self, project_id: Uuid, job_id: Uuid) -> PathBuf {

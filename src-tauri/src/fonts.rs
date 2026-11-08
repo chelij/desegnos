@@ -1,3 +1,4 @@
+use crate::native_files::LockExt;
 use base64::Engine;
 use desegnos_core::{ResolvedFont, resolve_font, standalone_face};
 use serde::Serialize;
@@ -32,19 +33,10 @@ pub fn resolve_canvas_font(
             fell_back: face.fell_back,
             italic: face.italic,
         };
-        faces()
-            .lock()
-            .map_err(|e| e.to_string())?
-            .entry(face.id.clone())
-            .or_insert(face);
+        faces().locked().entry(face.id.clone()).or_insert(face);
         Ok(result)
     })()
-    .map_err(|error| {
-        crate::native_error::NativeFailure::from_serializable(
-            error,
-            crate::native_error::NativeErrorKind::Command,
-        )
-    })
+    .map_err(crate::native_error::NativeErrorKind::Command.failure())
 }
 
 #[tauri::command]
@@ -55,7 +47,7 @@ pub fn list_canvas_fonts() -> Vec<String> {
 #[tauri::command]
 pub fn load_canvas_font(id: String) -> Result<String, crate::native_error::NativeFailure> {
     (|| -> Result<String, String> {
-        let faces = faces().lock().map_err(|e| e.to_string())?;
+        let faces = faces().locked();
         let face = faces
             .get(&id)
             .ok_or("Resolve the font before loading it.")?;
@@ -65,10 +57,5 @@ pub fn load_canvas_font(id: String) -> Result<String, crate::native_error::Nativ
             base64::engine::general_purpose::STANDARD.encode(bytes)
         ))
     })()
-    .map_err(|error| {
-        crate::native_error::NativeFailure::from_serializable(
-            error,
-            crate::native_error::NativeErrorKind::Command,
-        )
-    })
+    .map_err(crate::native_error::NativeErrorKind::Command.failure())
 }

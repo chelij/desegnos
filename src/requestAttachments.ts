@@ -1,6 +1,6 @@
 import { errorMessage } from './errorMessage.js';
 import type { RequestAttachment } from './types';
-import { IMAGE_MIME_TYPES, MAX_ATTACHMENT_TEXT_CHARS, MAX_ATTACHMENTS, MAX_NAME_CHARS, MAX_REQUEST_FILE_BYTES } from './generated/limits';
+import { IMAGE_MIME_TYPES, MAX_ATTACHMENT_TEXT_CHARS, MAX_ELEMENT_CONTEXT, MAX_NAME_CHARS, MAX_REQUEST_FILE_BYTES } from './generated/limits';
 
 export const ATTACHMENT_ACCEPT = [...IMAGE_MIME_TYPES, 'text/*', '.txt', '.md', '.csv', '.json', '.htm', '.html'].join(',');
 const id = () => crypto.randomUUID().replace(/-/g, '').slice(0, 16);
@@ -10,7 +10,7 @@ export async function readRequestAttachments(existing: RequestAttachment[], file
   const attachments = [...existing];
   const errors: string[] = [];
   const add = (attachment: RequestAttachment) => {
-    if (attachments.length >= MAX_ATTACHMENTS) throw new Error(`A request supports at most ${MAX_ATTACHMENTS} attachments.`);
+    if (attachments.length >= MAX_ELEMENT_CONTEXT) throw new Error(`A request supports at most ${MAX_ELEMENT_CONTEXT} attachments.`);
     attachments.push(attachment);
   };
   for (const file of files) {

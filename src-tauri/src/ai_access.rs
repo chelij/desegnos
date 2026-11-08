@@ -5,6 +5,7 @@
 use crate::{
     ai_settings::{AiSettingsStore, api_model_for_key, provider_key},
     chatgpt::ChatgptState,
+    native_files::{LockExt, NativeResult, message},
 };
 use desegnos_ai::{
     ApiKey, AuthenticationMethod, CancellationToken, ChatgptModel, CostEstimate, ErrorKind,
@@ -14,12 +15,6 @@ use desegnos_core::{GenerationMode, RequirementsSnapshot};
 use serde_json::Value;
 use std::sync::Mutex;
 use uuid::Uuid;
-
-type NativeResult<T> = Result<T, String>;
-
-fn message(error: impl std::fmt::Display) -> String {
-    error.to_string()
-}
 
 /// Which AI connection a job uses, and the ChatGPT account it is bound to.
 #[derive(Clone)]
@@ -153,7 +148,7 @@ async fn resolve_credentials(
         settings,
         account_id,
     } = connection;
-    let openai = service.lock().map_err(message)?.client()?;
+    let openai = service.locked().client()?;
     let client =
         ProviderClient::with_settings(*provider, openai.clone(), settings).map_err(message)?;
     let (key, account, account_model) = if *authentication == AuthenticationMethod::Chatgpt {
@@ -221,7 +216,7 @@ pub async fn credential_key(
     provider: ProviderId,
     settings: &ProviderSettings,
 ) -> NativeResult<ApiKey> {
-    let credentials = service.lock().map_err(message)?.credentials_for(provider);
+    let credentials = service.locked().credentials_for(provider);
     let local_authentication = settings.local_authentication;
     tauri::async_runtime::spawn_blocking(move || {
         provider_key(provider, local_authentication, &credentials)
