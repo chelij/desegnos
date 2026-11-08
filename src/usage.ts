@@ -1,10 +1,10 @@
 import { errorMessage } from './errorMessage.js';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import type { CommandName } from './generated/commands';
+import type { UsageEvent } from './generated/types';
 
 // Local usage log: which controls, shortcuts and commands are used, never what is typed.
 // Events are batched to the native `record_usage` command (see src-tauri/src/usage.rs).
-type UsageEvent = { t: number; kind: 'click' | 'key' | 'typing' | 'command' | 'session'; name: string; detail?: string; count?: number; ms?: number; ok?: boolean };
 
 const queue: UsageEvent[] = [];
 // Reads and polling say nothing about what the user did.

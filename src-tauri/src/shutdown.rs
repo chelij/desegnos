@@ -1,15 +1,13 @@
 //! An orderly termination from the operating system (logout, shutdown, `kill`, a closed
 //! terminal) keeps unsaved work for recovery and is not reported as a crash next launch.
+use crate::native_files::LockExt;
 use std::{io, sync::Mutex};
 use tauri::Manager;
 
 /// Keeps every open tab's unsaved work for recovery, then clears this run's crash marker.
 fn finish(app: &tauri::AppHandle) {
     if let Some(state) = app.try_state::<Mutex<crate::workspace::Workspace>>() {
-        match state.lock() {
-            Ok(workspace) => workspace.flush_recovery(),
-            Err(error) => eprintln!("Could not keep unsaved work: {error}"),
-        }
+        state.locked().flush_recovery();
     }
     crate::crash_report::finish();
 }

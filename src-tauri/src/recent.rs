@@ -1,9 +1,13 @@
+use crate::native_files::{LockExt, read_json};
+use desegnos_core::limits::MAX_NAME_CHARS;
 use serde::{Deserialize, Serialize};
 use std::{
     fs::File,
-    io::Read,
     path::{Path, PathBuf},
 };
+
+const MAX_RECENT: usize = 10;
+const MAX_LIST_BYTES: u64 = 65_536;
 
 #[derive(ts_rs::TS, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -36,26 +40,16 @@ fn file_time(path: &Path) -> u64 {
 
 pub fn read(directory: &Path) -> Result<Vec<RecentProject>, String> {
     let path = directory.join("recent-projects.json");
-    let file = match File::open(path) {
-        Ok(file) => file,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(vec![]),
-        Err(error) => return Err(error.to_string()),
-    };
-    let mut bytes = vec![];
-    file.take(65_537)
-        .read_to_end(&mut bytes)
-        .map_err(|error| error.to_string())?;
-    if bytes.len() > 65_536 {
-        return Err("The recent-project list is too large. Its original is preserved.".into());
+    if !path.exists() {
+        return Ok(vec![]);
     }
-    let entries: Vec<RecentProject> = serde_json::from_slice(&bytes)
-        .map_err(|_| "The recent-project list is damaged. Its original is preserved.".to_owned())?;
-    if entries.len() > 10
+    let entries: Vec<RecentProject> = read_json(&path, MAX_LIST_BYTES, "recent-project list")?;
+    if entries.len() > MAX_RECENT
         || entries.iter().any(|entry| {
             !entry.path.is_absolute()
                 || entry.path.as_os_str().len() > 4096
                 || entry.name.trim().is_empty()
-                || entry.name.chars().count() > 120
+                || entry.name.chars().count() > MAX_NAME_CHARS
                 || entry.name.chars().any(char::is_control)
         })
     {
@@ -106,7 +100,7 @@ fn remember_destination(
                 character
             }
         })
-        .take(120)
+        .take(MAX_NAME_CHARS)
         .collect();
     let mut entries = read(directory)?;
     let existing = entries.iter().find(|entry| entry.path == path).cloned();
@@ -128,7 +122,7 @@ fn remember_destination(
     );
     // Pinned entries stay at the top and are never evicted by newer unpinned ones.
     entries.sort_by_key(|entry| !entry.pinned);
-    entries.truncate(10);
+    entries.truncate(MAX_RECENT);
     write(directory, &entries)
 }
 
@@ -194,15 +188,10 @@ pub fn forget_recent_project(
     path: PathBuf,
 ) -> Result<Vec<RecentProject>, crate::native_error::NativeFailure> {
     (|| -> Result<Vec<RecentProject>, String> {
-        let state = state.lock().map_err(|error| error.to_string())?;
+        let state = state.locked();
         forget(state.directory(), &path)
     })()
-    .map_err(|error| {
-        crate::native_error::NativeFailure::from_serializable(
-            error,
-            crate::native_error::NativeErrorKind::Command,
-        )
-    })
+    .map_err(crate::native_error::NativeErrorKind::Command.failure())
 }
 
 #[tauri::command]
@@ -212,15 +201,10 @@ pub fn set_recent_project_pin(
     pinned: bool,
 ) -> Result<Vec<RecentProject>, crate::native_error::NativeFailure> {
     (|| -> Result<Vec<RecentProject>, String> {
-        let state = state.lock().map_err(|error| error.to_string())?;
+        let state = state.locked();
         set_pinned(state.directory(), &path, pinned)
     })()
-    .map_err(|error| {
-        crate::native_error::NativeFailure::from_serializable(
-            error,
-            crate::native_error::NativeErrorKind::Command,
-        )
-    })
+    .map_err(crate::native_error::NativeErrorKind::Command.failure())
 }
 
 #[cfg(test)]

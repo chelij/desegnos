@@ -1,7 +1,6 @@
+use crate::native_files::{LockExt, read_json};
 use serde::{Deserialize, Serialize};
 use std::{
-    fs::File,
-    io::Read,
     path::{Path, PathBuf},
     sync::Mutex,
 };
@@ -36,22 +35,11 @@ pub fn default_from_documents(documents: &Path) -> PathBuf {
 }
 
 fn read_settings(directory: &Path) -> Result<Settings, String> {
-    let file = match File::open(directory.join("project-settings.json")) {
-        Ok(file) => file,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(Settings::default());
-        }
-        Err(error) => return Err(error.to_string()),
-    };
-    let mut bytes = Vec::new();
-    file.take(65_537)
-        .read_to_end(&mut bytes)
-        .map_err(|e| e.to_string())?;
-    if bytes.len() > 65_536 {
-        return Err("The project settings file is too large. Its original was preserved.".into());
+    let path = directory.join("project-settings.json");
+    if !path.exists() {
+        return Ok(Settings::default());
     }
-    serde_json::from_slice(&bytes)
-        .map_err(|_| "Project settings could not be read. Their original was preserved.".to_owned())
+    read_json(&path, 65_536, "project settings file")
 }
 
 /// Read, change and write the settings under one lock so two windows cannot drop each
@@ -113,15 +101,10 @@ pub fn get_project_location(
     state: State<'_, Mutex<crate::workspace::Workspace>>,
 ) -> Result<ProjectLocationView, crate::native_error::NativeFailure> {
     (|| -> Result<ProjectLocationView, String> {
-        let state = state.lock().map_err(|e| e.to_string())?;
+        let state = state.locked();
         view(&state)
     })()
-    .map_err(|error| {
-        crate::native_error::NativeFailure::from_serializable(
-            error,
-            crate::native_error::NativeErrorKind::Command,
-        )
-    })
+    .map_err(crate::native_error::NativeErrorKind::Command.failure())
 }
 
 #[tauri::command]
@@ -129,18 +112,13 @@ pub fn get_app_settings(
     state: State<'_, Mutex<crate::workspace::Workspace>>,
 ) -> Result<AppSettingsView, crate::native_error::NativeFailure> {
     (|| -> Result<AppSettingsView, String> {
-        let state = state.lock().map_err(|e| e.to_string())?;
+        let state = state.locked();
         let settings = read_settings(state.directory())?;
         Ok(AppSettingsView {
             show_start_page: settings.show_start_page.unwrap_or(true),
         })
     })()
-    .map_err(|error| {
-        crate::native_error::NativeFailure::from_serializable(
-            error,
-            crate::native_error::NativeErrorKind::Command,
-        )
-    })
+    .map_err(crate::native_error::NativeErrorKind::Command.failure())
 }
 
 #[tauri::command]
@@ -149,7 +127,7 @@ pub fn set_show_start_page(
     value: bool,
 ) -> Result<AppSettingsView, crate::native_error::NativeFailure> {
     (|| -> Result<AppSettingsView, String> {
-        let state = state.lock().map_err(|e| e.to_string())?;
+        let state = state.locked();
         update_settings(state.directory(), |settings| {
             settings.show_start_page = Some(value);
         })?;
@@ -157,12 +135,7 @@ pub fn set_show_start_page(
             show_start_page: value,
         })
     })()
-    .map_err(|error| {
-        crate::native_error::NativeFailure::from_serializable(
-            error,
-            crate::native_error::NativeErrorKind::Command,
-        )
-    })
+    .map_err(crate::native_error::NativeErrorKind::Command.failure())
 }
 
 #[tauri::command]
@@ -186,12 +159,7 @@ pub async fn pick_project_location(
         .map_err(|e| e.to_string())?
     }
     .await;
-    result.map_err(|error| {
-        crate::native_error::NativeFailure::from_serializable(
-            error,
-            crate::native_error::NativeErrorKind::Command,
-        )
-    })
+    result.map_err(crate::native_error::NativeErrorKind::Command.failure())
 }
 
 #[tauri::command]
@@ -200,7 +168,7 @@ pub fn set_project_location(
     path: Option<PathBuf>,
 ) -> Result<ProjectLocationView, crate::native_error::NativeFailure> {
     (|| -> Result<ProjectLocationView, String> {
-        let state = state.lock().map_err(|e| e.to_string())?;
+        let state = state.locked();
         if let Some(path) = &path {
             validate(path)?;
             if !path.is_dir() {
@@ -212,12 +180,7 @@ pub fn set_project_location(
         })?;
         view(&state)
     })()
-    .map_err(|error| {
-        crate::native_error::NativeFailure::from_serializable(
-            error,
-            crate::native_error::NativeErrorKind::SaveLocation,
-        )
-    })
+    .map_err(crate::native_error::NativeErrorKind::SaveLocation.failure())
 }
 
 #[cfg(test)]

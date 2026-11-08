@@ -11,6 +11,13 @@ pub enum NativeErrorKind {
     Browser,
 }
 
+impl NativeErrorKind {
+    /// The `map_err` argument that turns a command's error into a typed `NativeFailure`.
+    pub fn failure<E: Serialize>(self) -> impl Fn(E) -> NativeFailure {
+        move |error| NativeFailure::from_serializable(error, self)
+    }
+}
+
 #[derive(ts_rs::TS, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NativeFailure {

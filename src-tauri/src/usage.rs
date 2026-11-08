@@ -16,23 +16,36 @@ const MAX_EVENTS: usize = 500;
 const MAX_DAY_BYTES: u64 = 2 * 1024 * 1024;
 const KEEP_DAYS: i64 = 30;
 
-#[derive(Deserialize, Serialize)]
+#[derive(ts_rs::TS, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum UsageKind {
+    Click,
+    Key,
+    Typing,
+    Command,
+    Session,
+}
+
+#[derive(ts_rs::TS, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UsageEvent {
     /// Milliseconds since the Unix epoch.
     pub t: u64,
-    /// click, key, typing, command or session.
-    pub kind: String,
+    pub kind: UsageKind,
     pub name: String,
     /// Where it happened (dialog, panel or canvas), the edit type of a command, or the native
     /// error message of a failed command.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub detail: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub count: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub ok: Option<bool>,
 }
 
@@ -42,11 +55,7 @@ fn short(value: &str, limit: usize) -> bool {
 
 impl UsageEvent {
     fn valid(&self) -> bool {
-        matches!(
-            self.kind.as_str(),
-            "click" | "key" | "typing" | "command" | "session"
-        ) && short(&self.name, 80)
-            && self.detail.as_deref().is_none_or(|value| short(value, 200))
+        short(&self.name, 80) && self.detail.as_deref().is_none_or(|value| short(value, 200))
     }
 }
 
@@ -113,12 +122,7 @@ pub fn record_usage(
         let directory = crate::data_location::directory(&app).join("usage");
         append(&directory, today, &events)
     })()
-    .map_err(|error| {
-        crate::native_error::NativeFailure::from_serializable(
-            error,
-            crate::native_error::NativeErrorKind::Command,
-        )
-    })
+    .map_err(crate::native_error::NativeErrorKind::Command.failure())
 }
 
 #[cfg(test)]
@@ -135,7 +139,7 @@ mod tests {
         fs::write(directory.join(format!("{}.jsonl", date(20_700))), "{}\n").unwrap();
         let event = UsageEvent {
             t: 1,
-            kind: "click".into(),
+            kind: UsageKind::Click,
             name: "Generate".into(),
             detail: None,
             count: None,
@@ -150,19 +154,13 @@ mod tests {
             "{\"t\":1,\"kind\":\"click\",\"name\":\"Generate\"}\n"
         );
         assert!(!directory.join(format!("{}.jsonl", date(20_700))).exists());
-        let bad = UsageEvent {
-            t: 1,
-            kind: "typed-text".into(),
-            name: "x".into(),
-            detail: None,
-            count: None,
-            ms: None,
-            ok: None,
-        };
-        assert!(!bad.valid());
+        assert!(
+            serde_json::from_str::<UsageEvent>(r#"{"t":1,"kind":"typed-text","name":"x"}"#)
+                .is_err()
+        );
         let failure = UsageEvent {
             t: 1,
-            kind: "command".into(),
+            kind: UsageKind::Command,
             name: "prepare_generation".into(),
             detail: Some("x".repeat(200)),
             count: None,

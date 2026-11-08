@@ -28,7 +28,6 @@ desegnos-storage = { path = "../crates/desegnos-storage" }
 desegnos-ai = { path = "../crates/desegnos-ai" }
 serde.workspace = true
 serde_json.workspace = true
-sha2.workspace = true
 uuid.workspace = true
 ts-rs.workspace = true
 base64 = { version = "=0.23.1", default-features = false, features = ["std"] }
@@ -55,6 +54,3 @@ desegnos-ai = { path = "../crates/desegnos-ai", features = ["test-support"] }
 
 [lints]
 workspace = true
-
-[target.'cfg(unix)'.dependencies]
-rustix = { version = "=1.1.5", features = ["process"] }

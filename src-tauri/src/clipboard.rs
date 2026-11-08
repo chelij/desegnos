@@ -15,12 +15,8 @@ fn check_size(text: &str) -> Result<(), String> {
 /// Copy a short piece of app-owned text, such as a local site address, at the user's request.
 #[tauri::command]
 pub fn copy_text(app: AppHandle, text: String) -> Result<(), crate::native_error::NativeFailure> {
-    (|| -> Result<(), String> { write(&app, text) })().map_err(|error| {
-        crate::native_error::NativeFailure::from_serializable(
-            error,
-            crate::native_error::NativeErrorKind::Clipboard,
-        )
-    })
+    (|| -> Result<(), String> { write(&app, text) })()
+        .map_err(crate::native_error::NativeErrorKind::Clipboard.failure())
 }
 
 fn write(app: &AppHandle, text: String) -> Result<(), String> {

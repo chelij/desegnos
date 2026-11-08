@@ -1,28 +1,22 @@
 //! What generation, identity analysis and export share about a paid AI job: which attempt is
 //! still the live one, how a provider failure maps to a job outcome, and the notices shown
-//! when a job stops. Sign-out cancels every service from here.
-use crate::{export::ExportService, generation::GenerationService, identity::IdentityService};
+//! when a job stops.
+use crate::native_files::LockExt;
 use desegnos_ai::{
     AuthenticationMethod, CancellationToken, ErrorKind, ProviderError, SubmissionOutcome,
 };
 use std::{
     collections::BTreeMap,
-    sync::{Arc, Mutex, MutexGuard, PoisonError},
+    sync::{Arc, Mutex},
 };
 use uuid::Uuid;
-
-/// Lock shared state even if another thread panicked while holding it. A job's outcome must
-/// still be recorded, or it would stay running forever with no error.
-pub fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
-}
 
 #[derive(Clone, Default)]
 pub struct SwitchGuard(Arc<Mutex<BTreeMap<Uuid, CancellationToken>>>);
 
 impl SwitchGuard {
     pub fn ensure_switch_allowed(&self) -> Result<(), String> {
-        if lock(&self.0).values().any(|token| !token.is_cancelled()) {
+        if self.0.locked().values().any(|token| !token.is_cancelled()) {
             return Err("An AI request is still running. Wait for its result or cancel it before switching projects; local editing and saving remain available.".into());
         }
         Ok(())
@@ -30,7 +24,7 @@ impl SwitchGuard {
 
     pub fn track(&self, token: CancellationToken) -> RunningRequest {
         let id = Uuid::new_v4();
-        lock(&self.0).insert(id, token);
+        self.0.locked().insert(id, token);
         RunningRequest {
             guard: self.clone(),
             id,
@@ -45,20 +39,21 @@ pub struct RunningRequest {
 
 impl Drop for RunningRequest {
     fn drop(&mut self) {
-        lock(&self.guard.0).remove(&self.id);
+        self.guard.0.locked().remove(&self.id);
     }
 }
 
-#[derive(Default)]
 pub struct ActiveJobs {
     jobs: BTreeMap<Uuid, (usize, CancellationToken, RunningRequest)>,
     switch_guard: SwitchGuard,
 }
 
 impl ActiveJobs {
-    pub fn bind_switch_guard(&mut self, guard: SwitchGuard) {
-        assert!(self.jobs.is_empty());
-        self.switch_guard = guard;
+    pub fn new(switch_guard: SwitchGuard) -> Self {
+        Self {
+            jobs: BTreeMap::new(),
+            switch_guard,
+        }
     }
 
     pub fn start(&mut self, job_id: Uuid, attempt: usize) -> CancellationToken {
@@ -164,29 +159,4 @@ pub fn interrupted_notice(subject: &str) -> String {
     format!(
         "{subject} was interrupted. Its outcome may be uncertain; it will not be sent again automatically. Review before explicitly trying again."
     )
-}
-
-/// Sign-out stops running work in every service. All services are attempted; the first
-/// failure to record a cancellation is returned afterwards.
-pub fn cancel_account(
-    generation: &Mutex<GenerationService>,
-    identity: &Mutex<IdentityService>,
-    exports: &Mutex<ExportService>,
-    account_id: Uuid,
-) -> Result<(), String> {
-    let results = [
-        generation
-            .lock()
-            .map_err(|_| "AI settings are unavailable.".to_owned())
-            .and_then(|mut service| service.cancel_account(account_id)),
-        identity
-            .lock()
-            .map_err(|_| "Identity analysis is unavailable.".to_owned())
-            .and_then(|mut service| service.cancel_account(account_id)),
-        exports
-            .lock()
-            .map_err(|_| "Exports are unavailable.".to_owned())
-            .map(|mut service| service.cancel_account(account_id)),
-    ];
-    results.into_iter().collect()
 }

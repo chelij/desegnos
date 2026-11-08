@@ -5,6 +5,7 @@ use crate::{
     ai_job::{ActiveJobs, Failure, interrupted_notice, stopped_notice},
     ai_settings::AiSettingsStore,
     chatgpt::ChatgptState,
+    native_files::LockExt,
     native_files::{
         self, NativeResult, message as error, open_lock_file, private_directory, regular_file,
     },
@@ -30,7 +31,7 @@ use uuid::Uuid;
 
 type IdentityState<'a> = State<'a, Mutex<IdentityService>>;
 const MAX_IDENTITY_MARKDOWN_BYTES: usize = 512 * 1024;
-use desegnos_core::limits::MAX_IDENTITY_RECORD_BYTES as MAX_RECORD_BYTES;
+use desegnos_core::limits::MAX_IDENTITY_RECORD_BYTES;
 const MAX_CANDIDATE_BYTES: usize = 256 * 1024;
 const MAX_SOURCES: usize = 8;
 /// An identity analysis is a single attempt.
@@ -273,7 +274,7 @@ fn read_record<T: for<'de> Deserialize<'de>>(path: &Path, limit: u64) -> NativeR
 }
 
 fn write_record(path: &Path, value: &impl Serialize) -> NativeResult<()> {
-    native_files::write_json(path, value, MAX_RECORD_BYTES, RECORD)
+    native_files::write_json(path, value, MAX_IDENTITY_RECORD_BYTES, RECORD)
 }
 
 fn acquire_ownership(directory: &Path) -> NativeResult<File> {
@@ -585,13 +586,12 @@ pub fn prepare_identity_selection(
 ) -> Result<IdentitySelection, crate::native_error::NativeFailure> {
     (|| -> NativeResult<IdentitySelection> {
         let source = state
-            .lock()
-            .map_err(error)?
+            .locked()
             .sources
             .get(&source_id)
             .cloned()
             .ok_or("Choose your brand folder or website again.")?;
-        let connection = generation.lock().map_err(error)?.connection();
+        let connection = generation.locked().connection();
         let (provider, authentication, settings) = (
             connection.provider,
             connection.authentication,
@@ -601,12 +601,7 @@ pub fn prepare_identity_selection(
             check_selection(&source, ids, provider, authentication, &settings)
         }))
     })()
-    .map_err(|error| {
-        crate::native_error::NativeFailure::from_serializable(
-            error,
-            crate::native_error::NativeErrorKind::Command,
-        )
-    })
+    .map_err(crate::native_error::NativeErrorKind::Command.failure())
 }
 
 fn candidate_schema() -> Value {
@@ -803,15 +798,11 @@ fn validate_candidate(candidate: &IdentityCandidate, record: &AnalysisRecord) ->
 }
 
 impl IdentityService {
-    pub(crate) fn bind_switch_guard(&mut self, guard: crate::ai_job::SwitchGuard) {
-        self.active.bind_switch_guard(guard);
+    pub fn initialize(data: &Path, switch_guard: crate::ai_job::SwitchGuard) -> Self {
+        Self::recover_or_report(data.join("identity"), switch_guard)
     }
-
-    pub fn initialize(data: &Path) -> Self {
-        Self::recover_or_report(data.join("identity"))
-    }
-    fn recover_or_report(directory: PathBuf) -> Self {
-        Self::from_directory(directory.clone()).unwrap_or_else(|reason| {
+    fn recover_or_report(directory: PathBuf, switch_guard: crate::ai_job::SwitchGuard) -> Self {
+        Self::from_directory(directory.clone(), switch_guard.clone()).unwrap_or_else(|reason| {
             let ownership = private_directory(&directory, RECORD)
                 .and_then(|()| acquire_ownership(&directory))
                 .ok();
@@ -820,14 +811,17 @@ impl IdentityService {
                 sources: BTreeMap::new(),
                 website_files: BTreeMap::new(),
                 latest: None,
-                active: ActiveJobs::default(),
+                active: ActiveJobs::new(switch_guard),
                 startup_error: Some(reason),
                 ownership,
             }
         })
     }
 
-    fn from_directory(directory: PathBuf) -> NativeResult<Self> {
+    fn from_directory(
+        directory: PathBuf,
+        switch_guard: crate::ai_job::SwitchGuard,
+    ) -> NativeResult<Self> {
         private_directory(&directory, RECORD)?;
         let ownership = acquire_ownership(&directory)?;
         let mut service = Self {
@@ -835,15 +829,17 @@ impl IdentityService {
             sources: BTreeMap::new(),
             website_files: BTreeMap::new(),
             latest: None,
-            active: ActiveJobs::default(),
+            active: ActiveJobs::new(switch_guard),
             startup_error: None,
             ownership: Some(ownership),
         };
         let pointer = service.directory.join("latest.json");
         if pointer.exists() {
             let latest: LatestAnalysis = read_record(&pointer, 4096)?;
-            let mut record: AnalysisRecord =
-                read_record(&service.record_path(latest.job_id), MAX_RECORD_BYTES)?;
+            let mut record: AnalysisRecord = read_record(
+                &service.record_path(latest.job_id),
+                MAX_IDENTITY_RECORD_BYTES,
+            )?;
             service.validate_record(&record)?;
             if record.status == AnalysisStatus::Analyzing {
                 record.status = AnalysisStatus::Unknown;
@@ -1197,7 +1193,7 @@ impl IdentityService {
             .filter(|record| record.requirements.job_id == job_id)
             .cloned()
             .map(Ok)
-            .unwrap_or_else(|| read_record(&self.record_path(job_id), MAX_RECORD_BYTES))?;
+            .unwrap_or_else(|| read_record(&self.record_path(job_id), MAX_IDENTITY_RECORD_BYTES))?;
         self.validate_record(&record)?;
         require(
             record.status == AnalysisStatus::Complete,
@@ -1382,32 +1378,25 @@ pub fn get_identity_analysis(
     state: IdentityState<'_>,
 ) -> Result<Option<AnalysisView>, crate::native_error::NativeFailure> {
     (|| -> NativeResult<Option<AnalysisView>> {
-        let service = state.lock().map_err(error)?;
+        let service = state.locked();
         if let Some(reason) = &service.startup_error {
             return Err(reason.clone());
         }
         Ok(service.latest.as_ref().map(AnalysisRecord::view))
     })()
-    .map_err(|error| {
-        crate::native_error::NativeFailure::from_serializable(
-            error,
-            crate::native_error::NativeErrorKind::Command,
-        )
-    })
+    .map_err(crate::native_error::NativeErrorKind::Command.failure())
 }
 #[tauri::command]
 pub fn cancel_identity_analysis(
     state: IdentityState<'_>,
     job_id: Uuid,
 ) -> Result<AnalysisView, crate::native_error::NativeFailure> {
-    (|| -> NativeResult<AnalysisView> { state.lock().map_err(error)?.cancel(job_id) })().map_err(
-        |error| {
-            crate::native_error::NativeFailure::from_serializable(
-                error,
-                crate::native_error::NativeErrorKind::Command,
-            )
-        },
-    )
+    (|| -> NativeResult<AnalysisView> { state.locked().cancel(job_id) })().map_err(|error| {
+        crate::native_error::NativeFailure::from_serializable(
+            error,
+            crate::native_error::NativeErrorKind::Command,
+        )
+    })
 }
 /// Access for an analysis of the selected connection, confirmed once more after sign-in.
 async fn identity_access(
@@ -1415,7 +1404,7 @@ async fn identity_access(
     chatgpt: &ChatgptState,
     cancellation: &CancellationToken,
 ) -> Result<Access, AccessFailure> {
-    let mut connection = state.lock().map_err(error)?.ready_connection()?;
+    let mut connection = state.locked().ready_connection()?;
     if connection.authentication == AuthenticationMethod::Chatgpt {
         connection.account_id = Some(active_account(chatgpt, "analyzing identity").await?);
     }
@@ -1432,7 +1421,7 @@ async fn identity_access(
     if cancellation.is_cancelled() {
         return Err("Identity analysis was cancelled before submission.".into());
     }
-    let service = state.lock().map_err(error)?;
+    let service = state.locked();
     if !service.is_selected(&access) {
         return Err(
             "AI settings changed while checking access. Review them and explicitly analyze again."
@@ -1478,25 +1467,24 @@ pub fn analyze_identity(
     file_ids: Vec<Uuid>,
 ) -> Result<AnalysisView, crate::native_error::NativeFailure> {
     (|| -> NativeResult<AnalysisView> {
-        let (view, cancellation) = state.lock().map_err(error)?.reserve(source_id, file_ids)?;
+        let (view, cancellation) = state.locked().reserve(source_id, file_ids)?;
         let job_id = view.job_id;
         tauri::async_runtime::spawn(async move {
             let generation = app.state::<Mutex<AiSettingsStore>>();
             let chatgpt = app.state::<ChatgptState>();
-            let provider = generation
-                .lock()
-                .ok()
-                .map(|service| service.connection().provider);
+            let provider = generation.locked().connection().provider;
             let access = match identity_access(&generation, &chatgpt, &cancellation).await {
                 Ok(access) => access,
                 Err(reason) => {
-                    if let Ok(mut service) = app.state::<Mutex<IdentityService>>().lock() {
+                    {
+                        let state = app.state::<Mutex<IdentityService>>();
+                        let mut service = state.locked();
                         if let Some(record) = service
                             .latest
                             .as_mut()
                             .filter(|record| record.requirements.job_id == job_id)
                         {
-                            record.provider = provider;
+                            record.provider = Some(provider);
                             record.provider_error = reason.provider_error.map(|error| *error);
                         }
                         report(service.fail_before_send(job_id, reason.message));
@@ -1506,17 +1494,18 @@ pub fn analyze_identity(
             };
             let begin = || {
                 app.state::<Mutex<IdentityService>>()
-                    .lock()
-                    .map_err(error)?
+                    .locked()
                     .begin(job_id, &access)
             };
             let prepared = access.while_signed_in(&chatgpt, begin);
             let (snapshot, images, schema) = match prepared {
                 Ok(value) => value,
                 Err(reason) => {
-                    if let Ok(mut service) = app.state::<Mutex<IdentityService>>().lock() {
-                        report(service.fail_before_send(job_id, reason));
-                    }
+                    report(
+                        app.state::<Mutex<IdentityService>>()
+                            .locked()
+                            .fail_before_send(job_id, reason),
+                    );
                     return;
                 }
             };
@@ -1534,34 +1523,29 @@ pub fn analyze_identity(
                         images: &images,
                     },
                     move |progress| {
-                        if let Ok(mut service) =
-                            progress_app.state::<Mutex<IdentityService>>().lock()
-                        {
-                            service.progress(job_id, progress);
-                        }
+                        progress_app
+                            .state::<Mutex<IdentityService>>()
+                            .locked()
+                            .progress(job_id, progress);
                     },
                 )
                 .await;
             let finish = || {
                 app.state::<Mutex<IdentityService>>()
-                    .lock()
-                    .map_err(error)?
+                    .locked()
                     .finish(job_id, result)
             };
-            if access.while_signed_in(&chatgpt, finish).is_err()
-                && let Ok(mut service) = app.state::<Mutex<IdentityService>>().lock()
-            {
-                report(service.cancel(job_id));
+            if access.while_signed_in(&chatgpt, finish).is_err() {
+                report(
+                    app.state::<Mutex<IdentityService>>()
+                        .locked()
+                        .cancel(job_id),
+                );
             }
         });
         Ok(view)
     })()
-    .map_err(|error| {
-        crate::native_error::NativeFailure::from_serializable(
-            error,
-            crate::native_error::NativeErrorKind::Command,
-        )
-    })
+    .map_err(crate::native_error::NativeErrorKind::Command.failure())
 }
 
 #[cfg(test)]
@@ -1670,7 +1654,8 @@ mod strict_schema_tests {
     fn import_snapshot_builds_and_keeps_a_source_and_rejects_an_invalid_one() {
         let directory =
             std::env::temp_dir().join(format!("desegnos-identity-import-{}", Uuid::new_v4()));
-        let mut service = IdentityService::from_directory(directory.clone()).unwrap();
+        let mut service =
+            IdentityService::from_directory(directory.clone(), Default::default()).unwrap();
         let html = "<!doctype html><title>Acme</title><p>We build chairs.</p>";
         let notes = "Voice: plain and warm.";
         let snapshot = desegnos_storage::WebsiteSnapshot {

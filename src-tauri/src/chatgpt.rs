@@ -1,10 +1,15 @@
-use crate::ai_settings::{AiSettingsStore, AiSettingsView, settings_view};
+use crate::{
+    ai_settings::{AiSettingsStore, AiSettingsView, settings_view},
+    export::ExportService,
+    generation::GenerationService,
+    identity::IdentityService,
+    native_files::{LockExt, NativeResult},
+};
 use desegnos_ai::{AuthenticationMethod, ChatgptManager, ChatgptView, CredentialStorage};
 use std::{collections::BTreeMap, path::PathBuf, sync::Mutex};
-use tauri::{AppHandle, State};
+use tauri::State;
 use uuid::Uuid;
 
-type NativeResult<T> = Result<T, String>;
 type AiState<'a> = State<'a, Mutex<AiSettingsStore>>;
 const USAGE_URL: &str = "https://chatgpt.com/settings/usage";
 
@@ -15,24 +20,7 @@ pub struct ChatgptState {
 
 impl ChatgptState {
     pub fn initialize(directory: PathBuf) -> Self {
-        #[cfg(not(feature = "native-tests"))]
-        let manager =
-            ChatgptManager::initialize(directory).map_err(|error| error.message().to_owned());
-        #[cfg(feature = "native-tests")]
-        let manager = (|| {
-            let endpoint = std::env::var("DESEGNOS_NATIVE_TEST_OPENAI_ENDPOINT")
-                .map_err(|_| "The isolated ChatGPT test endpoint is unavailable.".to_owned())?;
-            let base = endpoint
-                .strip_suffix("/v1")
-                .ok_or_else(|| "The isolated ChatGPT test endpoint is invalid.".to_owned())?;
-            let client = desegnos_ai::OpenAiClient::for_loopback(&endpoint)
-                .map_err(|error| error.message().to_owned())?;
-            let vault = desegnos_ai::ChatgptTestVault::memory_with_write_failure_flag(
-                directory.join("native-test-vault-write-failure"),
-            );
-            ChatgptManager::for_loopback(directory, base, client, vault)
-                .map_err(|error| error.message().to_owned())
-        })();
+        let manager = crate::testing::chatgpt_manager(directory);
         Self {
             manager,
             revocations: Mutex::new(BTreeMap::new()),
@@ -51,12 +39,7 @@ impl ChatgptState {
     }
 
     pub fn epoch(&self, account: Uuid) -> NativeResult<u64> {
-        Ok(*self
-            .revocations
-            .lock()
-            .map_err(|_| "Account access state is unavailable.")?
-            .get(&account)
-            .unwrap_or(&0))
+        Ok(*self.revocations.locked().get(&account).unwrap_or(&0))
     }
 
     /// The account a job is bound to with its current sign-out epoch.
@@ -84,80 +67,12 @@ impl ChatgptState {
         epoch: u64,
         operation: impl FnOnce() -> NativeResult<T>,
     ) -> NativeResult<T> {
-        let revocations = self
-            .revocations
-            .lock()
-            .map_err(|_| "Account access state is unavailable.")?;
+        let revocations = self.revocations.locked();
         if *revocations.get(&account).unwrap_or(&0) != epoch {
             return Err("This account was signed out while checking access. Sign in again before explicitly sending the request.".into());
         }
         operation()
     }
-}
-
-#[cfg(not(feature = "native-tests"))]
-async fn open_authorization(_: &AppHandle, url: &str) -> NativeResult<()> {
-    crate::system_open::open(url)
-        .map_err(|_| "Desegnos could not open your system browser. Check the default browser and start sign-in again.".into())
-}
-
-#[cfg(feature = "native-tests")]
-async fn open_authorization(_: &AppHandle, url: &str) -> NativeResult<()> {
-    use std::{
-        io::{Read, Write},
-        net::TcpStream,
-        time::Duration,
-    };
-    let url = tauri::Url::parse(url)
-        .map_err(|_| "The isolated authorization URL is invalid.".to_owned())?;
-    if url.scheme() != "http"
-        || url.host_str() != Some("127.0.0.1")
-        || url.port().is_none()
-        || !url.username().is_empty()
-        || url.password().is_some()
-        || url.fragment().is_some()
-    {
-        return Err("Native tests can only open their literal loopback OAuth fixture.".into());
-    }
-    let port = url
-        .port()
-        .ok_or("The isolated authorization port is missing.")?;
-    let target = format!(
-        "{}{}",
-        url.path(),
-        url.query()
-            .map(|query| format!("?{query}"))
-            .unwrap_or_default()
-    );
-    tauri::async_runtime::spawn_blocking(move || {
-        let mut stream =
-            TcpStream::connect_timeout(&([127, 0, 0, 1], port).into(), Duration::from_secs(5))
-                .map_err(|_| {
-                    "The isolated OAuth browser fixture could not be reached.".to_owned()
-                })?;
-        stream
-            .set_read_timeout(Some(Duration::from_secs(5)))
-            .map_err(|_| "The isolated OAuth browser timeout could not be set.".to_owned())?;
-        stream
-            .set_write_timeout(Some(Duration::from_secs(5)))
-            .map_err(|_| "The isolated OAuth browser timeout could not be set.".to_owned())?;
-        write!(
-            stream,
-            "GET {target} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
-        )
-        .map_err(|_| "The isolated OAuth browser fixture request failed.".to_owned())?;
-        let mut response = String::new();
-        stream
-            .take(4096)
-            .read_to_string(&mut response)
-            .map_err(|_| "The isolated OAuth browser fixture response failed.".to_owned())?;
-        if !response.starts_with("HTTP/1.1 200 ") && !response.starts_with("HTTP/1.0 200 ") {
-            return Err("The isolated OAuth browser fixture rejected authorization.".into());
-        }
-        Ok(())
-    })
-    .await
-    .map_err(|_| "The isolated OAuth browser fixture stopped.".to_owned())?
 }
 
 #[tauri::command]
@@ -167,24 +82,15 @@ pub async fn set_ai_authentication(
     authentication: AuthenticationMethod,
 ) -> Result<AiSettingsView, crate::native_error::NativeFailure> {
     let result: NativeResult<AiSettingsView> = async {
-        state
-            .lock()
-            .map_err(|_| "AI settings are unavailable.")?
-            .set_authentication(authentication)?;
+        state.locked().set_authentication(authentication)?;
         settings_view(&state, &chatgpt).await
     }
     .await;
-    result.map_err(|error| {
-        crate::native_error::NativeFailure::from_serializable(
-            error,
-            crate::native_error::NativeErrorKind::AiSettings,
-        )
-    })
+    result.map_err(crate::native_error::NativeErrorKind::AiSettings.failure())
 }
 
 #[tauri::command]
 pub async fn begin_chatgpt_sign_in(
-    app: AppHandle,
     state: AiState<'_>,
     chatgpt: State<'_, ChatgptState>,
     storage: CredentialStorage,
@@ -193,32 +99,23 @@ pub async fn begin_chatgpt_sign_in(
     let result: NativeResult<AiSettingsView> = async {
         let manager = chatgpt.manager()?;
         state
-            .lock()
-            .map_err(|_| "AI settings are unavailable.")?
+            .locked()
             .set_authentication(AuthenticationMethod::Chatgpt)?;
         if let Some(account) = account_id {
-            state
-                .lock()
-                .map_err(|_| "AI settings are unavailable.")?
-                .invalidate_image_account(account)?;
+            state.locked().invalidate_image_account(account)?;
         }
         let authorization = manager
             .begin_sign_in(storage, account_id)
             .await
             .map_err(|error| error.message().to_owned())?;
-        if let Err(error) = open_authorization(&app, authorization.url()).await {
+        if let Err(error) = crate::testing::open_authorization(authorization.url()).await {
             manager.cancel_sign_in().await;
             return Err(error);
         }
         settings_view(&state, &chatgpt).await
     }
     .await;
-    result.map_err(|error| {
-        crate::native_error::NativeFailure::from_serializable(
-            error,
-            crate::native_error::NativeErrorKind::AiSettings,
-        )
-    })
+    result.map_err(crate::native_error::NativeErrorKind::AiSettings.failure())
 }
 
 #[tauri::command]
@@ -231,12 +128,7 @@ pub async fn cancel_chatgpt_sign_in(
         settings_view(&state, &chatgpt).await
     }
     .await;
-    result.map_err(|error| {
-        crate::native_error::NativeFailure::from_serializable(
-            error,
-            crate::native_error::NativeErrorKind::AiSettings,
-        )
-    })
+    result.map_err(crate::native_error::NativeErrorKind::AiSettings.failure())
 }
 
 #[tauri::command]
@@ -256,10 +148,7 @@ pub async fn select_chatgpt_account(
             .iter()
             .any(|account| account.id == account_id && account.connected && account.plan_enabled)
         {
-            let client = state
-                .lock()
-                .map_err(|_| "AI settings are unavailable.")?
-                .client();
+            let client = state.locked().client();
             if let Ok(client) = client {
                 // Discovery failures remain in the accepted account's public model status.
                 let _ = manager
@@ -271,12 +160,7 @@ pub async fn select_chatgpt_account(
         settings_view(&state, &chatgpt).await
     }
     .await;
-    result.map_err(|error| {
-        crate::native_error::NativeFailure::from_serializable(
-            error,
-            crate::native_error::NativeErrorKind::AiSettings,
-        )
-    })
+    result.map_err(crate::native_error::NativeErrorKind::AiSettings.failure())
 }
 
 #[tauri::command]
@@ -294,12 +178,7 @@ pub async fn retry_chatgpt_secure_storage(
         settings_view(&state, &chatgpt).await
     }
     .await;
-    result.map_err(|error| {
-        crate::native_error::NativeFailure::from_serializable(
-            error,
-            crate::native_error::NativeErrorKind::AiSettings,
-        )
-    })
+    result.map_err(crate::native_error::NativeErrorKind::AiSettings.failure())
 }
 
 #[tauri::command]
@@ -323,15 +202,12 @@ pub async fn sign_out_chatgpt(
             return Err("Choose a saved ChatGPT account before signing out.".into());
         }
         let cancellation = {
-            let mut revocations = chatgpt
-                .revocations
-                .lock()
-                .map_err(|_| "Account access state is unavailable.")?;
+            let mut revocations = chatgpt.revocations.locked();
             let epoch = revocations.entry(account_id).or_default();
             *epoch = epoch
                 .checked_add(1)
                 .ok_or("Account access state must be restarted before signing out.")?;
-            crate::ai_job::cancel_account(&generation, &identity, &exports, account_id)
+            cancel_account(&generation, &identity, &exports, account_id)
         };
         let (view, warning) = sign_out_after_cancellation(cancellation, async {
             manager
@@ -344,12 +220,7 @@ pub async fn sign_out_chatgpt(
         Ok(view.with_warning(warning))
     }
     .await;
-    result.map_err(|error| {
-        crate::native_error::NativeFailure::from_serializable(
-            error,
-            crate::native_error::NativeErrorKind::AiSettings,
-        )
-    })
+    result.map_err(crate::native_error::NativeErrorKind::AiSettings.failure())
 }
 
 async fn sign_out_after_cancellation<T>(
@@ -374,27 +245,12 @@ async fn sign_out_after_cancellation<T>(
 }
 
 #[tauri::command]
-pub fn open_chatgpt_usage(app: AppHandle) -> Result<(), crate::native_error::NativeFailure> {
-    (|| -> NativeResult<()> {
-        #[cfg(not(feature = "native-tests"))]
-        {
-            let _ = app;
-            crate::system_open::open(USAGE_URL).map_err(|_| {
-                "Couldn't open a browser. Open https://chatgpt.com/settings/usage manually.".into()
-            })
-        }
-        #[cfg(feature = "native-tests")]
-        {
-            let _ = (app, USAGE_URL);
-            Ok(())
-        }
-    })()
-    .map_err(|error| {
-        crate::native_error::NativeFailure::from_serializable(
-            error,
-            crate::native_error::NativeErrorKind::AiSettings,
-        )
-    })
+pub fn open_chatgpt_usage() -> Result<(), crate::native_error::NativeFailure> {
+    crate::testing::open_usage(USAGE_URL)
+        .map_err(|_| {
+            "Couldn't open a browser. Open https://chatgpt.com/settings/usage manually.".to_owned()
+        })
+        .map_err(crate::native_error::NativeErrorKind::AiSettings.failure())
 }
 
 #[cfg(test)]
@@ -440,7 +296,7 @@ mod tests {
         let account = Uuid::new_v4();
         let epoch = state.epoch(account).unwrap();
         state.with_epoch(account, epoch, || Ok(())).unwrap();
-        state.revocations.lock().unwrap().insert(account, epoch + 1);
+        state.revocations.locked().insert(account, epoch + 1);
         let mut submitted = false;
         assert!(
             state
@@ -456,4 +312,23 @@ mod tests {
             .with_epoch(other, state.epoch(other).unwrap(), || Ok(()))
             .unwrap();
     }
+}
+
+/// Sign-out stops running work in every service. All services are attempted; the first
+/// failure to record a cancellation is returned afterwards.
+fn cancel_account(
+    generation: &Mutex<GenerationService>,
+    identity: &Mutex<IdentityService>,
+    exports: &Mutex<ExportService>,
+    account_id: Uuid,
+) -> Result<(), String> {
+    let results = [
+        generation.locked().cancel_account(account_id),
+        identity.locked().cancel_account(account_id),
+        {
+            exports.locked().cancel_account(account_id);
+            Ok(())
+        },
+    ];
+    results.into_iter().collect()
 }

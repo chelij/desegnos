@@ -1,10 +1,10 @@
 use crate::{
     ai_access::{AccessFailure, Connection, active_account, resolve},
     ai_job::{
-        Failure, interrupted_notice, lock, signed_out_notice, stopped_notice, unsaved_cancel_notice,
+        Failure, interrupted_notice, signed_out_notice, stopped_notice, unsaved_cancel_notice,
     },
     chatgpt::ChatgptState,
-    native_files::{NativeResult, message, regular_file},
+    native_files::{LockExt, NativeResult, message, regular_file},
     workspace::{Workspace, WorkspaceView},
 };
 
@@ -58,24 +58,6 @@ fn resolve_current(view: &GenerationJobView, project: &Project) -> NativeResult<
     candidate
         .validate(view.request_requirements(), project)
         .map_err(message)?;
-    Ok(())
-}
-
-#[cfg(feature = "native-tests")]
-fn capture_benchmark_output(
-    directory: &Path,
-    ordinal: usize,
-    text: &str,
-    enabled: bool,
-) -> NativeResult<()> {
-    if enabled {
-        private_directory(directory, RECORD)?;
-        write_text(
-            &directory.join(format!("provider-output-{ordinal}.txt")),
-            text,
-        )
-        .map_err(message)?;
-    }
     Ok(())
 }
 
@@ -557,13 +539,13 @@ pub struct GenerationHistory {
 }
 
 impl GenerationService {
-    pub fn initialize(data: &Path) -> Self {
-        Self::from_directory(data.join("generation"))
+    pub fn initialize(data: &Path, switch_guard: crate::ai_job::SwitchGuard) -> Self {
+        Self::from_directory(data.join("generation"), switch_guard)
     }
 
-    fn from_directory(directory: PathBuf) -> Self {
+    fn from_directory(directory: PathBuf, switch_guard: crate::ai_job::SwitchGuard) -> Self {
         Self {
-            store: job_store::GenerationJobStore::new(directory),
+            store: job_store::GenerationJobStore::new(directory, switch_guard),
         }
     }
 
@@ -1126,14 +1108,10 @@ impl GenerationService {
                     attempt.response_id = Some(response.response_id);
                     attempt.usage = response.usage;
                 }
-                // Only the explicit owner-run debug benchmark captures model output.
-                // Successful transport has already bounded it and rejected credential echoes.
-                #[cfg(feature = "native-tests")]
-                capture_benchmark_output(
+                crate::testing::capture_benchmark_output(
                     &self.store.job_directory(original.id, job_id),
                     ordinal,
                     &response.text,
-                    std::env::var("DESEGNOS_GENERATION_BENCHMARK").as_deref() == Ok("1"),
                 )?;
                 candidate_status(&response.text, &mut record, original)
             }
@@ -1316,10 +1294,6 @@ impl GenerationService {
         }
     }
 
-    pub(crate) fn bind_switch_guard(&mut self, guard: crate::ai_job::SwitchGuard) {
-        self.store.active.bind_switch_guard(guard);
-    }
-
     pub(super) fn cancel_account(&mut self, account_id: Uuid) -> NativeResult<()> {
         let jobs: Vec<_> = self
             .store
@@ -1360,16 +1334,11 @@ pub async fn prepare_generation(
 ) -> Result<GenerationJobView, crate::native_error::NativeFailure> {
     let ai_view = crate::ai_settings::settings_view(&settings, &chatgpt)
         .await
-        .map_err(|error| {
-            crate::native_error::NativeFailure::from_serializable(
-                error,
-                crate::native_error::NativeErrorKind::AiSettings,
-            )
-        })?;
+        .map_err(crate::native_error::NativeErrorKind::AiSettings.failure())?;
     ai_view.require_ready()?;
     let result: NativeResult<GenerationJobView> = async {
     let (authentication, provider) = {
-        let service = settings.lock().map_err(message)?;
+        let service = settings.locked();
         (service.authentication, service.provider)
     };
     let account_id = if authentication == AuthenticationMethod::Chatgpt {
@@ -1377,10 +1346,10 @@ pub async fn prepare_generation(
     } else {
         None
     };
-    let workspace = workspace.lock().map_err(message)?;
+    let workspace = workspace.locked();
     let project = workspace.project()?;
-    let ai = settings.lock().map_err(message)?;
-    let mut service = state.lock().map_err(message)?;
+    let ai = settings.locked();
+    let mut service = state.locked();
     if ai.authentication != authentication || ai.provider != provider {
         return Err("The generation method changed while preparing this request. Review it and prepare again.".into());
     }
@@ -1392,12 +1361,7 @@ pub async fn prepare_generation(
     }
 
     }.await;
-    result.map_err(|error| {
-        crate::native_error::NativeFailure::from_serializable(
-            error,
-            crate::native_error::NativeErrorKind::Command,
-        )
-    })
+    result.map_err(crate::native_error::NativeErrorKind::Command.failure())
 }
 
 #[tauri::command]
@@ -1407,22 +1371,17 @@ pub fn get_generation(
     project_id: Uuid,
 ) -> Result<Option<GenerationJobView>, crate::native_error::NativeFailure> {
     (|| -> NativeResult<Option<GenerationJobView>> {
-        let mut workspace = workspace.lock().map_err(message)?;
+        let mut workspace = workspace.locked();
         let project = workspace.project()?;
         if project.id != project_id {
             return Err("The active project changed. Reopen its generation review.".into());
         }
-        let mut service = state.lock().map_err(message)?;
+        let mut service = state.locked();
         let view = service.latest(project)?;
         view.map(|view| maintain_dossier(&mut workspace, &mut service, view))
             .transpose()
     })()
-    .map_err(|error| {
-        crate::native_error::NativeFailure::from_serializable(
-            error,
-            crate::native_error::NativeErrorKind::Command,
-        )
-    })
+    .map_err(crate::native_error::NativeErrorKind::Command.failure())
 }
 
 #[tauri::command]
@@ -1432,17 +1391,12 @@ pub fn list_generations(
     project_id: Uuid,
 ) -> Result<GenerationHistory, crate::native_error::NativeFailure> {
     (|| -> NativeResult<GenerationHistory> {
-        if workspace.lock().map_err(message)?.project()?.id != project_id {
+        if workspace.locked().project()?.id != project_id {
             return Err("The active project changed.".into());
         }
-        state.lock().map_err(message)?.store.past_jobs(project_id)
+        state.locked().store.past_jobs(project_id)
     })()
-    .map_err(|error| {
-        crate::native_error::NativeFailure::from_serializable(
-            error,
-            crate::native_error::NativeErrorKind::Command,
-        )
-    })
+    .map_err(crate::native_error::NativeErrorKind::Command.failure())
 }
 
 #[tauri::command]
@@ -1453,22 +1407,16 @@ pub fn get_past_generation(
     job_id: Uuid,
 ) -> Result<GenerationJobView, crate::native_error::NativeFailure> {
     (|| -> NativeResult<GenerationJobView> {
-        if workspace.lock().map_err(message)?.project()?.id != project_id {
+        if workspace.locked().project()?.id != project_id {
             return Err("The active project changed.".into());
         }
         state
-            .lock()
-            .map_err(message)?
+            .locked()
             .store
             .saved_job(project_id, job_id)?
             .ok_or_else(|| "This saved generation record is no longer available.".into())
     })()
-    .map_err(|error| {
-        crate::native_error::NativeFailure::from_serializable(
-            error,
-            crate::native_error::NativeErrorKind::Command,
-        )
-    })
+    .map_err(crate::native_error::NativeErrorKind::Command.failure())
 }
 
 fn maintain_dossier(
@@ -1517,8 +1465,8 @@ async fn submit(
     retry: bool,
 ) -> NativeResult<GenerationJobView> {
     let account_id = {
-        let workspace = workspace.lock().map_err(message)?;
-        let mut service = state.lock().map_err(message)?;
+        let workspace = workspace.locked();
+        let mut service = state.locked();
         service
             .record(workspace.project()?, job_id)?
             .view
@@ -1526,11 +1474,11 @@ async fn submit(
     };
     let binding = chatgpt.binding(account_id)?;
     let (original, view, cancellation) = chatgpt.with_binding(binding, || {
-        let workspace = workspace.lock().map_err(message)?;
+        let workspace = workspace.locked();
         let project = workspace.project()?.clone();
         let settings = app.state::<Mutex<AiSettingsStore>>();
-        let ai = settings.lock().map_err(message)?;
-        let mut service = state.lock().map_err(message)?;
+        let ai = settings.locked();
+        let mut service = state.locked();
         let (view, cancellation) = service.begin(&ai, &project, job_id, retry)?;
         Ok((project, view, cancellation))
     })?;
@@ -1587,7 +1535,9 @@ async fn attempt(
                         cancellation,
                     },
                     move |progress| {
-                        lock(&progress_app.state::<Mutex<GenerationService>>())
+                        progress_app
+                            .state::<Mutex<GenerationService>>()
+                            .locked()
                             .progress(job_id, ordinal, progress);
                     },
                 )
@@ -1604,7 +1554,8 @@ async fn attempt(
         &request.settings,
         request.estimate_usd,
         |usage| {
-            lock(&app.state::<Mutex<GenerationService>>())
+            app.state::<Mutex<GenerationService>>()
+                .locked()
                 .retrying_after_unreadable_reply(job_id, ordinal, usage);
         },
     )
@@ -1623,8 +1574,8 @@ fn record_attempt(
 ) {
     let workspace_state = app.state::<Mutex<Workspace>>();
     let service_state = app.state::<Mutex<GenerationService>>();
-    let mut workspace = lock(&workspace_state);
-    let mut service = lock(&service_state);
+    let mut workspace = workspace_state.locked();
+    let mut service = service_state.locked();
     let still_open = workspace
         .project()
         .is_ok_and(|project| project.id == original.id);
@@ -1652,12 +1603,7 @@ pub async fn start_generation(
 ) -> Result<GenerationJobView, crate::native_error::NativeFailure> {
     let result: NativeResult<GenerationJobView> =
         async { submit(app, workspace, state, chatgpt, job_id, false).await }.await;
-    result.map_err(|error| {
-        crate::native_error::NativeFailure::from_serializable(
-            error,
-            crate::native_error::NativeErrorKind::Command,
-        )
-    })
+    result.map_err(crate::native_error::NativeErrorKind::Command.failure())
 }
 
 #[tauri::command]
@@ -1670,12 +1616,7 @@ pub async fn retry_generation(
 ) -> Result<GenerationJobView, crate::native_error::NativeFailure> {
     let result: NativeResult<GenerationJobView> =
         async { submit(app, workspace, state, chatgpt, job_id, true).await }.await;
-    result.map_err(|error| {
-        crate::native_error::NativeFailure::from_serializable(
-            error,
-            crate::native_error::NativeErrorKind::Command,
-        )
-    })
+    result.map_err(crate::native_error::NativeErrorKind::Command.failure())
 }
 
 #[tauri::command]
@@ -1685,16 +1626,11 @@ pub fn cancel_generation(
     job_id: Uuid,
 ) -> Result<GenerationJobView, crate::native_error::NativeFailure> {
     (|| -> NativeResult<GenerationJobView> {
-        let workspace = workspace.lock().map_err(message)?;
-        let mut service = state.lock().map_err(message)?;
+        let workspace = workspace.locked();
+        let mut service = state.locked();
         service.cancel(workspace.project()?, job_id)
     })()
-    .map_err(|error| {
-        crate::native_error::NativeFailure::from_serializable(
-            error,
-            crate::native_error::NativeErrorKind::Command,
-        )
-    })
+    .map_err(crate::native_error::NativeErrorKind::Command.failure())
 }
 
 #[tauri::command]
@@ -1704,8 +1640,8 @@ pub fn discard_generation(
     job_id: Uuid,
 ) -> Result<GenerationJobView, crate::native_error::NativeFailure> {
     (|| -> NativeResult<GenerationJobView> {
-        let workspace = workspace.lock().map_err(message)?;
-        let mut service = state.lock().map_err(message)?;
+        let workspace = workspace.locked();
+        let mut service = state.locked();
         let mut record = service.record(workspace.project()?, job_id)?;
         if matches!(
             record.view.status,
@@ -1719,12 +1655,7 @@ pub fn discard_generation(
         record.transition(JobStatus::Discarded);
         service.store.persist(record)
     })()
-    .map_err(|error| {
-        crate::native_error::NativeFailure::from_serializable(
-            error,
-            crate::native_error::NativeErrorKind::Command,
-        )
-    })
+    .map_err(crate::native_error::NativeErrorKind::Command.failure())
 }
 
 #[tauri::command]
@@ -1738,13 +1669,13 @@ pub async fn apply_generation(
 ) -> Result<WorkspaceView, crate::native_error::NativeFailure> {
     let result: NativeResult<WorkspaceView> = async {
         let prepared = {
-            let workspace = workspace.lock().map_err(message)?;
+            let workspace = workspace.locked();
             let project = workspace.project()?;
             if project.applied_job_ids.contains(&job_id) {
                 return Ok(workspace.view());
             }
-            let ai = settings.lock().map_err(message)?;
-            let mut service = state.lock().map_err(message)?;
+            let ai = settings.locked();
+            let mut service = state.locked();
             let record = service.record(project, job_id)?;
             if record.view.status != JobStatus::Ready {
                 return Err("Only a current candidate with a ready reply can be applied.".into());
@@ -1859,8 +1790,8 @@ pub async fn apply_generation(
                 }
             })
             .collect();
-        let mut workspace = workspace.lock().map_err(message)?;
-        let mut service = state.lock().map_err(message)?;
+        let mut workspace = workspace.locked();
+        let mut service = state.locked();
         let record = service.record(workspace.project()?, job_id)?;
         if record.view.status != JobStatus::Ready {
             return Err("Only a current candidate with a ready reply can be applied.".into());
@@ -1900,12 +1831,7 @@ pub async fn apply_generation(
         Ok(workspace.view())
     }
     .await;
-    result.map_err(|error| {
-        crate::native_error::NativeFailure::from_serializable(
-            error,
-            crate::native_error::NativeErrorKind::Command,
-        )
-    })
+    result.map_err(crate::native_error::NativeErrorKind::Command.failure())
 }
 
 #[cfg(test)]
@@ -2043,8 +1969,9 @@ mod unreadable_reply_retry_tests {
     ) {
         let directory =
             std::env::temp_dir().join(format!("desegnos-retry-test-{}", Uuid::new_v4()));
-        let mut service = GenerationService::from_directory(directory.clone());
-        let mut ai = AiSettingsStore::from_directory(directory.clone()).unwrap();
+        let mut service = GenerationService::from_directory(directory.clone(), Default::default());
+        let mut ai =
+            AiSettingsStore::from_directory(directory.clone(), Default::default()).unwrap();
         ai.settings = settings;
         let (project, element_id) = project_and_element();
         let view = service

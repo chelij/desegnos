@@ -717,6 +717,16 @@ export type UpdateRelease = {
 version: string, name: string,
 url: string, publishedAt: string, };
 
+export type UsageEvent = {
+t: number, kind: UsageKind, name: string,
+detail?: string, count?: number, ms?: number, ok?: boolean, };
+
+export type UsageKind = "click"
+  | "key"
+  | "typing"
+  | "command"
+  | "session";
+
 export type ValidationEventKind = "operation"
   | "boundaryCoverage"
   | "pagePatch"
