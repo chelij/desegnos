@@ -1,30 +1,17 @@
-import { spawn } from 'node:child_process';
 import { stat } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { toolchainEnvironment } from './toolchain.mjs';
+import { runCommand } from './run.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
-
-async function runCommand(program, args, { env, capture = false }) {
-  const child = spawn(program, args, { cwd: root, env, stdio: ['inherit', capture ? 'pipe' : 'inherit', 'inherit'] });
-  let output = '';
-  if (capture) child.stdout.setEncoding('utf8').on('data', chunk => { output += chunk; });
-  await new Promise((accept, reject) => {
-    child.once('error', reject);
-    child.once('close', (code, signal) => code === 0 ? accept() : reject(new Error(`${program} failed (${signal ?? code}).`)));
-  });
-  return output;
-}
 
 // Local rebuilds skip link-time optimization and use parallel, incremental codegen: about a
 // minute instead of four after a change. --dist keeps the full release profile for publishing.
 export const localProfile = { CARGO_PROFILE_RELEASE_LTO: 'false', CARGO_PROFILE_RELEASE_CODEGEN_UNITS: '16', CARGO_PROFILE_RELEASE_INCREMENTAL: 'true' };
 
-export async function buildRelease({ run = runCommand, inspect = stat, env = toolchainEnvironment(), platform = process.platform, dist = false } = {}) {
-  // Tauri runs the frontend build before embedding it. Keep default dialog features.
-  await run(process.execPath, [join(root, 'scripts/tauri.mjs'), 'build', '--no-bundle', '--features', 'custom-protocol',
-    '--config', JSON.stringify({ build: { beforeBuildCommand: 'npm run build' } })], { env: dist ? env : { ...env, ...localProfile } });
+export async function buildRelease({ run = (program, args, options) => runCommand(program, args, { ...options, cwd: root }), inspect = stat, env = toolchainEnvironment(), platform = process.platform, dist = false } = {}) {
+  await run(process.execPath, [join(root, 'scripts/run.mjs'), 'tauri', 'build', '--no-bundle', '--features', 'custom-protocol'], { env: dist ? env : { ...env, ...localProfile } });
   const metadata = JSON.parse(await run('cargo', ['metadata', '--offline', '--no-deps', '--format-version', '1'], { env, capture: true }));
   const target = env.CARGO_BUILD_TARGET;
   const windows = target ? target.includes('windows') : platform === 'win32';

@@ -43,7 +43,7 @@ Checks:
 ```sh
 npm run typecheck
 npm run build
-node scripts/cargo.mjs check --workspace --all-targets
+node scripts/run.mjs cargo check --workspace --all-targets
 ```
 
 Build a local release with `npm run release:local`. Linux is the tested platform; Windows and macOS builds are unsigned previews.

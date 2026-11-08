@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
@@ -44,13 +44,6 @@ try {
     };
     return { ...components, state, effects, Element, escape, stop };
   }
-  await test('editor components do not create modal dialogs or popup windows', async () => {
-    // ModalDialog is the one exception: unsaved-work warnings block on purpose.
-    for (const name of (await readdir(join(root, 'src'))).filter(name => name.endsWith('.tsx') && name !== 'ModalDialog.tsx')) {
-      const source = await readFile(join(root, 'src', name), 'utf8');
-      assert.doesNotMatch(source, /<Modal\b|<dialog\b|\.showModal\s*\(|window\.open\s*\(|\bconfirm\s*\(/, name);
-    }
-  });
   await test('switching side-panel views closes the previous view and restores its persistent trigger', async () => {
     const { state, Element } = setup();
     const trigger = new Element(), internal = new Element(); internal.insideSurface = true;

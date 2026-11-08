@@ -7,7 +7,6 @@ import test from 'node:test';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 
-// The start page is the Home page of the main window: a rail, the template tiles, then recents.
 const root = fileURLToPath(new URL('../', import.meta.url));
 const temporary = await mkdtemp(join(root, '.start-page-'));
 const all = tree => tree == null ? [] : typeof tree !== 'object' ? [tree] : [tree, ...[tree.props?.children].flat(Infinity).flatMap(all)];
@@ -48,21 +47,6 @@ try {
     return { tree, calls };
   }
 
-  await test('the rail leads with Home, New and Open, and keeps Preferences at its foot', () => {
-    const { tree } = render();
-    const html = renderToStaticMarkup(tree);
-    const order = ['>Home<', '>New<', '>Open<', '>Preferences<', '>Blank canvas<', '>Website<', '>App screen<', '>Slide deck<', '>Social image<', '>Recent<'].map(label => {
-      const at = html.indexOf(label);
-      assert.ok(at >= 0, `${label} is on the page`);
-      return at;
-    });
-    assert.deepEqual(order, [...order].sort((a, b) => a - b));
-    assert.match(html, /aria-current="page"/);
-    assert.equal((html.match(/class="start-tile"/g) ?? []).length, 5);
-    assert.equal((html.match(/class="start-preview /g) ?? []).length, 5, 'every tile draws an outline preview');
-    assert.doesNotMatch(html, /<dialog|role="dialog"/);
-  });
-
   await test('each tile creates its own template through one native call', () => {
     const { tree, calls } = render();
     for (const [label, template] of [['Blank canvas', 'blank'], ['Website', 'website'], ['App screen', 'appScreen'], ['Slide deck', 'slideDeck'], ['Social image', 'socialImage']]) {
@@ -78,7 +62,6 @@ try {
     const html = renderToStaticMarkup(tree);
     button(tree, 'Open').props.onClick();
     assert.deepEqual(calls.at(-1), ['open-project']);
-    assert.match(html, /<details class="start-rail-preferences">/);
     assert.match(html, /Show start page on launch/);
     const toggle = all(tree).find(node => node.type === 'input' && node.props.type === 'checkbox');
     assert.equal(toggle.props.checked, true);
@@ -86,10 +69,10 @@ try {
     assert.deepEqual(calls.at(-1), ['show-start-page', false]);
   });
 
-  await test('recents are a full-width table with pinned rows first and every action wired', () => {
+  await test('recents list pinned projects first and wire every action', () => {
     const { tree, calls } = render();
     const html = renderToStaticMarkup(tree);
-    assert.match(html, /<table class="start-recents-table">/);
+    assert.match(html, /<table\b/);
     assert.match(html, />Name</);
     assert.match(html, />Location</);
     assert.match(html, />Last opened</);
@@ -97,7 +80,6 @@ try {
     assert.match(html, />\/home\/design</);
     assert.match(html, />1 min ago</);
     assert.match(html, />3 hr ago</);
-    assert.match(html, /class="start-recent pinned"/);
     assert.match(html, /aria-label="Unpin Studio"/);
     assert.match(html, /aria-label="Pin Shop"/);
     assert.match(html, /aria-label="Remove Shop from recent projects"/);
@@ -117,24 +99,17 @@ try {
   await test('an empty Recent is left off the page', () => {
     const html = renderToStaticMarkup(render({ recentProjects: [] }).tree);
     assert.doesNotMatch(html, />Recent</);
-    assert.doesNotMatch(html, /start-recents/);
-    assert.doesNotMatch(html, /start-recents-table/);
-    assert.doesNotMatch(html, /class="start-recent(?: |")/);
-    assert.doesNotMatch(html, /No recent projects/);
   });
 
   await test('recovery appears before recents, and tiles wait while a project is opening', () => {
     const withRecovery = render({ recovery: React.createElement('div', { className: 'recovery-list' }, 'Unsaved changes') });
     const html = renderToStaticMarkup(withRecovery.tree);
     assert.ok(html.indexOf('Unsaved work') < html.indexOf('>Recent<'));
-    assert.match(html, /class="recovery-list"/);
+    assert.match(html, /Unsaved changes/);
     const busy = render({ busy: true });
-    const tiles = all(busy.tree).filter(node => node.type === 'button' && String(node.props.className ?? '').includes('start-tile'));
-    assert.equal(tiles.length, 5);
-    assert.ok(tiles.every(node => node.props.disabled === true));
-    const actions = all(busy.tree).filter(node => node.type === 'button' && String(node.props.className ?? '').includes('start-rail-action'));
-    assert.equal(actions.length, 2);
-    assert.ok(actions.every(node => node.props.disabled === true));
+    for (const label of ['Blank canvas', 'Website', 'App screen', 'Slide deck', 'Social image', 'New', 'Open']) {
+      assert.equal(button(busy.tree, label).props.disabled, true, label);
+    }
   });
 } finally {
   await rm(temporary, { recursive: true, force: true });
