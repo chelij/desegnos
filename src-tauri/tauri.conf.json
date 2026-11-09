@@ -9,21 +9,50 @@
     "frontendDist": "../dist"
   },
   "app": {
-    "windows": [{ "label": "editor", "title": "Desegnos", "width": 1380, "height": 900, "minWidth": 760, "minHeight": 600, "dragDropEnabled": true, "create": false, "visible": false }],
+    "windows": [
+      {
+        "label": "editor",
+        "title": "Desegnos",
+        "width": 1380,
+        "height": 900,
+        "minWidth": 760,
+        "minHeight": 600,
+        "dragDropEnabled": true,
+        "create": false,
+        "visible": false
+      }
+    ],
     "security": {
-      "capabilities": ["editor"],
+      "capabilities": [
+        "editor"
+      ],
       "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' data: https: http://127.0.0.1:*; img-src 'self' data: https: http://127.0.0.1:*; font-src 'self' data: https: http://127.0.0.1:*; connect-src ipc: http://ipc.localhost; object-src 'none'; base-uri 'self'; frame-src 'self' https: http://127.0.0.1:*; form-action 'none'",
       "devCsp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' data: https: http://127.0.0.1:*; img-src 'self' data: https: http://127.0.0.1:*; font-src 'self' data: https: http://127.0.0.1:*; connect-src ipc: http://ipc.localhost http://127.0.0.1:* ws://127.0.0.1:*; object-src 'none'; base-uri 'self'; frame-src 'self' https: http://127.0.0.1:*; form-action 'none'"
     }
   },
-  "bundle": { "active": false, "icon": [
-    "icons/icon.png",
-    "icons/32x32.png",
-    "icons/64x64.png",
-    "icons/128x128.png",
-    "icons/128x128@2x.png",
-    "icons/icon.icns",
-    "icons/icon.ico"
-  ] }
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "createUpdaterArtifacts": true,
+    "publisher": "Desegnos",
+    "category": "DeveloperTool",
+    "shortDescription": "Desegnos website editor",
+    "icon": [
+      "icons/icon.png",
+      "icons/32x32.png",
+      "icons/64x64.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEI0N0ExMDZFNzExQzM4QzIKUldUQ09CeHhiaEI2dExSWXZNOTRXZzhmbXVJNmRzRmZ4WjUzZTFNaEdhUm5Nckx5VXYxalZObFAK",
+      "endpoints": [
+        "https://github.com/chelij/desegnos/releases/latest/download/latest.json"
+      ]
+    }
+  }
 }
-
