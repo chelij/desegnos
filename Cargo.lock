@@ -1121,7 +1121,7 @@ dependencies = [
 
 [[package]]
 name = "desegnos-ai"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "base64 0.23.1",
  "bytes",
@@ -1144,7 +1144,7 @@ dependencies = [
 
 [[package]]
 name = "desegnos-core"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "base64 0.22.1",
  "dom_query",
@@ -1169,7 +1169,7 @@ dependencies = [
 
 [[package]]
 name = "desegnos-desktop"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "base64 0.23.1",
  "desegnos-ai",
@@ -1198,7 +1198,7 @@ dependencies = [
 
 [[package]]
 name = "desegnos-storage"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "base64 0.22.1",
  "desegnos-core",
