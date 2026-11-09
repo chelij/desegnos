@@ -541,6 +541,7 @@ export type ProviderId = "openai"
   | "google"
   | "openrouter"
   | "deepseek"
+  | "custom"
   | "local";
 
 export type ProviderRetry = { attempt: number, kind: ErrorKind, };

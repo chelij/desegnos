@@ -49,6 +49,40 @@ pub fn local_endpoint(settings: &ProviderSettings) -> Result<String> {
     Ok(url.as_str().trim_end_matches('/').into())
 }
 
+/// Normalize a user-selected OpenAI-compatible API base. Never accept credentials in URLs.
+pub fn custom_endpoint(settings: &ProviderSettings) -> Result<String> {
+    let value = settings
+        .endpoint
+        .as_deref()
+        .unwrap_or("https://api.openai.com/v1")
+        .trim();
+    if value.len() > desegnos_core::limits::MAX_HTTP_URL_BYTES
+        || value.chars().any(char::is_control)
+    {
+        return Err(ProviderError::before(ErrorKind::InvalidSettings));
+    }
+    let url = reqwest::Url::parse(value)
+        .map_err(|_| ProviderError::before(ErrorKind::InvalidSettings))?;
+    let loopback = url.host_str().is_some_and(|host| {
+        host == "localhost"
+            || host
+                .trim_start_matches('[')
+                .trim_end_matches(']')
+                .parse::<std::net::IpAddr>()
+                .is_ok_and(|ip| ip.is_loopback())
+    });
+    if url.host_str().is_none()
+        || !(url.scheme() == "https" || url.scheme() == "http" && loopback)
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(ProviderError::before(ErrorKind::InvalidSettings));
+    }
+    Ok(url.as_str().trim_end_matches('/').into())
+}
+
 #[derive(Clone, Copy)]
 pub(crate) enum AuthHeader {
     Bearer,
@@ -138,6 +172,16 @@ providers! {
         sign_in: false, image_api: false, fixed_endpoint: true,
         reasoning: ReasoningEffort::High, max_output: crate::MAX_OUTPUT_TOKENS, catalogue: deepseek_catalogue,
     },
+    Custom => ProviderSpec {
+        name: "Custom API", service: "io.desegnos.custom", endpoint: "https://api.openai.com/v1",
+        default_model: "custom-model", auth: AuthHeader::Bearer,
+        discovery: crate::model_discovery::STANDARD_DISCOVERY,
+        wire: Some(WireProtocol::Chat { schema_in_prompt: true, require_parameters: false }),
+        web_search: false, local: false, list_probe: true,
+        sign_in: false, image_api: false, fixed_endpoint: false,
+        reasoning: ReasoningEffort::Medium, max_output: crate::DEFAULT_MAX_OUTPUT_TOKENS,
+        catalogue: Vec::new,
+    },
     Local => ProviderSpec {
         name: "Local", service: "io.desegnos.local", endpoint: DEFAULT_LOCAL_ENDPOINT,
         default_model: "local-model", auth: AuthHeader::Bearer,
@@ -195,9 +239,13 @@ impl ProviderId {
         let spec = self.spec();
         ProviderSettings {
             model: spec.default_model.into(),
-            reasoning_effort: spec.reasoning.clone(),
+            reasoning_effort: if self == Self::Custom {
+                ReasoningEffort::Other("none".into())
+            } else {
+                spec.reasoning.clone()
+            },
             max_output_tokens: spec.max_output,
-            endpoint: spec.local.then(|| spec.endpoint.to_owned()),
+            endpoint: (spec.local || self == Self::Custom).then(|| spec.endpoint.to_owned()),
             ..Default::default()
         }
     }
@@ -211,6 +259,9 @@ impl ProviderId {
         }
         if self.spec().local {
             local_endpoint(settings)?;
+        }
+        if self == Self::Custom {
+            custom_endpoint(settings)?;
         }
         if self.spec().fixed_endpoint && settings.endpoint.is_some() {
             return Err(ProviderError::before(ErrorKind::InvalidSettings));
@@ -381,6 +432,14 @@ impl ProviderClient {
             ProviderId::Openai => Backend::OpenAi(openai),
             ProviderId::Local => {
                 Backend::Key(KeyAdapter::build(id, &local_endpoint(settings)?, false)?)
+            }
+            ProviderId::Custom => {
+                let endpoint = custom_endpoint(settings)?;
+                Backend::Key(KeyAdapter::build(
+                    id,
+                    &endpoint,
+                    endpoint.starts_with("https:"),
+                )?)
             }
             _ => Backend::Key(KeyAdapter::new(id)?),
         };
@@ -974,12 +1033,13 @@ pub(crate) fn foreign_body(
         WireProtocol::Chat {
             schema_in_prompt,
             require_parameters,
-        } => chat_body(request, settings, schema_in_prompt, require_parameters),
+        } => chat_body(id, request, settings, schema_in_prompt, require_parameters),
         WireProtocol::Google => google_body(request, settings),
         WireProtocol::Anthropic => anthropic_body(request, settings),
     }
 }
 fn chat_body(
+    id: ProviderId,
     request: &RequestContent<'_>,
     s: &ProviderSettings,
     schema_in_prompt: bool,
@@ -1002,7 +1062,7 @@ fn chat_body(
             })
         })
         .collect::<Result<Vec<_>>>()?;
-    // DeepSeek only accepts json_object: local validation enforces the schema in the prompt.
+    // JSON-object endpoints receive the schema in the prompt; local validation still enforces it.
     let system = if schema_in_prompt {
         format!(
             "{}\n\nReply with one JSON object only that conforms to the JSON Schema below. Do not wrap it in prose or a code fence.\n{}",
@@ -1019,7 +1079,7 @@ fn chat_body(
     let mut body = json!({"model":s.model,"stream":true,"stream_options":{"include_usage":true},"max_tokens":s.max_output_tokens,
         "messages":[{"role":"system","content":system},{"role":"user","content":content}],"response_format":response_format});
     if s.reasoning_effort.as_str() != "none" {
-        body["reasoning_effort"] = json!(if schema_in_prompt {
+        body["reasoning_effort"] = json!(if id == ProviderId::Deepseek {
             deepseek_reasoning_effort(&s.reasoning_effort)
         } else {
             s.reasoning_effort.as_str()
@@ -1556,6 +1616,44 @@ mod tests {
     }
 
     #[test]
+    fn custom_base_urls_preserve_provider_paths_and_reject_unsafe_addresses() {
+        for (address, expected) in [
+            (
+                "https://api.synthetic.new/openai/v1/",
+                "https://api.synthetic.new/openai/v1",
+            ),
+            ("https://gateway.example/api", "https://gateway.example/api"),
+            ("http://127.0.0.1:9000/v1", "http://127.0.0.1:9000/v1"),
+        ] {
+            let settings = ProviderSettings {
+                endpoint: Some(address.into()),
+                ..ProviderId::Custom.defaults()
+            };
+            assert_eq!(custom_endpoint(&settings).unwrap(), expected);
+            ProviderId::Custom
+                .validate(&settings, AuthenticationMethod::ApiKey)
+                .unwrap();
+        }
+        for address in [
+            "",
+            "file:///v1",
+            "http://api.synthetic.new/openai/v1",
+            "https://user:secret@example.com/v1",
+            "https://example.com/v1?key=secret",
+            "https://example.com/v1#fragment",
+            "https://example.com/\nv1",
+        ] {
+            let settings = ProviderSettings {
+                endpoint: Some(address.into()),
+                ..ProviderId::Custom.defaults()
+            };
+            assert!(custom_endpoint(&settings).is_err(), "{address}");
+        }
+        assert!(!ProviderId::Custom.capabilities().web_search);
+        assert!(ProviderId::Custom.capabilities().image_generation.is_none());
+    }
+
+    #[test]
     fn local_addresses_are_normalized_and_restricted_to_loopback() {
         assert_eq!(
             local_endpoint(&ProviderId::Local.defaults()).unwrap(),
@@ -1669,6 +1767,10 @@ mod tests {
                 ProviderId::Deepseek,
                 ApiKey::new("synthetic-deepseek-key".into()).unwrap(),
             ),
+            (
+                ProviderId::Custom,
+                ApiKey::new("synthetic-custom-key".into()).unwrap(),
+            ),
             (ProviderId::Local, ApiKey::local_anonymous()),
             (
                 ProviderId::Local,
@@ -1728,7 +1830,24 @@ mod tests {
                 }),
                 ..provider.defaults()
             };
-            let adapter = KeyAdapter::build(provider, &endpoint, false).unwrap();
+            let adapter = if provider == ProviderId::Custom {
+                let configured = ProviderSettings {
+                    endpoint: Some(endpoint.clone()),
+                    ..settings.clone()
+                };
+                let client = ProviderClient::with_settings(
+                    provider,
+                    OpenAiClient::new().unwrap(),
+                    &configured,
+                )
+                .unwrap();
+                match client.backend {
+                    Backend::Key(adapter) => adapter,
+                    _ => panic!("expected chat adapter"),
+                }
+            } else {
+                KeyAdapter::build(provider, &endpoint, false).unwrap()
+            };
             let mut sent =
                 crate::request::request_content(&snapshot, GenerationMode::Strict, &schema)
                     .unwrap();
@@ -1759,7 +1878,7 @@ mod tests {
                 body["messages"][1]["content"][2]["image_url"]["url"],
                 "data:image/png;base64,AQ=="
             );
-            if provider == ProviderId::Deepseek {
+            if matches!(provider, ProviderId::Deepseek | ProviderId::Custom) {
                 assert_eq!(body["response_format"], json!({"type":"json_object"}));
                 let system = body["messages"][0]["content"].as_str().unwrap();
                 assert!(system.starts_with(packet.instructions));

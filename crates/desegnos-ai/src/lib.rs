@@ -39,8 +39,8 @@ pub use identity::{
 pub use image_access::{ImageAccess, ImageAvailability, image_access_now, use_image_key};
 pub use providers::{
     DEFAULT_LOCAL_ENDPOINT, GenerationRequest, IdentityRequest, ProviderClient, ProviderDescriptor,
-    ProviderId, estimate_identity_for_provider, local_endpoint, models_error, models_need_key,
-    provider_catalogue,
+    ProviderId, custom_endpoint, estimate_identity_for_provider, local_endpoint, models_error,
+    models_need_key, provider_catalogue,
 };
 
 pub use settings::{

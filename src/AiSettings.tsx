@@ -56,7 +56,7 @@ export function AiSettings({ current, refresh, update, manageUsage, pollingError
     setSettings(draft => {
       const changedConnection = previous?.provider !== value.provider || previous?.authentication !== value.authentication || previous?.chatgpt.activeAccountId !== value.chatgpt.activeAccountId;
       let next = reset || changedConnection || !draft || JSON.stringify(draft) === JSON.stringify(previous?.settings) ? value.settings : draft;
-      if (value.provider === 'local') next = { ...next, endpoint: value.settings.endpoint, localAuthentication: value.settings.localAuthentication };
+      if (value.provider === 'local' || value.provider === 'custom') next = { ...next, endpoint: value.settings.endpoint, localAuthentication: value.settings.localAuthentication };
       const model = value.catalogue.find(model => model.id === next.model);
       if (value.authentication === 'apiKey' && model?.defaultPricing) {
         const quoted = model.defaultPricing;
@@ -110,7 +110,8 @@ export function AiSettings({ current, refresh, update, manageUsage, pollingError
   }
   async function connectServer(event: FormEvent) {
     event.preventDefault(); if (!view) return;
-    const value = await action('save_ai_settings', { settings: { ...view.settings, endpoint: endpoint ?? view.settings.endpoint ?? DEFAULT_LOCAL_ENDPOINT }, connectionOnly: true });
+    setKey(''); setReplacingKey(false);
+    const value = await action('save_ai_settings', { settings: { ...view.settings, endpoint: endpoint ?? view.settings.endpoint ?? (view.provider === 'local' ? DEFAULT_LOCAL_ENDPOINT : '') }, connectionOnly: true });
     if (value) { receive(value, true); setEndpoint(null); }
   }
   function setPrice(field: 'inputUsdPerMillion' | 'outputUsdPerMillion' | 'requestUsd' | 'imageUsd', text: string) {
@@ -174,7 +175,8 @@ export function AiSettings({ current, refresh, update, manageUsage, pollingError
   const dirty = !!view && !!settings && JSON.stringify(view.settings) !== JSON.stringify(settings);
   const usesChatgpt = view?.authentication === 'chatgpt' && view.provider === 'openai';
   const usesLocal = view?.provider === 'local';
-  const endpointDirty = usesLocal && endpoint !== null && endpoint !== view?.settings.endpoint;
+  const usesCustom = view?.provider === 'custom';
+  const endpointDirty = (usesLocal || usesCustom) && endpoint !== null && endpoint !== view?.settings.endpoint;
   const hasKey = !!view?.credential.configured && (!usesLocal || !!view.settings.localAuthentication);
   const provider = view?.providers?.find(item => item.id === view.provider);
   const providerName = provider?.name ?? 'OpenAI';
@@ -207,8 +209,8 @@ export function AiSettings({ current, refresh, update, manageUsage, pollingError
           <option key="openai" value="openai">API key</option>,
         ] : [<option key={item.id} value={item.id}>{item.name}</option>])}
       </select></label>
-      {usesLocal && <form className="ai-key-form" onSubmit={connectServer}>
-        <label>Server URL<input type="url" aria-label="Local server URL" required maxLength={MAX_HTTP_URL_BYTES} disabled={busy} value={endpoint ?? view.settings.endpoint ?? DEFAULT_LOCAL_ENDPOINT} onChange={event => setEndpoint(event.target.value)} /></label>
+      {(usesLocal || usesCustom) && <form className="ai-key-form" onSubmit={connectServer}>
+        <label>{usesCustom ? 'Base URL' : 'Server URL'}<input type="url" aria-label={usesCustom ? 'API base URL' : 'Local server URL'} placeholder={usesCustom ? 'https://api.synthetic.new/openai/v1' : undefined} required maxLength={MAX_HTTP_URL_BYTES} disabled={busy} value={endpoint ?? view.settings.endpoint ?? (usesLocal ? DEFAULT_LOCAL_ENDPOINT : '')} onChange={event => setEndpoint(event.target.value)} /></label>
         <button type="submit" disabled={busy}>Connect</button>
       </form>}
       {view.configurationError && <Notice variant="error" message={userError(view.configurationError)} />}
@@ -247,8 +249,8 @@ export function AiSettings({ current, refresh, update, manageUsage, pollingError
         </> : <>
           {view.credential.configured && view.credential.vaultError && <Notice variant="error" message={userError(view.credential.vaultError)} />}
           {(!view.credential.configured || replacingKey) && <form className="ai-key-form" onSubmit={saveKey}>
-            <label>{hasKey ? 'Replacement API key' : `${providerName} API key`}<input disabled={busy || pending} type="password" value={key} onChange={event => setKey(event.target.value)} autoComplete="new-password" spellCheck={false} required autoFocus={replacingKey} /></label>
-            <button className="primary" type="submit" disabled={busy || pending || !key.trim()}>{busy ? 'Connecting…' : 'Connect'}</button>
+            <label>{hasKey ? 'Replacement API key' : `${providerName} API key`}<input disabled={busy || pending || endpointDirty} type="password" value={key} onChange={event => setKey(event.target.value)} autoComplete="new-password" spellCheck={false} required autoFocus={replacingKey} /></label>
+            <button className="primary" type="submit" disabled={busy || pending || endpointDirty || !key.trim()}>{busy ? 'Connecting…' : 'Connect'}</button>
             {replacingKey && <button type="button" disabled={busy} onClick={() => { setKey(''); setReplacingKey(false); }}>Cancel</button>}
           </form>}
         </>}

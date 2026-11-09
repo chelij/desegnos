@@ -232,7 +232,11 @@ pub async fn credential_key(
     provider: ProviderId,
     settings: &ProviderSettings,
 ) -> NativeResult<ApiKey> {
-    let credentials = service.locked().credentials_for(provider);
+    let credentials = if provider == ProviderId::Custom {
+        service.locked().custom_credentials_for(settings)?
+    } else {
+        service.locked().credentials_for(provider)
+    };
     let local_authentication = settings.local_authentication;
     tauri::async_runtime::spawn_blocking(move || {
         provider_key(provider, local_authentication, &credentials)

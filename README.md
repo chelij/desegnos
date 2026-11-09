@@ -48,6 +48,16 @@ node scripts/run.mjs cargo check --workspace --all-targets
 
 Build a local release with `npm run release:local`. Linux is the tested platform; Windows and macOS builds are unsigned previews.
 
+## Custom AI providers
+
+In AI settings, choose **Custom API**, enter the provider's OpenAI-compatible base URL,
+then click **Connect**. For Synthetic, use `https://api.synthetic.new/openai/v1`.
+Connect your API key, select a discovered model, enter its input/output price ceilings,
+and save. Use the provider's published rates (or zero for a subscription with no extra charges).
+Custom APIs must support `/models`, streaming `/chat/completions`, and JSON-object responses.
+HTTPS is required except for loopback servers. Keys are stored separately for each base URL;
+changing the URL resets the selected model and its pricing. Existing providers keep their settings.
+
 ## Project layout
 
 ```text

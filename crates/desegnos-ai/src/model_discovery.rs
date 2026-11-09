@@ -515,6 +515,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn custom_catalogue_uses_configured_base_url_and_requires_prices() {
+        let (endpoint, requests, task) = server(vec![(
+            200,
+            serde_json::json!({"data":[{"id":"hf:deepseek-ai/DeepSeek-V4.1-Flash-1017"}]}),
+        )])
+        .await;
+        let settings = crate::ProviderSettings {
+            endpoint: Some(format!("{}/openai/v1/", endpoint.trim_end_matches("/v1"))),
+            ..ProviderId::Custom.defaults()
+        };
+        let adapter = crate::ProviderClient::with_settings(
+            ProviderId::Custom,
+            crate::OpenAiClient::new().unwrap(),
+            &settings,
+        )
+        .unwrap();
+        let models = adapter
+            .list_api_models(&key(), &CancellationToken::new())
+            .await
+            .unwrap();
+        task.await.unwrap();
+        assert_eq!(models[0].id, "hf:deepseek-ai/DeepSeek-V4.1-Flash-1017");
+        assert!(models[0].pricing_required);
+        assert!(models[0].default_pricing.is_none());
+        let requests = requests.lock().unwrap();
+        assert!(requests[0].starts_with("GET /openai/v1/models "));
+        assert!(
+            requests[0]
+                .to_ascii_lowercase()
+                .contains("authorization: bearer synthetic-model-discovery-key")
+        );
+    }
+
+    #[tokio::test]
     async fn account_catalogues_follow_pagination_and_preserve_provider_metadata() {
         for provider in [
             ProviderId::Openai,

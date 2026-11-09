@@ -92,13 +92,13 @@ trait Vault: Send + Sync {
 }
 
 struct SystemVault {
-    service: &'static str,
+    service: String,
 }
 
 impl SystemVault {
     #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
     fn entry(&self) -> Result<keyring::Entry> {
-        keyring::Entry::new(self.service, ACCOUNT)
+        keyring::Entry::new(&self.service, ACCOUNT)
             .map_err(|_| ProviderError::before(ErrorKind::VaultUnavailable))
     }
 }
@@ -185,7 +185,20 @@ impl CredentialManager {
         Self {
             state: Mutex::new(CredentialState::default()),
             vault: Box::new(SystemVault {
-                service: provider.service(),
+                service: provider.service().into(),
+            }),
+        }
+    }
+
+    /// Custom-server keys belong to the exact base URL, so switching hosts cannot forward a key.
+    pub fn for_custom_endpoint(endpoint: &str) -> Self {
+        Self {
+            state: Mutex::new(CredentialState::default()),
+            vault: Box::new(SystemVault {
+                service: format!(
+                    "io.desegnos.custom.{}",
+                    desegnos_core::digest(endpoint.as_bytes())
+                ),
             }),
         }
     }
@@ -194,7 +207,7 @@ impl CredentialManager {
         Self {
             state: Mutex::new(CredentialState::default()),
             vault: Box::new(SystemVault {
-                service: "io.desegnos.openai.images",
+                service: "io.desegnos.openai.images".into(),
             }),
         }
     }

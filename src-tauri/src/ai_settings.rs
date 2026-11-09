@@ -117,6 +117,7 @@ pub struct AiSettingsStore {
     pub(super) image_access_checking: BTreeMap<String, Uuid>,
     pub(super) provider: ProviderId,
     pub(super) provider_credentials: BTreeMap<ProviderId, Arc<CredentialManager>>,
+    custom_credentials: BTreeMap<String, Arc<CredentialManager>>,
     pub(super) directory: PathBuf,
     pub(super) settings: ProviderSettings,
     pub(super) configuration_error: Option<String>,
@@ -171,6 +172,9 @@ fn catalogue_identity(
     let mut id = key.image_access_cache_key();
     if provider.is_local() {
         id.push_str(&digest(desegnos_ai::local_endpoint(settings)?.as_bytes()));
+    }
+    if provider == ProviderId::Custom {
+        id.push_str(&digest(desegnos_ai::custom_endpoint(settings)?.as_bytes()));
     }
     Ok(id)
 }
@@ -366,6 +370,7 @@ impl AiSettingsStore {
             image_access_checking: BTreeMap::new(),
             provider: ProviderId::Openai,
             provider_credentials: BTreeMap::new(),
+            custom_credentials: BTreeMap::new(),
             directory,
             settings,
             configuration_error,
@@ -422,6 +427,17 @@ impl AiSettingsStore {
         }
         Ok(())
     }
+    pub(super) fn custom_credentials_for(
+        &mut self,
+        settings: &ProviderSettings,
+    ) -> NativeResult<Arc<CredentialManager>> {
+        let endpoint = desegnos_ai::custom_endpoint(settings).map_err(message)?;
+        Ok(self
+            .custom_credentials
+            .entry(endpoint.clone())
+            .or_insert_with(|| Arc::new(CredentialManager::for_custom_endpoint(&endpoint)))
+            .clone())
+    }
     pub(super) fn credentials_for(&mut self, provider: ProviderId) -> Arc<CredentialManager> {
         if provider == self.provider {
             return self.credentials.clone();
@@ -457,7 +473,8 @@ impl AiSettingsStore {
         provider
             .validate(&settings, authentication)
             .map_err(message)?;
-        self.adapter(provider)?;
+        ProviderClient::with_settings(provider, self.client.clone()?, &settings)
+            .map_err(message)?;
         if persist {
             write_json(
                 &self.directory.join("provider.json"),
@@ -469,7 +486,11 @@ impl AiSettingsStore {
         }
         self.provider_credentials
             .insert(self.provider, self.credentials.clone());
-        self.credentials = self.credentials_for(provider);
+        self.credentials = if provider == ProviderId::Custom {
+            self.custom_credentials_for(&settings)?
+        } else {
+            self.credentials_for(provider)
+        };
         self.provider = provider;
         self.authentication = authentication;
         self.settings = settings;
@@ -938,20 +959,30 @@ pub async fn save_ai_settings(
             if connection_only.unwrap_or(false) {
                 {
                     let mut service = state.locked();
-                    if !service.provider.is_local() {
-                        return Err("Choose Local before changing its server address.".into());
+                    if !service.provider.is_local() && service.provider != ProviderId::Custom {
+                        return Err("Choose Custom API or Local before changing its base URL.".into());
                     }
                     service.switch_guard.ensure_switch_allowed()?;
-                    let endpoint = desegnos_ai::local_endpoint(&settings).map_err(|_| {
-                        format!(
-                            "Use a local server address ending in /v1, such as {}.",
-                            desegnos_ai::DEFAULT_LOCAL_ENDPOINT
-                        )
-                    })?;
+                    let custom = service.provider == ProviderId::Custom;
+                    let endpoint = if custom {
+                        desegnos_ai::custom_endpoint(&settings).map_err(|_| "Use an HTTPS base URL without a query, fragment, or embedded credentials.".to_owned())?
+                    } else {
+                        desegnos_ai::local_endpoint(&settings).map_err(|_| format!("Use a local server address ending in /v1, such as {}.", desegnos_ai::DEFAULT_LOCAL_ENDPOINT))?
+                    };
                     let mut next = service.settings.clone();
+                    if custom && desegnos_ai::custom_endpoint(&next).map_err(message)? != endpoint {
+                        next.model = ProviderId::Custom.defaults().model;
+                        next.pricing = None;
+                        next.reasoning_effort = ProviderId::Custom.defaults().reasoning_effort;
+                    }
+                    if !custom {
+                        next.local_authentication = settings.local_authentication;
+                    }
                     next.endpoint = Some(endpoint);
-                    next.local_authentication = settings.local_authentication;
-                    write_json(&service.settings_path(ProviderId::Local), &next)?;
+                    write_json(&service.settings_path(service.provider), &next)?;
+                    if custom {
+                        service.credentials = service.custom_credentials_for(&next)?;
+                    }
                     service.settings = next;
                     service.configuration_error = None;
                 }
@@ -961,6 +992,10 @@ pub async fn save_ai_settings(
             let account = chatgpt.view().await;
             let (provider, authentication) = {
                 let service = state.locked();
+                if service.provider == ProviderId::Custom
+                    && desegnos_ai::custom_endpoint(&service.settings).map_err(message)? != desegnos_ai::custom_endpoint(&settings).map_err(message)? {
+                    return Err("Connect the base URL before saving model settings.".into());
+                }
                 (service.provider, service.authentication)
             };
             if authentication == AuthenticationMethod::ApiKey {
@@ -971,7 +1006,9 @@ pub async fn save_ai_settings(
             }
             {
                 let mut service = state.locked();
-                if service.provider != provider || service.authentication != authentication {
+                if service.provider != provider || service.authentication != authentication
+                    || provider == ProviderId::Custom
+                        && desegnos_ai::custom_endpoint(&service.settings).map_err(message)? != desegnos_ai::custom_endpoint(&settings).map_err(message)? {
                     return Err(
                         "The AI connection changed. Review the current settings and save again."
                             .into(),
@@ -1136,6 +1173,57 @@ pub async fn test_ai_access(
 mod api_model_cache_tests {
     use super::*;
     use std::fs;
+
+    #[tokio::test]
+    async fn custom_servers_isolate_keys_models_and_saved_selection() {
+        let directory = std::env::temp_dir().join(format!("desegnos-custom-{}", Uuid::new_v4()));
+        let mut service =
+            AiSettingsStore::from_directory(directory.clone(), Default::default()).unwrap();
+        let first = ProviderSettings {
+            endpoint: Some("https://api.synthetic.new/openai/v1".into()),
+            ..ProviderId::Custom.defaults()
+        };
+        let second = ProviderSettings {
+            endpoint: Some("https://other.example/v1".into()),
+            ..first.clone()
+        };
+        let credentials = service.custom_credentials_for(&first).unwrap();
+        credentials
+            .set_key("custom-server-one-key".into(), CredentialStorage::Session)
+            .unwrap();
+        let key = credentials.key().unwrap();
+        assert_ne!(
+            catalogue_identity(ProviderId::Custom, &first, &key).unwrap(),
+            catalogue_identity(ProviderId::Custom, &second, &key).unwrap()
+        );
+        let same = ProviderSettings {
+            endpoint: Some("https://api.synthetic.new/openai/v1/".into()),
+            ..first.clone()
+        };
+        assert!(Arc::ptr_eq(
+            &credentials,
+            &service.custom_credentials_for(&same).unwrap()
+        ));
+        assert!(!Arc::ptr_eq(
+            &credentials,
+            &service.custom_credentials_for(&second).unwrap()
+        ));
+        write_json(&service.settings_path(ProviderId::Custom), &first).unwrap();
+        service.select_provider(ProviderId::Custom, true).unwrap();
+        assert!(Arc::ptr_eq(&credentials, &service.credentials));
+        assert_eq!(service.settings.endpoint, first.endpoint);
+        service.select_provider(ProviderId::Deepseek, true).unwrap();
+        service.select_provider(ProviderId::Custom, true).unwrap();
+        assert!(Arc::ptr_eq(&credentials, &service.credentials));
+        assert_eq!(service.settings.endpoint, first.endpoint);
+        drop(service);
+        let restarted =
+            AiSettingsStore::from_directory(directory.clone(), Default::default()).unwrap();
+        assert_eq!(restarted.provider, ProviderId::Custom);
+        assert_eq!(restarted.settings.endpoint, first.endpoint);
+        drop(restarted);
+        fs::remove_dir_all(directory).unwrap();
+    }
 
     #[tokio::test]
     async fn local_catalogues_are_bound_to_server_and_key_mode() {

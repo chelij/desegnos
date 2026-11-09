@@ -4086,6 +4086,7 @@ fn deepseek_requests_use_system_role_and_effort_names() {
             (ProviderId::Google, "Google"),
             (ProviderId::Openrouter, "OpenRouter"),
             (ProviderId::Deepseek, "DeepSeek"),
+            (ProviderId::Custom, "Custom API"),
             (ProviderId::Local, "Local"),
         ]
     );

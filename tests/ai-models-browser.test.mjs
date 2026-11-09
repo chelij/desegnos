@@ -21,7 +21,7 @@ const script = `
   let current = {
     authentication: 'chatgpt', provider: 'openai',
     readiness: {ready: true, apiKeyReady: false, blockedReason: null, canTest: true, canRefreshModels: true, imagesUsable: false, accounts: {first: true, second: true}},
-    providers: ['openai','anthropic','google','openrouter','deepseek','local'].map(id => ({id, name:id, available:true, signInSupported:id === 'openai', capabilities:{webSearch:true}})),
+    providers: ['openai','anthropic','google','openrouter','deepseek','custom','local'].map(id => ({id, name:id, available:true, signInSupported:id === 'openai', capabilities:{webSearch:true}})),
     settings: {model:'gpt-6.1-sol', reasoningEffort:'medium', maxOutputTokens:32768, spendingLimitUsd:2, imageGeneration:false},
     catalogue: [model('gpt-6.1-sol'), model('future-account-model', ['adaptive', 'max'])],
     credential: emptyKey, imageKey: emptyKey, imageAccess: null, imageAccessChecking: false, configurationError:null,
@@ -77,12 +77,12 @@ const script = `
     current = {...current, catalogue:[model('other-account-model')], chatgpt:{...current.chatgpt, accounts:[account('second')], activeAccountId:'second'}};
     render();
     await wait(() => ids().length === 1 && ids()[0] === 'other-account-model', 'Previous account models survived account switch');
-    for (const provider of ['openai', 'anthropic', 'google', 'openrouter', 'local']) {
+    for (const provider of ['openai', 'anthropic', 'google', 'openrouter', 'custom', 'local']) {
       const id = 'vendor/future-' + provider + ':latest';
       const quoted = provider === 'openrouter' || provider === 'local';
       const pricing = {model:id, inputUsdPerMillion:provider === 'local' ? 0 : 20, outputUsdPerMillion:provider === 'local' ? 0 : 80, requestUsd:provider === 'local' ? 0 : 0.01, imageUsd:provider === 'local' ? 0 : 0.02};
       current = {...current, provider, authentication:'apiKey', credential:{...emptyKey, configured:true, storage:'session'},
-        settings:{...current.settings, model:'unavailable', reasoningEffort:'none', maxOutputTokens:32768, pricing:undefined, endpoint:provider === 'local' ? 'http://127.0.0.1:11434/v1' : undefined, localAuthentication:false},
+        settings:{...current.settings, model:'unavailable', reasoningEffort:'none', maxOutputTokens:32768, pricing:undefined, endpoint:provider === 'local' ? 'http://127.0.0.1:11434/v1' : provider === 'custom' ? 'https://api.openai.com/v1' : undefined, localAuthentication:false},
         catalogue:[{...model(id, ['none']), pricingRequired:provider !== 'openrouter', defaultPricing:quoted ? pricing : undefined, maxOutputTokens:4096}]};
       render();
       await wait(() => ids().includes(id), provider + ': discovery did not reach picker');
@@ -103,6 +103,15 @@ const script = `
       await wait(() => saved?.model === id, provider + ': new model did not save');
       check(saved.pricing.inputUsdPerMillion === pricing.inputUsdPerMillion && saved.pricing.outputUsdPerMillion === pricing.outputUsdPerMillion, provider + ': price ceilings did not save');
       if (provider === 'openrouter') check(saved.pricing.requestUsd === 0.01 && saved.pricing.imageUsd === 0.02, 'OpenRouter fees did not save');
+      if (provider === 'custom') {
+        const address = document.querySelector('[aria-label="API base URL"]');
+        check(address.value === 'https://api.openai.com/v1', 'Custom base URL was not shown');
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(address, 'https://api.synthetic.new/openai/v1');
+        address.dispatchEvent(new Event('input', {bubbles:true}));
+        await wait(() => document.querySelector('[aria-label="Refresh models"]').disabled, 'Unsaved custom URL did not block model refresh');
+        address.closest('form').requestSubmit();
+        await wait(() => connectedUrl === 'https://api.synthetic.new/openai/v1', 'Custom base URL did not save');
+      }
       if (provider === 'local') {
         const address = document.querySelector('[aria-label="Local server URL"]');
         check(address.value === 'http://127.0.0.1:11434/v1', 'Local default address was not shown');

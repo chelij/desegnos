@@ -12,7 +12,7 @@ import { scopeLabel } from './Notes';
 import { summarizePageChanges } from './noticeSummary';
 import { MAX_PROMPT_CHARS } from './generated/limits';
 
-const SERVICE = { openai: 'OpenAI', anthropic: 'Anthropic', google: 'Google', openrouter: 'OpenRouter', deepseek: 'DeepSeek', local: 'Local model' } as const;
+const SERVICE = { openai: 'OpenAI', anthropic: 'Anthropic', google: 'Google', openrouter: 'OpenRouter', deepseek: 'DeepSeek', custom: 'Custom API', local: 'Local model' } as const;
 const kb = (bytes: number) => bytes < 1024 ? `${bytes} bytes` : `${(bytes / 1024).toFixed(1)} KB`;
 
 function allElements(elements: Element[]): Element[] {
