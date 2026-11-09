@@ -76,15 +76,20 @@ jobs:
           releaseId: ${{ needs.draft.outputs.id }}
           tauriScript: npx tauri
           args: --target ${{ matrix.target }}
+          # The publish job writes latest.json once; parallel jobs editing it raced.
+          includeUpdaterJson: false
 
   publish:
     needs: [draft, build]
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+      # Fails unless every platform's signature is present, so a partial release never goes live.
       - env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
         run: |
-          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | grep -qx latest.json \
-            || { echo "::error::$TAG has no latest.json; not publishing"; exit 1; }
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern '*.sig' --dir sigs
+          node scripts/updater-manifest.mjs sigs "$GITHUB_REPOSITORY" "$TAG" > latest.json
+          gh release upload "$TAG" latest.json --repo "$GITHUB_REPOSITORY" --clobber
           gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest
