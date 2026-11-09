@@ -4,7 +4,7 @@ import { type Boundary } from './boundaryLayout';
 import type { ReferenceItem } from '../types';
 import {
   MINIMAP_HEIGHT, MINIMAP_WIDTH, cameraCentredOn, minimapPoint, minimapTransform, minimapWorld, minimapWorldPoint, overviewRects,
-} from './minimap';
+} from './minimapGeometry';
 
 /** A small overview of every boundary and reference item, with the visible viewport on top.
  * The content layer depends only on the canvas layout; panning redraws just the viewport box. */

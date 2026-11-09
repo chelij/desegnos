@@ -243,7 +243,7 @@ test-results/                Local evidence from smoke, startup and vault runs (
 | [pasteDrop.ts](../src/projectCanvas/pasteDrop.ts) | Clipboard ownership, linked/unlinked paste choices, external paste and drop coordination. |
 | [clipboardPaste.ts](../src/projectCanvas/clipboardPaste.ts), [fileDrop.ts](../src/projectCanvas/fileDrop.ts) | Clipboard markers, image/text paste helpers and sizing; dropped-file classification and reading. |
 | [selectionBar.tsx](../src/projectCanvas/selectionBar.tsx) | Selection actions and This size / All sizes editing scope. |
-| [Minimap.tsx](../src/projectCanvas/Minimap.tsx), [minimap.ts](../src/projectCanvas/minimap.ts) | Overview UI, fit visibility, coordinate transforms and camera navigation. |
+| [Minimap.tsx](../src/projectCanvas/Minimap.tsx), [minimapGeometry.ts](../src/projectCanvas/minimapGeometry.ts) | Overview UI, fit visibility, coordinate transforms and camera navigation. |
 | [canvasView.ts](../src/projectCanvas/canvasView.ts) | Cached resolved geometry per project revision, model hit boxes and viewport visibility checks. |
 | [boundaries.tsx](../src/projectCanvas/boundaries.tsx) | Boundary content per linked size: element trees, hidden-size placeholders and Play rendering. |
 | [boundaryLabels.tsx](../src/projectCanvas/boundaryLabels.tsx) | Boundary names above each corner in screen pixels; labels double as drag handles. |

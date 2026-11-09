@@ -25,7 +25,7 @@ import { shownReference } from './reference';
 import { pointerEntries } from './pointers';
 import { behaviourEntries } from './behaviours';
 import { screenRect, useCanvasCamera, type ScreenRect } from './surface';
-import { contentFitsViewport, overviewRects } from './minimap';
+import { contentFitsViewport, overviewRects } from './minimapGeometry';
 import { textEditorScreen } from './elements';
 import { linkedDefinition, resolveElements } from './links';
 import { usePasteDefault } from '../pastePreference';

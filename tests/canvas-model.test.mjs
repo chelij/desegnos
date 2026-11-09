@@ -11,7 +11,7 @@ const modules = await compileModules([
   'src/projectCanvas/sizes.ts',
   'src/projectCanvas/links.ts',
   'src/projectCanvas/elementGeometry.ts',
-  'src/projectCanvas/minimap.ts',
+  'src/projectCanvas/minimapGeometry.ts',
   'src/projectCanvas/pointerNames.ts',
   'src/projectCanvas/autoLinks.ts',
   'src/projectCanvas/pointerGeometry.ts',
@@ -60,7 +60,7 @@ try {
   const elementGeometry = await modules.load('projectCanvas/elementGeometry.js');
   const geometry = Object.assign({}, ...await Promise.all(['camera', 'boundaryLayout', 'referenceGeometry', 'canvasTargets', 'pointerGeometry', 'pointerNames', 'autoLinks'].map(name => modules.load(`projectCanvas/${name}.js`))));
   const elementFacts = await modules.load('projectCanvas/elementFacts.js');
-  const minimap = await modules.load('projectCanvas/minimap.js');
+  const minimap = await modules.load('projectCanvas/minimapGeometry.js');
   const shortcuts = await modules.load('shortcuts.js');
 
   const baseStyle = () => ({
@@ -415,7 +415,7 @@ try {
   });
 
   // -------------------------------------------------------------------------
-  // minimap.ts
+  // minimapGeometry.ts
   // -------------------------------------------------------------------------
 
   await test('the minimap fits content, maps the viewport and hides when everything fits', () => {
