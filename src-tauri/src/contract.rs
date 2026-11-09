@@ -57,6 +57,7 @@ fn types() -> String {
         crate::website_import::WebsiteImportView,
         crate::website_import::WebsiteImportResultView,
         crate::updates::UpdateCheck,
+        crate::updates::UpdateProgress,
         crate::usage::UsageEvent,
         crate::crash_report::CrashReportView,
         crate::crash_report::OpenFailure,
@@ -212,6 +213,10 @@ fn commands() -> String {
     text.push_str(&format!(
         "export const IMAGE_DRAG_EVENT = '{}';\n",
         crate::image_drop::IMAGE_DRAG_EVENT
+    ));
+    text.push_str(&format!(
+        "export const UPDATE_PROGRESS_EVENT = '{}';\n",
+        crate::updates::UPDATE_PROGRESS_EVENT
     ));
     text
 }

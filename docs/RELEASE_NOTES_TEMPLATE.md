@@ -33,8 +33,8 @@ GitHub automatically attaches these **Source code (tar.gz/zip)** downloads to th
 ## Known preview limitations
 
 - Linux is the tested platform and requires WebKitGTK 4.1, a desktop portal with a backend, and a Secret Service provider for secure credentials.
-- Windows and macOS builds are unsigned, untested previews. Signing, notarization and the signed updater are deferred.
-- Updates are checked manually through **Menu → Check for updates…**; installation is manual.
+- Windows and macOS builds are unsigned, untested previews. Platform signing and notarization are deferred.
+- Signed updates are checked quietly after launch and through **Menu → Check for updates…**. **Install and restart** confirms unsaved or running work first; unsupported installs offer **Download**.
 - This preview covers canvas requests, generation, Keep/Undo, visual edits, save/reopen and website-folder export. React export, hosted publishing and the remaining 1.0 contract are deferred.
 - External services, forms and remote assets still require their actual services; export warnings describe portability limits.
 - [List release-specific known bugs and remaining limitations. State the actual validation performed and any unverified behavior; do not imply all release-plan gates passed without evidence.]

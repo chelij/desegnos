@@ -5,7 +5,7 @@ use std::{io, sync::Mutex};
 use tauri::Manager;
 
 /// Keeps every open tab's unsaved work for recovery, then clears this run's crash marker.
-fn finish(app: &tauri::AppHandle) {
+pub(crate) fn finish(app: &tauri::AppHandle) {
     if let Some(state) = app.try_state::<Mutex<crate::workspace::Workspace>>() {
         state.locked().flush_recovery();
     }

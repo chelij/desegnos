@@ -50,6 +50,7 @@ project_location::set_project_location
 recent::forget_recent_project
 recent::set_recent_project_pin
 updates::check_for_updates
+updates::install_update
 usage::record_usage
 website_import::prepare_website_import_url
 website_import::pick_website_import_source

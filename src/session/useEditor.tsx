@@ -50,7 +50,6 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
   const run = useCallback((operation: () => Promise<unknown>) => { void operation().catch(error => setError(errorValue(error))); }, []);
   const [openFailure, setOpenFailure] = useState<{ message: string; url: string } | null>(null);
   const { notices, setNotice, dismissNotice } = useNotices(current, view);
-  const { updateState, dismissUpdate, checkForUpdates, openRelease } = useUpdateCheck(setOpenFailure);
   const [showPalette, setShowPalette] = useState(false);
   const [dismissedRecovery, setDismissedRecovery] = useState<string[]>([]);
   const canvasRef = useRef<ProjectCanvasHandle>(null);
@@ -74,7 +73,9 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
   const saveState = useRef<SaveState>(saving);
   function transitionSave(next: SaveState) { saveState.current = next; setSaving(next); }
   const generationJob = useRef<GenerationJobView | null>(null);
-  const { closeRequest, setCloseRequest } = useWindowClose({ settle, current, generation: generationJob, aiAuthentication: aiCurrent, setError });
+  const { closeRequest, setCloseRequest, confirmExit } = useWindowClose({ settle, current, generation: generationJob, aiAuthentication: aiCurrent, setError });
+
+  const { updateState, dismissUpdate, checkForUpdates, installUpdate, openRelease } = useUpdateCheck(setOpenFailure, confirmExit);
 
   const selectedElementPageId = propertySelection(project, canvasSelection, canvasFocus, {}).selectedElementPageId;
   const exports = useExportJobs({ current, panels, panelActions, accept, setNotice, settle, setError, setOpenFailure, openPanel, closePanel, mutate, canvasFocus, selectedElementPageId, play, setPlay, view, panel, aiConnected: aiReady(aiSettings, null), spendingLimitUsd: aiSettings?.settings.spendingLimitUsd ?? null });
@@ -199,7 +200,7 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
     newUntitled, open, clearInsertKind: tool.clearInsertKind, bumpInsertSignal: tool.bumpInsertSignal, chooseTool: tool.chooseTool,
     panelActions, canvasRef, togglePlay, previewSelectedBoundary: exports.previewBoundary,
     openExportPanel: exports.openPanel, runExport: exports.run, openInBrowser: exports.openInBrowser,
-    travel, save, saveCopy, closeProject, checkForUpdates, checkingForUpdates: updateState.kind === 'checking',
+    travel, save, saveCopy, closeProject, checkForUpdates, checkingForUpdates: updateState.kind === 'checking' || updateState.kind === 'installing',
     hasRecoveries: !!view?.recoveries.length,
     adaptSelectedSize: () => {
       const page = current.current?.project?.pages.find(page => page.id === canvasFocus);
@@ -254,7 +255,7 @@ export function useEditor({ initialView }: { initialView?: WorkspaceView } = {})
     view, project, pending, onStartPage, loading, load, error, setError, problemAction,
     panel, openPanel, closePanel, togglePanel, panels, panelActions, historyEpoch,
     saving, replacement, setReplacement, confirmation, setConfirmation, chooseSaveConflict, closeUntitledSave, saveUntitledProject, compactHistory,
-    notices, setNotice, dismissNotice, updateState, dismissUpdate, openRelease, openFailure, setOpenFailure, dismissedRecovery, setDismissedRecovery,
+    notices, setNotice, dismissNotice, updateState, dismissUpdate, installUpdate, openRelease, openFailure, setOpenFailure, dismissedRecovery, setDismissedRecovery,
     closeRequest, setCloseRequest, showPalette, setShowPalette, paletteCommands: paletteCommands(actions, menuItems), menuItems,
     switchProjectTab, closeProjectTab, newUntitled, open, openRecent, recover, dismissRecoveries, recovery,
     resolvedTheme, setTheme, play, setPlay, togglePlay, playElement,

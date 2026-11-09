@@ -724,12 +724,11 @@ export type TextStyle = { id: string, name: string, fontFamily: string, size: nu
 
 export type TokenUsage = { inputTokens: number, outputTokens: number, totalTokens: number, };
 
-export type UpdateCheck = { current: string,
-latest: UpdateRelease | null, newer: boolean, };
+export type UpdateCheck = { current: string, latest: UpdateRelease | null, newer: boolean, installSupported: boolean, };
 
-export type UpdateRelease = {
-version: string, name: string,
-url: string, publishedAt: string, };
+export type UpdateProgress = { percent: number | null, installing: boolean, };
+
+export type UpdateRelease = { version: string, notes: string | null, url: string, };
 
 export type UsageEvent = {
 t: number, kind: UsageKind, name: string,

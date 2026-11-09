@@ -33,7 +33,7 @@ API-key generation uses your provider billing; eligible ChatGPT requests use you
 
 ## Updates and support
 
-**Menu → Check for updates…** checks GitHub Releases when you ask. If a newer version exists, **Download** opens its release page. Install the replacement yourself; there is no automatic update installation or startup update check.
+Desegnos quietly checks for signed updates about five seconds after launch. **Menu → Check for updates…** checks on request. When an update is available, **Install and restart** downloads, verifies and installs it, then restarts Desegnos. Unsaved changes or running generation ask for confirmation first. Linux package installs and unsupported update targets offer **Download** to open the GitHub release page instead.
 
 Crash reports are opt-in. After an unexpected close, **What's included** lets you read the scrubbed report. **Report on GitHub** opens a prefilled issue for you to review and submit. **Dismiss** deletes the local report. Nothing is sent automatically; there is no other telemetry.
 

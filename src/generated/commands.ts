@@ -53,6 +53,7 @@ export type CommandName =
   | 'forget_recent_project'
   | 'set_recent_project_pin'
   | 'check_for_updates'
+  | 'install_update'
   | 'record_usage'
   | 'prepare_website_import_url'
   | 'pick_website_import_source'
@@ -88,3 +89,4 @@ export type CommandName =
   | 'dismiss_recovery';
 
 export const IMAGE_DRAG_EVENT = 'desegnos://image-drag';
+export const UPDATE_PROGRESS_EVENT = 'desegnos://update-progress';
