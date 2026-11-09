@@ -19,10 +19,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
+        # Take the id from the create call: the release list can lag behind a new draft.
         run: |
-          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
-            || gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft --title "Desegnos ${TAG#v}" --notes "Test build. macOS and Windows installers are not code-signed yet."
-          echo "id=$(gh api "repos/$GITHUB_REPOSITORY/releases" --jq ".[] | select(.tag_name == \"$TAG\") | .id")" >> "$GITHUB_OUTPUT"
+          id=$(gh api "repos/$GITHUB_REPOSITORY/releases" --jq ".[] | select(.tag_name == \"$TAG\") | .id" | head -1)
+          [ -n "$id" ] || id=$(gh api -X POST "repos/$GITHUB_REPOSITORY/releases" -f tag_name="$TAG" -f name="Desegnos ${TAG#v}" \
+            -f body="Test build. macOS and Windows installers are not code-signed yet." -F draft=true --jq .id)
+          [ -n "$id" ] || { echo "::error::No release id for $TAG"; exit 1; }
+          echo "id=$id" >> "$GITHUB_OUTPUT"
     outputs:
       id: ${{ steps.create.outputs.id }}
 
@@ -80,4 +83,8 @@ jobs:
     steps:
       - env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release edit "${{ github.ref_name }}" --repo "$GITHUB_REPOSITORY" --draft=false --latest
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | grep -qx latest.json \
+            || { echo "::error::$TAG has no latest.json; not publishing"; exit 1; }
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest
