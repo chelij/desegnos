@@ -12,8 +12,8 @@ fn finish(app: &tauri::AppHandle) {
     crate::crash_report::finish();
 }
 
-/// Listens for termination signals on a thread of its own, so a busy UI thread cannot delay
-/// it and no work happens inside a signal handler. SIGKILL, power loss and real crashes still
+/// Listens and flushes recovery on a thread of its own, even when the UI thread is busy,
+/// with no work inside a signal handler. SIGKILL, power loss and real crashes still
 /// leave the marker behind and are reported.
 pub fn install(app: tauri::AppHandle) -> io::Result<()> {
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -29,8 +29,12 @@ pub fn install(app: tauri::AppHandle) -> io::Result<()> {
         .spawn(move || {
             runtime.block_on(wait);
             finish(&app);
-            // Windows gives close/logoff/shutdown handlers only a few seconds, so exit here
-            // rather than waiting for the event loop; everything is already flushed.
+            // Unix graphics teardown must run on the UI thread: exiting here races
+            // WebKit's texture use against NVIDIA's process-exit cleanup.
+            #[cfg(not(windows))]
+            app.exit(0);
+            // Windows gives close/logoff/shutdown handlers only a few seconds.
+            #[cfg(windows)]
             std::process::exit(0);
         })?;
     Ok(())

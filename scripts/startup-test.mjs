@@ -178,7 +178,14 @@ async function isolated() {
     while (probing) await delay(20);
     if (probeFailure) { report.passed = false; report.error = probeFailure.stack; }
     if (app?.pid) {
-      try { await stopGroup(app.pid); await exit(app); await app.streamsClosed; report.appStopped = !alive(app); }
+      try {
+        if (report.passed) {
+          app.kill('SIGTERM');
+          report.shutdown = { signal: 'SIGTERM', exitCode: await exit(app) };
+          assert.equal(report.shutdown.exitCode, 0, 'Orderly shutdown must exit cleanly through the UI event loop');
+        }
+        await stopGroup(app.pid); await exit(app); await app.streamsClosed; report.appStopped = !alive(app);
+      }
       catch (error) { report.passed = false; report.error ??= error.stack; }
       app.stdout.unpipe(log); app.stderr.unpipe(log);
     }
