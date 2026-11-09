@@ -7,11 +7,12 @@ try {
   await modules.rewrite('session/useWindowClose.js', source => source
     .replace(/^import .* from '@tauri-apps\/api\/core';$/m, 'const isTauri = () => true;')
     .replace(/^import .* from '@tauri-apps\/api\/window';$/m, 'const getCurrentWindow = () => globalThis.__windowClose.window;')
-    .replace(/^import .* from 'react';$/m, 'const { useEffect, useRef, useState } = globalThis.__windowClose.hooks;')
+    .replace(/^import .* from 'react';$/m, 'const { useCallback, useEffect, useRef, useState } = globalThis.__windowClose.hooks;')
     .replace(/^import .* from '\.\.\/api\.js';$/m, 'const native = (...args) => globalThis.__windowClose.native(...args);'));
   let handler, request, destroyed, errors;
   globalThis.__windowClose = {
     hooks: {
+      useCallback(callback) { return callback; },
       useEffect(effect) { effect(); },
       useRef(value) { return { current: value }; },
       useState(value) { return [value, next => { request = next; }]; },
